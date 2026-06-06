@@ -1,0 +1,5 @@
+pydantic-settings==2.7.0
+loguru==0.7.2
+httpx[socks]==0.28.1
+aioesphomeapi==45.3.1
+aiohttp==3.11.11
