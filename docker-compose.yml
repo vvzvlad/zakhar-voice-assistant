@@ -37,7 +37,8 @@ services:
     labels:
       com.centurylinklabs.watchtower.enable: "true"   # auto-update the image
     healthcheck:
-      test: ["CMD", "curl", "-s", "-f", "-o", "/dev/null", "http://127.0.0.1:8200/health"]
+      # python:3.11-slim ships no curl, so probe /health with the stdlib instead.
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8200/health', timeout=4).status==200 else 1)"]
       interval: 30m
       timeout: 5s
       retries: 2
