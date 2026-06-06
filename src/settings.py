@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -42,6 +43,18 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     system_prompt_path: str = "data/system_prompt.md"
     context_dir: str = "data"   # per-device context files live here as context_<name>.txt
+
+    # --- Server-side VAD end-pointing (defaults OK) ---
+    # The speaker streams mic PCM continuously and never signals end-of-speech,
+    # so we detect the end of an utterance ourselves with WebRTC VAD.
+    # webrtcvad accepts only 0..3 and raises on anything else; constrain here so a
+    # bad value fails fast with a clear validation error instead of an obscure
+    # webrtcvad traceback at Pipeline construction time.
+    vad_aggressiveness: int = Field(default=2, ge=0, le=3)  # higher = more aggressive non-speech filtering
+    vad_silence_ms: int = 800            # trailing silence (after speech) that ends the utterance
+    vad_min_speech_ms: int = 200         # minimum speech before end-detection arms
+    vad_max_utterance_ms: int = 15000    # hard cap: finalize even if no trailing silence
+    vad_no_speech_timeout_ms: int = 8000  # if no speech detected at all after start, finalize (STT-empty -> RUN_END)
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
