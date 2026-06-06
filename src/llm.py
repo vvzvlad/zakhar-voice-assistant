@@ -46,11 +46,16 @@ async def call_groq_api(
 
         if response.status_code == 200:
             response_json = response.json()
-            logger.info(f"Groq API response: {json.dumps(response_json, indent=2, ensure_ascii=False)}")
 
             # Extract content from choices[0].message.content
             if 'choices' in response_json and len(response_json['choices']) > 0:
                 content = response_json['choices'][0]['message']['content']
+                # Log only the essentials, not the full response dump.
+                usage = response_json.get("usage", {})
+                logger.info(
+                    f"Groq response: model={response_json.get('model')} "
+                    f"total_time={usage.get('total_time')}s content={content!r}"
+                )
                 logger.debug(f"Raw content: {content}")
 
                 # Process <command>...</command> blocks before stripping them

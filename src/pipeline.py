@@ -19,6 +19,7 @@ run is finalized exactly once even under concurrent eager on_audio tasks.
 
 import asyncio
 import os
+import time
 
 import webrtcvad
 from aioesphomeapi import VoiceAssistantEventType as VAET
@@ -80,6 +81,8 @@ class Pipeline:
         self._speech_detected = False
         self._elapsed_ms = 0
         self._finalized = False
+        # Logging-only flag: log "receiving audio" once per run, not per chunk.
+        self._audio_logged = False
 
         # Injected by DeviceClient on connect (bound to the live API client).
         self.send_event = None
@@ -104,6 +107,8 @@ class Pipeline:
         self._speech_detected = False
         self._elapsed_ms = 0
         self._finalized = False
+        self._audio_logged = False
+        logger.info(f"{self.name}: ▶️ run started (cid={conversation_id})")
         self._emit(VAET.VOICE_ASSISTANT_RUN_START, {})
         self._emit(VAET.VOICE_ASSISTANT_STT_START, {})
         return 0  # 0 = audio comes in-band over the API connection.
@@ -122,6 +127,11 @@ class Pipeline:
         """
         if self._finalized:
             return  # Ignore late audio for an already-finalized run.
+
+        # Log once per run on the first chunk; the speaker streams many chunks.
+        if not self._audio_logged:
+            self._audio_logged = True
+            logger.info(f"{self.name}: 🎤 receiving audio...")
 
         # The full utterance audio (everything streamed, silence included) is what
         # we send to STT.
@@ -196,21 +206,39 @@ class Pipeline:
         RUN_END is always sent.
         """
         async with self._lock:
-            logger.info(f"{self.name}: finalize ({reason}), {len(pcm)} bytes")
+            # Total-run timer (logging only); started after the claim/lock.
+            t0 = time.perf_counter()
+            logger.info(
+                f"{self.name}: 🎙️ captured {len(pcm)} bytes "
+                f"(~{len(pcm) / (SAMPLE_RATE * 2):.1f}s), reason={reason}"
+            )
             try:
                 if not pcm:
+                    logger.info(f"{self.name}: empty audio, ending run")
                     self._emit(VAET.VOICE_ASSISTANT_RUN_END, {})
                     return
 
+                stt_t = time.perf_counter()
                 text = await stt.transcribe(self.client_ext, pcm)
+                logger.info(
+                    f"{self.name}: 📝 STT ({time.perf_counter() - stt_t:.2f}s): "
+                    f"{text!r}"
+                )
                 self._emit(VAET.VOICE_ASSISTANT_STT_END, {"text": text})
                 if not text.strip():
+                    logger.info(f"{self.name}: empty transcription, ending run")
                     self._emit(VAET.VOICE_ASSISTANT_RUN_END, {})
                     return
 
                 self._emit(VAET.VOICE_ASSISTANT_INTENT_START, {})
+                logger.info(f"{self.name}: 🤖 → LLM: {text!r}")
+                llm_t = time.perf_counter()
                 reply = await llm.call_groq_api(
                     self.client_ext, self.client_local, text
+                )
+                logger.info(
+                    f"{self.name}: 💬 LLM reply ({time.perf_counter() - llm_t:.2f}s): "
+                    f"{reply!r}"
                 )
 
                 try:
@@ -229,14 +257,23 @@ class Pipeline:
 
                 self._emit(VAET.VOICE_ASSISTANT_TTS_START, {"text": reply})
                 try:
+                    tts_t = time.perf_counter()
                     mime, audio = await self.tts_backend.synthesize(reply, "ru")
+                    logger.info(
+                        f"{self.name}: 🔊 TTS ({time.perf_counter() - tts_t:.2f}s, "
+                        f"{len(audio)} bytes)"
+                    )
                     audio_id = self.audio_server.put(audio)
                     url = f"{self.public_base_url.rstrip('/')}/tts/{audio_id}.mp3"
+                    logger.info(f"{self.name}: ▶ serving {url}")
                     self._emit(VAET.VOICE_ASSISTANT_TTS_END, {"url": url})
                 except Exception as e:
                     # No TTS_END on failure; the run still ends cleanly.
                     logger.error(f"TTS failed: {e}")
 
+                logger.info(
+                    f"{self.name}: ✅ run complete in {time.perf_counter() - t0:.2f}s"
+                )
                 self._emit(VAET.VOICE_ASSISTANT_RUN_END, {})
             except Exception as e:
                 logger.exception(f"{self.name}: pipeline run failed: {e}")
