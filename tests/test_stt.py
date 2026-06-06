@@ -2,9 +2,11 @@ import io
 import wave
 
 import httpx
+import pytest
 import respx
 
-from src.stt import GROQ_STT_URL, pcm_to_wav, transcribe
+from src.settings import settings
+from src.stt import GROQ_STT_URL, GroqSttBackend, make_stt_backend, pcm_to_wav
 
 
 def test_pcm_to_wav_roundtrip():
@@ -18,29 +20,44 @@ def test_pcm_to_wav_roundtrip():
 
 
 @respx.mock
-async def test_transcribe_returns_text_on_200():
+async def test_groq_backend_returns_text_on_200():
     respx.post(GROQ_STT_URL).mock(
         return_value=httpx.Response(200, json={"text": "привет мир"})
     )
     async with httpx.AsyncClient(verify=False) as client:
-        result = await transcribe(client, b"\x01\x02" * 100)
+        backend = GroqSttBackend(client)
+        result = await backend.transcribe(b"\x01\x02" * 100)
     assert result == "привет мир"
 
 
 @respx.mock
-async def test_transcribe_returns_empty_on_error():
+async def test_groq_backend_returns_empty_on_error():
     respx.post(GROQ_STT_URL).mock(return_value=httpx.Response(500, text="boom"))
     async with httpx.AsyncClient(verify=False) as client:
-        result = await transcribe(client, b"\x01\x02" * 100)
+        backend = GroqSttBackend(client)
+        result = await backend.transcribe(b"\x01\x02" * 100)
     assert result == ""
 
 
 @respx.mock
-async def test_transcribe_empty_pcm_skips_http():
+async def test_groq_backend_empty_pcm_skips_http():
     route = respx.post(GROQ_STT_URL).mock(
         return_value=httpx.Response(200, json={"text": "x"})
     )
     async with httpx.AsyncClient(verify=False) as client:
-        result = await transcribe(client, b"")
+        backend = GroqSttBackend(client)
+        result = await backend.transcribe(b"")
     assert result == ""
     assert not route.called
+
+
+async def test_make_stt_backend_groq():
+    async with httpx.AsyncClient(verify=False) as client:
+        backend = make_stt_backend("groq", client, settings)
+    assert isinstance(backend, GroqSttBackend)
+
+
+async def test_make_stt_backend_unknown_raises():
+    async with httpx.AsyncClient(verify=False) as client:
+        with pytest.raises(ValueError):
+            make_stt_backend("nope", client, settings)

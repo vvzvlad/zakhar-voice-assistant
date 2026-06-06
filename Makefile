@@ -42,6 +42,10 @@ install: $(VENV)/.deps-installed ## Create .venv (if missing) and install dev/te
 env: ## Create .env from the template if it does not exist
 	@test -f .env || cp .env.example .env
 
+.PHONY: models
+models: ## Download Vosk + Piper models into models/
+	bash scripts/download_models.sh
+
 # --- Develop -----------------------------------------------------------------
 .PHONY: test
 test: install ## Run the test suite (auto-creates .venv if missing)

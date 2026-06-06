@@ -25,7 +25,7 @@ import webrtcvad
 from aioesphomeapi import VoiceAssistantEventType as VAET
 from loguru import logger
 
-from src import context, llm, stt
+from src import context, llm
 from src.settings import settings
 
 # WebRTC VAD requires mono 16-bit PCM frames of exactly 10/20/30 ms at 16 kHz.
@@ -48,6 +48,7 @@ class Pipeline:
         name,
         client_ext,
         client_local,
+        stt_backend,
         tts_backend,
         audio_server,
         public_base_url,
@@ -56,6 +57,7 @@ class Pipeline:
         self.name = name
         self.client_ext = client_ext
         self.client_local = client_local
+        self.stt_backend = stt_backend
         self.tts_backend = tts_backend
         self.audio_server = audio_server
         self.public_base_url = public_base_url
@@ -219,7 +221,7 @@ class Pipeline:
                     return
 
                 stt_t = time.perf_counter()
-                text = await stt.transcribe(self.client_ext, pcm)
+                text = await self.stt_backend.transcribe(pcm)
                 logger.info(
                     f"{self.name}: 📝 STT ({time.perf_counter() - stt_t:.2f}s): "
                     f"{text!r}"
@@ -263,8 +265,13 @@ class Pipeline:
                         f"{self.name}: 🔊 TTS ({time.perf_counter() - tts_t:.2f}s, "
                         f"{len(audio)} bytes)"
                     )
-                    audio_id = self.audio_server.put(audio)
-                    url = f"{self.public_base_url.rstrip('/')}/tts/{audio_id}.mp3"
+                    ext = {
+                        "audio/wav": "wav",
+                        "audio/mpeg": "mp3",
+                        "audio/flac": "flac",
+                    }.get(mime, "mp3")
+                    audio_id = self.audio_server.put(audio, mime)
+                    url = f"{self.public_base_url.rstrip('/')}/tts/{audio_id}.{ext}"
                     logger.info(f"{self.name}: ▶ serving {url}")
                     self._emit(VAET.VOICE_ASSISTANT_TTS_END, {"url": url})
                 except Exception as e:

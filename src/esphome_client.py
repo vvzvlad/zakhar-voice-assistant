@@ -14,12 +14,13 @@ from src.settings import DeviceConfig, settings
 class DeviceClient:
     """One ESPHome speaker: connection lifecycle + voice_assistant wiring."""
 
-    def __init__(self, cfg: DeviceConfig, zc, client_ext, client_local, tts_backend, audio_server):
+    def __init__(self, cfg: DeviceConfig, zc, client_ext, client_local, stt_backend, tts_backend, audio_server):
         self.cfg = cfg
         self.pipeline = Pipeline(
             cfg.name,
             client_ext,
             client_local,
+            stt_backend,
             tts_backend,
             audio_server,
             settings.public_base_url,
@@ -88,9 +89,9 @@ class DeviceClient:
 class DeviceManager:
     """Owns one DeviceClient per configured speaker; starts/stops them all."""
 
-    def __init__(self, zc, client_ext, client_local, tts_backend, audio_server):
+    def __init__(self, zc, client_ext, client_local, stt_backend, tts_backend, audio_server):
         self.clients = [
-            DeviceClient(cfg, zc, client_ext, client_local, tts_backend, audio_server)
+            DeviceClient(cfg, zc, client_ext, client_local, stt_backend, tts_backend, audio_server)
             for cfg in settings.devices
         ]
 

@@ -9,6 +9,7 @@ from loguru import logger
 from src.audio_server import AudioServer
 from src.esphome_client import DeviceManager
 from src.settings import settings
+from src.stt import make_stt_backend
 from src.tts import make_tts_backend
 
 
@@ -18,6 +19,8 @@ async def main() -> None:
     client_ext = httpx.AsyncClient(proxy=(settings.groq_proxy or None), verify=False)
     client_local = httpx.AsyncClient(verify=False)
 
+    # STT runs over client_ext (the proxied client GroqSttBackend uses).
+    stt_backend = make_stt_backend(settings.stt_backend, client_ext, settings)
     tts_backend = make_tts_backend(
         settings.tts_backend, settings.tts_base_url, client_local, settings.tts_timeout
     )
@@ -25,7 +28,9 @@ async def main() -> None:
     await audio_server.start()
 
     zc = zeroconf.Zeroconf()
-    manager = DeviceManager(zc, client_ext, client_local, tts_backend, audio_server)
+    manager = DeviceManager(
+        zc, client_ext, client_local, stt_backend, tts_backend, audio_server
+    )
 
     try:
         await manager.start()
