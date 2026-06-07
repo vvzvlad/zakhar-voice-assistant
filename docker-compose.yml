@@ -20,11 +20,14 @@ services:
       - zakhar-voice-assistant:/app/data   # all mutable state survives restart/update
     ports:
       - "${AUDIO_PORT}:${AUDIO_PORT}"       # publish the audio server to the LAN
+    depends_on:
+      zakhar-smarthome-mcp:
+        condition: service_healthy
     environment:
       GROQ_API_KEY: XXX
       WEATHER_API_KEY: XXX
       ESPHOME_DEVICES: "living|10.0.0.5|your_psk_here"
-      SMARTHOME_URL: http://10.0.0.5:1880/voice_command
+      MCP_SMARTHOME_URL: http://zakhar-smarthome-mcp:8201/mcp
       TTS_BASE_URL: http://10.0.0.5:8124
       PUBLIC_BASE_URL: http://10.0.0.10:8200
       AUDIO_PORT: 8200
@@ -42,3 +45,31 @@ services:
       interval: 30m
       timeout: 5s
       retries: 2
+
+  # Thin smart-home MCP server: exposes control tools and forwards them to
+  # Node-RED. Reached by the app over the default bridge by service name, so no
+  # published ports are needed.
+  zakhar-smarthome-mcp:
+    image: ghcr.io/vvzvlad/zakhar-voice-assistant:latest
+    container_name: zakhar-smarthome-mcp
+    command: python mcp_server.py
+    restart: always
+    environment:
+      SMARTHOME_URL: http://10.0.0.5:1880/voice_command
+      MCP_SERVER_HOST: 0.0.0.0
+      MCP_SERVER_PORT: 8201
+      TZ: Europe/Moscow
+    logging:
+      driver: "json-file"
+      options:
+        max-file: 5
+        max-size: 10m
+    labels:
+      com.centurylinklabs.watchtower.enable: "true"   # auto-update the image
+    healthcheck:
+      # The /mcp endpoint is POST/SSE, not a plain GET — just TCP-probe the port.
+      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('127.0.0.1', 8201), timeout=4).close()"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

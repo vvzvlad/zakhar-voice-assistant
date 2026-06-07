@@ -8,7 +8,7 @@ def _set_required(monkeypatch):
     """Set every required env var so Settings() can be constructed."""
     monkeypatch.setenv("GROQ_API_KEY", "g-key")
     monkeypatch.setenv("WEATHER_API_KEY", "w-key")
-    monkeypatch.setenv("SMARTHOME_URL", "http://smarthome.test/cmd")
+    monkeypatch.setenv("MCP_SMARTHOME_URL", "http://mcp.test:8201/mcp")
     monkeypatch.setenv("TTS_BASE_URL", "http://tts.test:8124")
     monkeypatch.setenv("PUBLIC_BASE_URL", "http://10.0.0.10:8200")
     monkeypatch.setenv("ESPHOME_DEVICES", "living|10.0.0.5|cHNr")
@@ -20,7 +20,7 @@ def test_loads_from_env(monkeypatch):
     s = Settings(_env_file=None)
     assert s.groq_api_key == "g-key"
     assert s.weather_api_key == "w-key"
-    assert s.smarthome_url == "http://smarthome.test/cmd"
+    assert s.mcp_smarthome_url == "http://mcp.test:8201/mcp"
     assert s.tts_base_url == "http://tts.test:8124"
     assert s.public_base_url == "http://10.0.0.10:8200"
     assert s.log_level == "DEBUG"

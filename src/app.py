@@ -8,6 +8,7 @@ from loguru import logger
 
 from src.audio_server import AudioServer
 from src.esphome_client import DeviceManager
+from src.mcp_client import McpToolHub
 from src.settings import settings
 from src.stt import make_stt_backend
 from src.tts import make_tts_backend
@@ -15,7 +16,7 @@ from src.tts import make_tts_backend
 
 async def main() -> None:
     """Build shared dependencies, start all speakers, and run until cancelled."""
-    # client_ext (proxied) -> Groq chat/STT + weather; client_local -> smart-home + TTS.
+    # client_ext (proxied) -> Groq chat/STT + weather; client_local -> local TTS.
     client_ext = httpx.AsyncClient(proxy=(settings.groq_proxy or None), verify=False)
     client_local = httpx.AsyncClient(verify=False)
 
@@ -27,9 +28,14 @@ async def main() -> None:
     audio_server = AudioServer(settings.audio_host, settings.audio_port, settings.audio_ttl)
     await audio_server.start()
 
+    # Smart-home MCP client: connect once here (same task as stop(), per anyio
+    # cancel-scope rules). A connect failure is handled gracefully inside start().
+    hub = McpToolHub(settings.mcp_smarthome_url, settings.mcp_smarthome_token or None)
+    await hub.start()
+
     zc = zeroconf.Zeroconf()
     manager = DeviceManager(
-        zc, client_ext, client_local, stt_backend, tts_backend, audio_server
+        zc, client_ext, hub, stt_backend, tts_backend, audio_server
     )
 
     try:
@@ -39,6 +45,7 @@ async def main() -> None:
         logger.info("shutting down")
     finally:
         await manager.stop()
+        await hub.stop()
         await audio_server.stop()
         await client_ext.aclose()
         await client_local.aclose()

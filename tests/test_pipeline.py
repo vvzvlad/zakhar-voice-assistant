@@ -38,7 +38,7 @@ def make_pipeline(tmp_path, name="dev", stt_text="распознанный те�
     pipeline = Pipeline(
         name,
         client_ext=object(),
-        client_local=object(),
+        hub=object(),
         stt_backend=FakeSttBackend(stt_text),
         tts_backend=tts_backend or FakeTtsBackend(),
         audio_server=audio_server,
@@ -81,7 +81,7 @@ def set_small_vad_thresholds(pipeline):
 def patch_llm(monkeypatch, reply="ответ"):
     """Stub the LLM (still Groq). STT is injected as a fake backend, not patched."""
 
-    async def fake_call_groq_api(client_ext, client_local, text):
+    async def fake_call_groq_api(client_ext, hub, text):
         return reply
 
     monkeypatch.setattr("src.llm.call_groq_api", fake_call_groq_api)

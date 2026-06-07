@@ -47,7 +47,7 @@ class Pipeline:
         self,
         name,
         client_ext,
-        client_local,
+        hub,
         stt_backend,
         tts_backend,
         audio_server,
@@ -56,7 +56,8 @@ class Pipeline:
     ):
         self.name = name
         self.client_ext = client_ext
-        self.client_local = client_local
+        # MCP tool hub: advertises smart-home tools to the model and executes them.
+        self.hub = hub
         self.stt_backend = stt_backend
         self.tts_backend = tts_backend
         self.audio_server = audio_server
@@ -236,7 +237,7 @@ class Pipeline:
                 logger.info(f"{self.name}: 🤖 → LLM: {text!r}")
                 llm_t = time.perf_counter()
                 reply = await llm.call_groq_api(
-                    self.client_ext, self.client_local, text
+                    self.client_ext, self.hub, text
                 )
                 logger.info(
                     f"{self.name}: 💬 LLM reply ({time.perf_counter() - llm_t:.2f}s): "

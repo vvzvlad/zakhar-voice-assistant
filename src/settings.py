@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from src.config_errors import load_settings_or_exit
+
 
 @dataclass(frozen=True)
 class DeviceConfig:
@@ -22,7 +24,7 @@ class Settings(BaseSettings):
     weather_api_key: str
 
     # --- Our own services (no default) ---
-    smarthome_url: str          # Node-RED endpoint for smart-home commands
+    mcp_smarthome_url: str      # Smart-home MCP server endpoint, e.g. http://127.0.0.1:8201/mcp
     tts_base_url: str           # home_assistant_tts service base, e.g. http://10.0.0.5:8124
     public_base_url: str        # base URL the speakers use to fetch audio, e.g. http://10.0.0.10:8200
 
@@ -30,6 +32,7 @@ class Settings(BaseSettings):
     esphome_devices: str        # "name|host|psk;name2|host2|psk2"
 
     # --- Non-secret config (defaults OK) ---
+    mcp_smarthome_token: str = ""  # Optional bearer token for the MCP server; empty = no auth header
     esphome_port: int = 6053
     groq_model: str = "openai/gpt-oss-120b"
     groq_stt_model: str = "whisper-large-v3-turbo"
@@ -81,4 +84,4 @@ class Settings(BaseSettings):
         return result
 
 
-settings = Settings()
+settings = load_settings_or_exit(Settings)
