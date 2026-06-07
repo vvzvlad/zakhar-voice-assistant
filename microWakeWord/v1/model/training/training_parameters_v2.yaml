@@ -1,0 +1,64 @@
+window_step_ms: 10
+train_dir: /home/claude/zakhar-mww/trained_models/zakhar_v2
+
+features:
+  - features_dir: /home/claude/zakhar-mww/features_real
+    sampling_weight: 4.0
+    penalty_weight: 1.0
+    truth: true
+    truncation_strategy: truncate_start
+    type: mmap
+  - features_dir: /home/claude/zakhar-mww/features_synth
+    sampling_weight: 2.0
+    penalty_weight: 1.0
+    truth: true
+    truncation_strategy: truncate_start
+    type: mmap
+  - features_dir: /home/claude/zakhar-mww/negative_datasets/speech
+    sampling_weight: 10.0
+    penalty_weight: 1.0
+    truth: false
+    truncation_strategy: random
+    type: mmap
+  - features_dir: /home/claude/zakhar-mww/negative_datasets/dinner_party
+    sampling_weight: 10.0
+    penalty_weight: 1.0
+    truth: false
+    truncation_strategy: random
+    type: mmap
+  - features_dir: /home/claude/zakhar-mww/negative_datasets/no_speech
+    sampling_weight: 12.0
+    penalty_weight: 1.0
+    truth: false
+    truncation_strategy: random
+    type: mmap
+  - features_dir: /home/claude/zakhar-mww/negative_datasets/dinner_party_eval
+    sampling_weight: 0.0
+    penalty_weight: 1.0
+    truth: false
+    truncation_strategy: split
+    type: mmap
+
+# Three training stages with decaying learning rate (25000 steps total).
+training_steps: [10000, 10000, 5000]
+learning_rates: [0.001, 0.0005, 0.0001]
+positive_class_weight: [1, 1, 1]
+# Higher negative weight to suppress false accepts (short 2-syllable phrase).
+negative_class_weight: [30, 30, 30]
+
+batch_size: 128
+
+# Light SpecAugment for generalization (lists match training_steps length).
+time_mask_max_size: [5, 5, 5]
+time_mask_count: [2, 2, 2]
+freq_mask_max_size: [5, 5, 5]
+freq_mask_count: [2, 2, 2]
+
+eval_step_interval: 500
+clip_duration_ms: 1500
+
+# Best-weights selection: first drive ambient false-accepts/hour <= target,
+# then maximize recall across viable thresholds.
+target_minimization: 2.0
+minimization_metric: ambient_false_positives_per_hour
+maximization_metric: average_viable_recall

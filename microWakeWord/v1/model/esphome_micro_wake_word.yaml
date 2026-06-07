@@ -1,0 +1,34 @@
+# ESPHome micro_wake_word snippet for the custom "Захар" wake word.
+# Tested target: ESP32-S3 with PSRAM (Home Assistant Voice PE). ESPHome >= 2024.7.
+#
+# Place zakhar.tflite and zakhar.json where ESPHome can fetch them. Options:
+#   1) Host both files on a URL and point `model:` at the JSON URL.
+#   2) Use the github:// shorthand if you publish them in a repo.
+#   3) Put them under your ESPHome `config/` and reference by local path.
+#
+# The probability_cutoff and sliding_window_size come from zakhar.json but can be
+# overridden here (uncomment) without retraining.
+
+micro_wake_word:
+  models:
+    - model: https://YOUR_HOST/zakhar.json
+      # id: zakhar
+      # probability_cutoff: 0.97      # override (optional)
+      # sliding_window_size: 5        # override (optional)
+  vad:                                 # optional voice-activity gate (recommended)
+  on_wake_word_detected:
+    - voice_assistant.start:
+        wake_word: !lambda return wake_word;
+
+# Minimal microphone block for reference (Voice PE already defines its own mic;
+# adapt to your board's pins / i2s config):
+# i2s_audio:
+#   - id: i2s_in
+#     i2s_lrclk_pin: GPIO...
+#     i2s_bclk_pin: GPIO...
+# microphone:
+#   - platform: i2s_audio
+#     id: mic
+#     adc_type: external
+#     i2s_din_pin: GPIO...
+#     pdm: false
