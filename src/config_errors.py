@@ -1,8 +1,7 @@
 """Turn a pydantic-settings ValidationError into a clear, actionable startup message.
 
-Shared by the app Settings and the standalone MCP server config so a missing or
-invalid environment variable fails fast with a readable message (naming the env
-var) instead of a raw pydantic traceback.
+Used by the app Settings so a missing or invalid environment variable fails fast
+with a readable message (naming the env var) instead of a raw pydantic traceback.
 """
 
 import sys

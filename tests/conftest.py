@@ -5,8 +5,6 @@ import os
 # same variables are injected via the workflow's `env:` block.
 os.environ.setdefault("GROQ_API_KEY", "test-groq-key")
 os.environ.setdefault("WEATHER_API_KEY", "test-weather-key")
-# Node-RED endpoint — used by the standalone MCP server tests (McpServerSettings).
-os.environ.setdefault("SMARTHOME_URL", "http://smarthome.test/voice_command")
 # Smart-home MCP server endpoint — required by the app Settings now.
 os.environ.setdefault("MCP_SMARTHOME_URL", "http://mcp.test:8201/mcp")
 os.environ.setdefault("TTS_BASE_URL", "http://tts.test:8124")

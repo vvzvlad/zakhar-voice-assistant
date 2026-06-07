@@ -19,7 +19,6 @@ RUN mkdir -p data
 COPY src/ src/
 COPY templates/ templates/
 COPY main.py .
-COPY mcp_server.py .
 
 # No EXPOSE: the audio port is published to the LAN via docker-compose `ports`.
 

@@ -2,12 +2,12 @@
 
 Client-side voice assistant for a "HA Voice PE" ESP32 speaker. It connects to the
 speaker over the ESPHome Native API (as the client), then runs the pipeline:
-STT (Groq Whisper) → LLM (Groq chat) → smart-home tools via MCP server → Node-RED →
+STT (Groq Whisper) → LLM (Groq chat) → smart-home tools via an external MCP server →
 TTS (local TeraTTS HTTP service), and serves the resulting audio back to N speakers.
 It replaces Home Assistant in this loop. Smart-home control is an MCP integration:
-a thin standalone MCP server (`mcp_server.py`, `make run-mcp`) exposes control
-tools and forwards them to Node-RED; the app is an MCP client running an agentic
-tool-calling loop.
+the app is an MCP client (running an agentic tool-calling loop) that connects to an
+external smart-home MCP server hosted in Node-RED (node-red-contrib-mcp-server) at
+`MCP_SMARTHOME_URL`.
 
 ## Project structure
 - `src/` — application code (`settings.py` is the single config entry point)
@@ -37,7 +37,7 @@ make run               # runs .venv/bin/python main.py
 
 App, required (no default — missing → fail at startup):
 - `GROQ_API_KEY`, `WEATHER_API_KEY` — credentials.
-- `MCP_SMARTHOME_URL` — smart-home MCP server endpoint (e.g. http://127.0.0.1:8201/mcp).
+- `MCP_SMARTHOME_URL` — external smart-home MCP server endpoint (node-red-contrib-mcp-server in Node-RED, e.g. http://10.0.0.5:8001/mcp).
 - `TTS_BASE_URL` — local TeraTTS service base.
 - `PUBLIC_BASE_URL` — base URL the speakers use to fetch audio.
 - `ESPHOME_DEVICES` — `name|host|psk;name2|host2|psk2`.
@@ -47,10 +47,6 @@ MCP server; empty = no auth), `ESPHOME_PORT`, `GROQ_MODEL`, `GROQ_STT_MODEL`,
 `GROQ_PROXY`, `WEATHER_CITY`, `TTS_BACKEND`, `TTS_TIMEOUT`, `AUDIO_HOST`,
 `AUDIO_PORT`, `AUDIO_TTL`, `LOG_LEVEL`, `SYSTEM_PROMPT_PATH`, `CONTEXT_DIR`.
 See `.env.example`.
-
-Smart-home MCP server (standalone `mcp_server.py`, `make run-mcp`):
-- `SMARTHOME_URL` — required; Node-RED endpoint it forwards commands to.
-- `MCP_SERVER_HOST` (default `0.0.0.0`), `MCP_SERVER_PORT` (default `8201`).
 
 ## Conventions
 - All mutable state goes under `data/`.

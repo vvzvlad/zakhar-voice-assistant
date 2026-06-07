@@ -55,10 +55,6 @@ test: install ## Run the test suite (auto-creates .venv if missing)
 run: install ## Run the application (auto-creates .venv if missing)
 	$(PY) main.py
 
-.PHONY: run-mcp
-run-mcp: install ## Run the smart-home MCP server
-	$(PY) mcp_server.py
-
 # --- Housekeeping ------------------------------------------------------------
 .PHONY: clean
 clean: ## Remove the venv and Python caches

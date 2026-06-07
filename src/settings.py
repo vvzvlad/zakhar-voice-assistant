@@ -24,7 +24,7 @@ class Settings(BaseSettings):
     weather_api_key: str
 
     # --- Our own services (no default) ---
-    mcp_smarthome_url: str      # Smart-home MCP server endpoint, e.g. http://127.0.0.1:8201/mcp
+    mcp_smarthome_url: str      # external smart-home MCP server endpoint (Node-RED), e.g. http://10.0.0.5:8001/mcp
     tts_base_url: str           # home_assistant_tts service base, e.g. http://10.0.0.5:8124
     public_base_url: str        # base URL the speakers use to fetch audio, e.g. http://10.0.0.10:8200
 
