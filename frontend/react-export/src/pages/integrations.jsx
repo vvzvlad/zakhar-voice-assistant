@@ -22,19 +22,15 @@ function Card({ title, sub, children, foot, right }) {
 // configured), each enriched with LIVE status/tools from GET /api/tools matched
 // by source id. Sources are built once at boot, so enabling one needs a restart.
 
-// Read-only chip row of advertised tool names with a "show all / hide" toggle,
-// mirroring the original MCP card design (first 5 shown, "+N" collapsed).
+// Read-only chip row that always renders every advertised tool name.
 function ToolChips({ tools }) {
-  const [showAll, setShowAll] = useState(false);
   const list = tools || [];
   return <div className="z-f" style={{ borderBottom: "none" }}>
-    <div className="z-fl"><b style={{ fontSize: 12 }}>Advertised tools <span style={{ color: "var(--mut2)", fontWeight: 400 }}>(read-only)</span></b>
-      {list.length > 5 && <a style={{ fontSize: 11.5, color: "var(--acc)", cursor: "pointer", fontWeight: 600 }} onClick={() => setShowAll((v) => !v)}>{showAll ? "Hide" : "Show all"}</a>}</div>
+    <div className="z-fl"><b style={{ fontSize: 12 }}>Advertised tools <span style={{ color: "var(--mut2)", fontWeight: 400 }}>(read-only)</span></b></div>
     {list.length === 0
       ? <div className="z-fh">No tools — the source is not responding or disabled.</div>
       : <div className="z-chiprow">
-          {(showAll ? list : list.slice(0, 5)).map((t) => <span className="z-toolchip" key={t.name} title={t.description || ""}>{t.name}</span>)}
-          {!showAll && list.length > 5 && <span className="z-toolchip" style={{ color: "var(--mut)" }}>+{list.length - 5}</span>}
+          {list.map((t) => <span className="z-toolchip" key={t.name} title={t.description || ""}>{t.name}</span>)}
         </div>}
   </div>;
 }
