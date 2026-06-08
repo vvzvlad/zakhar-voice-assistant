@@ -579,6 +579,212 @@ async def test_raw_capture_disabled_by_default_writes_nothing(tmp_path, monkeypa
     assert not cap_dir.exists() or list(cap_dir.glob("*.wav")) == []
 
 
+# --- manual "record X seconds" capture-only mode -----------------------------
+
+async def test_capture_run_writes_wav_and_skips_pipeline(tmp_path, monkeypatch):
+    # An armed capture run records the streamed PCM to a WAV and runs NO STT/LLM/TTS:
+    # only RUN_START and RUN_END are emitted, the WAV matches the buffered bytes, and
+    # neither the STT backend nor the LLM is ever called.
+    import wave
+
+    cap_dir = tmp_path / "captures"
+    store = FakeRunsStore()
+    pipeline, events = make_pipeline(
+        tmp_path, name="dev", stt_text="должно быть проигнорировано", runs_store=store,
+    )
+    pipeline.rt.core.capture.dir = str(cap_dir)
+
+    # Track STT/LLM invocation: in capture mode neither must run.
+    stt_calls = []
+    orig_transcribe = pipeline.stt_backend.transcribe
+
+    async def spy_transcribe(pcm):
+        stt_calls.append(pcm)
+        return await orig_transcribe(pcm)
+
+    pipeline.stt_backend.transcribe = spy_transcribe
+    llm_calls = []
+
+    async def fake_llm(*a, **k):
+        llm_calls.append(a)
+        return "nope"
+
+    monkeypatch.setattr("src.llm.call_llm_api", fake_llm)
+
+    pcm = b"\x01\x02" * 100  # 400 bytes
+    pipeline.arm_capture(5)
+    assert pipeline._capture_armed is True
+    await pipeline.on_start("cid", 0, None, None)
+    # arming is consumed into the per-run flag.
+    assert pipeline._capture_armed is False
+    assert pipeline._capture_run is True
+    await pipeline.on_audio(pcm)
+    await pipeline.on_stop(False)
+
+    # Only the capture-only event pair, NO STT/INTENT/TTS events.
+    assert types_of(events) == [
+        VAET.VOICE_ASSISTANT_RUN_START,
+        VAET.VOICE_ASSISTANT_RUN_END,
+    ]
+    assert stt_calls == [] and llm_calls == []
+    # No run recorded: capture-only never touches the runs store.
+    assert store.records == []
+    # The capture flag is cleared so the next start is a normal run.
+    assert pipeline._capture_run is False
+
+    wavs = list(cap_dir.glob("*_manual_*.wav"))
+    assert len(wavs) == 1
+    with wave.open(str(wavs[0]), "rb") as w:
+        assert w.getnchannels() == 1 and w.getsampwidth() == 2
+        assert w.getframerate() == 16000
+        assert w.readframes(w.getnframes()) == pcm
+
+
+async def test_capture_run_ends_on_deadline(tmp_path, monkeypatch):
+    # When the device never signals stop, the server-side deadline ends the capture
+    # on the next audio chunk and still writes the WAV + emits RUN_END.
+    import wave
+
+    cap_dir = tmp_path / "captures"
+    pipeline, events = make_pipeline(tmp_path, name="dev")
+    pipeline.rt.core.capture.dir = str(cap_dir)
+
+    pipeline.arm_capture(5)
+    await pipeline.on_start("cid", 0, None, None)
+    # Force the deadline into the past so the next chunk ends the capture.
+    pipeline._capture_deadline = 0.0
+    await pipeline.on_audio(b"\x03\x04" * 50)  # 100 bytes
+
+    assert pipeline._capture_run is False
+    assert types_of(events) == [
+        VAET.VOICE_ASSISTANT_RUN_START,
+        VAET.VOICE_ASSISTANT_RUN_END,
+    ]
+    wavs = list(cap_dir.glob("*_manual_*.wav"))
+    assert len(wavs) == 1
+    with wave.open(str(wavs[0]), "rb") as w:
+        assert w.readframes(w.getnframes()) == b"\x03\x04" * 50
+
+    # A later device stop must NOT emit anything again (finalize-once).
+    before = len(events)
+    await pipeline.on_stop(False)
+    assert len(events) == before
+
+
+async def test_capture_arming_does_not_affect_normal_run(tmp_path, monkeypatch):
+    # A normal wake-word run on a pipeline that was NEVER armed runs the full
+    # STT->LLM->TTS path unchanged (regression guard for the capture branch).
+    patch_llm(monkeypatch, reply="готово")
+    cap_dir = tmp_path / "captures"
+    pipeline, events = make_pipeline(tmp_path, stt_text="включи свет")
+    pipeline.rt.core.capture.dir = str(cap_dir)
+
+    assert pipeline._capture_run is False
+    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_audio(b"\x01\x02" * 100)
+    await pipeline.on_stop(False)
+
+    assert types_of(events) == FULL_SEQUENCE
+    # No manual-capture WAV written for a normal run.
+    assert not cap_dir.exists() or list(cap_dir.glob("*_manual_*.wav")) == []
+
+
+async def test_capture_run_after_normal_run_is_isolated(tmp_path, monkeypatch):
+    # Arm only the SECOND run on a reused pipeline: run 1 is a normal full pipeline,
+    # run 2 is capture-only. Confirms arming is per-run and does not leak backwards.
+    patch_llm(monkeypatch, reply="готово")
+    cap_dir = tmp_path / "captures"
+    pipeline, events = make_pipeline(tmp_path, name="dev", stt_text="включи свет")
+    pipeline.rt.core.capture.dir = str(cap_dir)
+
+    # Run 1: normal.
+    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_audio(b"\x01\x02" * 100)
+    await pipeline.on_stop(False)
+    assert types_of(events) == FULL_SEQUENCE
+    events.clear()
+
+    # Run 2: capture-only.
+    pipeline.arm_capture(3)
+    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_audio(b"\x05\x06" * 80)
+    await pipeline.on_stop(False)
+    assert types_of(events) == [
+        VAET.VOICE_ASSISTANT_RUN_START,
+        VAET.VOICE_ASSISTANT_RUN_END,
+    ]
+    assert len(list(cap_dir.glob("*_manual_*.wav"))) == 1
+
+
+async def test_expired_arm_does_not_capture_later_run(tmp_path, monkeypatch):
+    # FIX 2: if the button press is lost / the device never starts, the armed flag
+    # must expire instead of silently turning a later real wake-word run into a
+    # capture-only run. Arm, blow past the arm-arrival deadline, then start a normal
+    # run: it must run the full STT->LLM->TTS path, not capture.
+    patch_llm(monkeypatch, reply="готово")
+    cap_dir = tmp_path / "captures"
+    pipeline, events = make_pipeline(tmp_path, name="dev", stt_text="включи свет")
+    pipeline.rt.core.capture.dir = str(cap_dir)
+
+    pipeline.arm_capture(5)
+    assert pipeline._capture_armed is True
+    # Force the arm-arrival deadline into the past: the press effectively never landed.
+    pipeline._capture_arm_deadline = 0.0
+
+    # A real wake-word run arrives later (with a phrase). It must NOT be captured.
+    await pipeline.on_start("cid", 0, None, "захар")
+    assert pipeline._capture_run is False
+    assert pipeline._capture_armed is False  # stale flag cleared, not consumed
+    await pipeline.on_audio(b"\x01\x02" * 100)
+    await pipeline.on_stop(False)
+
+    assert types_of(events) == FULL_SEQUENCE
+    assert not cap_dir.exists() or list(cap_dir.glob("*_manual_*.wav")) == []
+
+
+async def test_wake_word_run_while_armed_keeps_flag_for_manual_start(tmp_path, monkeypatch):
+    # FIX 3: between arm_capture() and the button-initiated start, a real wake word
+    # could fire. Its on_start carries a wake_word_phrase, so it must NOT consume the
+    # armed flag: it runs as a normal assistant run, and the flag survives so the
+    # later phraseless manual start still gets captured.
+    import wave
+
+    patch_llm(monkeypatch, reply="готово")
+    cap_dir = tmp_path / "captures"
+    pipeline, events = make_pipeline(tmp_path, name="dev", stt_text="включи свет")
+    pipeline.rt.core.capture.dir = str(cap_dir)
+
+    pipeline.arm_capture(5)
+    assert pipeline._capture_armed is True
+
+    # A genuine wake-word run sneaks in WITH a phrase while armed.
+    await pipeline.on_start("cid", 0, None, "захар")
+    assert pipeline._capture_run is False           # not captured
+    assert pipeline._capture_armed is True          # flag preserved for the manual start
+    await pipeline.on_audio(b"\x01\x02" * 100)
+    await pipeline.on_stop(False)
+    assert types_of(events) == FULL_SEQUENCE        # ran the full assistant pipeline
+    assert not cap_dir.exists() or list(cap_dir.glob("*_manual_*.wav")) == []
+    events.clear()
+
+    # Now the genuine manual start arrives (no phrase) and consumes the flag.
+    await pipeline.on_start("cid", 0, None, None)
+    assert pipeline._capture_run is True
+    assert pipeline._capture_armed is False
+    pcm = b"\x07\x08" * 60
+    await pipeline.on_audio(pcm)
+    await pipeline.on_stop(False)
+
+    assert types_of(events) == [
+        VAET.VOICE_ASSISTANT_RUN_START,
+        VAET.VOICE_ASSISTANT_RUN_END,
+    ]
+    wavs = list(cap_dir.glob("*_manual_*.wav"))
+    assert len(wavs) == 1
+    with wave.open(str(wavs[0]), "rb") as w:
+        assert w.readframes(w.getnframes()) == pcm
+
+
 async def test_tts_fail_without_prior_error_sets_tts_stage(tmp_path, monkeypatch):
     # Sanity check the guard's other branch: a TTS failure with no earlier error
     # still records error_stage="TTS".

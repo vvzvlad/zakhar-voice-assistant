@@ -22,6 +22,37 @@ class RaisingWS:
         raise RuntimeError("socket is dead")
 
 
+class ClosableWS:
+    """WebSocket double that records whether close() was awaited."""
+
+    def __init__(self):
+        self.closed = False
+
+    async def send_str(self, data):
+        pass
+
+    async def close(self):
+        self.closed = True
+
+
+class CloseRaisingWS:
+    """WebSocket double whose close() always fails (a stuck client).
+
+    Records that close() was actually invoked so the test can prove close_all()
+    reaches a client even when its close() raises (the exception is suppressed).
+    """
+
+    def __init__(self):
+        self.close_called = False
+
+    async def send_str(self, data):
+        pass
+
+    async def close(self):
+        self.close_called = True
+        raise RuntimeError("close failed")
+
+
 async def test_broadcast_reaches_all_clients():
     hub = RunEventsHub()
     a, b = FakeWS(), FakeWS()
@@ -69,4 +100,23 @@ async def test_broadcast_with_no_clients_is_noop():
     hub = RunEventsHub()
     # Must not raise with zero registered clients.
     await hub.broadcast({"type": "run", "run": {"id": 4}})
+    assert hub.count() == 0
+
+
+async def test_close_all_closes_every_client_and_clears_set():
+    hub = RunEventsHub()
+    good = ClosableWS()
+    bad = CloseRaisingWS()
+    hub.register(good)
+    hub.register(bad)
+    assert hub.count() == 2
+
+    # A failing close() on one client must not prevent closing the others.
+    await hub.close_all()
+
+    # The healthy client was actually closed.
+    assert good.closed is True
+    # The raising client was still reached (its exception was suppressed, not skipped).
+    assert bad.close_called is True
+    # The set was cleared regardless of the raising close.
     assert hub.count() == 0

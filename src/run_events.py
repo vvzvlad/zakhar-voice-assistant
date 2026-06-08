@@ -1,5 +1,6 @@
 """In-memory broadcast hub: pushes finalized pipeline runs to live panel WS clients."""
 
+import contextlib
 import json
 
 from loguru import logger
@@ -40,3 +41,17 @@ class RunEventsHub:
                 dead.append(ws)
         for ws in dead:
             self._clients.discard(ws)
+
+    async def close_all(self) -> None:
+        """Close every registered client and clear the set, used on panel shutdown.
+
+        The panel's `_runs_stream` handlers block in `async for _msg in ws`, so on
+        shutdown aiohttp's `AppRunner.cleanup()` would otherwise wait the full
+        `shutdown_timeout` for them to finish — making the process hang on Ctrl+C.
+        Closing the sockets here unblocks those handlers immediately. Closing one
+        client must not prevent closing the others, so each close is suppressed.
+        """
+        for ws in list(self._clients):
+            with contextlib.suppress(Exception):
+                await ws.close()
+        self._clients.clear()

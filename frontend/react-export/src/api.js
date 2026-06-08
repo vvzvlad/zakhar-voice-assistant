@@ -56,6 +56,9 @@ export const putPrompt = (text) => request("/api/prompt", { method: "PUT", body:
 export const getSystem = () => request("/api/system");
 export const postRestart = () => request("/api/restart", { method: "POST" });
 export const getDevices = () => request("/api/devices");
+// Trigger a manual capture-only recording (seconds of mic audio -> WAV, no pipeline).
+export const postCapture = (device, seconds) =>
+  request("/api/capture", { method: "POST", body: { device, seconds } });
 // Live tool sources (external MCP + built-ins) with their advertised tools.
 export const getTools = () => request("/api/tools");
 

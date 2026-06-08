@@ -35,6 +35,131 @@ def _manager(clients):
     return mgr
 
 
+# --- manual capture (DeviceClient.capture + DeviceManager.capture) ------------
+
+class _Ent:
+    def __init__(self, object_id, key):
+        self.object_id = object_id
+        self.key = key
+
+
+class _CaptureCli:
+    """Fake APIClient recording number_command/button_command calls."""
+
+    def __init__(self):
+        self.numbers = []  # (key, state)
+        self.buttons = []  # key
+
+    def number_command(self, key, state, device_id=0):
+        self.numbers.append((key, state))
+
+    def button_command(self, key, device_id=0):
+        self.buttons.append(key)
+
+
+class _CapturePipeline:
+    """Fake pipeline recording the armed seconds."""
+
+    def __init__(self):
+        self.armed = []
+
+    def arm_capture(self, seconds):
+        self.armed.append(seconds)
+
+
+def _capture_client(name="dev", *, online=True, btn_key=11, sec_key=22):
+    """Build a DeviceClient bypassing __init__, wired with capture fakes."""
+    from src.esphome_client import DeviceClient
+    c = DeviceClient.__new__(DeviceClient)
+    c.cfg = _Cfg(name)
+    c.online = online
+    c.cli = _CaptureCli()
+    c.pipeline = _CapturePipeline()
+    c._capture_button_key = btn_key
+    c._capture_seconds_key = sec_key
+    return c
+
+
+def test_discover_capture_keys_maps_by_object_id():
+    # These object_ids are exactly what the firmware sends over the Native API:
+    # object_id = slugify(name) for the "Zakhar Capture Seconds" / "Zakhar Capture
+    # Sample" entities in esphome/zakhar-voice.yaml (NOT the YAML `id:` field). They
+    # MUST stay equal to slugify(name) or discovery silently fails on real hardware.
+    c = _capture_client(btn_key=None, sec_key=None)
+    c._discover_capture_keys([
+        _Ent("some_other", 1),
+        _Ent("zakhar_capture_seconds", 22),
+        _Ent("zakhar_capture_sample", 11),
+    ])
+    assert c._capture_button_key == 11
+    assert c._capture_seconds_key == 22
+
+
+def test_discover_capture_keys_absent_leaves_none():
+    c = _capture_client(btn_key=5, sec_key=6)
+    c._discover_capture_keys([_Ent("unrelated", 1)])  # no capture entities
+    assert c._capture_button_key is None
+    assert c._capture_seconds_key is None
+
+
+async def test_capture_arms_then_commands():
+    c = _capture_client(btn_key=11, sec_key=22)
+    await c.capture(7)
+    # Pipeline armed BEFORE the device commands.
+    assert c.pipeline.armed == [7]
+    # seconds set first (as float), then the button pressed.
+    assert c.cli.numbers == [(22, 7.0)]
+    assert c.cli.buttons == [11]
+
+
+async def test_capture_raises_when_offline():
+    c = _capture_client(online=False)
+    with pytest.raises(RuntimeError):
+        await c.capture(5)
+    assert c.pipeline.armed == []  # never armed when offline
+
+
+async def test_capture_raises_when_keys_missing():
+    c = _capture_client(btn_key=None, sec_key=None)
+    with pytest.raises(RuntimeError):
+        await c.capture(5)
+    assert c.pipeline.armed == []
+
+
+class _MgrCaptureClient:
+    """Fake DeviceClient for DeviceManager.capture routing tests."""
+
+    def __init__(self, name, online=True):
+        self.cfg = _Cfg(name)
+        self.online = online
+        self.captured = []
+
+    async def capture(self, seconds):
+        self.captured.append(seconds)
+
+
+async def test_manager_capture_routes_to_named_online_client():
+    a = _MgrCaptureClient("a")
+    b = _MgrCaptureClient("b")
+    mgr = _manager([a, b])
+    await mgr.capture("b", 9)
+    assert b.captured == [9] and a.captured == []
+
+
+async def test_manager_capture_unknown_device_raises_lookup():
+    mgr = _manager([_MgrCaptureClient("a")])
+    with pytest.raises(LookupError):
+        await mgr.capture("nope", 5)
+
+
+async def test_manager_capture_offline_raises_runtime():
+    off = _MgrCaptureClient("a", online=False)
+    mgr = _manager([off])
+    with pytest.raises(RuntimeError):
+        await mgr.capture("a", 5)
+    assert off.captured == []
+
+
 async def test_start_isolates_failing_client():
     a, bad, c = _FakeClient("a"), _FakeClient("bad", fail=True), _FakeClient("c")
     await _manager([a, bad, c]).start()

@@ -11,6 +11,13 @@ from src.audio_server import tts_url
 from src.core_config import DeviceConfig
 from src.pipeline import Pipeline
 
+# Native API object_ids of the manual-capture template entities. The firmware
+# transmits object_id = slugify(name) over the API (NOT the YAML `id:` field), so
+# these MUST equal slugify(name) from esphome/zakhar-voice.yaml — i.e. the entities
+# named "Zakhar Capture Seconds" / "Zakhar Capture Sample".
+CAPTURE_SECONDS_OBJECT_ID = "zakhar_capture_seconds"
+CAPTURE_SAMPLE_OBJECT_ID = "zakhar_capture_sample"
+
 
 class DeviceClient:
     """One ESPHome speaker: connection lifecycle + voice_assistant wiring."""
@@ -32,16 +39,24 @@ class DeviceClient:
         )
         self._unsub = None
         self.online = False
+        # Native API entity keys for the manual-capture template entities, discovered
+        # on connect by object_id. None when the firmware predates these entities.
+        self._capture_button_key = None
+        self._capture_seconds_key = None
 
     async def _on_connect(self) -> None:
-        """Re-runs on every (re)connection: log device, wire & subscribe."""
+        """Re-runs on every (re)connection: log device, discover entities, wire & subscribe."""
+        # Combined call: device info + the entity list in one round-trip. We need the
+        # entity list to map the capture template entities (by object_id) to their
+        # Native API keys for number_command/button_command.
         try:
-            info = await self.cli.device_info()
+            info, entities, _services = await self.cli.device_info_and_list_entities()
             logger.info(
                 f"connected {self.cfg.name}: {info.name} (esphome {info.esphome_version})"
             )
+            self._discover_capture_keys(entities)
         except Exception as e:
-            logger.warning(f"{self.cfg.name}: device_info failed: {e}")
+            logger.warning(f"{self.cfg.name}: device_info/list_entities failed: {e}")
 
         # Bind the pipeline's emitters to this live connection.
         self.pipeline.send_event = self.cli.send_voice_assistant_event
@@ -71,6 +86,50 @@ class DeviceClient:
 
     async def _handle_stop(self, abort):
         await self.pipeline.on_stop(abort)
+
+    def _discover_capture_keys(self, entities) -> None:
+        """Map the manual-capture template entities to Native API keys by object_id.
+
+        Sets _capture_button_key / _capture_seconds_key from the entity list; leaves
+        them None when the firmware does not expose the entities (older flash).
+        """
+        self._capture_button_key = None
+        self._capture_seconds_key = None
+        for ent in entities:
+            object_id = getattr(ent, "object_id", None)
+            if object_id == CAPTURE_SAMPLE_OBJECT_ID:
+                self._capture_button_key = ent.key
+            elif object_id == CAPTURE_SECONDS_OBJECT_ID:
+                self._capture_seconds_key = ent.key
+        if self._capture_button_key is None or self._capture_seconds_key is None:
+            logger.info(
+                f"{self.cfg.name}: manual-capture entities not found "
+                f"(button={self._capture_button_key}, seconds={self._capture_seconds_key}); "
+                f"flash the firmware with the capture entities to enable it"
+            )
+
+    async def capture(self, seconds: int) -> None:
+        """Record `seconds` of mic audio on this speaker in capture-only mode.
+
+        Arms the pipeline for a capture-only run FIRST (so the flag is set before the
+        device's voice_assistant.start arrives), sets the device-side duration, then
+        presses the device button. The device then streams audio for `seconds` and
+        stops itself; the pipeline writes the PCM to a WAV (no STT/LLM/TTS). Raises a
+        clear error when the speaker is offline or lacks the capture entities.
+        """
+        if not self.online:
+            raise RuntimeError(f"{self.cfg.name} is offline")
+        if self._capture_button_key is None or self._capture_seconds_key is None:
+            raise RuntimeError(
+                f"{self.cfg.name} has no manual-capture entities "
+                f"(firmware needs the zakhar_capture_sample/seconds template entities)"
+            )
+        # Arm BEFORE pressing so the resulting on_start is treated as capture-only.
+        self.pipeline.arm_capture(seconds)
+        logger.info(f"{self.cfg.name}: ⏺️ manual capture {seconds}s")
+        # number_command / button_command are sync (they just queue a protobuf send).
+        self.cli.number_command(self._capture_seconds_key, float(seconds))
+        self.cli.button_command(self._capture_button_key)
 
     async def announce(self, text: str) -> None:
         """Proactively speak `text` on this speaker via the assist-satellite announce path."""
@@ -132,6 +191,22 @@ class DeviceManager:
             logger.warning(f"reminder target {device_name!r} unavailable; dropping")
             return
         await target.announce(text)
+
+    async def capture(self, device_name: str, seconds: int) -> None:
+        """Trigger a manual capture-only recording on the named speaker.
+
+        Routes to the matching online client (mirrors announce routing). Raises a
+        clear error when the device is unknown or offline so the caller (panel API)
+        can return the right status code.
+        """
+        target = next(
+            (c for c in self.clients if c.cfg.name == device_name), None
+        )
+        if target is None:
+            raise LookupError(f"unknown device {device_name!r}")
+        if not target.online:
+            raise RuntimeError(f"{device_name} is offline")
+        await target.capture(seconds)
 
     async def start(self) -> None:
         for c in self.clients:

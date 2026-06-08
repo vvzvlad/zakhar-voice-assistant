@@ -73,11 +73,13 @@ async def _read_json(request: web.Request):
 
 class PanelServer:
     def __init__(self, svc, host, port, *, version, started_at,
-                 restart_event, device_status=None, static_dir=None,
-                 runs_store=None, tool_sources=None, run_events=None,
-                 pending_restart=None):
+                 restart_event, device_status=None, device_capture=None,
+                 static_dir=None, runs_store=None, tool_sources=None,
+                 run_events=None, pending_restart=None):
         # svc: ConfigService; started_at: float (time.time()); restart_event: asyncio.Event
         # device_status: optional callable -> list[dict]; static_dir: optional path to built frontend
+        # device_capture: optional async callable (device_name, seconds) -> None that triggers a
+        #   manual capture-only recording (DeviceManager.capture). None -> /api/capture returns 503.
         # runs_store: optional RunsStore for the observability endpoints (None -> empty/zeros)
         # tool_sources: optional zero-arg callable -> list[dict] (ToolHub.describe()), None -> []
         # run_events: optional RunEventsHub for the live WS run stream (None -> WS closes)
@@ -90,6 +92,7 @@ class PanelServer:
         self.started_at = started_at
         self.restart_event = restart_event
         self.device_status = device_status
+        self.device_capture = device_capture
         self.static_dir = static_dir
         self.runs_store = runs_store
         self.tool_sources = tool_sources
@@ -166,6 +169,47 @@ class PanelServer:
 
     async def _get_devices(self, request: web.Request) -> web.Response:
         return web.json_response(self.device_status() if self.device_status else [])
+
+    async def _post_capture(self, request: web.Request) -> web.Response:
+        """Trigger a manual capture-only recording on a speaker.
+
+        Body: {"device": "<name>", "seconds": <int 1..30>}. The device records that
+        many seconds of mic audio; the server saves it to a WAV (no STT/LLM/TTS).
+        Returns 202 on success, 400 on bad input, 404 unknown device, 409 offline,
+        503 when capture is not wired (no DeviceManager).
+        """
+        if self.device_capture is None:
+            return web.json_response({"error": "capture not available"}, status=503)
+        body = await _read_json(request)
+        if not isinstance(body, dict):
+            return web.json_response({"error": "body must be a JSON object"}, status=400)
+        device = body.get("device")
+        if not isinstance(device, str) or not device:
+            return web.json_response(
+                {"error": 'field "device" (string) is required'}, status=400
+            )
+        seconds = body.get("seconds")
+        # Reject non-integers (bools are ints in Python, so exclude them explicitly).
+        if not isinstance(seconds, int) or isinstance(seconds, bool):
+            return web.json_response(
+                {"error": 'field "seconds" (integer 1..30) is required'}, status=400
+            )
+        if not (1 <= seconds <= 30):
+            return web.json_response(
+                {"error": "seconds must be between 1 and 30"}, status=400
+            )
+        try:
+            await self.device_capture(device, seconds)
+        except LookupError:
+            return web.json_response(
+                {"error": f"unknown device {device!r}"}, status=404
+            )
+        except RuntimeError as e:
+            # Offline device or missing firmware entities -> not actionable right now.
+            return web.json_response({"error": str(e)}, status=409)
+        return web.json_response(
+            {"capturing": True, "device": device, "seconds": seconds}, status=202
+        )
 
     async def _get_tools(self, request: web.Request) -> web.Response:
         # Live tool sources from the ToolHub (external MCP + built-ins). describe()
@@ -252,6 +296,7 @@ class PanelServer:
             web.get("/api/system", self._get_system),
             web.post("/api/restart", self._post_restart),
             web.get("/api/devices", self._get_devices),
+            web.post("/api/capture", self._post_capture),
             web.get("/api/tools", self._get_tools),
             web.get("/api/runs", self._get_runs),
             web.get("/api/runs/stream", self._runs_stream),  # before {id}: literal wins
@@ -268,10 +313,22 @@ class PanelServer:
                 app.router.add_static("/assets/", assets)
             app.router.add_get("/", self._spa_index)
             app.router.add_get("/{path:(?!api/).*}", self._spa_index)
+
+        async def _close_ws_clients(_app: web.Application) -> None:
+            # Fired by AppRunner.cleanup() BEFORE it waits (up to shutdown_timeout) for
+            # in-flight handlers. Closing the live run-stream sockets here unblocks the
+            # _runs_stream handler so shutdown (and Ctrl+C) completes immediately instead
+            # of hanging until the timeout elapses.
+            if self.run_events is not None:
+                await self.run_events.close_all()
+        app.on_shutdown.append(_close_ws_clients)
         return app
 
     async def start(self) -> None:
-        self._runner = web.AppRunner(self.build_app(), access_log=None)  # disable per-request access logs
+        # access_log=None disables per-request access logs; shutdown_timeout bounds how
+        # long cleanup() waits for in-flight handlers (defense-in-depth so even a lingering
+        # connection can't make Ctrl+C hang for the 60s aiohttp default).
+        self._runner = web.AppRunner(self.build_app(), access_log=None, shutdown_timeout=5.0)
         await self._runner.setup()
         site = web.TCPSite(self._runner, self.host, self.port)
         await site.start()

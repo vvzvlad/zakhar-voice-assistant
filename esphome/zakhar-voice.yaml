@@ -61,3 +61,43 @@ wifi:
 api:
   encryption:
     key: !secret api_encryption_key
+
+# --- Manual "record X seconds" capture trigger ---
+#
+# A device-side, self-timed sample capture exposed to our server over the Native
+# API. The server discovers these two template entities by their object_id
+# (`zakhar_capture_seconds`, `zakhar_capture_sample`), sets the duration, then
+# presses the button. The button runs the device's voice_assistant for the chosen
+# number of seconds with silence detection OFF, so the speaker streams mic PCM for
+# the whole window; our server records that audio in capture-only mode (no STT/LLM/
+# TTS). `voice_assistant.start`/`voice_assistant.stop` resolve against the single
+# voice_assistant instance defined by the official home-assistant-voice package
+# (the package's own on_wake_word_detected already calls voice_assistant.start, so
+# the action exists without needing an explicit id).
+#
+# IMPORTANT: the Native API transmits each entity's object_id as slugify(name),
+# NOT the YAML `id:` field. The server matches on those slugified object_ids, so
+# the names below MUST slugify to `zakhar_capture_seconds` / `zakhar_capture_sample`
+# (i.e. "Zakhar Capture Seconds" / "Zakhar Capture Sample"). The `zakhar_` prefix
+# also keeps these from clashing with the official package's own entities. The C++
+# `id:` fields stay as-is — they're referenced by `id(...)` in the lambda below.
+number:
+  - platform: template
+    name: "Zakhar Capture Seconds"
+    id: zakhar_capture_seconds
+    optimistic: true
+    min_value: 1
+    max_value: 30
+    step: 1
+    initial_value: 5
+    restore_value: true
+
+button:
+  - platform: template
+    name: "Zakhar Capture Sample"
+    id: zakhar_capture_sample
+    on_press:
+      - voice_assistant.start:
+          silence_detection: false
+      - delay: !lambda 'return (int)(id(zakhar_capture_seconds).state * 1000);'
+      - voice_assistant.stop:

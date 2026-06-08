@@ -155,6 +155,7 @@ async def main() -> None:
             svc, core.panel.host, core.panel.port,
             version=__version__, started_at=started_at,
             restart_event=restart_event, device_status=manager.statuses,
+            device_capture=manager.capture,
             static_dir=static_dir if os.path.isdir(static_dir) else None,
             runs_store=runs_store,
             tool_sources=hub.describe,

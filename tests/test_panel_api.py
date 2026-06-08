@@ -317,6 +317,81 @@ async def test_get_devices_default_empty(tmp_path):
         await client.close()
 
 
+async def test_capture_success_returns_202(tmp_path):
+    calls = []
+
+    async def cap(device, seconds):
+        calls.append((device, seconds))
+
+    client, _svc_, _ev = await _client(tmp_path, device_capture=cap)
+    try:
+        resp = await client.post("/api/capture", json={"device": "hall", "seconds": 5})
+        assert resp.status == 202
+        body = await resp.json()
+        assert body == {"capturing": True, "device": "hall", "seconds": 5}
+        assert calls == [("hall", 5)]
+    finally:
+        await client.close()
+
+
+async def test_capture_unknown_device_returns_404(tmp_path):
+    async def cap(device, seconds):
+        raise LookupError("unknown device 'x'")
+
+    client, _svc_, _ev = await _client(tmp_path, device_capture=cap)
+    try:
+        resp = await client.post("/api/capture", json={"device": "x", "seconds": 5})
+        assert resp.status == 404
+    finally:
+        await client.close()
+
+
+async def test_capture_offline_device_returns_409(tmp_path):
+    async def cap(device, seconds):
+        raise RuntimeError("hall is offline")
+
+    client, _svc_, _ev = await _client(tmp_path, device_capture=cap)
+    try:
+        resp = await client.post("/api/capture", json={"device": "hall", "seconds": 5})
+        assert resp.status == 409
+        body = await resp.json()
+        assert "offline" in body["error"]
+    finally:
+        await client.close()
+
+
+async def test_capture_bad_seconds_returns_400(tmp_path):
+    called = []
+
+    async def cap(device, seconds):
+        called.append((device, seconds))
+
+    client, _svc_, _ev = await _client(tmp_path, device_capture=cap)
+    try:
+        # Out of range, wrong type, missing device — all 400, capture never called.
+        for body in ({"device": "h", "seconds": 0},
+                     {"device": "h", "seconds": 31},
+                     {"device": "h", "seconds": "5"},
+                     {"device": "h", "seconds": True},
+                     {"device": "", "seconds": 5},
+                     {"seconds": 5}):
+            resp = await client.post("/api/capture", json=body)
+            assert resp.status == 400, body
+        assert called == []
+    finally:
+        await client.close()
+
+
+async def test_capture_without_manager_returns_503(tmp_path):
+    # No device_capture wired (e.g. tests / API-only boot) -> 503.
+    client, _svc_, _ev = await _client(tmp_path)
+    try:
+        resp = await client.post("/api/capture", json={"device": "h", "seconds": 5})
+        assert resp.status == 503
+    finally:
+        await client.close()
+
+
 async def test_get_tools(tmp_path):
     # tool_sources is a zero-arg callable returning ToolHub.describe() output.
     sources = [{

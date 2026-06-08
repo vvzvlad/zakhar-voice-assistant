@@ -70,6 +70,8 @@ def test_action_for_representative_paths():
         "core.log_level": "logging",
         "core.context.dir": "restart",       # moving the data dir touches runs.db/reminders.db
         "core.context.max_turns": "live",
+        "core.capture.enabled": "live",      # read per-run via the Runtime read-through
+        "core.capture.dir": "live",          # ditto; NOT a data-dir move like core.context.dir
         "core.vad.aggressiveness": "live",
         "core.audio.public_base_url": "live",
         "core.audio.ttl": "live",
@@ -140,6 +142,15 @@ def test_reconfigurator_live_only_no_restart():
     reconf = _make_reconf(_stub_runtime())
     reconf.on_config_change({"core.context.max_turns", "core.vad.aggressiveness"})
     assert reconf.pending_restart() is False
+
+
+def test_reconfigurator_capture_is_live_no_restart_no_job():
+    # core.capture.* is read per-run via the Runtime read-through, so it applies live:
+    # it must NOT latch pending_restart and must NOT enqueue an async rebuild job.
+    reconf = _make_reconf(_stub_runtime())
+    reconf.on_config_change({"core.capture.enabled"})
+    assert reconf.pending_restart() is False
+    assert reconf.queue.qsize() == 0
 
 
 def test_reconfigurator_rebuild_backends_enqueues_and_no_restart():

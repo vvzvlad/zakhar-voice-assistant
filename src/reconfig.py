@@ -55,6 +55,8 @@ def action_for(path: str) -> str:
         return "restart"      # moving the data dir touches runs.db/reminders.db too
     if path.startswith("core.context") or path.startswith("core.vad"):
         return "live"
+    if path.startswith("core.capture"):
+        return "live"          # capture.enabled/dir are read per-run via the Runtime read-through
     if path == "core.audio.public_base_url" or path == "core.audio.ttl":
         return "live"
     if path.startswith("core.audio"):            # host/port -> rebind

@@ -7,7 +7,7 @@ import SchemaForm from "../components/SchemaForm.jsx";
 import { useAppData } from "../appData.jsx";
 import { useStageForm, errorLines } from "../useStageForm.js";
 import { deref } from "../schema.js";
-import { getPrompt, putPrompt, getDevices, getTools } from "../api.js";
+import { getPrompt, putPrompt, getDevices, getTools, postCapture } from "../api.js";
 
 function Card({ title, sub, children, foot, right }) {
   return <div className="z-card">
@@ -327,6 +327,27 @@ function DeviceModal({ initial, onSave, onClose, title }) {
   </Modal>;
 }
 
+// Per-device "record X seconds" control: sets the duration and POSTs /api/capture.
+// The speaker records that many seconds of mic audio; the server saves a WAV
+// (no STT/LLM/TTS). Disabled while the device is offline.
+function CaptureControl({ device, online }) {
+  const [seconds, setSeconds] = useState(5);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  const record = async () => {
+    setBusy(true);
+    setErr(null);
+    try { await postCapture(device, seconds); }
+    catch (e) { setErr(e.message || "failed"); }
+    finally { setBusy(false); }
+  };
+  return <div style={{ display: "flex", gap: 6, alignItems: "center", justifyContent: "flex-end" }}>
+    <Stepper value={seconds} min={1} max={30} onChange={setSeconds} />
+    <button className="z-mini" disabled={!online || busy} title={err || (online ? "" : "Speaker offline")}
+      onClick={record}>{busy ? "Recording…" : "Record sample"}</button>
+  </div>;
+}
+
 export function Devices() {
   const { catalog, patch } = useAppData();
   const devices = catalog.core.values.devices || [];
@@ -370,15 +391,16 @@ export function Devices() {
     {busyErr && <div className="z-banner warn" style={{ margin: "0 0 12px" }}><Ic n="restart" w={15} /><span>{errorLines(busyErr).join(" · ")}</span></div>}
     <Card>
       <table className="z-tbl">
-        <thead><tr><th>Name</th><th>Host / IP</th><th>PSK</th><th>Status</th><th></th></tr></thead>
+        <thead><tr><th>Name</th><th>Host / IP</th><th>PSK</th><th>Status</th><th>Capture sample</th><th></th></tr></thead>
         <tbody>
           {devices.length === 0
-            ? <tr><td colSpan={5} style={{ color: "var(--mut)", padding: "14px 0" }}>No speakers configured.</td></tr>
+            ? <tr><td colSpan={6} style={{ color: "var(--mut)", padding: "14px 0" }}>No speakers configured.</td></tr>
             : devices.map((d, i) => <tr key={i} style={{ cursor: "default" }}>
               <td style={{ fontWeight: 600 }}>{d.name}</td>
               <td className="mono" style={{ fontSize: 11.5 }}>{d.host}<span style={{ color: "var(--mut2)" }}>:{esphomePort}</span></td>
               <td className="mono" style={{ fontSize: 11.5, color: "var(--mut)" }}>{d.psk ? "••••••••" : "—"}</td>
               <td><StatusPill status={statusOf(d.name)} /></td>
+              <td><CaptureControl device={d.name} online={statusOf(d.name) === "online"} /></td>
               <td style={{ textAlign: "right" }}><div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
                 <button className="z-mini" onClick={() => setModal({ mode: "edit", index: i })}>Edit</button>
                 <button className="z-mini" onClick={() => onDelete(i)}>Delete</button>
