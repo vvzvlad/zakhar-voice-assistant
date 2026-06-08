@@ -2,6 +2,8 @@
 
 import asyncio
 import json
+import os
+import time
 
 import httpx
 import zeroconf
@@ -14,6 +16,7 @@ from src.builtin_mcp.weather import build_weather_server
 from src.config_service import ConfigDoc, ConfigService
 from src.esphome_client import DeviceManager
 from src.mcp_client import McpToolHub
+from src.panel_api import PanelServer
 from src.plugins.base import Deps
 from src.tool_hub import BuiltinMcpSource, HttpMcpSource, ToolHub
 from src.version import __version__
@@ -32,6 +35,9 @@ def load_or_create_config() -> dict:
 
 async def main() -> None:
     """Build shared dependencies, start all speakers, and run until cancelled."""
+    restart_event = asyncio.Event()
+    started_at = time.time()
+
     doc = load_or_create_config()
     core = ConfigDoc(**doc).core  # parse once to read proxy/timeout for Deps
 
@@ -70,15 +76,33 @@ async def main() -> None:
     zc = zeroconf.Zeroconf()
     manager = DeviceManager(
         zc, hub, stt_backend, llm_backend, tts_backend, audio_server,
-        client_ext, core, llm_cfg,
+        core, llm_cfg,
     )
 
+    # Admin panel HTTP API. Serves the built frontend if it has been bundled into
+    # frontend/react-export/dist; otherwise runs API-only. Constructed and started
+    # INSIDE the try below so a failed start (e.g. port already taken) still runs
+    # the finally cleanup for the resources opened above.
+    static_dir = "frontend/react-export/dist"
+    panel = None
+
     try:
+        panel = PanelServer(
+            svc, core.panel.host, core.panel.port,
+            version=__version__, started_at=started_at,
+            restart_event=restart_event, device_status=manager.statuses,
+            static_dir=static_dir if os.path.isdir(static_dir) else None,
+        )
+        await panel.start()
         await manager.start()
-        await asyncio.Event().wait()  # run forever until cancelled
+        # Block until POST /api/restart sets the event (or the task is cancelled).
+        # docker `restart: always` brings the process back after the clean exit.
+        await restart_event.wait()
     except (asyncio.CancelledError, KeyboardInterrupt):
         logger.info("shutting down")
     finally:
+        if panel is not None:
+            await panel.stop()
         await manager.stop()
         await hub.stop()
         await audio_server.stop()

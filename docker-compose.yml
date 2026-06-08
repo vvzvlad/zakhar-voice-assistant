@@ -24,6 +24,8 @@ services:
     ports:
       # Must match core.audio.port in data/config.json (default 8200).
       - "8200:8200"                          # publish the audio server to the LAN
+      # Admin panel API + UI; must match core.panel.port (default 8201).
+      - "8201:8201"
     environment:
       # All app config is in data/config.json (in the volume), NOT in env vars.
       TZ: Europe/Moscow

@@ -12,6 +12,7 @@
     "mcp": {"url": "", "token": ""},
     "esphome": {"port": 6053},
     "prompt": {"system_prompt_path": "data/system_prompt.md"},
+    "panel": {"host": "0.0.0.0", "port": 8201},
     "devices": [],
     "tts_timeout": 30,
     "log_level": "INFO"

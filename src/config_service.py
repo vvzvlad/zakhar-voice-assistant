@@ -51,6 +51,7 @@ class ConfigService:
         self._deps = deps
         self._path = path or config_store.DEFAULT_PATH
         self._cbs = []
+        self._pending_restart = False
         # Eagerly validate the selected providers' instance configs.
         for cat in STAGE_CATEGORIES:
             self.get(cat)
@@ -58,6 +59,14 @@ class ConfigService:
     @property
     def core(self) -> CoreConfig:
         return self._doc.core
+
+    @property
+    def pending_restart(self) -> bool:
+        return self._pending_restart
+
+    def document(self) -> dict:
+        """Return the current raw config document (as plain JSON-able dict)."""
+        return self._doc.model_dump(mode="json")
 
     def _slot(self, category) -> StageSlot:
         return getattr(self._doc, category)
@@ -119,6 +128,10 @@ class ConfigService:
 
         config_store.save(merged, self._path)
         self._doc = new_doc
+        # MVP: any successful config change suggests a restart, because backends are
+        # built once at boot. Refining this via per-field apply-class diffing (live vs
+        # rebuild, per settings-storage-design.md §10) is future work.
+        self._pending_restart = True
         for cb in self._cbs:
             cb()
 

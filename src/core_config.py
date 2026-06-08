@@ -58,6 +58,11 @@ class PromptConfig(BaseModel):
     system_prompt_path: str = "data/system_prompt.md"
 
 
+class PanelConfig(BaseModel):
+    host: str = "0.0.0.0"
+    port: int = 8201
+
+
 class CoreConfig(BaseModel):
     context: ContextConfig = ContextConfig()
     audio: AudioConfig = AudioConfig()
@@ -67,6 +72,7 @@ class CoreConfig(BaseModel):
     mcp: McpConfig = McpConfig()
     esphome: EsphomeConfig = EsphomeConfig()
     prompt: PromptConfig = PromptConfig()
+    panel: PanelConfig = PanelConfig()
     devices: list[DeviceConfig] = []
     tts_timeout: int = 30
     log_level: str = "INFO"
