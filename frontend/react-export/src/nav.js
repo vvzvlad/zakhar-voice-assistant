@@ -3,7 +3,7 @@
 export const NAV = [
   { grp: "Overview", items: [["dashboard", "Dashboard"]] },
   { grp: "Pipeline", items: [["vad", "VAD / Capture"], ["stt", "STT"], ["llm", "LLM"], ["tts", "TTS"]] },
-  { grp: "Integrations", items: [["mcp", "MCP Servers"], ["prompt", "System Prompt"], ["context", "Context"], ["devices", "Devices"]] },
+  { grp: "Integrations", items: [["mcp", "MCP Servers"], ["prompt", "System Prompt"], ["devices", "Devices"]] },
   { grp: "Operations", items: [["log", "Request Log"], ["network", "Network"]] },
 ];
 export const TITLES = Object.fromEntries(NAV.flatMap((g) => g.items));

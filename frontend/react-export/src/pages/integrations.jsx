@@ -260,6 +260,14 @@ export function Prompt() {
     finally { setSaving(false); }
   };
 
+  // Dialog context (core.context) — an independent save form rendered in the aside.
+  // All hooks must run before the early-return below to satisfy the rules of hooks.
+  const { catalog, patch } = useAppData();
+  const ctxSchema = catalog.core.schema.$defs?.ContextConfig;
+  const ctxValues = catalog.core.values.context || {};
+  const ctxBuildPatch = (d) => ({ core: { context: d } });
+  const { draft: ctxDraft, onChange: ctxOnChange, dirty: ctxDirty, saving: ctxSaving, err: ctxErr, save: ctxSave } = useStageForm(ctxValues, ctxBuildPatch, patch);
+
   if (text == null) return <div className="z-page"><div className="z-card"><Loading /></div></div>;
 
   return <div className="z-page">
@@ -278,6 +286,14 @@ export function Prompt() {
         </div>
       </Card>
       <div className="z-aside">
+        <Card title="Dialog context" foot={<FormSaveBar dirty={ctxDirty} saving={ctxSaving} onSave={ctxSave} errors={errorLines(ctxErr)} />}>
+          {ctxSchema
+            ? <SchemaForm schema={ctxSchema} values={ctxDraft} onChange={ctxOnChange} skip={["dir"]} />
+            : <>
+                <Field label="Context depth" hint="Recent Q&A pairs sent to the model." row><Stepper value={ctxDraft.max_turns ?? 5} min={1} onChange={(v) => ctxOnChange("max_turns", v)} unit="turns" /></Field>
+                <Field label="Dialog TTL" hint="Idle time before a dialog resets (0 = always fresh)." row><Stepper value={ctxDraft.ttl_seconds ?? 300} min={0} step={30} onChange={(v) => ctxOnChange("ttl_seconds", v)} unit="s" /></Field>
+              </>}
+        </Card>
         <Card title="The date/time variable">
           <div className="z-info" style={{ padding: "10px 0 12px" }}>
             <span className="z-paramtag" style={{ fontSize: 11 }}>{"<<<<<TDW>>>>>"}</span> is substituted at request time with the current <b>date and time</b>.
@@ -288,28 +304,6 @@ export function Prompt() {
         </Card>
       </div>
     </div>
-  </div>;
-}
-
-// ── Context (core.context) ────────────────────────────────────────────────
-export function Context() {
-  const { catalog, patch } = useAppData();
-  const ctxSchema = catalog.core.schema.$defs?.ContextConfig;
-  const ctxValues = catalog.core.values.context || {};
-  const buildPatch = (draft) => ({ core: { context: draft } });
-  const { draft, onChange, dirty, saving, err, save } = useStageForm(ctxValues, buildPatch, patch);
-
-  return <div className="z-page">
-    <PageHeader title="Dialog context" crumb="Integrations"
-      desc="How many past turns the assistant remembers, and how quickly it forgets. Stored separately per speaker." />
-    <Card title="Memory" foot={<FormSaveBar dirty={dirty} saving={saving} onSave={save} errors={errorLines(err)} />}>
-      {ctxSchema
-        ? <SchemaForm schema={ctxSchema} values={draft} onChange={onChange} skip={["dir"]} />
-        : <>
-          <Field label="Context depth" hint="Recent Q&A pairs sent to the model." row><Stepper value={draft.max_turns ?? 5} min={1} onChange={(v) => onChange("max_turns", v)} unit="turns" /></Field>
-          <Field label="Dialog TTL" hint="Idle time before a dialog resets (0 = always fresh)." row><Stepper value={draft.ttl_seconds ?? 300} min={0} step={30} onChange={(v) => onChange("ttl_seconds", v)} unit="s" /></Field>
-        </>}
-    </Card>
   </div>;
 }
 
