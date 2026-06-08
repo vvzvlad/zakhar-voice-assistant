@@ -4,8 +4,11 @@ import { setNavigate } from "./navStore.js";
 import { Sidebar } from "./components/Sidebar.jsx";
 import { Topbar } from "./components/Topbar.jsx";
 import { PAGES } from "./pages/index.js";
+import { useAppData } from "./appData.jsx";
+import { Loading, ErrorBox } from "./components/primitives.jsx";
 
 export default function App() {
+  const { loading, error, reload } = useAppData();
   const [active, setActive] = useState(() => {
     try { return localStorage.getItem("z-active") || "dashboard"; } catch { return "dashboard"; }
   });
@@ -27,7 +30,13 @@ export default function App() {
       <Sidebar active={active} onNav={navigate} />
       <div className="z-main">
         <Topbar active={active} />
-        <div className="z-scroll"><Page /></div>
+        <div className="z-scroll">
+          {loading
+            ? <div className="z-page"><div className="z-card"><Loading /></div></div>
+            : error
+              ? <div className="z-page"><div className="z-card"><ErrorBox error={error} onRetry={reload} /></div></div>
+              : <Page />}
+        </div>
       </div>
     </div>
   );

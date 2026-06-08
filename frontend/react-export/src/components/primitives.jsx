@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
-import Z from "../data.js";
+import { STAGE_COLOR, STAGE_ORDER } from "../stageMeta.js";
 import { Ic } from "./icons.jsx";
 
 // ── Sparkline ──────────────────────────────────────────
@@ -84,12 +84,12 @@ export function StatusPill({ status }) {
 }
 
 // ── Waterfall ──────────────────────────────────────────
-const SC = Z.stageColor;
+const SC = STAGE_COLOR;
 export const total = (t) => Object.values(t).reduce((a, b) => a + b, 0);
 export function segsFor(r) {
   if (r.result === "empty") return [{ label: "no speech · 8.00s", pct: 100, bg: "#cbd2dd", col: "#8a93a4" }];
   const tot = total(r.t) || 1;
-  const arr = Z.stageOrder.filter((k) => r.t[k] > 0).map((k) => { const pct = r.t[k] / tot * 100; return { label: pct >= 15 ? `${k} ${r.t[k]}` : String(r.t[k]), pct, bg: SC[k], col: SC[k] }; });
+  const arr = STAGE_ORDER.filter((k) => r.t[k] > 0).map((k) => { const pct = r.t[k] / tot * 100; return { label: pct >= 15 ? `${k} ${r.t[k]}` : String(r.t[k]), pct, bg: SC[k], col: SC[k] }; });
   if (r.result === "error") arr.push({ label: "fail", pct: 24, bg: "repeating-linear-gradient(45deg,#dc2626,#dc2626 3px,#fecaca 3px,#fecaca 6px)", col: "#dc2626" });
   return arr;
 }
@@ -118,6 +118,32 @@ export function SaveBar({ restart, noTest }) {
     {!noTest && <button className="z-btn g"><Ic n="test" w={14} />Test connection</button>}
     <span style={{ flex: 1 }} />
     <span className="z-dirty"><s />Unsaved{restart ? " · restart required" : ""}</span>
+  </div>;
+}
+
+// Live save bar wired to real state: dirty flag, async save, and inline 422 errors.
+export function FormSaveBar({ dirty, saving, onSave, restart, errors = [] }) {
+  return <>
+    {errors.length > 0 && <div className="z-banner" style={{ background: "var(--bad-bg)", border: "1px solid #f3c8c8", color: "#b91c1c", margin: "0 17px 0", borderRadius: 8 }}>
+      <Ic n="restart" w={15} />
+      <span><b>Не сохранено.</b> {errors.join(" · ")}</span>
+    </div>}
+    <div className="z-foot">
+      <button className="z-btn p" disabled={!dirty || saving} onClick={onSave}>{saving ? "Saving…" : "Save changes"}</button>
+      <span style={{ flex: 1 }} />
+      {dirty && <span className="z-dirty"><s />Unsaved{restart ? " · restart required" : ""}</span>}
+    </div>
+  </>;
+}
+
+export function Loading({ label = "Загрузка…" }) {
+  return <div className="z-empty"><b>{label}</b>Получаем данные с сервера.</div>;
+}
+export function ErrorBox({ error, onRetry }) {
+  return <div className="z-empty">
+    <b>Ошибка загрузки</b>
+    {(error && (error.message || String(error))) || "Не удалось получить данные."}
+    {onRetry && <button className="z-btn g sm" style={{ marginTop: 12 }} onClick={onRetry}>Повторить</button>}
   </div>;
 }
 export function Modal({ title, children, footer, onClose }) {
