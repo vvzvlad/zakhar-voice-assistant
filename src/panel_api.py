@@ -247,7 +247,10 @@ class PanelServer:
         safe_device = "".join(
             c if c.isascii() and (c.isalnum() or c in "._-") else "_" for c in device
         ) or "device"
-        filename = f"zakhar_{safe_device}_{seconds}s.wav"
+        # Timestamp the download (UTC) so successive captures of the same device
+        # don't collide on the filename and the moment of recording is visible.
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        filename = f"zakhar_{safe_device}_{seconds}s_{stamp}.wav"
         return web.Response(
             body=wav,
             content_type="audio/wav",

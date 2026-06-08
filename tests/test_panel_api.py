@@ -6,6 +6,7 @@ tmp config file and drives a fresh PanelServer app.
 """
 
 import asyncio
+import re
 import time
 
 import aiohttp
@@ -348,8 +349,11 @@ async def test_capture_success_returns_wav_download(tmp_path):
         resp = await client.post("/api/capture", json={"device": "hall", "seconds": 5})
         assert resp.status == 200
         assert resp.headers["Content-Type"] == "audio/wav"
-        assert resp.headers["Content-Disposition"] == \
-            'attachment; filename="zakhar_hall_5s.wav"'
+        # filename carries device+seconds plus a UTC capture timestamp (YYYYMMDD_HHMMSS)
+        assert re.fullmatch(
+            r'attachment; filename="zakhar_hall_5s_\d{8}_\d{6}\.wav"',
+            resp.headers["Content-Disposition"],
+        )
         body = await resp.read()
         assert body == wav
         # The body parses as a valid 16k/mono/16-bit WAV.
@@ -370,8 +374,11 @@ async def test_capture_filename_sanitizes_device(tmp_path):
     try:
         resp = await client.post("/api/capture", json={"device": "living room/2", "seconds": 3})
         assert resp.status == 200
-        assert resp.headers["Content-Disposition"] == \
-            'attachment; filename="zakhar_living_room_2_3s.wav"'
+        # unsafe chars sanitized; trailing UTC timestamp appended (YYYYMMDD_HHMMSS)
+        assert re.fullmatch(
+            r'attachment; filename="zakhar_living_room_2_3s_\d{8}_\d{6}\.wav"',
+            resp.headers["Content-Disposition"],
+        )
     finally:
         await client.close()
 
