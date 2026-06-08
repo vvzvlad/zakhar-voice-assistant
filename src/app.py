@@ -61,6 +61,15 @@ async def main() -> None:
         runs_store = RunsStore(os.path.join(core.context.dir, "runs.db"))
         runs_store.prune(now=time.time(), retention_days=core.runs.retention_days)
 
+    # Fail loudly: an empty public_base_url yields host-less TTS URLs that speakers
+    # silently fail to fetch (the run otherwise logs as successful).
+    if not core.audio.public_base_url:
+        logger.warning(
+            f"audio.public_base_url is empty — speakers will receive host-less TTS "
+            f"URLs (e.g. /tts/<id>.mp3) and play nothing. Set core.audio.public_base_url "
+            f"in data/config.json (e.g. http://<this-host>:{core.audio.port})."
+        )
+
     audio_server = AudioServer(core.audio.host, core.audio.port, core.audio.ttl)
     await audio_server.start()
 
@@ -71,7 +80,7 @@ async def main() -> None:
     # api key; built-in weather uses the proxied client_ext for its OWM call.
     sources = []
     if core.mcp.url:
-        sources.append(HttpMcpSource("home", McpToolHub(core.mcp.url, core.mcp.token or None)))
+        sources.append(HttpMcpSource("home", McpToolHub(core.mcp.url, core.mcp.token or None, core.mcp.transport)))
     if core.weather.api_key:
         sources.append(
             BuiltinMcpSource(
