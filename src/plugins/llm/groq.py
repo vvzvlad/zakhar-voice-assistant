@@ -27,4 +27,5 @@ class GroqLlmProvider(Provider):
             temperature=cfg.temperature,
             max_tokens=cfg.max_tokens,
             client=deps.http_cloud,
+            timeout=cfg.timeout,
         )

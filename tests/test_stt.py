@@ -30,6 +30,47 @@ async def test_groq_backend_returns_text_on_200():
 
 
 @respx.mock
+async def test_groq_backend_sends_configured_language_and_temperature():
+    route = respx.post(GROQ_STT_URL).mock(
+        return_value=httpx.Response(200, json={"text": "ok"})
+    )
+    async with httpx.AsyncClient(verify=False) as client:
+        backend = GroqSttBackend(
+            client,
+            api_key="test-key",
+            model="whisper-large-v3-turbo",
+            language="en",
+            temperature=0.5,
+            timeout=42,
+        )
+        await backend.transcribe(b"\x01\x02" * 100)
+
+    req = route.calls.last.request
+    # The multipart body carries the configured language and temperature.
+    body = req.content.decode("utf-8", "replace")
+    # Match the actual multipart field, not a stray "en" inside "Content-Disposition".
+    assert 'name="language"\r\n\r\nen' in body
+    assert "0.5" in body
+    # The configured per-request timeout is applied to the POST.
+    assert req.extensions["timeout"]["read"] == 42
+
+
+@respx.mock
+async def test_groq_backend_default_language_and_temperature():
+    route = respx.post(GROQ_STT_URL).mock(
+        return_value=httpx.Response(200, json={"text": "ok"})
+    )
+    async with httpx.AsyncClient(verify=False) as client:
+        backend = GroqSttBackend(client, api_key="k", model="whisper-large-v3-turbo")
+        await backend.transcribe(b"\x01\x02" * 100)
+
+    body = route.calls.last.request.content.decode("utf-8", "replace")
+    assert "ru" in body            # default language
+    assert "0.0" in body           # default temperature (str(0.0))
+    assert route.calls.last.request.extensions["timeout"]["read"] == 60
+
+
+@respx.mock
 async def test_groq_backend_returns_empty_on_error():
     respx.post(GROQ_STT_URL).mock(return_value=httpx.Response(500, text="boom"))
     async with httpx.AsyncClient(verify=False) as client:

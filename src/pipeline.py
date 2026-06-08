@@ -52,7 +52,7 @@ class Pipeline:
         audio_server,
         weather_client,
         core,
-        max_tool_rounds,
+        llm_cfg,
     ):
         self.name = name
         # MCP tool hub: advertises smart-home tools to the model and executes them.
@@ -63,7 +63,7 @@ class Pipeline:
         self.audio_server = audio_server
         self.weather_client = weather_client
         self.core = core
-        self.max_tool_rounds = max_tool_rounds
+        self.llm_cfg = llm_cfg
         self.public_base_url = core.audio.public_base_url
         self._buffer = bytearray()
         self._lock = asyncio.Lock()
@@ -250,7 +250,7 @@ class Pipeline:
                     text,
                     weather_client=self.weather_client,
                     core=self.core,
-                    max_tool_rounds=self.max_tool_rounds,
+                    llm_cfg=self.llm_cfg,
                     history=history,
                 )
                 logger.info(

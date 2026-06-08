@@ -2,6 +2,7 @@ from aioesphomeapi import VoiceAssistantEventType as VAET
 
 from src.core_config import AudioConfig, ContextConfig, CoreConfig
 from src.pipeline import Pipeline
+from src.plugins.llm.base import LlmConfig
 
 PUBLIC_BASE_URL = "http://10.0.0.10:8200"
 
@@ -49,7 +50,7 @@ def make_pipeline(tmp_path, name="dev", stt_text="распознанный те�
         audio_server=audio_server,
         weather_client=object(),
         core=core,
-        max_tool_rounds=5,
+        llm_cfg=LlmConfig(),
     )
     events = []
     pipeline.send_event = lambda et, data: events.append((et, data))

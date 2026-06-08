@@ -35,6 +35,31 @@ def test_config_models_build_with_defaults():
     assert LlmConfig().model == "anthropic/claude-haiku-4.5"
 
 
+def test_groq_stt_config_new_fields_defaults_and_types():
+    cfg = GroqSttConfig()
+    assert cfg.language == "ru"
+    assert cfg.temperature == 0.0
+    assert cfg.timeout == 60
+    assert isinstance(cfg.temperature, float)
+    assert isinstance(cfg.timeout, int)
+    # Types validate/coerce from the JSON document.
+    parsed = GroqSttConfig(language="en", temperature=1, timeout="30")
+    assert parsed.temperature == 1.0 and isinstance(parsed.temperature, float)
+    assert parsed.timeout == 30 and isinstance(parsed.timeout, int)
+
+
+def test_llm_config_new_fields_defaults():
+    cfg = LlmConfig()
+    assert cfg.timeout == 300
+    assert isinstance(cfg.timeout, int)
+    assert cfg.reply_empty_after_tools == "Готово."
+    assert cfg.reply_empty == "Я тебя не расслышала, повтори."
+    assert cfg.reply_rate_limit == (
+        "У меня кончились ресурсы на вас, мясных мешков. Я занимаюсь своими делами, "
+        "обратитесь позже, и может быть, я вас обслужу, раз вы сами не в состоянии"
+    )
+
+
 def test_yandex_speed_range_enforced():
     YandexTtsConfig(speed=2.5)            # in range, OK
     with pytest.raises(ValidationError):

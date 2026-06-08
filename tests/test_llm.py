@@ -3,7 +3,8 @@ import pytest
 import respx
 
 from src.core_config import CoreConfig, PromptConfig, WeatherConfig
-from src.llm import EMPTY_REPLY_AFTER_TOOLS, EMPTY_REPLY_FALLBACK, call_llm_api
+from src.llm import call_llm_api
+from src.plugins.llm.base import LlmConfig
 from src.text import processing_response
 from src.weather import OPENWEATHERMAP_URL
 
@@ -118,7 +119,7 @@ async def _call(backend, hub, text, core, *, history=None, max_tool_rounds=MAX_T
             text,
             weather_client=weather_client,
             core=core,
-            max_tool_rounds=max_tool_rounds,
+            llm_cfg=LlmConfig(max_tool_rounds=max_tool_rounds),
             history=history,
         )
 
@@ -161,10 +162,7 @@ async def test_rate_limit_path(tmp_path):
 
     result = await _call(backend, hub, "привет", _core(tmp_path))
 
-    assert result == (
-        "У меня кончились ресурсы на вас, мясных мешков. Я занимаюсь своими делами, "
-        "обратитесь позже, и может быть, я вас обслужу, раз вы сами не в состоянии"
-    )
+    assert result == LlmConfig().reply_rate_limit
 
 
 @respx.mock
@@ -211,7 +209,7 @@ async def test_empty_final_reply_uses_fallback(tmp_path):
 
     result = await _call(backend, hub, "...", _core(tmp_path))
 
-    assert result == EMPTY_REPLY_FALLBACK
+    assert result == LlmConfig().reply_empty
 
 
 @respx.mock
@@ -228,7 +226,7 @@ async def test_empty_reply_after_tools_uses_done(tmp_path):
     result = await _call(backend, hub, "включи свет", _core(tmp_path))
 
     assert hub.calls == [("set_light", {})]
-    assert result == EMPTY_REPLY_AFTER_TOOLS
+    assert result == LlmConfig().reply_empty_after_tools
 
 
 @respx.mock

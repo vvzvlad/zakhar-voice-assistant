@@ -23,4 +23,5 @@ class OpenRouterProvider(Provider):
             max_tokens=cfg.max_tokens,
             client=deps.http_cloud,
             extra_headers={"X-Title": "Zakhar Voice Assistant"},
+            timeout=cfg.timeout,
         )

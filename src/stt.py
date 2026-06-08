@@ -39,10 +39,21 @@ class SttBackend(ABC):
 class GroqSttBackend(SttBackend):
     """Groq Whisper HTTP backend. Posts a WAV-wrapped PCM and returns the text."""
 
-    def __init__(self, client: httpx.AsyncClient, api_key: str, model: str):
+    def __init__(
+        self,
+        client: httpx.AsyncClient,
+        api_key: str,
+        model: str,
+        language: str = "ru",
+        temperature: float = 0.0,
+        timeout: int = 60,
+    ):
         self.client = client
         self.api_key = api_key
         self.model = model
+        self.language = language
+        self.temperature = temperature
+        self.timeout = timeout
 
     async def transcribe(self, pcm: bytes) -> str:
         """Transcribe raw 16 kHz/16-bit mono PCM via Groq Whisper.
@@ -57,15 +68,15 @@ class GroqSttBackend(SttBackend):
         files = {"file": ("audio.wav", wav_bytes, "audio/wav")}
         data = {
             "model": self.model,
-            "language": "ru",
+            "language": self.language,
             "response_format": "json",
-            "temperature": "0",
+            "temperature": str(self.temperature),
         }
         headers = {"Authorization": f"Bearer {self.api_key}"}
 
         try:
             resp = await self.client.post(
-                GROQ_STT_URL, headers=headers, data=data, files=files, timeout=60
+                GROQ_STT_URL, headers=headers, data=data, files=files, timeout=self.timeout
             )
             if resp.status_code == 200:
                 return resp.json().get("text", "").strip()

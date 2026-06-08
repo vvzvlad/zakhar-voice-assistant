@@ -25,7 +25,7 @@ class DeviceClient:
         audio_server,
         weather_client,
         core,
-        max_tool_rounds,
+        llm_cfg,
     ):
         self.cfg = cfg
         self.pipeline = Pipeline(
@@ -37,7 +37,7 @@ class DeviceClient:
             audio_server,
             weather_client,
             core,
-            max_tool_rounds,
+            llm_cfg,
         )
         self.cli = APIClient(
             cfg.host, core.esphome.port, None, noise_psk=cfg.psk, zeroconf_instance=zc
@@ -112,7 +112,7 @@ class DeviceManager:
         audio_server,
         weather_client,
         core,
-        max_tool_rounds,
+        llm_cfg,
     ):
         self.clients = [
             DeviceClient(
@@ -125,7 +125,7 @@ class DeviceManager:
                 audio_server,
                 weather_client,
                 core,
-                max_tool_rounds,
+                llm_cfg,
             )
             for cfg in core.devices
         ]

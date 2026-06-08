@@ -42,7 +42,7 @@ async def main() -> None:
     stt_backend = svc.create("stt")
     tts_backend = svc.create("tts")
     llm_backend = svc.create("llm")
-    max_tool_rounds = svc.get("llm").max_tool_rounds
+    llm_cfg = svc.get("llm")
 
     audio_server = AudioServer(core.audio.host, core.audio.port, core.audio.ttl)
     await audio_server.start()
@@ -55,7 +55,7 @@ async def main() -> None:
     zc = zeroconf.Zeroconf()
     manager = DeviceManager(
         zc, hub, stt_backend, llm_backend, tts_backend, audio_server,
-        client_ext, core, max_tool_rounds,
+        client_ext, core, llm_cfg,
     )
 
     try:

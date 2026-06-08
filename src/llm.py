@@ -13,10 +13,6 @@ from loguru import logger
 from src.prompt import build_system_prompt
 from src.text import processing_response
 
-# Fallbacks so an empty/null model reply never reaches TTS as "".
-EMPTY_REPLY_AFTER_TOOLS = "Готово."
-EMPTY_REPLY_FALLBACK = "Я тебя не расслышала, повтори."
-
 
 async def call_llm_api(
     llm_backend,
@@ -25,7 +21,7 @@ async def call_llm_api(
     *,
     weather_client: httpx.AsyncClient,
     core,
-    max_tool_rounds: int,
+    llm_cfg,
     history: list | None = None,
 ) -> str:
     """Drive the LLM backend with the given text and return a plain-text result.
@@ -51,14 +47,14 @@ async def call_llm_api(
 
     last_content = ""
     tool_executed = False
-    for _ in range(max_tool_rounds):
+    for _ in range(llm_cfg.max_tool_rounds):
         try:
             data = await llm_backend.complete(messages, hub.tools or None)
         except httpx.HTTPStatusError as e:
             # Log full status + body for diagnostics (the returned string is spoken via TTS).
             logger.error(f"LLM API error: {e.response.status_code} - {e.response.text}")
             if e.response.status_code == 429:
-                return "У меня кончились ресурсы на вас, мясных мешков. Я занимаюсь своими делами, обратитесь позже, и может быть, я вас обслужу, раз вы сами не в состоянии"
+                return llm_cfg.reply_rate_limit
             try:
                 reason = e.response.json().get("error", {}).get("message")
             except Exception:
@@ -91,7 +87,7 @@ async def call_llm_api(
             reply = processing_response(last_content)
             if reply:
                 return reply
-            return EMPTY_REPLY_AFTER_TOOLS if tool_executed else EMPTY_REPLY_FALLBACK
+            return llm_cfg.reply_empty_after_tools if tool_executed else llm_cfg.reply_empty
 
         # Execute each requested tool via MCP and feed results back.
         for tc in tool_calls:
@@ -114,7 +110,7 @@ async def call_llm_api(
         continue
 
     # Rounds exhausted: the model kept asking for tools without a final reply.
-    logger.warning(f"Tool-calling loop exhausted after {max_tool_rounds} rounds")
+    logger.warning(f"Tool-calling loop exhausted after {llm_cfg.max_tool_rounds} rounds")
     if last_content:
         return processing_response(last_content)
     return "Ошибка: слишком много вызовов инструментов"
