@@ -7,6 +7,7 @@ from abc import ABC, abstractmethod
 from urllib.parse import quote
 
 import httpx
+from loguru import logger
 
 from src.settings import settings
 
@@ -69,6 +70,7 @@ class PiperTtsBackend(TtsBackend):
 
         # The config json sits next to the onnx at <path>.json.
         self._voice = PiperVoice.load(voice_path, voice_path + ".json")
+        logger.info(f"Piper TTS voice loaded: {voice_path}")
 
     def _synth(self, text: str) -> bytes:
         buf = io.BytesIO()
