@@ -2,6 +2,7 @@
 
 import asyncio
 import io
+import re
 import wave
 from abc import ABC, abstractmethod
 from urllib.parse import quote
@@ -10,6 +11,19 @@ import httpx
 from loguru import logger
 
 from src.settings import settings
+
+
+# Sentence-ending punctuation; ellipsis "…" is normalized to "." first because
+# espeak-ng does not treat the "…" character as a pause.
+def split_sentences(text: str) -> list[str]:
+    """Split text into sentences, keeping terminal punctuation. Ellipsis "…" and
+    runs of dots are normalized to a single ".". Returns non-empty, stripped parts."""
+    text = text.replace("…", ".")
+    text = re.sub(r"\.{2,}", ".", text)              # "..." -> "."
+    parts = re.split(r"(?<=[.!?])\s+", text.strip())  # split after . ! ?
+    # Keep only fragments with a word character, so punctuation-only pieces
+    # (e.g. "." / "?" / "…"->".") that piper can't voice are dropped.
+    return [p.strip() for p in parts if p.strip() and re.search(r"\w", p, re.UNICODE)]
 
 
 class TtsBackend(ABC):
@@ -70,15 +84,43 @@ class PiperTtsBackend(TtsBackend):
 
         # The config json sits next to the onnx at <path>.json.
         self._voice = PiperVoice.load(voice_path, voice_path + ".json")
+        self._sentence_silence = max(0.0, float(settings.tts_sentence_silence))
         logger.info(f"Piper TTS voice loaded: {voice_path}")
 
     def _synth(self, text: str) -> bytes:
-        buf = io.BytesIO()
-        with wave.open(buf, "wb") as wf:
-            self._voice.synthesize_wav(text, wf)
-        # Transcode to MP3 here so the blocking lameenc call runs in the worker
-        # thread (via asyncio.to_thread in synthesize), not on the event loop.
-        return wav_to_mp3(buf.getvalue())
+        sentences = split_sentences(text)
+        pcm = bytearray()
+        framerate = channels = sampwidth = None
+        for sentence in sentences:
+            b = io.BytesIO()
+            try:
+                with wave.open(b, "wb") as wf:
+                    self._voice.synthesize_wav(sentence, wf)
+            except Exception:
+                # piper produced no audio for this fragment (e.g. symbols only); skip it.
+                continue
+            with wave.open(io.BytesIO(b.getvalue()), "rb") as rf:
+                if framerate is None:
+                    framerate, channels, sampwidth = rf.getframerate(), rf.getnchannels(), rf.getsampwidth()
+                frames = rf.readframes(rf.getnframes())
+            if not frames:
+                continue
+            if pcm and self._sentence_silence > 0:
+                # whole number of frames of silence, so samples stay aligned
+                frame = sampwidth * channels
+                pcm += b"\x00" * (int(framerate * self._sentence_silence) * frame)
+            pcm += frames
+        if framerate is None:
+            # Nothing pronounceable -> return a short silent clip (don't crash).
+            framerate, channels, sampwidth = 22050, 1, 2
+        out = io.BytesIO()
+        with wave.open(out, "wb") as wf:
+            wf.setframerate(framerate)
+            wf.setnchannels(channels)
+            wf.setsampwidth(sampwidth)
+            wf.writeframes(bytes(pcm))
+        # Transcode here so the blocking lameenc call runs in the worker thread.
+        return wav_to_mp3(out.getvalue())
 
     async def synthesize(self, text: str, lang: str = "ru") -> tuple[str, bytes]:
         mp3_bytes = await asyncio.to_thread(self._synth, text)

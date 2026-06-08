@@ -42,6 +42,7 @@ class Settings(BaseSettings):
     vosk_model_path: str = "models/vosk-model-small-ru-0.22"
     tts_backend: str = "teratts"  # teratts | piper
     piper_voice_path: str = "models/ru_RU-ruslan-medium.onnx"  # male adult RU; config json expected at <path>.json
+    tts_sentence_silence: float = 0.4   # seconds of silence inserted between sentences (Piper)
     tts_timeout: int = 30
     audio_host: str = "0.0.0.0"
     audio_port: int = 8200
