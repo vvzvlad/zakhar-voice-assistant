@@ -49,6 +49,10 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     system_prompt_path: str = "data/system_prompt.md"
     context_dir: str = "data"   # per-device context files live here as context_<name>.txt
+    # ge=1: keep at least one exchange. 0 would make the "last N*2" slice (msgs[-0:])
+    # return the whole list, i.e. unbounded growth — fail fast on that misconfig.
+    context_max_turns: int = Field(default=5, ge=1)        # recent user+assistant exchanges kept and shown to the model
+    context_ttl_seconds: int = Field(default=300, ge=0)    # idle seconds after which a conversation resets to empty (0 = always reset)
 
     # --- Server-side VAD end-pointing (defaults OK) ---
     # The speaker streams mic PCM continuously and never signals end-of-speech,

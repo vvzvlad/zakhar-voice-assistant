@@ -38,6 +38,15 @@ def test_missing_credential_fails(monkeypatch):
         Settings(_env_file=None)
 
 
+def test_context_max_turns_rejects_zero(monkeypatch):
+    # 0 would disable trimming (msgs[-0:] == whole list) -> unbounded growth.
+    # The ge=1 constraint must reject it at construction time.
+    _set_required(monkeypatch)
+    monkeypatch.setenv("CONTEXT_MAX_TURNS", "0")
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None)
+
+
 def test_devices_single(monkeypatch):
     _set_required(monkeypatch)
     monkeypatch.setenv("ESPHOME_DEVICES", "living|10.0.0.5|cHNr")

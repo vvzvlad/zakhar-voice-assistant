@@ -45,7 +45,8 @@ App, required (no default — missing → fail at startup):
 App, optional (sensible defaults in code): `MCP_SMARTHOME_TOKEN` (bearer for the
 MCP server; empty = no auth), `ESPHOME_PORT`, `GROQ_MODEL`, `GROQ_STT_MODEL`,
 `GROQ_PROXY`, `WEATHER_CITY`, `TTS_BACKEND`, `TTS_TIMEOUT`, `AUDIO_HOST`,
-`AUDIO_PORT`, `AUDIO_TTL`, `LOG_LEVEL`, `SYSTEM_PROMPT_PATH`, `CONTEXT_DIR`.
+`AUDIO_PORT`, `AUDIO_TTL`, `LOG_LEVEL`, `SYSTEM_PROMPT_PATH`, `CONTEXT_DIR`,
+`CONTEXT_MAX_TURNS`, `CONTEXT_TTL_SECONDS`.
 See `.env.example`.
 
 ## Conventions

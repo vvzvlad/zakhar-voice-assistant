@@ -37,3 +37,22 @@ def test_percent_replacement_isolated():
 
 def test_wind_replacement_isolated():
     assert processing_response("3 м/с") == "3 метров в секунду"
+
+
+def test_stress_mark_moved_onto_vowel():
+    # "+" before the stressed vowel becomes a combining acute accent (U+0301) after it.
+    assert processing_response("прив+ет") == "приве́т"
+
+
+def test_stray_plus_removed():
+    # A "+" not preceding a vowel is dropped so it isn't spoken.
+    assert "+" not in processing_response("два + два")
+
+
+def test_stress_then_word_replacement():
+    # Stress conversion runs first, so "что"->"што" still matches afterwards.
+    assert processing_response("чт+о") == "што́"
+
+
+def test_stress_multiple_words():
+    assert processing_response("больш+ая к+омната") == "больша́я ко́мната"

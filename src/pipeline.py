@@ -236,8 +236,9 @@ class Pipeline:
                 self._emit(VAET.VOICE_ASSISTANT_INTENT_START, {})
                 logger.info(f"{self.name}: 🤖 → LLM: {text!r}")
                 llm_t = time.perf_counter()
+                history = context.load_context(self._context_path)
                 reply = await llm.call_groq_api(
-                    self.client_ext, self.hub, text
+                    self.client_ext, self.hub, text, history=history
                 )
                 logger.info(
                     f"{self.name}: 💬 LLM reply ({time.perf_counter() - llm_t:.2f}s): "

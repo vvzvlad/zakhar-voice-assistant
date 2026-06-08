@@ -1,3 +1,5 @@
+import json
+
 import httpx
 import respx
 
@@ -169,6 +171,30 @@ async def test_httpx_error_returns_error_prefix(monkeypatch):
         result = await call_groq_api(client_ext, hub, "привет")
 
     assert result.startswith("Ошибка:")
+
+
+@respx.mock
+async def test_history_is_included(monkeypatch):
+    _patch_prompt(monkeypatch)
+    hub = StubHub(tools=[])
+    route = respx.post(GROQ_API_URL).mock(
+        return_value=httpx.Response(200, json=_final("ответ"))
+    )
+
+    history = [
+        {"role": "user", "content": "старый вопрос"},
+        {"role": "assistant", "content": "старый ответ"},
+    ]
+    async with httpx.AsyncClient() as client_ext:
+        await call_groq_api(client_ext, hub, "новый вопрос", history=history)
+
+    sent = json.loads(route.calls.last.request.content)
+    assert sent["messages"] == [
+        {"role": "system", "content": "SYS"},
+        {"role": "user", "content": "старый вопрос"},
+        {"role": "assistant", "content": "старый ответ"},
+        {"role": "user", "content": "новый вопрос"},
+    ]
 
 
 @respx.mock

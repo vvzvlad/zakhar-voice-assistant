@@ -81,7 +81,7 @@ def set_small_vad_thresholds(pipeline):
 def patch_llm(monkeypatch, reply="ответ"):
     """Stub the LLM (still Groq). STT is injected as a fake backend, not patched."""
 
-    async def fake_call_groq_api(client_ext, hub, text):
+    async def fake_call_groq_api(client_ext, hub, text, history=None):
         return reply
 
     monkeypatch.setattr("src.llm.call_groq_api", fake_call_groq_api)
@@ -303,3 +303,56 @@ async def test_finalize_once_race(tmp_path, monkeypatch):
     second = pipeline._claim()
     assert second is None
     assert types_of(events) == after_first
+
+
+async def test_history_flows_across_runs(tmp_path, monkeypatch):
+    import json
+
+    from src import context
+
+    # Capturing fake: records (text, history) per call and returns a scripted reply.
+    seen = []  # list of (text, history)
+    replies = {"первый вопрос": "первый ответ", "второй вопрос": "второй ответ"}
+
+    async def fake_call_groq_api(client_ext, hub, text, history=None):
+        seen.append((text, history))
+        return replies[text]
+
+    monkeypatch.setattr("src.llm.call_groq_api", fake_call_groq_api)
+
+    pipeline, _ = make_pipeline(tmp_path, name="hist", stt_text="первый вопрос")
+
+    # Run 1.
+    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_audio(b"\x01\x02" * 100)
+    await pipeline.on_stop(False)
+
+    # Run 1 saw no prior history.
+    assert seen[0][0] == "первый вопрос"
+    assert not seen[0][1]  # [] or None
+    # After run 1 the context file holds the first exchange as JSONL.
+    saved = context.load_context(pipeline._context_path)
+    assert saved == [
+        {"role": "user", "content": "первый вопрос"},
+        {"role": "assistant", "content": "первый ответ"},
+    ]
+    for ln in [
+        ln
+        for ln in open(pipeline._context_path, encoding="utf-8").read().splitlines()
+        if ln
+    ]:
+        json.loads(ln)
+
+    # Run 2 on the same pipeline instance with a different utterance.
+    # on_start resets all per-run state (including _finalized).
+    pipeline.stt_backend.text = "второй вопрос"
+    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_audio(b"\x01\x02" * 100)
+    await pipeline.on_stop(False)
+
+    # Run 2 received the first exchange as history.
+    assert seen[1][0] == "второй вопрос"
+    assert seen[1][1] == [
+        {"role": "user", "content": "первый вопрос"},
+        {"role": "assistant", "content": "первый ответ"},
+    ]

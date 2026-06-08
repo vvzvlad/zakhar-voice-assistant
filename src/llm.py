@@ -20,8 +20,11 @@ EMPTY_REPLY_AFTER_TOOLS = "Готово."
 EMPTY_REPLY_FALLBACK = "Я тебя не расслышала, повтори."
 
 
-async def call_groq_api(client_ext: httpx.AsyncClient, hub, text: str) -> str:
+async def call_groq_api(client_ext: httpx.AsyncClient, hub, text: str, history: list | None = None) -> str:
     """Call Groq API with the given text and return plain-text result.
+
+    `history` is the recent prior messages spliced between the system prompt and the
+    new user turn so the model remembers the last few exchanges.
 
     The external client (proxied) is used for the Groq request and for building the
     system prompt (weather). Smart-home control is performed by calling MCP tools
@@ -37,10 +40,10 @@ async def call_groq_api(client_ext: httpx.AsyncClient, hub, text: str) -> str:
     # Self-heal a startup race: pick up tools if the MCP server was down at boot.
     await hub.ensure_tools()
 
-    messages = [
-        {"role": "system", "content": await build_system_prompt(client_ext)},
-        {"role": "user", "content": text},
-    ]
+    messages = [{"role": "system", "content": await build_system_prompt(client_ext)}]
+    if history:
+        messages.extend(history)
+    messages.append({"role": "user", "content": text})
 
     last_content = ""
     tool_executed = False
