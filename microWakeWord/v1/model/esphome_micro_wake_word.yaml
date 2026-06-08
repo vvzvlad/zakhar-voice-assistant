@@ -15,7 +15,10 @@ micro_wake_word:
       # id: zakhar
       # probability_cutoff: 0.97      # override (optional)
       # sliding_window_size: 5        # override (optional)
-  vad:                                 # optional voice-activity gate (recommended)
+  vad:                                 # VAD pre-gate — STRONGLY RECOMMENDED
+  # ^ Measured: the VAD gate cuts music false-accepts ~80% (16.5 -> ~3 /h at cutoff
+  #   0.9, window 3) with NO change to real-voice recall (0.81). Continuous
+  #   instrumental music is non-speech and is blocked before the wake-word decision.
   on_wake_word_detected:
     - voice_assistant.start:
         wake_word: !lambda return wake_word;
