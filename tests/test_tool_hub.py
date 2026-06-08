@@ -1,3 +1,5 @@
+from loguru import logger
+
 from src.tool_hub import ToolHub
 
 
@@ -46,17 +48,19 @@ class FakeSource:
         self.stopped = True
 
 
-async def test_advertised_names_are_prefixed_and_merged():
+async def test_advertised_names_are_raw_and_merged():
     home = FakeSource("home", ["set_light", "list_devices"])
     weather = FakeSource("weather", ["get_current_weather"])
     hub = ToolHub([home, weather])
     await hub.start()
 
+    # Advertised names are the sources' RAW names, in source order — no prefixing,
+    # so the system prompt's bare names (set_light, ...) still match.
     names = [t["function"]["name"] for t in hub.tools]
     assert names == [
-        "home__set_light",
-        "home__list_devices",
-        "weather__get_current_weather",
+        "set_light",
+        "list_devices",
+        "get_current_weather",
     ]
 
 
@@ -66,10 +70,10 @@ async def test_call_routes_to_owning_source_with_raw_name():
     hub = ToolHub([home, weather])
     await hub.start()
 
-    out = await hub.call("weather__get_current_weather", {"city": "Moscow"})
+    out = await hub.call("get_current_weather", {"city": "Moscow"})
 
     assert out == "weather:get_current_weather"
-    # The owning source received the RAW (un-prefixed) name.
+    # The owning source received the raw name.
     assert weather.calls == [("get_current_weather", {"city": "Moscow"})]
     assert home.calls == []
 
@@ -78,8 +82,8 @@ async def test_unknown_tool_returns_error_string():
     hub = ToolHub([FakeSource("home", ["set_light"])])
     await hub.start()
 
-    out = await hub.call("home__nope", {})
-    assert out == "error: unknown tool home__nope"
+    out = await hub.call("nope", {})
+    assert out == "error: unknown tool nope"
 
 
 async def test_failing_source_does_not_break_others():
@@ -91,11 +95,11 @@ async def test_failing_source_does_not_break_others():
     await hub.start()
 
     names = [t["function"]["name"] for t in hub.tools]
-    # The broken source advertised nothing extra; the healthy source still serves.
-    assert "home__set_light" in names
+    # The healthy source still serves its tool under the raw name.
+    assert "set_light" in names
     assert healthy.started is True
     # The healthy source is still callable.
-    assert await hub.call("home__set_light", {}) == "home:set_light"
+    assert await hub.call("set_light", {}) == "home:set_light"
 
 
 async def test_source_dicts_are_not_mutated():
@@ -103,9 +107,42 @@ async def test_source_dicts_are_not_mutated():
     hub = ToolHub([home])
     await hub.start()
 
-    # The hub clones tool dicts before prefixing, so the source keeps the raw name.
+    # No name rewriting: the advertised name equals the source's raw name, and the
+    # source dict is left untouched.
     assert home.raw_tools()[0]["function"]["name"] == "set_light"
-    assert hub.tools[0]["function"]["name"] == "home__set_light"
+    assert hub.tools[0]["function"]["name"] == "set_light"
+
+
+async def test_name_collision_first_source_wins():
+    # Two sources both expose a tool named "foo".
+    first = FakeSource("first", ["foo"])
+    second = FakeSource("second", ["foo"])
+    hub = ToolHub([first, second])
+
+    # Capture loguru output (loguru does not feed pytest's caplog by default).
+    records = []
+    sink_id = logger.add(records.append, level="WARNING")
+    try:
+        await hub.start()
+    finally:
+        logger.remove(sink_id)
+
+    # "foo" is advertised exactly ONCE (deduped, first occurrence kept).
+    names = [t["function"]["name"] for t in hub.tools]
+    assert names == ["foo"]
+
+    # call("foo", ...) routes to the FIRST source, not the second.
+    out = await hub.call("foo", {"x": 1})
+    assert out == "first:foo"
+    assert first.calls == [("foo", {"x": 1})]
+    assert second.calls == []
+
+    # A warning was logged naming the tool and both source ids.
+    logged = "".join(records)
+    assert "WARNING" in logged
+    assert "foo" in logged
+    assert "first" in logged
+    assert "second" in logged
 
 
 async def test_ensure_tools_refreshes_each_source():

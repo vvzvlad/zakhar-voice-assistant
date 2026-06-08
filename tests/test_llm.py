@@ -4,6 +4,7 @@ from src.core_config import CoreConfig, PromptConfig, WeatherConfig
 from src.llm import call_llm_api
 from src.plugins.llm.base import LlmConfig
 from src.text import processing_response
+from src.tool_hub import ToolHub
 
 MAX_TOOL_ROUNDS = 5
 
@@ -20,6 +21,32 @@ class StubHub:
 
     async def call(self, name, arguments):
         self.calls.append((name, arguments))
+        return "ok"
+
+
+class FakeToolSource:
+    """Minimal ToolSource double for driving a REAL ToolHub end to end.
+
+    Advertises one tool under its raw name and records call()s, so a test can prove the
+    name the model emits is routed unchanged through the hub to the owning source.
+    """
+
+    def __init__(self, id, tool):
+        self.id = id
+        self._tools = [tool]
+        self.calls = []  # records (name, args)
+
+    async def start(self):
+        return None
+
+    async def ensure(self):
+        return None
+
+    def raw_tools(self):
+        return self._tools
+
+    async def call(self, name, args):
+        self.calls.append((name, args))
         return "ok"
 
 
@@ -127,6 +154,31 @@ async def test_tool_path(tmp_path):
         ("set_light", {"device_id": "bright_room_light", "state": "on"})
     ]
     # processing_response is applied to the final content.
+    assert result == processing_response("Готово.")
+
+
+async def test_tool_path_through_real_tool_hub(tmp_path):
+    # Guard the whole loop against name-routing regressions: drive call_llm_api over a
+    # REAL ToolHub (not StubHub). The hub advertises the source's raw name unchanged, so
+    # the name the model emits must route straight back to the owning source.
+    source = FakeToolSource("home", SET_LIGHT_TOOL)
+    hub = ToolHub([source])
+    await hub.start()
+
+    # The hub advertises the bare name the system prompt teaches.
+    assert [t["function"]["name"] for t in hub.tools] == ["set_light"]
+
+    backend = FakeLlmBackend([
+        _tool_call("set_light", '{"device_id":"bright_room_light","state":"on"}'),
+        _final("Готово."),
+    ])
+
+    result = await _call(backend, hub, "включи свет", _core(tmp_path))
+
+    # The raw tool name + args reached the owning source via the hub.
+    assert source.calls == [
+        ("set_light", {"device_id": "bright_room_light", "state": "on"})
+    ]
     assert result == processing_response("Готово.")
 
 
