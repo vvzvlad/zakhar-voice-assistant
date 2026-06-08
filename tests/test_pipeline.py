@@ -367,26 +367,97 @@ async def test_vad_maxlen_finalize(tmp_path, monkeypatch):
 
 
 async def test_vad_no_speech_finalize(tmp_path, monkeypatch):
-    # STT returns whitespace -> after STT_END the run ends without intent/TTS.
+    # No speech detected by VAD -> STT is SKIPPED entirely (so Whisper can't
+    # hallucinate on non-speech audio); STT_END is emitted empty and the run ends
+    # without intent/TTS.
     patch_llm(monkeypatch)
     pipeline, events = make_pipeline(tmp_path, monkeypatch, stt_text="   ")
     set_small_vad_thresholds(pipeline)
     # Never any speech: only the no-speech timeout can finalize.
     pipeline._vad = FakeVad([False])
 
+    # Spy on transcribe to assert it is never called on a no-speech run.
+    stt_calls = []
+    orig_transcribe = pipeline.stt_backend.transcribe
+
+    async def spy_transcribe(pcm):
+        stt_calls.append(pcm)
+        return await orig_transcribe(pcm)
+
+    pipeline.stt_backend.transcribe = spy_transcribe
+
     await pipeline.on_start("cid", 0, None, None)
     # no_speech_timeout_ms=200 -> 10 frames; feed 11 to cross it.
     await pipeline.on_audio(FRAME * 11)
 
     assert pipeline._finalized is True
-    # pcm is non-empty (we buffered it), STT runs and returns whitespace.
+    # STT must never run on a no-speech utterance.
+    assert stt_calls == []
+    # STT_START (from on_start) is balanced by an empty STT_END; no intent/TTS.
     assert types_of(events) == [
         VAET.VOICE_ASSISTANT_RUN_START,
         VAET.VOICE_ASSISTANT_STT_START,
         VAET.VOICE_ASSISTANT_STT_END,
         VAET.VOICE_ASSISTANT_RUN_END,
     ]
+    data = dict(events)
+    assert data[VAET.VOICE_ASSISTANT_STT_END] == {"text": ""}
     assert_all_str(events)
+
+
+async def test_no_speech_run_is_recorded_as_empty(tmp_path, monkeypatch):
+    # A no-speech finalization skips STT but still records the run as empty
+    # (result="empty", stt_text="", t_stt=0, reason="no_speech").
+    patch_llm(monkeypatch)
+    store = FakeRunsStore()
+    pipeline, _ = make_pipeline(tmp_path, monkeypatch, stt_text="   ", runs_store=store)
+    set_small_vad_thresholds(pipeline)
+    # Never any speech: only the no-speech timeout can finalize.
+    pipeline._vad = FakeVad([False])
+
+    stt_calls = []
+    orig_transcribe = pipeline.stt_backend.transcribe
+
+    async def spy_transcribe(pcm):
+        stt_calls.append(pcm)
+        return await orig_transcribe(pcm)
+
+    pipeline.stt_backend.transcribe = spy_transcribe
+
+    await pipeline.on_start("cid", 0, None, None)
+    # no_speech_timeout_ms=200 -> 10 frames; feed 11 to cross it.
+    await pipeline.on_audio(FRAME * 11)
+
+    # STT never ran, but the run is recorded once as an empty run.
+    assert stt_calls == []
+    assert len(store.records) == 1
+    rec = store.records[0]
+    assert rec["result"] == "empty"
+    assert rec["stt_text"] == ""
+    assert rec["t_stt"] == 0
+    assert rec["reason"] == "no_speech"
+
+
+async def test_on_start_rebuilds_vad_when_aggressiveness_changed(tmp_path, monkeypatch):
+    # webrtcvad.Vad bakes the aggressiveness in at construction, so on_start must rebuild
+    # the real Vad object when rt.core.vad.aggressiveness changed since it was last built,
+    # and leave it untouched (same object) when the value is unchanged.
+    pipeline, _ = make_pipeline(tmp_path, monkeypatch)
+    initial_vad = pipeline._vad
+    initial_aggr = pipeline._vad_aggressiveness
+
+    # Change to a different valid value (0..3) and start: the Vad object is rebuilt.
+    new_aggr = (initial_aggr + 1) % 4
+    pipeline.rt.core.vad.aggressiveness = new_aggr
+    await pipeline.on_start("cid", 0, None, None)
+    assert pipeline._vad is not initial_vad            # rebuilt (new object)
+    assert pipeline._vad_aggressiveness == new_aggr     # tracked value updated
+
+    # A second start with the SAME aggressiveness is a no-op: the object is not replaced.
+    same_vad = pipeline._vad
+    await pipeline.on_start("cid", 0, None, None)
+    assert pipeline._vad is same_vad                    # unchanged -> not rebuilt
+    assert pipeline._vad_aggressiveness == new_aggr
 
 
 async def test_finalize_once_race(tmp_path, monkeypatch):

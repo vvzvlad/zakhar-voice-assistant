@@ -534,6 +534,20 @@ class Pipeline:
                 "rounds": [],
             }
             try:
+                # VAD found no speech in the whole window — this is silence/noise,
+                # not an utterance. Skip STT entirely: Whisper hallucinates stray
+                # phrases on non-speech audio (e.g. "Продолжение следует..."), which
+                # would then pollute the run log or flow into the LLM/TTS. Balance the
+                # STT_START emitted in on_start with an empty STT_END, end the run, and
+                # let the finally below record it as an empty run (result="empty",
+                # stt_text="", t_stt=0 — all left at their defaults).
+                if reason == "no_speech":
+                    logger.info(
+                        f"{self.name}: 😶 no speech detected by VAD, skipping STT"
+                    )
+                    self._emit(VAET.VOICE_ASSISTANT_STT_END, {"text": ""})
+                    self._emit(VAET.VOICE_ASSISTANT_RUN_END, {})
+                    return
                 stt_t = time.perf_counter()
                 text = await self.stt_backend.transcribe(pcm)
                 record["t_stt"] = int((time.perf_counter() - stt_t) * 1000)
