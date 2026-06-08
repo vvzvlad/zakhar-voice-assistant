@@ -237,7 +237,7 @@ class Pipeline:
                 logger.info(f"{self.name}: 🤖 → LLM: {text!r}")
                 llm_t = time.perf_counter()
                 history = context.load_context(self._context_path)
-                reply = await llm.call_groq_api(
+                reply = await llm.call_llm_api(
                     self.client_ext, self.hub, text, history=history
                 )
                 logger.info(

@@ -81,10 +81,10 @@ def set_small_vad_thresholds(pipeline):
 def patch_llm(monkeypatch, reply="ответ"):
     """Stub the LLM (still Groq). STT is injected as a fake backend, not patched."""
 
-    async def fake_call_groq_api(client_ext, hub, text, history=None):
+    async def fake_call_llm_api(client_ext, hub, text, history=None):
         return reply
 
-    monkeypatch.setattr("src.llm.call_groq_api", fake_call_groq_api)
+    monkeypatch.setattr("src.llm.call_llm_api", fake_call_llm_api)
 
 
 def types_of(events):
@@ -314,11 +314,11 @@ async def test_history_flows_across_runs(tmp_path, monkeypatch):
     seen = []  # list of (text, history)
     replies = {"первый вопрос": "первый ответ", "второй вопрос": "второй ответ"}
 
-    async def fake_call_groq_api(client_ext, hub, text, history=None):
+    async def fake_call_llm_api(client_ext, hub, text, history=None):
         seen.append((text, history))
         return replies[text]
 
-    monkeypatch.setattr("src.llm.call_groq_api", fake_call_groq_api)
+    monkeypatch.setattr("src.llm.call_llm_api", fake_call_llm_api)
 
     pipeline, _ = make_pipeline(tmp_path, name="hist", stt_text="первый вопрос")
 

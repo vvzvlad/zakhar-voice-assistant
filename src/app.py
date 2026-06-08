@@ -16,12 +16,12 @@ from src.tts import make_tts_backend
 
 async def main() -> None:
     """Build shared dependencies, start all speakers, and run until cancelled."""
-    # client_ext (proxied) -> Groq chat/STT + weather; client_local -> local TTS.
-    client_ext = httpx.AsyncClient(proxy=(settings.groq_proxy or None), verify=False)
+    # client_ext (proxied) -> cloud STT/intent + weather; client_local -> local TTS.
+    client_ext = httpx.AsyncClient(proxy=(settings.external_proxy or None), verify=False)
     client_local = httpx.AsyncClient(verify=False)
 
     # STT runs over client_ext (the proxied client GroqSttBackend uses).
-    stt_backend = make_stt_backend(settings.stt_backend, client_ext, settings)
+    stt_backend = make_stt_backend(settings.stt_provider, client_ext, settings)
     tts_backend = make_tts_backend(
         settings.tts_backend, settings.tts_base_url, client_local, settings.tts_timeout
     )

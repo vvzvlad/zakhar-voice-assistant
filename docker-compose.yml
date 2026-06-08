@@ -21,7 +21,8 @@ services:
     ports:
       - "${AUDIO_PORT}:${AUDIO_PORT}"       # publish the audio server to the LAN
     environment:
-      GROQ_API_KEY: XXX
+      INTENT_API_KEY: XXX
+      STT_API_KEY: XXX
       WEATHER_API_KEY: XXX
       ESPHOME_DEVICES: "living|10.0.0.5|your_psk_here"
       MCP_SMARTHOME_URL: http://10.0.0.5:8001/mcp

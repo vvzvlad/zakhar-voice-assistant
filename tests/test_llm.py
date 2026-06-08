@@ -6,9 +6,9 @@ import respx
 from src import llm
 from src.llm import (
     EMPTY_REPLY_FALLBACK,
-    GROQ_API_URL,
     MAX_TOOL_ROUNDS,
-    call_groq_api,
+    OPENROUTER_API_URL,
+    call_llm_api,
 )
 from src.text import processing_response
 
@@ -79,7 +79,7 @@ def _patch_prompt(monkeypatch):
 async def test_tool_path(monkeypatch):
     _patch_prompt(monkeypatch)
     hub = StubHub(tools=[SET_LIGHT_TOOL])
-    respx.post(GROQ_API_URL).mock(
+    respx.post(OPENROUTER_API_URL).mock(
         side_effect=[
             httpx.Response(
                 200,
@@ -92,7 +92,7 @@ async def test_tool_path(monkeypatch):
     )
 
     async with httpx.AsyncClient() as client_ext:
-        result = await call_groq_api(client_ext, hub, "включи свет")
+        result = await call_llm_api(client_ext, hub, "включи свет")
 
     assert hub.calls == [
         ("set_light", {"device_id": "bright_room_light", "state": "on"})
@@ -104,12 +104,12 @@ async def test_tool_path(monkeypatch):
 async def test_no_tool_path(monkeypatch):
     _patch_prompt(monkeypatch)
     hub = StubHub(tools=[SET_LIGHT_TOOL])
-    respx.post(GROQ_API_URL).mock(
+    respx.post(OPENROUTER_API_URL).mock(
         return_value=httpx.Response(200, json=_final("Привет, мясной мешок."))
     )
 
     async with httpx.AsyncClient() as client_ext:
-        result = await call_groq_api(client_ext, hub, "привет")
+        result = await call_llm_api(client_ext, hub, "привет")
 
     assert hub.calls == []
     assert result == processing_response("Привет, мясной мешок.")
@@ -119,10 +119,10 @@ async def test_no_tool_path(monkeypatch):
 async def test_rate_limit_path(monkeypatch):
     _patch_prompt(monkeypatch)
     hub = StubHub(tools=[])
-    respx.post(GROQ_API_URL).mock(return_value=httpx.Response(429))
+    respx.post(OPENROUTER_API_URL).mock(return_value=httpx.Response(429))
 
     async with httpx.AsyncClient() as client_ext:
-        result = await call_groq_api(client_ext, hub, "привет")
+        result = await call_llm_api(client_ext, hub, "привет")
 
     assert result == (
         "У меня кончились ресурсы на вас, мясных мешков. Я занимаюсь своими делами, "
@@ -134,7 +134,7 @@ async def test_rate_limit_path(monkeypatch):
 async def test_max_tool_rounds_exhausted(monkeypatch):
     _patch_prompt(monkeypatch)
     hub = StubHub(tools=[SET_LIGHT_TOOL])
-    respx.post(GROQ_API_URL).mock(
+    respx.post(OPENROUTER_API_URL).mock(
         side_effect=[
             httpx.Response(200, json=_tool_call("set_light", "{}"))
             for _ in range(MAX_TOOL_ROUNDS + 1)
@@ -142,7 +142,7 @@ async def test_max_tool_rounds_exhausted(monkeypatch):
     )
 
     async with httpx.AsyncClient() as client_ext:
-        result = await call_groq_api(client_ext, hub, "включи свет")
+        result = await call_llm_api(client_ext, hub, "включи свет")
 
     assert result == "Ошибка: слишком много вызовов инструментов"
 
@@ -151,12 +151,12 @@ async def test_max_tool_rounds_exhausted(monkeypatch):
 async def test_non_200_returns_error_message(monkeypatch):
     _patch_prompt(monkeypatch)
     hub = StubHub(tools=[])
-    respx.post(GROQ_API_URL).mock(
+    respx.post(OPENROUTER_API_URL).mock(
         return_value=httpx.Response(500, json={"error": {"message": "boom"}})
     )
 
     async with httpx.AsyncClient() as client_ext:
-        result = await call_groq_api(client_ext, hub, "привет")
+        result = await call_llm_api(client_ext, hub, "привет")
 
     assert result == "Ошибка: boom"
 
@@ -165,10 +165,10 @@ async def test_non_200_returns_error_message(monkeypatch):
 async def test_httpx_error_returns_error_prefix(monkeypatch):
     _patch_prompt(monkeypatch)
     hub = StubHub(tools=[])
-    respx.post(GROQ_API_URL).mock(side_effect=httpx.ConnectError("down"))
+    respx.post(OPENROUTER_API_URL).mock(side_effect=httpx.ConnectError("down"))
 
     async with httpx.AsyncClient() as client_ext:
-        result = await call_groq_api(client_ext, hub, "привет")
+        result = await call_llm_api(client_ext, hub, "привет")
 
     assert result.startswith("Ошибка:")
 
@@ -177,7 +177,7 @@ async def test_httpx_error_returns_error_prefix(monkeypatch):
 async def test_history_is_included(monkeypatch):
     _patch_prompt(monkeypatch)
     hub = StubHub(tools=[])
-    route = respx.post(GROQ_API_URL).mock(
+    route = respx.post(OPENROUTER_API_URL).mock(
         return_value=httpx.Response(200, json=_final("ответ"))
     )
 
@@ -186,7 +186,7 @@ async def test_history_is_included(monkeypatch):
         {"role": "assistant", "content": "старый ответ"},
     ]
     async with httpx.AsyncClient() as client_ext:
-        await call_groq_api(client_ext, hub, "новый вопрос", history=history)
+        await call_llm_api(client_ext, hub, "новый вопрос", history=history)
 
     sent = json.loads(route.calls.last.request.content)
     assert sent["messages"] == [
@@ -201,9 +201,9 @@ async def test_history_is_included(monkeypatch):
 async def test_empty_final_reply_uses_fallback(monkeypatch):
     _patch_prompt(monkeypatch)
     hub = StubHub(tools=[])
-    respx.post(GROQ_API_URL).mock(return_value=httpx.Response(200, json=_final(None)))
+    respx.post(OPENROUTER_API_URL).mock(return_value=httpx.Response(200, json=_final(None)))
 
     async with httpx.AsyncClient() as client_ext:
-        result = await call_groq_api(client_ext, hub, "...")
+        result = await call_llm_api(client_ext, hub, "...")
 
     assert result == EMPTY_REPLY_FALLBACK

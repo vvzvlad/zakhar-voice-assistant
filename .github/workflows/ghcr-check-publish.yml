@@ -27,7 +27,8 @@ jobs:
 
     - name: Run tests
       env:                               # required ENV so importing settings works
-        GROQ_API_KEY: test-groq-key
+        INTENT_API_KEY: test-intent-key
+        STT_API_KEY: test-stt-key
         WEATHER_API_KEY: test-weather-key
         MCP_SMARTHOME_URL: http://mcp.test:8001/mcp
         TTS_BASE_URL: http://tts.test:8124

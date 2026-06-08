@@ -3,7 +3,8 @@ import os
 # Provide the required env vars BEFORE any test module imports src.settings
 # (Settings() is instantiated at import time and would otherwise fail). In CI the
 # same variables are injected via the workflow's `env:` block.
-os.environ.setdefault("GROQ_API_KEY", "test-groq-key")
+os.environ.setdefault("INTENT_API_KEY", "test-intent-key")
+os.environ.setdefault("STT_API_KEY", "test-stt-key")
 os.environ.setdefault("WEATHER_API_KEY", "test-weather-key")
 # Smart-home MCP server endpoint — required by the app Settings now.
 os.environ.setdefault("MCP_SMARTHOME_URL", "http://mcp.test:8201/mcp")

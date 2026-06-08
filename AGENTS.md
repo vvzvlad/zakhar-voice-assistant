@@ -2,7 +2,8 @@
 
 Client-side voice assistant for a "HA Voice PE" ESP32 speaker. It connects to the
 speaker over the ESPHome Native API (as the client), then runs the pipeline:
-STT (Groq Whisper) → LLM (Groq chat) → smart-home tools via an external MCP server →
+STT (cloud Whisper, default Groq) → LLM (default Claude Haiku 4.5 via OpenRouter) →
+smart-home tools via an external MCP server →
 TTS (local TeraTTS HTTP service), and serves the resulting audio back to N speakers.
 It replaces Home Assistant in this loop. Smart-home control is an MCP integration:
 the app is an MCP client (running an agentic tool-calling loop) that connects to an
@@ -36,17 +37,19 @@ make run               # runs .venv/bin/python main.py
 ## Environment
 
 App, required (no default — missing → fail at startup):
-- `GROQ_API_KEY`, `WEATHER_API_KEY` — credentials.
+- `INTENT_API_KEY` — key for the intent (LLM) provider.
+- `STT_API_KEY` — key for the cloud STT provider (required for the default cloud STT; leave empty when `STT_PROVIDER=vosk`).
+- `WEATHER_API_KEY` — credential.
 - `MCP_SMARTHOME_URL` — external smart-home MCP server endpoint (node-red-contrib-mcp-server in Node-RED, e.g. http://10.0.0.5:8001/mcp).
 - `TTS_BASE_URL` — local TeraTTS service base.
 - `PUBLIC_BASE_URL` — base URL the speakers use to fetch audio.
 - `ESPHOME_DEVICES` — `name|host|psk;name2|host2|psk2`.
 
 App, optional (sensible defaults in code): `MCP_SMARTHOME_TOKEN` (bearer for the
-MCP server; empty = no auth), `ESPHOME_PORT`, `GROQ_MODEL`, `GROQ_STT_MODEL`,
-`GROQ_PROXY`, `WEATHER_CITY`, `TTS_BACKEND`, `TTS_TIMEOUT`, `AUDIO_HOST`,
-`AUDIO_PORT`, `AUDIO_TTL`, `LOG_LEVEL`, `SYSTEM_PROMPT_PATH`, `CONTEXT_DIR`,
-`CONTEXT_MAX_TURNS`, `CONTEXT_TTL_SECONDS`.
+MCP server; empty = no auth), `ESPHOME_PORT`, `INTENT_PROVIDER`, `INTENT_MODEL`,
+`STT_PROVIDER`, `STT_MODEL`, `EXTERNAL_PROXY`, `WEATHER_CITY`, `TTS_BACKEND`,
+`TTS_TIMEOUT`, `AUDIO_HOST`, `AUDIO_PORT`, `AUDIO_TTL`, `LOG_LEVEL`,
+`SYSTEM_PROMPT_PATH`, `CONTEXT_DIR`, `CONTEXT_MAX_TURNS`, `CONTEXT_TTL_SECONDS`.
 See `.env.example`.
 
 ## Conventions
@@ -55,7 +58,7 @@ See `.env.example`.
 - Credentials / addresses of our own services that the user provides go ONLY into
   `.env` (never into code, never via inline env vars); read them through `Settings`.
 - No default/example credentials in code; missing ENV var → fail at startup.
-- A default address is allowed ONLY for public third-party APIs (Groq, OpenWeatherMap).
+- A default address is allowed ONLY for public third-party APIs (Groq, OpenRouter, OpenWeatherMap).
   Addresses of self-hosted services have no default.
 - Code comments are in English.
 - All repeated actions (env setup, tests, run) go through `make` targets — add or

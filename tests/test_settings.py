@@ -6,7 +6,7 @@ from src.settings import DeviceConfig, Settings
 
 def _set_required(monkeypatch):
     """Set every required env var so Settings() can be constructed."""
-    monkeypatch.setenv("GROQ_API_KEY", "g-key")
+    monkeypatch.setenv("INTENT_API_KEY", "i-key")
     monkeypatch.setenv("WEATHER_API_KEY", "w-key")
     monkeypatch.setenv("MCP_SMARTHOME_URL", "http://mcp.test:8201/mcp")
     monkeypatch.setenv("TTS_BASE_URL", "http://tts.test:8124")
@@ -18,7 +18,7 @@ def test_loads_from_env(monkeypatch):
     _set_required(monkeypatch)
     monkeypatch.setenv("LOG_LEVEL", "DEBUG")
     s = Settings(_env_file=None)
-    assert s.groq_api_key == "g-key"
+    assert s.intent_api_key == "i-key"
     assert s.weather_api_key == "w-key"
     assert s.mcp_smarthome_url == "http://mcp.test:8201/mcp"
     assert s.tts_base_url == "http://tts.test:8124"
@@ -27,13 +27,13 @@ def test_loads_from_env(monkeypatch):
     # Defaults applied for non-secret config.
     assert s.esphome_port == 6053
     assert s.audio_port == 8200
-    assert s.groq_proxy == ""
+    assert s.external_proxy == ""
 
 
 def test_missing_credential_fails(monkeypatch):
     # A missing credential must blow up at construction time, not silently default.
     _set_required(monkeypatch)
-    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    monkeypatch.delenv("INTENT_API_KEY", raising=False)
     with pytest.raises(ValidationError):
         Settings(_env_file=None)
 

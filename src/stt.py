@@ -1,4 +1,4 @@
-"""Speech-to-text backends (pluggable; Groq Whisper HTTP is the default)."""
+"""Speech-to-text backends (pluggable; cloud Whisper via the STT provider is the default)."""
 
 import asyncio
 import io
@@ -56,12 +56,12 @@ class GroqSttBackend(SttBackend):
         wav_bytes = pcm_to_wav(pcm)
         files = {"file": ("audio.wav", wav_bytes, "audio/wav")}
         data = {
-            "model": settings.groq_stt_model,
+            "model": settings.stt_model,
             "language": "ru",
             "response_format": "json",
             "temperature": "0",
         }
-        headers = {"Authorization": f"Bearer {settings.groq_api_key}"}
+        headers = {"Authorization": f"Bearer {settings.stt_api_key}"}
 
         try:
             resp = await self.client.post(

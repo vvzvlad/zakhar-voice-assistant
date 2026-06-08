@@ -20,7 +20,7 @@ class DeviceConfig:
 class Settings(BaseSettings):
     # --- Credentials (no default) ---
     # Missing in the environment → Settings() raises at startup. Never defaulted.
-    groq_api_key: str
+    intent_api_key: str         # API key for the intent (LLM) provider
     weather_api_key: str
 
     # --- Our own services (no default) ---
@@ -34,11 +34,20 @@ class Settings(BaseSettings):
     # --- Non-secret config (defaults OK) ---
     mcp_smarthome_token: str = ""  # Optional bearer token for the MCP server; empty = no auth header
     esphome_port: int = 6053
-    groq_model: str = "openai/gpt-oss-120b"
-    groq_stt_model: str = "whisper-large-v3-turbo"
-    groq_proxy: str = ""        # SOCKS/HTTP proxy for Groq + weather; empty = direct
     weather_city: str = "Moscow"
-    stt_backend: str = "groq"   # groq | vosk
+
+    # --- Intent (LLM) provider ---
+    intent_provider: str = "openrouter"   # openrouter | groq
+    intent_model: str = "anthropic/claude-haiku-4.5"  # fastest Claude 4-gen model (OpenRouter slug)
+
+    # --- STT provider ---
+    stt_provider: str = "groq"   # groq (cloud Whisper) | vosk (in-process)
+    stt_api_key: str = ""        # API key for the cloud STT provider; empty for vosk
+    stt_model: str = "whisper-large-v3-turbo"
+
+    # --- Outbound networking ---
+    external_proxy: str = ""     # SOCKS/HTTP proxy for cloud APIs (STT, intent, weather); empty = direct
+
     vosk_model_path: str = "models/vosk-model-small-ru-0.22"
     tts_backend: str = "teratts"  # teratts | piper
     piper_voice_path: str = "models/ru_RU-ruslan-medium.onnx"  # male adult RU; config json expected at <path>.json

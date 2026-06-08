@@ -2,9 +2,10 @@
 
 Client-side voice assistant for a "HA Voice PE" ESP32 speaker that replaces Home
 Assistant in the voice loop. The server connects to the speaker over the ESPHome
-Native API (as the client) and runs the pipeline: STT (Groq Whisper) → LLM
-(Groq chat) → smart-home tools via an external MCP server → TTS (local TeraTTS
-HTTP service), returning the generated audio to N speakers.
+Native API (as the client) and runs the pipeline: STT (cloud Whisper, default
+Groq) → LLM (default Claude Haiku 4.5 via OpenRouter) → smart-home tools via an
+external MCP server → TTS (local TeraTTS HTTP service), returning the generated
+audio to N speakers.
 
 Smart-home control is an MCP integration: the app is an MCP client that connects
 to an external smart-home MCP server (hosted in Node-RED via
@@ -27,17 +28,19 @@ automatically — you never need the system Python.
 
 ## Environment
 
-App, required (no default — missing → fail at startup): `GROQ_API_KEY`,
-`WEATHER_API_KEY`, `MCP_SMARTHOME_URL` (external smart-home MCP server endpoint —
+App, required (no default — missing → fail at startup): `INTENT_API_KEY` (key for
+the intent/LLM provider), `STT_API_KEY` (key for the cloud STT provider; required
+for the default cloud STT, leave empty when `STT_PROVIDER=vosk`), `WEATHER_API_KEY`,
+`MCP_SMARTHOME_URL` (external smart-home MCP server endpoint —
 node-red-contrib-mcp-server in Node-RED, e.g. `http://10.0.0.5:8001/mcp`),
 `TTS_BASE_URL`, `PUBLIC_BASE_URL`, `ESPHOME_DEVICES`
 (`name|host|psk;name2|host2|psk2`).
 
 App, optional (defaults in code): `MCP_SMARTHOME_TOKEN` (bearer for the MCP
-server; empty = no auth), `ESPHOME_PORT`, `GROQ_MODEL`, `GROQ_STT_MODEL`,
-`GROQ_PROXY`, `WEATHER_CITY`, `TTS_BACKEND`, `TTS_TIMEOUT`, `AUDIO_HOST`,
-`AUDIO_PORT` (default 8200), `AUDIO_TTL`, `LOG_LEVEL`, `SYSTEM_PROMPT_PATH`,
-`CONTEXT_DIR`. See `.env.example` for the full list.
+server; empty = no auth), `ESPHOME_PORT`, `INTENT_PROVIDER`, `INTENT_MODEL`,
+`STT_PROVIDER`, `STT_MODEL`, `EXTERNAL_PROXY`, `WEATHER_CITY`, `TTS_BACKEND`,
+`TTS_TIMEOUT`, `AUDIO_HOST`, `AUDIO_PORT` (default 8200), `AUDIO_TTL`, `LOG_LEVEL`,
+`SYSTEM_PROMPT_PATH`, `CONTEXT_DIR`. See `.env.example` for the full list.
 
 ## What's here
 
