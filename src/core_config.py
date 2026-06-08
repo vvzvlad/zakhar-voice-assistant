@@ -5,7 +5,7 @@ they are plain pydantic models (not providers). They still feed the panel the sa
 way — via model_json_schema() — but stay out of the REGISTRY.
 """
 
-from pydantic import BaseModel, Field, SecretStr
+from pydantic import BaseModel, Field
 
 
 class ContextConfig(BaseModel):
@@ -34,20 +34,20 @@ class NetworkConfig(BaseModel):
 
 
 class WeatherConfig(BaseModel):
-    api_key: SecretStr = Field(default=SecretStr(""), json_schema_extra={"secret": True})
+    api_key: str = ""
     city: str = "Moscow"
 
 
 class McpConfig(BaseModel):
     # Single smart-home MCP server for now (multi-server is a later feature).
     url: str = ""
-    token: SecretStr = Field(default=SecretStr(""), json_schema_extra={"secret": True})
+    token: str = ""
 
 
 class DeviceConfig(BaseModel):
     name: str
     host: str
-    psk: SecretStr = Field(json_schema_extra={"secret": True})
+    psk: str
 
 
 class EsphomeConfig(BaseModel):

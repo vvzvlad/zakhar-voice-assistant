@@ -1,6 +1,5 @@
 import json
 import os
-import stat
 
 import pytest
 
@@ -38,13 +37,6 @@ def test_no_bak_on_first_write(tmp_path):
     path = str(tmp_path / "config.json")
     config_store.save({"v": 1}, path)
     assert not os.path.exists(path + ".bak")
-
-
-def test_file_mode_is_0600(tmp_path):
-    path = str(tmp_path / "config.json")
-    config_store.save({"a": 1}, path)
-    mode = stat.S_IMODE(os.stat(path).st_mode)
-    assert mode == 0o600
 
 
 def test_invalid_json_raises(tmp_path):

@@ -4,7 +4,7 @@ from pydantic import ValidationError
 
 import src.plugins  # noqa: F401  register all providers
 from src import config_store
-from src.config_service import ConfigService, mask_secrets
+from src.config_service import ConfigService
 from src.core_config import CoreConfig
 from src.plugins.base import Deps
 
@@ -75,63 +75,28 @@ def test_catalog_lists_all_categories_with_schemas(tmp_path):
     assert "schema" in cat["core"] and "values" in cat["core"]
 
 
-def test_catalog_masks_secrets_and_never_leaks_plaintext(tmp_path):
-    cat = _service(tmp_path).catalog()
-    blob = repr(cat)
-    # No plaintext secret anywhere in the emitted catalog.
-    for secret in ("gsk-secret", "sk-or-secret", "AQVN-secret", "weather-secret"):
-        assert secret not in blob
-
-    # The yandex api_key field is masked to {"is_set": True}.
-    tts = next(c for c in cat["categories"] if c["id"] == "tts")
-    yandex = next(p for p in tts["providers"] if p["id"] == "yandex")
-    assert yandex["values"]["api_key"] == {"is_set": True}
-    assert yandex["values"]["voice"] == "jane"  # non-secret passes through
-
-    # Core weather secret masked; city stays readable.
-    assert cat["core"]["values"]["weather"]["api_key"] == {"is_set": True}
-    assert cat["core"]["values"]["weather"]["city"] == "Москва"
-
-
-def test_mask_secrets_unset_secret_is_false():
-    masked = mask_secrets(CoreConfig())
-    assert masked["weather"]["api_key"] == {"is_set": False}
-    assert masked["mcp"]["token"] == {"is_set": False}
-
-
-def test_catalog_masks_psk_in_device_list(tmp_path):
-    # devices is a list of models, each with a secret `psk` field — masking must
-    # recurse into the list and never leak the plaintext psk.
+def test_catalog_exposes_values_plainly(tmp_path):
+    # Secrets are plain config values now: catalog() emits them verbatim (no masking).
     doc = _doc()
+    doc["core"]["weather"]["api_key"] = "wkey"
     doc["core"]["devices"] = [
         {"name": "kitchen", "host": "10.0.0.5", "psk": "psk-plaintext-1"},
-        {"name": "bedroom", "host": "10.0.0.6", "psk": "psk-plaintext-2"},
     ]
     cat = ConfigService(doc, _deps(), path=str(tmp_path / "config.json")).catalog()
 
-    blob = repr(cat)
-    assert "psk-plaintext-1" not in blob
-    assert "psk-plaintext-2" not in blob
+    # Provider api_key comes through as plaintext.
+    tts = next(c for c in cat["categories"] if c["id"] == "tts")
+    yandex = next(p for p in tts["providers"] if p["id"] == "yandex")
+    assert yandex["values"]["api_key"] == "AQVN-secret"
+    assert yandex["values"]["voice"] == "jane"
 
-    devices = cat["core"]["values"]["devices"]
-    assert len(devices) == 2
-    for dev in devices:
-        assert dev["psk"] == {"is_set": True}
-    assert {d["name"] for d in devices} == {"kitchen", "bedroom"}
+    # Core weather api_key and device psk are plaintext too.
+    assert cat["core"]["values"]["weather"]["api_key"] == "wkey"
+    assert cat["core"]["values"]["devices"][0]["psk"] == "psk-plaintext-1"
 
-
-def test_apply_with_masked_secret_placeholder_raises_and_does_not_persist(tmp_path):
-    # Documented contract: a masked placeholder ({"is_set": ...}) sent back for a
-    # secret field fails validation and the file is not written.
-    path = str(tmp_path / "config.json")
-    svc = ConfigService(_doc(), _deps(), path=path)
-    with pytest.raises(ValidationError):
-        svc.apply({"core": {"weather": {"api_key": {"is_set": True}}}})
-
-    import os
-    assert not os.path.exists(path)  # nothing persisted
-    # In-memory secret is untouched.
-    assert svc.core.weather.api_key.get_secret_value() == "weather-secret"
+    # JSON Schema is still emitted per provider and for core.
+    assert "properties" in yandex["schema"]
+    assert "properties" in cat["core"]["schema"]
 
 
 def test_options_proxies_provider(tmp_path):

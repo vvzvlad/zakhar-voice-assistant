@@ -14,7 +14,7 @@
 - **Типы данных между стадиями статичны** (PCM → text → text → audio).
 - **Внутри стадии провайдеров может быть много** (TTS: teratts/piper/yandex и т.д.) → выбор провайдера
   на стадию + самоописываемые настройки провайдера — это и есть ядро дизайна, оно остаётся.
-- **Секреты — обычные поля конфига** (`SecretStr`, маскируются в API). Отдельного хранилища секретов нет.
+- **Секреты — обычные строковые поля конфига** (без маскирования). Отдельного хранилища секретов нет.
 
 Связано с панелью: [web-panel-brief.md](web-panel-brief.md).
 
@@ -55,7 +55,7 @@
 ├──────────────────────────────────────────────────────────────────┤
 │ ConfigService           catalog() · get() · apply(patch) · on_change()   ← plugin-agnostic
 │   ├── REGISTRY (статический dict)  провайдеры по категориям stt/llm/tts/accentuator
-│   ├── config_store      load()/save() → data/config.json (атомарно, .bak, 0600)
+│   ├── config_store      load()/save() → data/config.json (атомарно, .bak)
 │   └── CoreConfig        plain pydantic-секции: context, audio, vad, network
 ├──────────────────────────────────────────────────────────────────┤
 │ build_pipeline()  тонкая функция: берёт выбранные провайдеры →     │
@@ -105,7 +105,7 @@ class Provider:                          # base, in-repo only
 
 ```python
 class YandexTtsConfig(BaseModel):
-    api_key: SecretStr = Field(..., json_schema_extra={"secret": True, "apply": "rebuild"})
+    api_key: str       = Field("", json_schema_extra={"apply": "rebuild"})
     voice:   str       = Field("zahar", json_schema_extra={"widget": "select", "options": "dynamic"})
     emotion: Literal["neutral", "good", "evil"] = "neutral"
     speed:   float     = Field(1.0, ge=0.1, le=3.0, json_schema_extra={"widget": "slider"})
@@ -118,7 +118,7 @@ class YandexTtsProvider(Provider):
     ConfigModel = YandexTtsConfig
 
     def create(self, cfg: YandexTtsConfig, deps) -> TtsBackend:
-        return YandexTtsBackend(deps.http_cloud, api_key=cfg.api_key.get_secret_value(),
+        return YandexTtsBackend(deps.http_cloud, api_key=cfg.api_key,
                                 voice=cfg.voice, emotion=cfg.emotion, speed=cfg.speed,
                                 folder_id=cfg.folder_id, url=cfg.url, timeout=deps.tts_timeout)
 
@@ -134,8 +134,6 @@ class YandexTtsProvider(Provider):
 
 Метаданные кладём в `Field(json_schema_extra=...)`; `model_json_schema()` их выносит, панель читает:
 
-- `secret: true` — поле `SecretStr`; API маскирует (`{"is_set": true}`), в логи не пишем, запись —
-  отдельной операцией «заменить».
 - `apply: "live" | "rebuild"` — применять сразу или пересобирать стадию.
 - `widget`, `min`/`max` (через `ge`/`le`), `options: "dynamic"` — подсказки рендера.
 
@@ -167,13 +165,12 @@ Discovery — простой явный импорт пакета `src/plugins/`
 ```python
 # src/config_store.py
 def load() -> dict: ...
-def save(doc: dict) -> None: ...   # atomic: temp + fsync + os.replace; keep .bak; file mode 0600
+def save(doc: dict) -> None: ...   # atomic: temp + fsync + os.replace; keep .bak
 ```
 
 Документ generic; стадии-провайдеры имеют форму `{selected, instances}`, мульти-категории (mcp/device) —
 список инстансов. Значения каждого среза валидируются **схемой соответствующего провайдера** (берётся
-из `REGISTRY`). Секреты лежат тут же как обычные значения (`SecretStr`), маскирует их API-слой по
-флагу `secret:true`.
+из `REGISTRY`). Секреты лежат тут же как обычные строковые значения — без маскирования.
 
 ```jsonc
 {
@@ -199,9 +196,6 @@ def save(doc: dict) -> None: ...   # atomic: temp + fsync + os.replace; keep .ba
 Формы хранения — ровно две (single `{selected,instances}` для stt/llm/tts/accentuator; список для
 mcp/device), они известны заранее из фиксированного набора стадий — обобщённого параметра
 «cardinality» у категории заводить не нужно.
-
-> Замечание: секрет в JSON-документе хранится как значение; права файла `0600` и «не логировать
-> SecretStr» — требования к `config_store`/логгеру, а не повод для отдельной подсистемы.
 
 ---
 
@@ -290,7 +284,7 @@ class ConfigService:
 ## 15. Решения (всё зафиксировано, открытых вопросов нет)
 
 - Внешние плагины / entry points — **нет**, только in-repo `plugins/`.
-- Отдельный SecretStore — **нет**, секреты = `SecretStr`-поля в `config.json` (`0600`), маскирование в API.
+- Отдельный SecretStore — **нет**. Секреты — обычные строковые поля в `config.json`, без маскирования и без спец-режимов файла (доверенная зона).
 - Generic-слоты конвейера — **нет**, конвейер захардкожен.
 - `core.*` как провайдеры — **нет**, это plain pydantic-секции, отдающие JSON Schema.
 - Аутентификация панели — **нет**, панель всегда в доверенной зоне; ENV не используется вообще.
@@ -303,5 +297,5 @@ class ConfigService:
 Провайдеры стадий — самодостаточные in-repo модули, каждый со своей pydantic-схемой; конфиг-ядро
 (`REGISTRY` + `ConfigService` + `config_store`) plugin-agnostic; панель строит формы из JSON Schema
 автоматически; конвейер захардкожен (динамична только начинка стадии); значения — в `data/config.json`
-с атомарной записью, секреты — обычные `SecretStr`-поля; лог — отдельно в SQLite. `.env`-монолит
+с атомарной записью, секреты — обычные строковые поля; лог — отдельно в SQLite. `.env`-монолит
 уничтожен. Добавление провайдера — один файл, ноль правок ядра и UI.

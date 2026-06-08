@@ -2,7 +2,7 @@
 
 from typing import Literal
 
-from pydantic import BaseModel, Field, SecretStr
+from pydantic import BaseModel, Field
 
 from src.plugins.base import Deps, Provider, register
 
@@ -11,9 +11,7 @@ YANDEX_VOICES = ["zahar", "filipp", "ermil", "jane", "omazh", "alena", "madirus"
 
 
 class YandexTtsConfig(BaseModel):
-    api_key: SecretStr = Field(
-        default=SecretStr(""), json_schema_extra={"secret": True, "apply": "rebuild"}
-    )
+    api_key: str = Field("", json_schema_extra={"apply": "rebuild"})
     voice: str = Field("zahar", json_schema_extra={"widget": "select", "options": "dynamic"})
     emotion: Literal["neutral", "good", "evil"] = "neutral"
     speed: float = Field(1.0, ge=0.1, le=3.0, json_schema_extra={"widget": "slider"})
@@ -33,7 +31,7 @@ class YandexTtsProvider(Provider):
 
         return YandexTtsBackend(
             deps.http_cloud,
-            api_key=cfg.api_key.get_secret_value(),
+            api_key=cfg.api_key,
             voice=cfg.voice,
             emotion=cfg.emotion,
             speed=cfg.speed,

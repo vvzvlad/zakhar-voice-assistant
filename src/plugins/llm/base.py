@@ -6,7 +6,7 @@ single round-trip chat-completions client; the loop drives it.
 
 from abc import ABC, abstractmethod
 
-from pydantic import BaseModel, Field, SecretStr
+from pydantic import BaseModel, Field
 
 
 class LlmBackend(ABC):
@@ -17,9 +17,7 @@ class LlmBackend(ABC):
 
 
 class LlmConfig(BaseModel):
-    api_key: SecretStr = Field(
-        default=SecretStr(""), json_schema_extra={"secret": True, "apply": "live"}
-    )
+    api_key: str = Field("", json_schema_extra={"apply": "live"})
     model: str = "anthropic/claude-haiku-4.5"
     temperature: float = Field(0.8, ge=0.0, le=2.0)
     max_tokens: int = Field(4096, ge=1)

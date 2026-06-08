@@ -17,7 +17,7 @@ class OpenRouterProvider(Provider):
     def create(self, cfg: LlmConfig, deps: Deps):
         return OpenAICompatLlmBackend(
             url=OPENROUTER_API_URL,
-            api_key=cfg.api_key.get_secret_value(),
+            api_key=cfg.api_key,
             model=cfg.model,
             temperature=cfg.temperature,
             max_tokens=cfg.max_tokens,

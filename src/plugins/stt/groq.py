@@ -1,12 +1,12 @@
 """Groq Whisper STT provider (cloud)."""
 
-from pydantic import BaseModel, Field, SecretStr
+from pydantic import BaseModel
 
 from src.plugins.base import Deps, Provider, register
 
 
 class GroqSttConfig(BaseModel):
-    api_key: SecretStr = Field(default=SecretStr(""), json_schema_extra={"secret": True})
+    api_key: str = ""
     model: str = "whisper-large-v3-turbo"
 
 

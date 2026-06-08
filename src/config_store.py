@@ -1,8 +1,7 @@
 """Atomic JSON config storage (data/config.json).
 
 Single source of truth for the config document. Writes are atomic (unique temp
-file + fsync + os.replace + directory fsync), keep a .bak of the previous file, and
-chmod the result to 0o600 because secrets live in this file as plain SecretStr values.
+file + fsync + os.replace + directory fsync) and keep a .bak of the previous file.
 """
 
 import json
@@ -32,7 +31,7 @@ def save(doc: dict, path: str = DEFAULT_PATH) -> None:
     Steps: create the parent dir if needed, write JSON to a UNIQUE temp file in the
     same directory and fsync it, copy the existing file to <path>.bak (if any), then
     os.replace(tmp, path) and fsync the containing directory so the rename survives a
-    power failure. The final file is chmod'd to 0o600 since it may contain secrets.
+    power failure.
 
     The temp file is unique (tempfile.mkstemp) so two concurrent saves cannot race on
     a shared `<path>.tmp` name. On any failure the temp file is removed (no leftover
@@ -56,7 +55,6 @@ def save(doc: dict, path: str = DEFAULT_PATH) -> None:
             shutil.copy2(path, path + ".bak")
 
         os.replace(tmp, path)
-        os.chmod(path, 0o600)
 
         # Persist the rename metadata by fsyncing the directory. Best-effort: some
         # platforms cannot open a directory (no O_DIRECTORY), so guard against OSError.

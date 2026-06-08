@@ -12,7 +12,7 @@ the module global and lets tests point at a tmp file.
 
 import copy
 
-from pydantic import BaseModel, SecretStr
+from pydantic import BaseModel
 
 from src import config_store
 from src.core_config import CoreConfig
@@ -32,60 +32,6 @@ class ConfigDoc(BaseModel):
     llm: StageSlot
     tts: StageSlot
     core: CoreConfig = CoreConfig()
-
-
-def _is_secret_field(field) -> bool:
-    """A field is secret if its schema extra marks it, or its type is SecretStr."""
-    extra = field.json_schema_extra
-    if isinstance(extra, dict) and extra.get("secret") is True:
-        return True
-    return field.annotation is SecretStr
-
-
-def mask_secrets(model: BaseModel) -> dict:
-    """Dump a pydantic model to a JSON-able dict with every secret field replaced
-    by {"is_set": <bool>}. Recurses into nested models and lists of models. Never
-    emits secret plaintext."""
-
-    def _value(field, val):
-        if _is_secret_field(field):
-            return {"is_set": _truthy_secret(val)}
-        return _dump(val)
-
-    def _truthy_secret(val) -> bool:
-        if isinstance(val, SecretStr):
-            return bool(val.get_secret_value())
-        return bool(val)
-
-    def _dump(val):
-        if isinstance(val, BaseModel):
-            out = {}
-            for name, field in val.__class__.model_fields.items():
-                out[name] = _value(field, getattr(val, name))
-            return out
-        if isinstance(val, list):
-            return [_dump(v) for v in val]
-        if isinstance(val, dict):
-            return {k: _dump(v) for k, v in val.items()}
-        if isinstance(val, SecretStr):
-            # A bare SecretStr reached without field context — never leak it.
-            return {"is_set": bool(val.get_secret_value())}
-        return val
-
-    return _dump(model)
-
-
-def _reveal(val):
-    """Convert a model_dump(mode='python') tree into a JSON-able dict with SecretStr
-    revealed to plaintext. Used to build the merge/persist base so secrets survive an
-    apply() round-trip (mode='json' would have masked them to '**********')."""
-    if isinstance(val, SecretStr):
-        return val.get_secret_value()
-    if isinstance(val, dict):
-        return {k: _reveal(v) for k, v in val.items()}
-    if isinstance(val, list):
-        return [_reveal(v) for v in val]
-    return val
 
 
 def _deep_merge(base: dict, patch: dict) -> dict:
@@ -134,7 +80,7 @@ class ConfigService:
 
     def catalog(self) -> dict:
         """Everything the panel needs: per-category providers + JSON Schema +
-        masked values + core schema/values."""
+        plain values + core schema/values."""
         categories = []
         for cat in STAGE_CATEGORIES:
             slot = self._slot(cat)
@@ -145,14 +91,14 @@ class ConfigService:
                     "id": pid,
                     "label": prov.label,
                     "schema": prov.ConfigModel.model_json_schema(),
-                    "values": mask_secrets(values),
+                    "values": values.model_dump(mode="json"),
                 })
             categories.append({"id": cat, "selected": slot.selected, "providers": provs})
         return {
             "categories": categories,
             "core": {
                 "schema": CoreConfig.model_json_schema(),
-                "values": mask_secrets(self._doc.core),
+                "values": self._doc.core.model_dump(mode="json"),
             },
         }
 
@@ -160,13 +106,9 @@ class ConfigService:
         """Deep-merge `patch` into the current document, re-validate, persist, then
         fire callbacks. Raises (without persisting) on any validation error.
 
-        Masked-secret contract: the panel MUST NOT send back masked secret
-        placeholders (the {"is_set": ...} shape catalog() emits). To keep a secret's
-        current value, omit that field from the patch — it survives the merge
-        untouched. Sending a masked placeholder for a secret field fails validation
-        by design (a dict is not a valid SecretStr), so the file is NOT written and
-        the plaintext is never clobbered with the placeholder."""
-        base = _reveal(self._doc.model_dump(mode="python"))
+        A partial patch only overrides the keys it carries; sibling keys survive the
+        deep merge untouched."""
+        base = self._doc.model_dump(mode="json")
         merged = _deep_merge(base, patch)
         new_doc = ConfigDoc(**merged)      # structural + core validation
         # Validate every touched provider's selected instance config.
