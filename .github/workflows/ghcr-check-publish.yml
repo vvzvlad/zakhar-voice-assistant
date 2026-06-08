@@ -33,6 +33,12 @@ jobs:
     needs: test                          # no green tests → no image is built
     steps:
     - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0   # full history + tags so `git describe --tags` works
+
+    - name: Derive version from Git tag
+      id: version
+      run: echo "version=$(git describe --tags --always --dirty)" >> "$GITHUB_OUTPUT"
 
     - name: Log in to GitHub Container Registry
       uses: docker/login-action@v2
@@ -42,7 +48,7 @@ jobs:
         password: ${{ secrets.GITHUB_TOKEN }}
 
     - name: Build the Docker image
-      run: docker build . --file Dockerfile --tag ghcr.io/${{ github.repository }}:latest --tag ghcr.io/${{ github.repository }}:${{ github.sha }}
+      run: docker build . --file Dockerfile --build-arg VERSION="${{ steps.version.outputs.version }}" --tag ghcr.io/${{ github.repository }}:latest --tag ghcr.io/${{ github.repository }}:${{ github.sha }}
 
     - name: Push Docker images
       run: |

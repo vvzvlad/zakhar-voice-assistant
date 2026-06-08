@@ -17,3 +17,6 @@ models/
 
 # Claude Code git worktrees — must never be committed
 .claude/worktrees/
+
+# Generated at Docker build time by the version-stamp step
+src/_version.txt
