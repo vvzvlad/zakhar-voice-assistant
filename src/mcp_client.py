@@ -1,30 +1,53 @@
 """MCP client hub: short-lived per-operation sessions to the smart-home MCP server."""
 
 import asyncio
+from contextlib import asynccontextmanager
 
 from loguru import logger
 from mcp import ClientSession
+from mcp.client.sse import sse_client
 from mcp.client.streamable_http import streamablehttp_client
 
 
 class McpToolHub:
     """MCP client for the smart-home MCP server.
 
-    Opens a fresh short-lived session per operation (list_tools / call_tool). The
-    smart-home MCP server runs stateless_http and is an independently auto-updated
-    container, so its restarts are routine; reconnecting per call makes the
-    integration self-healing (no stale persistent session to break) and keeps every
-    context manager entered and exited in the caller's own task (anyio-safe).
+    Opens a fresh short-lived session per operation (list_tools / call_tool). Supports
+    both the Streamable HTTP and SSE transports; the per-operation short-lived-session
+    pattern works for both (SSE is stateful, but each op opens and closes its own
+    session). The smart-home MCP server is an independently auto-updated container, so
+    its restarts are routine; reconnecting per call makes the integration self-healing
+    (no stale persistent session to break) and keeps every context manager entered and
+    exited in the caller's own task (anyio-safe).
     """
 
-    def __init__(self, url: str, token: str | None = None):
+    def __init__(self, url: str, token: str | None = None, transport: str = "auto"):
         self._url = url
         self._headers = {"Authorization": f"Bearer {token}"} if token else None
+        self._transport = self._resolve_transport(transport, url)
         self._tools: list = []
         self._lock = asyncio.Lock()  # serialize tool calls across concurrent speakers
 
+    @staticmethod
+    def _resolve_transport(transport: str, url: str) -> str:
+        # "auto": HA MCP Server and most SSE endpoints are published at .../sse.
+        if transport == "auto":
+            return "sse" if url.rstrip("/").endswith("/sse") else "streamable_http"
+        return transport  # explicit "sse" | "streamable_http"
+
+    @asynccontextmanager
+    async def _connect(self):
+        # Yield (read, write) regardless of transport, hiding the tuple-arity
+        # difference: sse_client yields 2, streamablehttp_client yields 3.
+        if self._transport == "sse":
+            async with sse_client(self._url, headers=self._headers) as (read, write):
+                yield read, write
+        else:
+            async with streamablehttp_client(self._url, headers=self._headers) as (read, write, _):
+                yield read, write
+
     async def _list_tools(self) -> list:
-        async with streamablehttp_client(self._url, headers=self._headers) as (read, write, _):
+        async with self._connect() as (read, write):
             async with ClientSession(read, write) as session:
                 await session.initialize()
                 resp = await session.list_tools()
@@ -66,7 +89,7 @@ class McpToolHub:
     async def call(self, name: str, arguments: dict) -> str:
         async with self._lock:
             try:
-                async with streamablehttp_client(self._url, headers=self._headers) as (read, write, _):
+                async with self._connect() as (read, write):
                     async with ClientSession(read, write) as session:
                         await session.initialize()
                         result = await session.call_tool(name, arguments)

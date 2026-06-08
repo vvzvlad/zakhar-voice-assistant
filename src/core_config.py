@@ -5,6 +5,8 @@ they are plain pydantic models (not providers). They still feed the panel the sa
 way — via model_json_schema() — but stay out of the REGISTRY.
 """
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 
@@ -42,6 +44,7 @@ class McpConfig(BaseModel):
     # Single smart-home MCP server for now (multi-server is a later feature).
     url: str = ""
     token: str = ""
+    transport: Literal["auto", "streamable_http", "sse"] = "auto"
 
 
 class CalendarConfig(BaseModel):

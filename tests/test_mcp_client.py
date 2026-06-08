@@ -65,6 +65,20 @@ class StubTransport:
         return False
 
 
+class StubSseTransport:
+    """Async-context-manager double for sse_client (yields a 2-tuple)."""
+
+    def __init__(self, url, headers=None):
+        self.url = url
+        self.headers = headers
+
+    async def __aenter__(self):
+        return ("read", "write")
+
+    async def __aexit__(self, *exc):
+        return False
+
+
 def test_to_groq_tool_conversion():
     tool = StubTool(
         "set_light",
@@ -134,6 +148,36 @@ async def test_call_returns_no_output_when_empty_content(monkeypatch):
     hub = McpToolHub("http://mcp.test:8201/mcp")
     out = await hub.call("list_devices", {})
     assert out == "(no output)"
+
+
+def test_resolve_transport_auto_detects_sse_by_url_suffix():
+    assert McpToolHub._resolve_transport("auto", "http://ha:8123/mcp_server/sse") == "sse"
+    assert McpToolHub._resolve_transport("auto", "http://ha:8123/mcp_server/sse/") == "sse"
+    assert McpToolHub._resolve_transport("auto", "http://mcp.test:8201/mcp") == "streamable_http"
+
+
+def test_resolve_transport_explicit_value_is_preserved():
+    assert McpToolHub._resolve_transport("sse", "http://mcp.test:8201/mcp") == "sse"
+    assert (
+        McpToolHub._resolve_transport("streamable_http", "http://ha:8123/mcp_server/sse")
+        == "streamable_http"
+    )
+
+
+async def test_call_uses_sse_transport_when_selected(monkeypatch):
+    session = StubSession(result=StubResult([StubContent("done")]))
+
+    def must_not_be_called(*a, **k):
+        raise AssertionError("streamablehttp_client used while SSE transport selected")
+
+    monkeypatch.setattr(mcp_client, "streamablehttp_client", must_not_be_called)
+    monkeypatch.setattr(mcp_client, "sse_client", lambda url, headers=None: StubSseTransport(url, headers))
+    monkeypatch.setattr(mcp_client, "ClientSession", lambda read, write: session)
+
+    hub = McpToolHub("http://ha:8123/mcp_server/sse")
+    out = await hub.call("set_light", {"device_id": "x", "state": "on"})
+    assert out == "done"
+    assert session.calls == [("set_light", {"device_id": "x", "state": "on"})]
 
 
 async def test_list_tools_converts_server_tools(monkeypatch):
