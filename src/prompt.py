@@ -6,19 +6,17 @@ from datetime import datetime
 import httpx
 from loguru import logger
 
-from src.settings import settings
+from src.core_config import CoreConfig
 from src.weather import get_weather_summary
 
 DEFAULT_PROMPT_PATH = "templates/default_prompt.md"
 
 
-def load_system_prompt() -> str:
-    """Load system prompt from settings.system_prompt_path or create it from the default.
+def load_system_prompt(prompt_path: str) -> str:
+    """Load the system prompt from `prompt_path` or create it from the default.
 
     If the data file is missing, copies default content into the data file and returns it.
     """
-    prompt_path = settings.system_prompt_path
-
     if os.path.exists(prompt_path):
         with open(prompt_path, "r", encoding="utf-8") as f:
             content = f.read()
@@ -36,7 +34,7 @@ def load_system_prompt() -> str:
     return default_content
 
 
-async def build_system_prompt(client: httpx.AsyncClient) -> str:
+async def build_system_prompt(client: httpx.AsyncClient, core: CoreConfig) -> str:
     """Prefix SYSTEM_PROMPT with current time-of-day, date, and current weather."""
     now = datetime.now()
     date_time_text = now.strftime("%Y-%m-%d, %H:%M")  # 2025-09-18, 14:05
@@ -45,12 +43,12 @@ async def build_system_prompt(client: httpx.AsyncClient) -> str:
     prefix = f"Сейчас (дата и время): {date_time_text}, {day_time}, {week_day}.\n"
 
     weather_summary = await get_weather_summary(
-        client, settings.weather_city, settings.weather_api_key
+        client, core.weather.city, core.weather.api_key
     )
     if weather_summary is not None:
-        prefix += f"Погода в {settings.weather_city}: {weather_summary}.\n"
+        prefix += f"Погода в {core.weather.city}: {weather_summary}.\n"
 
-    system_prompt = load_system_prompt()
+    system_prompt = load_system_prompt(core.prompt.system_prompt_path)
     system_prompt = system_prompt.replace("<<<<<TDW>>>>>", prefix)
 
     return system_prompt

@@ -20,7 +20,4 @@ class GroqSttProvider(Provider):
     def create(self, cfg: GroqSttConfig, deps: Deps):
         from src.stt import GroqSttBackend
 
-        # TODO(phase2): GroqSttBackend currently reads settings.stt_api_key /
-        # settings.stt_model internally. Phase 2 will pass cfg.api_key/cfg.model
-        # explicitly so this provider no longer depends on the global settings.
-        return GroqSttBackend(deps.http_cloud)
+        return GroqSttBackend(deps.http_cloud, api_key=cfg.api_key, model=cfg.model)

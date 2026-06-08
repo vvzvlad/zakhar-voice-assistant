@@ -26,7 +26,6 @@ from aioesphomeapi import VoiceAssistantEventType as VAET
 from loguru import logger
 
 from src import context, llm
-from src.settings import settings
 
 # WebRTC VAD requires mono 16-bit PCM frames of exactly 10/20/30 ms at 16 kHz.
 # We use 20 ms frames = 16000 * 2 * 20/1000 = 640 bytes.
@@ -46,36 +45,40 @@ class Pipeline:
     def __init__(
         self,
         name,
-        client_ext,
         hub,
         stt_backend,
+        llm_backend,
         tts_backend,
         audio_server,
-        public_base_url,
-        context_dir,
+        weather_client,
+        core,
+        max_tool_rounds,
     ):
         self.name = name
-        self.client_ext = client_ext
         # MCP tool hub: advertises smart-home tools to the model and executes them.
         self.hub = hub
         self.stt_backend = stt_backend
+        self.llm_backend = llm_backend
         self.tts_backend = tts_backend
         self.audio_server = audio_server
-        self.public_base_url = public_base_url
+        self.weather_client = weather_client
+        self.core = core
+        self.max_tool_rounds = max_tool_rounds
+        self.public_base_url = core.audio.public_base_url
         self._buffer = bytearray()
         self._lock = asyncio.Lock()
         self._conversation_id = ""
-        self._context_path = os.path.join(context_dir, f"context_{name}.txt")
+        self._context_path = os.path.join(core.context.dir, f"context_{name}.txt")
 
-        # VAD end-pointing tunables (non-secret, defaulted in settings). Stored as
+        # VAD end-pointing tunables (non-secret, defaulted in core.vad). Stored as
         # plain ints so tests can shrink the thresholds on the instance directly.
-        self.vad_silence_ms = settings.vad_silence_ms
-        self.vad_min_speech_ms = settings.vad_min_speech_ms
-        self.vad_max_utterance_ms = settings.vad_max_utterance_ms
-        self.vad_no_speech_timeout_ms = settings.vad_no_speech_timeout_ms
+        self.vad_silence_ms = core.vad.silence_ms
+        self.vad_min_speech_ms = core.vad.min_speech_ms
+        self.vad_max_utterance_ms = core.vad.max_utterance_ms
+        self.vad_no_speech_timeout_ms = core.vad.no_speech_timeout_ms
         # Instance attribute so tests can monkeypatch it with a fake exposing
         # is_speech(frame, rate) -> bool.
-        self._vad = webrtcvad.Vad(settings.vad_aggressiveness)
+        self._vad = webrtcvad.Vad(core.vad.aggressiveness)
 
         # Per-run VAD state (reset in on_start).
         self._frame_rem = bytearray()  # leftover bytes between non-640-aligned chunks
@@ -236,9 +239,19 @@ class Pipeline:
                 self._emit(VAET.VOICE_ASSISTANT_INTENT_START, {})
                 logger.info(f"{self.name}: 🤖 → LLM: {text!r}")
                 llm_t = time.perf_counter()
-                history = context.load_context(self._context_path)
+                history = context.load_context(
+                    self._context_path,
+                    max_turns=self.core.context.max_turns,
+                    ttl_seconds=self.core.context.ttl_seconds,
+                )
                 reply = await llm.call_llm_api(
-                    self.client_ext, self.hub, text, history=history
+                    self.llm_backend,
+                    self.hub,
+                    text,
+                    weather_client=self.weather_client,
+                    core=self.core,
+                    max_tool_rounds=self.max_tool_rounds,
+                    history=history,
                 )
                 logger.info(
                     f"{self.name}: 💬 LLM reply ({time.perf_counter() - llm_t:.2f}s): "
@@ -246,7 +259,13 @@ class Pipeline:
                 )
 
                 try:
-                    context.append_context(self._context_path, text, reply)
+                    context.append_context(
+                        self._context_path,
+                        text,
+                        reply,
+                        max_turns=self.core.context.max_turns,
+                        ttl_seconds=self.core.context.ttl_seconds,
+                    )
                 except Exception as e:
                     # Context persistence failure must not break the run.
                     logger.error(f"{self.name}: context append failed: {e}")

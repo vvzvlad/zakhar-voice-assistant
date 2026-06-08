@@ -1,16 +1,13 @@
-import json
-
 import httpx
+import pytest
 import respx
 
-from src import llm
-from src.llm import (
-    EMPTY_REPLY_FALLBACK,
-    MAX_TOOL_ROUNDS,
-    OPENROUTER_API_URL,
-    call_llm_api,
-)
+from src.core_config import CoreConfig, PromptConfig, WeatherConfig
+from src.llm import EMPTY_REPLY_AFTER_TOOLS, EMPTY_REPLY_FALLBACK, call_llm_api
 from src.text import processing_response
+from src.weather import OPENWEATHERMAP_URL
+
+MAX_TOOL_ROUNDS = 5
 
 
 class StubHub:
@@ -26,6 +23,28 @@ class StubHub:
     async def call(self, name, arguments):
         self.calls.append((name, arguments))
         return "ok"
+
+
+class FakeLlmBackend:
+    """LLM backend double: returns scripted JSON per complete() call.
+
+    Each scripted item is either a dict (returned as the provider JSON) or an
+    Exception instance (raised), so tests can drive both happy and error paths.
+    Records the (messages, tools) of each call for assertions.
+    """
+
+    def __init__(self, responses):
+        self._responses = list(responses)
+        self._i = 0
+        self.seen = []  # list of (messages, tools)
+
+    async def complete(self, messages, tools):
+        self.seen.append((list(messages), tools))
+        item = self._responses[self._i]
+        self._i += 1
+        if isinstance(item, BaseException):
+            raise item
+        return item
 
 
 SET_LIGHT_TOOL = {
@@ -68,61 +87,79 @@ def _tool_call(name, arguments_json):
     }
 
 
-def _patch_prompt(monkeypatch):
-    async def fake_build_system_prompt(client):
-        return "SYS"
+def _http_status_error(status_code, json_body=None):
+    """Build an httpx.HTTPStatusError carrying a Response with the given status."""
+    request = httpx.Request("POST", "https://llm.test/chat")
+    response = httpx.Response(status_code, json=json_body, request=request)
+    return httpx.HTTPStatusError("error", request=request, response=response)
 
-    monkeypatch.setattr(llm, "build_system_prompt", fake_build_system_prompt)
+
+def _core(tmp_path):
+    """A CoreConfig whose prompt file lives in tmp_path (so the real
+    build_system_prompt reads it without touching data/)."""
+    prompt_path = tmp_path / "system_prompt.md"
+    prompt_path.write_text("PROMPT BODY <<<<<TDW>>>>>", encoding="utf-8")
+    return CoreConfig(
+        prompt=PromptConfig(system_prompt_path=str(prompt_path)),
+        weather=WeatherConfig(api_key="w-key", city="Moscow"),
+    )
+
+
+def _mock_weather_404():
+    """Mock OpenWeatherMap to 404 so weather is omitted from the prompt (deterministic)."""
+    respx.get(OPENWEATHERMAP_URL).mock(return_value=httpx.Response(404, json={}))
+
+
+async def _call(backend, hub, text, core, *, history=None, max_tool_rounds=MAX_TOOL_ROUNDS):
+    async with httpx.AsyncClient() as weather_client:
+        return await call_llm_api(
+            backend,
+            hub,
+            text,
+            weather_client=weather_client,
+            core=core,
+            max_tool_rounds=max_tool_rounds,
+            history=history,
+        )
 
 
 @respx.mock
-async def test_tool_path(monkeypatch):
-    _patch_prompt(monkeypatch)
+async def test_tool_path(tmp_path):
+    _mock_weather_404()
     hub = StubHub(tools=[SET_LIGHT_TOOL])
-    respx.post(OPENROUTER_API_URL).mock(
-        side_effect=[
-            httpx.Response(
-                200,
-                json=_tool_call(
-                    "set_light", '{"device_id":"bright_room_light","state":"on"}'
-                ),
-            ),
-            httpx.Response(200, json=_final("Готово.")),
-        ]
-    )
+    backend = FakeLlmBackend([
+        _tool_call("set_light", '{"device_id":"bright_room_light","state":"on"}'),
+        _final("Готово."),
+    ])
 
-    async with httpx.AsyncClient() as client_ext:
-        result = await call_llm_api(client_ext, hub, "включи свет")
+    result = await _call(backend, hub, "включи свет", _core(tmp_path))
 
     assert hub.calls == [
         ("set_light", {"device_id": "bright_room_light", "state": "on"})
     ]
+    # processing_response is applied to the final content.
     assert result == processing_response("Готово.")
 
 
 @respx.mock
-async def test_no_tool_path(monkeypatch):
-    _patch_prompt(monkeypatch)
+async def test_no_tool_path(tmp_path):
+    _mock_weather_404()
     hub = StubHub(tools=[SET_LIGHT_TOOL])
-    respx.post(OPENROUTER_API_URL).mock(
-        return_value=httpx.Response(200, json=_final("Привет, мясной мешок."))
-    )
+    backend = FakeLlmBackend([_final("Привет, мясной мешок.")])
 
-    async with httpx.AsyncClient() as client_ext:
-        result = await call_llm_api(client_ext, hub, "привет")
+    result = await _call(backend, hub, "привет", _core(tmp_path))
 
     assert hub.calls == []
     assert result == processing_response("Привет, мясной мешок.")
 
 
 @respx.mock
-async def test_rate_limit_path(monkeypatch):
-    _patch_prompt(monkeypatch)
+async def test_rate_limit_path(tmp_path):
+    _mock_weather_404()
     hub = StubHub(tools=[])
-    respx.post(OPENROUTER_API_URL).mock(return_value=httpx.Response(429))
+    backend = FakeLlmBackend([_http_status_error(429)])
 
-    async with httpx.AsyncClient() as client_ext:
-        result = await call_llm_api(client_ext, hub, "привет")
+    result = await _call(backend, hub, "привет", _core(tmp_path))
 
     assert result == (
         "У меня кончились ресурсы на вас, мясных мешков. Я занимаюсь своими делами, "
@@ -131,66 +168,86 @@ async def test_rate_limit_path(monkeypatch):
 
 
 @respx.mock
-async def test_max_tool_rounds_exhausted(monkeypatch):
-    _patch_prompt(monkeypatch)
-    hub = StubHub(tools=[SET_LIGHT_TOOL])
-    respx.post(OPENROUTER_API_URL).mock(
-        side_effect=[
-            httpx.Response(200, json=_tool_call("set_light", "{}"))
-            for _ in range(MAX_TOOL_ROUNDS + 1)
-        ]
-    )
-
-    async with httpx.AsyncClient() as client_ext:
-        result = await call_llm_api(client_ext, hub, "включи свет")
-
-    assert result == "Ошибка: слишком много вызовов инструментов"
-
-
-@respx.mock
-async def test_non_200_returns_error_message(monkeypatch):
-    _patch_prompt(monkeypatch)
+async def test_non_2xx_returns_error_message(tmp_path):
+    _mock_weather_404()
     hub = StubHub(tools=[])
-    respx.post(OPENROUTER_API_URL).mock(
-        return_value=httpx.Response(500, json={"error": {"message": "boom"}})
-    )
+    backend = FakeLlmBackend([_http_status_error(500, {"error": {"message": "boom"}})])
 
-    async with httpx.AsyncClient() as client_ext:
-        result = await call_llm_api(client_ext, hub, "привет")
+    result = await _call(backend, hub, "привет", _core(tmp_path))
 
     assert result == "Ошибка: boom"
 
 
 @respx.mock
-async def test_httpx_error_returns_error_prefix(monkeypatch):
-    _patch_prompt(monkeypatch)
+async def test_httpx_error_returns_error_prefix(tmp_path):
+    _mock_weather_404()
     hub = StubHub(tools=[])
-    respx.post(OPENROUTER_API_URL).mock(side_effect=httpx.ConnectError("down"))
+    backend = FakeLlmBackend([httpx.ConnectError("down")])
 
-    async with httpx.AsyncClient() as client_ext:
-        result = await call_llm_api(client_ext, hub, "привет")
+    result = await _call(backend, hub, "привет", _core(tmp_path))
 
     assert result.startswith("Ошибка:")
 
 
 @respx.mock
-async def test_history_is_included(monkeypatch):
-    _patch_prompt(monkeypatch)
+async def test_max_tool_rounds_exhausted(tmp_path):
+    _mock_weather_404()
+    hub = StubHub(tools=[SET_LIGHT_TOOL])
+    backend = FakeLlmBackend([
+        _tool_call("set_light", "{}") for _ in range(MAX_TOOL_ROUNDS + 1)
+    ])
+
+    result = await _call(backend, hub, "включи свет", _core(tmp_path))
+
+    assert result == "Ошибка: слишком много вызовов инструментов"
+
+
+@respx.mock
+async def test_empty_final_reply_uses_fallback(tmp_path):
+    # No tool ever ran -> empty final content falls back to the "didn't hear" line.
+    _mock_weather_404()
     hub = StubHub(tools=[])
-    route = respx.post(OPENROUTER_API_URL).mock(
-        return_value=httpx.Response(200, json=_final("ответ"))
-    )
+    backend = FakeLlmBackend([_final(None)])
+
+    result = await _call(backend, hub, "...", _core(tmp_path))
+
+    assert result == EMPTY_REPLY_FALLBACK
+
+
+@respx.mock
+async def test_empty_reply_after_tools_uses_done(tmp_path):
+    # A tool ran, then the model produced empty content -> "Готово." (not the
+    # "didn't hear" fallback).
+    _mock_weather_404()
+    hub = StubHub(tools=[SET_LIGHT_TOOL])
+    backend = FakeLlmBackend([
+        _tool_call("set_light", "{}"),
+        _final(None),
+    ])
+
+    result = await _call(backend, hub, "включи свет", _core(tmp_path))
+
+    assert hub.calls == [("set_light", {})]
+    assert result == EMPTY_REPLY_AFTER_TOOLS
+
+
+@respx.mock
+async def test_history_is_included(tmp_path):
+    _mock_weather_404()
+    hub = StubHub(tools=[])
+    backend = FakeLlmBackend([_final("ответ")])
 
     history = [
         {"role": "user", "content": "старый вопрос"},
         {"role": "assistant", "content": "старый ответ"},
     ]
-    async with httpx.AsyncClient() as client_ext:
-        await call_llm_api(client_ext, hub, "новый вопрос", history=history)
+    await _call(backend, hub, "новый вопрос", _core(tmp_path), history=history)
 
-    sent = json.loads(route.calls.last.request.content)
-    assert sent["messages"] == [
-        {"role": "system", "content": "SYS"},
+    # System prompt + history + the new user turn, in order. The 404 weather is
+    # omitted, so the system message is just the prompt body with the time prefix.
+    messages = backend.seen[0][0]
+    assert messages[0]["role"] == "system"
+    assert messages[1:] == [
         {"role": "user", "content": "старый вопрос"},
         {"role": "assistant", "content": "старый ответ"},
         {"role": "user", "content": "новый вопрос"},
@@ -198,12 +255,12 @@ async def test_history_is_included(monkeypatch):
 
 
 @respx.mock
-async def test_empty_final_reply_uses_fallback(monkeypatch):
-    _patch_prompt(monkeypatch)
+async def test_no_tools_passes_none_to_backend(tmp_path):
+    # hub.tools is [] -> the loop passes None (not []) to complete().
+    _mock_weather_404()
     hub = StubHub(tools=[])
-    respx.post(OPENROUTER_API_URL).mock(return_value=httpx.Response(200, json=_final(None)))
+    backend = FakeLlmBackend([_final("ок")])
 
-    async with httpx.AsyncClient() as client_ext:
-        result = await call_llm_api(client_ext, hub, "...")
+    await _call(backend, hub, "привет", _core(tmp_path))
 
-    assert result == EMPTY_REPLY_FALLBACK
+    assert backend.seen[0][1] is None

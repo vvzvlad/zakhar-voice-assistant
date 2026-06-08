@@ -5,7 +5,6 @@ import httpx
 import pytest
 import respx
 
-from src.settings import settings
 from src.stt import GROQ_STT_URL, GroqSttBackend, make_stt_backend, pcm_to_wav
 
 
@@ -25,7 +24,7 @@ async def test_groq_backend_returns_text_on_200():
         return_value=httpx.Response(200, json={"text": "привет мир"})
     )
     async with httpx.AsyncClient(verify=False) as client:
-        backend = GroqSttBackend(client)
+        backend = GroqSttBackend(client, api_key="test-key", model="whisper-large-v3-turbo")
         result = await backend.transcribe(b"\x01\x02" * 100)
     assert result == "привет мир"
 
@@ -34,7 +33,7 @@ async def test_groq_backend_returns_text_on_200():
 async def test_groq_backend_returns_empty_on_error():
     respx.post(GROQ_STT_URL).mock(return_value=httpx.Response(500, text="boom"))
     async with httpx.AsyncClient(verify=False) as client:
-        backend = GroqSttBackend(client)
+        backend = GroqSttBackend(client, api_key="test-key", model="whisper-large-v3-turbo")
         result = await backend.transcribe(b"\x01\x02" * 100)
     assert result == ""
 
@@ -45,7 +44,7 @@ async def test_groq_backend_empty_pcm_skips_http():
         return_value=httpx.Response(200, json={"text": "x"})
     )
     async with httpx.AsyncClient(verify=False) as client:
-        backend = GroqSttBackend(client)
+        backend = GroqSttBackend(client, api_key="test-key", model="whisper-large-v3-turbo")
         result = await backend.transcribe(b"")
     assert result == ""
     assert not route.called
@@ -53,11 +52,11 @@ async def test_groq_backend_empty_pcm_skips_http():
 
 async def test_make_stt_backend_groq():
     async with httpx.AsyncClient(verify=False) as client:
-        backend = make_stt_backend("groq", client, settings)
+        backend = make_stt_backend("groq", client, api_key="k", model="whisper-large-v3-turbo")
     assert isinstance(backend, GroqSttBackend)
 
 
 async def test_make_stt_backend_unknown_raises():
     async with httpx.AsyncClient(verify=False) as client:
         with pytest.raises(ValueError):
-            make_stt_backend("nope", client, settings)
+            make_stt_backend("nope", client)

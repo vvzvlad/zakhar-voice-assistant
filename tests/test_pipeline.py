@@ -1,5 +1,6 @@
 from aioesphomeapi import VoiceAssistantEventType as VAET
 
+from src.core_config import AudioConfig, ContextConfig, CoreConfig
 from src.pipeline import Pipeline
 
 PUBLIC_BASE_URL = "http://10.0.0.10:8200"
@@ -35,15 +36,20 @@ class FakeAudioServer:
 
 def make_pipeline(tmp_path, name="dev", stt_text="распознанный текст", tts_backend=None):
     audio_server = FakeAudioServer()
+    core = CoreConfig(
+        audio=AudioConfig(public_base_url=PUBLIC_BASE_URL),
+        context=ContextConfig(dir=str(tmp_path)),
+    )
     pipeline = Pipeline(
         name,
-        client_ext=object(),
         hub=object(),
         stt_backend=FakeSttBackend(stt_text),
+        llm_backend=object(),
         tts_backend=tts_backend or FakeTtsBackend(),
         audio_server=audio_server,
-        public_base_url=PUBLIC_BASE_URL,
-        context_dir=str(tmp_path),
+        weather_client=object(),
+        core=core,
+        max_tool_rounds=5,
     )
     events = []
     pipeline.send_event = lambda et, data: events.append((et, data))
@@ -79,12 +85,12 @@ def set_small_vad_thresholds(pipeline):
 
 
 def patch_llm(monkeypatch, reply="ответ"):
-    """Stub the LLM (still Groq). STT is injected as a fake backend, not patched."""
+    """Stub the whole LLM call. STT is injected as a fake backend, not patched."""
 
-    async def fake_call_llm_api(client_ext, hub, text, history=None):
+    async def fake(llm_backend, hub, text, **kwargs):
         return reply
 
-    monkeypatch.setattr("src.llm.call_llm_api", fake_call_llm_api)
+    monkeypatch.setattr("src.llm.call_llm_api", fake)
 
 
 def types_of(events):
@@ -314,11 +320,11 @@ async def test_history_flows_across_runs(tmp_path, monkeypatch):
     seen = []  # list of (text, history)
     replies = {"первый вопрос": "первый ответ", "второй вопрос": "второй ответ"}
 
-    async def fake_call_llm_api(client_ext, hub, text, history=None):
-        seen.append((text, history))
+    async def fake(llm_backend, hub, text, **kwargs):
+        seen.append((text, kwargs.get("history")))
         return replies[text]
 
-    monkeypatch.setattr("src.llm.call_llm_api", fake_call_llm_api)
+    monkeypatch.setattr("src.llm.call_llm_api", fake)
 
     pipeline, _ = make_pipeline(tmp_path, name="hist", stt_text="первый вопрос")
 

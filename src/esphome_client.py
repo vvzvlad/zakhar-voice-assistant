@@ -7,27 +7,40 @@ drive its voice_assistant, and route events through a per-device Pipeline.
 from aioesphomeapi import APIClient, ReconnectLogic
 from loguru import logger
 
+from src.core_config import DeviceConfig
 from src.pipeline import Pipeline
-from src.settings import DeviceConfig, settings
 
 
 class DeviceClient:
     """One ESPHome speaker: connection lifecycle + voice_assistant wiring."""
 
-    def __init__(self, cfg: DeviceConfig, zc, client_ext, hub, stt_backend, tts_backend, audio_server):
+    def __init__(
+        self,
+        cfg: DeviceConfig,
+        zc,
+        hub,
+        stt_backend,
+        llm_backend,
+        tts_backend,
+        audio_server,
+        weather_client,
+        core,
+        max_tool_rounds,
+    ):
         self.cfg = cfg
         self.pipeline = Pipeline(
             cfg.name,
-            client_ext,
             hub,
             stt_backend,
+            llm_backend,
             tts_backend,
             audio_server,
-            settings.public_base_url,
-            settings.context_dir,
+            weather_client,
+            core,
+            max_tool_rounds,
         )
         self.cli = APIClient(
-            cfg.host, settings.esphome_port, None, noise_psk=cfg.psk, zeroconf_instance=zc
+            cfg.host, core.esphome.port, None, noise_psk=cfg.psk, zeroconf_instance=zc
         )
         self.reconnect = ReconnectLogic(
             client=self.cli,
@@ -89,10 +102,32 @@ class DeviceClient:
 class DeviceManager:
     """Owns one DeviceClient per configured speaker; starts/stops them all."""
 
-    def __init__(self, zc, client_ext, hub, stt_backend, tts_backend, audio_server):
+    def __init__(
+        self,
+        zc,
+        hub,
+        stt_backend,
+        llm_backend,
+        tts_backend,
+        audio_server,
+        weather_client,
+        core,
+        max_tool_rounds,
+    ):
         self.clients = [
-            DeviceClient(cfg, zc, client_ext, hub, stt_backend, tts_backend, audio_server)
-            for cfg in settings.devices
+            DeviceClient(
+                cfg,
+                zc,
+                hub,
+                stt_backend,
+                llm_backend,
+                tts_backend,
+                audio_server,
+                weather_client,
+                core,
+                max_tool_rounds,
+            )
+            for cfg in core.devices
         ]
 
     async def start(self) -> None:

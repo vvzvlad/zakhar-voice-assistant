@@ -11,17 +11,20 @@ external smart-home MCP server hosted in Node-RED (node-red-contrib-mcp-server) 
 `MCP_SMARTHOME_URL`.
 
 ## Project structure
-- `src/` — application code (`settings.py` is the single config entry point)
+- `src/` — application code. Config core: `config_store.py` (atomic JSON load/save) +
+  `config_service.py` (`ConfigService`/`ConfigDoc`) + `core_config.py` (`CoreConfig`).
+  Stage providers live under `src/plugins/<stage>/<id>.py`, each with its own pydantic
+  `ConfigModel` + `create()`; `src/plugins/base.py` has the `Provider`/`REGISTRY`.
 - `tests/` — pytest
-- `data/` — runtime state: per-device context files, cached prompt (gitignored, docker volume)
-- `templates/` — static assets that ship inside the image (`default_prompt.md`)
+- `data/` — runtime state: `config.json`, per-device context files, cached prompt (gitignored, docker volume)
+- `templates/` — committed reference assets seeded into `data/` on first boot (`default_prompt.md`, `default_config.json`)
 - `main.py` — thin entry point over `src/`
 
 ## Setup
 All routine actions go through the `Makefile` — run `make help` to list targets.
 ```bash
 make install           # create .venv and install dev/test deps
-cp .env.example .env   # then fill in the values  (shortcut: make env)
+make config            # seed data/config.json from the template, then edit it
 ```
 
 ## Running tests
@@ -34,33 +37,26 @@ make test              # runs .venv/bin/pytest
 make run               # runs .venv/bin/python main.py
 ```
 
-## Environment
+## Configuration
 
-App, required (no default — missing → fail at startup):
-- `INTENT_API_KEY` — key for the intent (LLM) provider.
-- `STT_API_KEY` — key for the cloud STT provider (required for the default cloud STT; leave empty when `STT_PROVIDER=vosk`).
-- `WEATHER_API_KEY` — credential.
-- `MCP_SMARTHOME_URL` — external smart-home MCP server endpoint (node-red-contrib-mcp-server in Node-RED, e.g. http://10.0.0.5:8001/mcp).
-- `TTS_BASE_URL` — local TeraTTS service base.
-- `PUBLIC_BASE_URL` — base URL the speakers use to fetch audio.
-- `ESPHOME_DEVICES` — `name|host|psk;name2|host2|psk2`.
+All config lives in `data/config.json` (created on first boot from
+`templates/default_config.json`). There is no `.env` / environment-based config.
 
-App, optional (sensible defaults in code): `MCP_SMARTHOME_TOKEN` (bearer for the
-MCP server; empty = no auth), `ESPHOME_PORT`, `INTENT_PROVIDER`, `INTENT_MODEL`,
-`STT_PROVIDER`, `STT_MODEL`, `EXTERNAL_PROXY`, `WEATHER_CITY`, `TTS_BACKEND`
-(`teratts` | `piper` | `yandex`), `TTS_TIMEOUT`, `AUDIO_HOST`, `AUDIO_PORT`,
-`AUDIO_TTL`, `LOG_LEVEL`, `SYSTEM_PROMPT_PATH`, `CONTEXT_DIR`, `CONTEXT_MAX_TURNS`,
-`CONTEXT_TTL_SECONDS`. The `YANDEX_TTS_*` vars configure the Yandex SpeechKit cloud
-backend when `TTS_BACKEND=yandex`. See `.env.example`.
+- Per stage (`stt`/`llm`/`tts`) the doc holds `{selected, instances}`; each provider
+  defines its own settings via a pydantic `ConfigModel` in `src/plugins/<stage>/<id>.py`.
+  The config core (`ConfigService`/`config_store`) is provider-agnostic — it never names a
+  provider's fields. Adding a provider = one new plugin file; zero changes to the core.
+- `core.*` holds non-provider settings (context, audio, vad, network, weather, mcp,
+  esphome, prompt, devices, tts_timeout, log_level) as plain `CoreConfig` pydantic sections.
+- API keys are plain string fields in the JSON (trusted-LAN service, no masking). `data/`
+  is gitignored so `config.json` never gets committed.
 
 ## Conventions
 - All mutable state goes under `data/`.
-- All config comes from ENV / `.env` (see `.env.example`).
-- Credentials / addresses of our own services that the user provides go ONLY into
-  `.env` (never into code, never via inline env vars); read them through `Settings`.
-- No default/example credentials in code; missing ENV var → fail at startup.
+- All config is in `data/config.json`, read via `ConfigService`; never hardcode config in code.
+- A new provider is a self-contained plugin (`ConfigModel` + `create()`) registered with
+  `@register`; do not teach the config core about specific provider fields.
 - A default address is allowed ONLY for public third-party APIs (Groq, OpenRouter, OpenWeatherMap).
-  Addresses of self-hosted services have no default.
 - Code comments are in English.
 - All repeated actions (env setup, tests, run) go through `make` targets — add or
   extend a target instead of running ad-hoc commands.

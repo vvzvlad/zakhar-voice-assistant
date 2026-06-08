@@ -68,3 +68,5 @@ class CoreConfig(BaseModel):
     esphome: EsphomeConfig = EsphomeConfig()
     prompt: PromptConfig = PromptConfig()
     devices: list[DeviceConfig] = []
+    tts_timeout: int = 30
+    log_level: str = "INFO"

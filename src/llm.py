@@ -1,4 +1,9 @@
-"""OpenAI-compatible chat API client (default provider: OpenRouter) with an agentic tool-calling loop."""
+"""Agentic tool-calling loop driving an injected LLM backend.
+
+The loop is provider-agnostic: it drives a single-round-trip LlmBackend (built by a
+provider, see src.plugins.llm.base) and never builds HTTP requests itself. The backend
+returns the raw provider JSON and raises httpx.HTTPStatusError on non-2xx.
+"""
 
 import json
 
@@ -6,144 +11,110 @@ import httpx
 from loguru import logger
 
 from src.prompt import build_system_prompt
-from src.settings import settings
 from src.text import processing_response
-
-OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
-GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
-
-# Chat-completions endpoint per intent provider (all OpenAI-compatible).
-INTENT_PROVIDER_URLS = {
-    "openrouter": OPENROUTER_API_URL,
-    "groq": GROQ_API_URL,
-}
-
-# Hard cap on model<->tool round-trips to avoid an unbounded loop if the model
-# keeps requesting tools.
-MAX_TOOL_ROUNDS = 5
 
 # Fallbacks so an empty/null model reply never reaches TTS as "".
 EMPTY_REPLY_AFTER_TOOLS = "Готово."
 EMPTY_REPLY_FALLBACK = "Я тебя не расслышала, повтори."
 
 
-async def call_llm_api(client_ext: httpx.AsyncClient, hub, text: str, history: list | None = None) -> str:
-    """Call the intent LLM provider with the given text and return plain-text result.
+async def call_llm_api(
+    llm_backend,
+    hub,
+    text: str,
+    *,
+    weather_client: httpx.AsyncClient,
+    core,
+    max_tool_rounds: int,
+    history: list | None = None,
+) -> str:
+    """Drive the LLM backend with the given text and return a plain-text result.
 
     `history` is the recent prior messages spliced between the system prompt and the
     new user turn so the model remembers the last few exchanges.
 
-    The external client (proxied) is used for the provider request and for building
-    the system prompt (weather). Smart-home control is performed by calling MCP tools
-    (advertised to the model and executed via `hub`).
+    `weather_client` (proxied) and `core` are used to build the system prompt (which
+    encapsulates weather + the configured prompt file). Smart-home control is performed
+    by calling MCP tools (advertised to the model and executed via `hub`).
 
     Runs an agentic loop: model -> tool_calls -> execute via MCP -> feed results
     back -> final text. On success returns the assistant text. On error returns a
     human-readable string starting with "Ошибка: ".
     """
-    url = INTENT_PROVIDER_URLS.get(settings.intent_provider)
-    if url is None:
-        return f"Ошибка: неизвестный провайдер интенса: {settings.intent_provider}"
-    headers = {"Content-Type": "application/json", "Authorization": f"Bearer {settings.intent_api_key}"}
-    if settings.intent_provider == "openrouter":
-        headers["X-Title"] = "Zakhar Voice Assistant"  # OpenRouter app attribution (optional)
-
     # Self-heal a startup race: pick up tools if the MCP server was down at boot.
     await hub.ensure_tools()
 
-    messages = [{"role": "system", "content": await build_system_prompt(client_ext)}]
+    messages = [{"role": "system", "content": await build_system_prompt(weather_client, core)}]
     if history:
         messages.extend(history)
     messages.append({"role": "user", "content": text})
 
     last_content = ""
     tool_executed = False
-    for _ in range(MAX_TOOL_ROUNDS):
-        payload = {
-            "messages": messages,
-            "model": settings.intent_model,
-            "temperature": 0.8,
-            "max_tokens": 4096,
-            "stream": False,
-        }
-        # Advertise smart-home tools only when the hub actually has any.
-        if hub.tools:
-            payload["tools"] = hub.tools
-            payload["tool_choice"] = "auto"
-
+    for _ in range(max_tool_rounds):
         try:
-            response = await client_ext.post(url, headers=headers, json=payload, timeout=300)
-            logger.info(f"Intent API response status: {response.status_code}")
-
-            if response.status_code != 200:
-                error_msg = f"Intent API error: {response.status_code} - {response.text}"
-                logger.error(error_msg)
-                # If rate limited, return fixed Russian message
-                if response.status_code == 429:
-                    return (
-                        "У меня кончились ресурсы на вас, мясных мешков. Я занимаюсь своими делами, обратитесь позже, и может быть, я вас обслужу, раз вы сами не в состоянии"
-                    )
-                # Try to extract detailed error message
-                try:
-                    err_json = response.json()
-                    reason_msg = err_json.get("error", {}).get("message")
-                except (ValueError, json.JSONDecodeError):
-                    reason_msg = None
-                return f"Ошибка: {reason_msg if reason_msg else error_msg}"
-
-            response_json = response.json()
-            choices = response_json.get("choices")
-            if not choices:
-                logger.error("No choices found in Intent API response")
-                return "Ошибка: не найден ответ от модели"
-
-            message = choices[0]["message"]
-            usage = response_json.get("usage", {})
-            logger.info(
-                f"Intent response: model={response_json.get('model')} "
-                f"total_tokens={usage.get('total_tokens')} "
-                f"content={message.get('content')!r} "
-                f"tool_calls={len(message.get('tool_calls') or [])}"
-            )
-
-            # Append the assistant message verbatim (carries content + tool_calls).
-            messages.append(message)
-            last_content = message.get("content") or ""
-
-            tool_calls = message.get("tool_calls")
-            if not tool_calls:
-                reply = processing_response(last_content)
-                if reply:
-                    return reply
-                return EMPTY_REPLY_AFTER_TOOLS if tool_executed else EMPTY_REPLY_FALLBACK
-
-            # Execute each requested tool via MCP and feed results back.
-            for tc in tool_calls:
-                fn = tc["function"]
-                name = fn["name"]
-                try:
-                    args = json.loads(fn.get("arguments") or "{}")
-                except (ValueError, json.JSONDecodeError):
-                    args = {}
-                out = await hub.call(name, args)
-                tool_executed = True
-                logger.info(f"tool {name}({args}) -> {out!r}")
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": tc["id"],
-                    "name": name,
-                    "content": out,
-                })
-            # Loop again so the model can produce its final spoken reply.
-            continue
-
+            data = await llm_backend.complete(messages, hub.tools or None)
+        except httpx.HTTPStatusError as e:
+            # Log full status + body for diagnostics (the returned string is spoken via TTS).
+            logger.error(f"LLM API error: {e.response.status_code} - {e.response.text}")
+            if e.response.status_code == 429:
+                return "У меня кончились ресурсы на вас, мясных мешков. Я занимаюсь своими делами, обратитесь позже, и может быть, я вас обслужу, раз вы сами не в состоянии"
+            try:
+                reason = e.response.json().get("error", {}).get("message")
+            except Exception:
+                reason = None
+            return f"Ошибка: {reason or e}"
         except httpx.HTTPError as e:
-            error_msg = f"API request failed: {str(e)}"
-            logger.error(error_msg)
-            return f"Ошибка: {str(e)}"
+            logger.error(f"LLM request failed: {e}")
+            return f"Ошибка: {e}"
+
+        choices = data.get("choices")
+        if not choices:
+            logger.error("No choices found in LLM response")
+            return "Ошибка: не найден ответ от модели"
+
+        message = choices[0]["message"]
+        usage = data.get("usage", {})
+        logger.info(
+            f"LLM response: model={data.get('model')} "
+            f"total_tokens={usage.get('total_tokens')} "
+            f"content={message.get('content')!r} "
+            f"tool_calls={len(message.get('tool_calls') or [])}"
+        )
+
+        # Append the assistant message verbatim (carries content + tool_calls).
+        messages.append(message)
+        last_content = message.get("content") or ""
+
+        tool_calls = message.get("tool_calls")
+        if not tool_calls:
+            reply = processing_response(last_content)
+            if reply:
+                return reply
+            return EMPTY_REPLY_AFTER_TOOLS if tool_executed else EMPTY_REPLY_FALLBACK
+
+        # Execute each requested tool via MCP and feed results back.
+        for tc in tool_calls:
+            fn = tc["function"]
+            name = fn["name"]
+            try:
+                args = json.loads(fn.get("arguments") or "{}")
+            except (ValueError, json.JSONDecodeError):
+                args = {}
+            out = await hub.call(name, args)
+            tool_executed = True
+            logger.info(f"tool {name}({args}) -> {out!r}")
+            messages.append({
+                "role": "tool",
+                "tool_call_id": tc["id"],
+                "name": name,
+                "content": out,
+            })
+        # Loop again so the model can produce its final spoken reply.
+        continue
 
     # Rounds exhausted: the model kept asking for tools without a final reply.
-    logger.warning(f"Tool-calling loop exhausted after {MAX_TOOL_ROUNDS} rounds")
+    logger.warning(f"Tool-calling loop exhausted after {max_tool_rounds} rounds")
     if last_content:
         return processing_response(last_content)
     return "Ошибка: слишком много вызовов инструментов"

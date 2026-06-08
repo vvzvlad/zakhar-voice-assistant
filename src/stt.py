@@ -9,8 +9,6 @@ from abc import ABC, abstractmethod
 import httpx
 from loguru import logger
 
-from src.settings import settings
-
 GROQ_STT_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
 
 
@@ -41,8 +39,10 @@ class SttBackend(ABC):
 class GroqSttBackend(SttBackend):
     """Groq Whisper HTTP backend. Posts a WAV-wrapped PCM and returns the text."""
 
-    def __init__(self, client: httpx.AsyncClient):
+    def __init__(self, client: httpx.AsyncClient, api_key: str, model: str):
         self.client = client
+        self.api_key = api_key
+        self.model = model
 
     async def transcribe(self, pcm: bytes) -> str:
         """Transcribe raw 16 kHz/16-bit mono PCM via Groq Whisper.
@@ -56,12 +56,12 @@ class GroqSttBackend(SttBackend):
         wav_bytes = pcm_to_wav(pcm)
         files = {"file": ("audio.wav", wav_bytes, "audio/wav")}
         data = {
-            "model": settings.stt_model,
+            "model": self.model,
             "language": "ru",
             "response_format": "json",
             "temperature": "0",
         }
-        headers = {"Authorization": f"Bearer {settings.stt_api_key}"}
+        headers = {"Authorization": f"Bearer {self.api_key}"}
 
         try:
             resp = await self.client.post(
@@ -107,10 +107,17 @@ class VoskSttBackend(SttBackend):
         return await asyncio.to_thread(self._decode, pcm)
 
 
-def make_stt_backend(name: str, client: httpx.AsyncClient, settings_obj) -> SttBackend:
-    """Construct an STT backend by name."""
+def make_stt_backend(
+    name: str,
+    client: httpx.AsyncClient,
+    *,
+    api_key: str = "",
+    model: str = "whisper-large-v3-turbo",
+    vosk_model_path: str = "models/vosk-model-small-ru-0.22",
+) -> SttBackend:
+    """Construct an STT backend by name (provider plugins are the primary path now)."""
     if name == "groq":
-        return GroqSttBackend(client)
+        return GroqSttBackend(client, api_key=api_key, model=model)
     if name == "vosk":
-        return VoskSttBackend(settings_obj.vosk_model_path)
+        return VoskSttBackend(vosk_model_path)
     raise ValueError(f"Unknown STT backend: {name}")

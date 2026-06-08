@@ -20,7 +20,4 @@ class PiperProvider(Provider):
     def create(self, cfg: PiperConfig, deps: Deps):
         from src.tts import PiperTtsBackend
 
-        b = PiperTtsBackend(cfg.voice_path)
-        # Override the settings-derived value with this provider's own config.
-        b._sentence_silence = max(0.0, float(cfg.sentence_silence))
-        return b
+        return PiperTtsBackend(cfg.voice_path, sentence_silence=cfg.sentence_silence)

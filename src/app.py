@@ -1,44 +1,61 @@
-"""Application composition root: wires shared deps and runs forever."""
+"""Application composition root: boots from data/config.json and runs forever."""
 
 import asyncio
+import json
 
 import httpx
 import zeroconf
 from loguru import logger
 
+import src.plugins  # noqa: F401  triggers provider registration
+from src import config_store
 from src.audio_server import AudioServer
+from src.config_service import ConfigDoc, ConfigService
 from src.esphome_client import DeviceManager
 from src.mcp_client import McpToolHub
-from src.settings import settings
-from src.stt import make_stt_backend
-from src.tts import make_tts_backend
+from src.plugins.base import Deps
+
+
+def load_or_create_config() -> dict:
+    """Return the config document, creating data/config.json from the template on first boot."""
+    doc = config_store.load()
+    if not doc:
+        with open("templates/default_config.json", encoding="utf-8") as f:
+            doc = json.load(f)
+        config_store.save(doc, config_store.DEFAULT_PATH)
+        logger.info("created default config at data/config.json")
+    return doc
 
 
 async def main() -> None:
     """Build shared dependencies, start all speakers, and run until cancelled."""
-    # client_ext (proxied) -> cloud STT/intent + weather; client_local -> local TTS.
-    client_ext = httpx.AsyncClient(proxy=(settings.external_proxy or None), verify=False)
-    client_local = httpx.AsyncClient(verify=False)
+    doc = load_or_create_config()
+    core = ConfigDoc(**doc).core  # parse once to read proxy/timeout for Deps
 
-    # STT runs over client_ext (the proxied client GroqSttBackend uses).
-    stt_backend = make_stt_backend(settings.stt_provider, client_ext, settings)
-    # Yandex SpeechKit is a cloud API -> route it through the proxied client (like
-    # STT/intent). Local TTS backends (teratts/piper) use the direct client.
-    tts_client = client_ext if settings.tts_backend == "yandex" else client_local
-    tts_backend = make_tts_backend(
-        settings.tts_backend, settings.tts_base_url, tts_client, settings.tts_timeout
-    )
-    audio_server = AudioServer(settings.audio_host, settings.audio_port, settings.audio_ttl)
+    # client_ext (proxied) -> cloud STT/LLM + weather; client_local -> local TTS.
+    client_ext = httpx.AsyncClient(proxy=(core.network.external_proxy or None), verify=False)
+    client_local = httpx.AsyncClient(verify=False)
+    deps = Deps(http_cloud=client_ext, http_local=client_local, tts_timeout=core.tts_timeout)
+
+    svc = ConfigService(doc, deps)
+    core = svc.core
+    stt_backend = svc.create("stt")
+    tts_backend = svc.create("tts")
+    llm_backend = svc.create("llm")
+    max_tool_rounds = svc.get("llm").max_tool_rounds
+
+    audio_server = AudioServer(core.audio.host, core.audio.port, core.audio.ttl)
     await audio_server.start()
 
     # Smart-home MCP client: connect once here (same task as stop(), per anyio
     # cancel-scope rules). A connect failure is handled gracefully inside start().
-    hub = McpToolHub(settings.mcp_smarthome_url, settings.mcp_smarthome_token or None)
+    hub = McpToolHub(core.mcp.url, core.mcp.token or None)
     await hub.start()
 
     zc = zeroconf.Zeroconf()
     manager = DeviceManager(
-        zc, client_ext, hub, stt_backend, tts_backend, audio_server
+        zc, hub, stt_backend, llm_backend, tts_backend, audio_server,
+        client_ext, core, max_tool_rounds,
     )
 
     try:

@@ -38,9 +38,9 @@ $(VENV)/.deps-installed: requirements-dev.txt requirements.txt | $(VENV)/bin/pyt
 .PHONY: install
 install: $(VENV)/.deps-installed ## Create .venv (if missing) and install dev/test deps
 
-.PHONY: env
-env: ## Create .env from the template if it does not exist
-	@test -f .env || cp .env.example .env
+.PHONY: config
+config: ## Create data/config.json from the template if it does not exist
+	@test -f data/config.json || (mkdir -p data && cp templates/default_config.json data/config.json && echo "created data/config.json")
 
 .PHONY: models
 models: ## Download Vosk + Piper models into models/

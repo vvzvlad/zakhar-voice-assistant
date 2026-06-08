@@ -18,7 +18,7 @@ Everything routine is wrapped in the `Makefile` (`make help` lists all targets):
 
 ```bash
 make install                # create .venv + install dev/test deps
-cp .env.example .env        # fill in the values
+make config                 # seed data/config.json from the template, then edit it
 make test                   # run tests
 make run                    # run the app
 ```
@@ -26,42 +26,46 @@ make run                    # run the app
 Python targets (`make test`, `make run`) create and reuse a local `.venv`
 automatically — you never need the system Python.
 
-## Environment
+## Configuration
 
-App, required (no default — missing → fail at startup): `INTENT_API_KEY` (key for
-the intent/LLM provider), `STT_API_KEY` (key for the cloud STT provider; required
-for the default cloud STT, leave empty when `STT_PROVIDER=vosk`), `WEATHER_API_KEY`,
-`MCP_SMARTHOME_URL` (external smart-home MCP server endpoint —
-node-red-contrib-mcp-server in Node-RED, e.g. `http://10.0.0.5:8001/mcp`),
-`TTS_BASE_URL`, `PUBLIC_BASE_URL`, `ESPHOME_DEVICES`
-(`name|host|psk;name2|host2|psk2`).
+All config lives in a single JSON file, `data/config.json` (created on first run
+from `templates/default_config.json`; `make config` seeds it explicitly). There is
+no `.env` — edit the JSON and restart.
 
-App, optional (defaults in code): `MCP_SMARTHOME_TOKEN` (bearer for the MCP
-server; empty = no auth), `ESPHOME_PORT`, `INTENT_PROVIDER`, `INTENT_MODEL`,
-`STT_PROVIDER`, `STT_MODEL`, `EXTERNAL_PROXY`, `WEATHER_CITY`, `TTS_BACKEND`
-(`teratts` | `piper` | `yandex`), `TTS_TIMEOUT`, `AUDIO_HOST`, `AUDIO_PORT`
-(default 8200), `AUDIO_TTL`, `LOG_LEVEL`, `SYSTEM_PROMPT_PATH`, `CONTEXT_DIR`. The
-`YANDEX_TTS_*` vars configure the Yandex SpeechKit cloud backend when
-`TTS_BACKEND=yandex`. See `.env.example` for the full list.
+Shape (see `templates/default_config.json` for the full default):
+
+- **Stage providers** — for each stage you pick one provider and configure it:
+  - `stt`: `groq` (cloud Whisper) | `vosk` (offline) — `selected` + per-provider `instances`.
+  - `llm`: `openrouter` | `groq` — model, api_key, temperature, max_tokens, max_tool_rounds.
+  - `tts`: `teratts` (HTTP) | `piper` (offline) | `yandex` (SpeechKit) — voice/key/etc. per provider.
+  Each provider declares its own settings schema (`src/plugins/<stage>/<id>.py`); adding a
+  provider is one file, no changes to the config core.
+- **`core`** — non-provider settings: `context` (max_turns / ttl_seconds / dir), `audio`
+  (host / port / ttl / public_base_url), `vad` thresholds, `network.external_proxy`,
+  `weather` (api_key / city), `mcp` (url / token), `esphome.port`, `prompt.system_prompt_path`,
+  `devices` (list of `{name, host, psk}`), `tts_timeout`, `log_level`.
+
+API keys are plain string fields in the JSON (this is a trusted-LAN service); `data/` is
+gitignored, so `config.json` and its keys never get committed.
 
 ## What's here
 
 | Path | Purpose |
 |------|---------|
 | `Makefile` | Single entry point for repeated actions: `install`, `test`, `run`. Run `make help`. |
-| `src/` | Application code; `settings.py` reads all config from ENV / `.env`. |
+| `src/` | Application code. Config core: `config_store.py` + `config_service.py`; providers under `src/plugins/`. |
 | `tests/` | pytest suite (runs in CI before the image is built). |
-| `data/` | Runtime state (per-device context, cached prompt). Gitignored, mounted as a volume. |
-| `templates/` | Static assets baked into the image (`default_prompt.md`). |
+| `data/` | Runtime state: `config.json`, per-device context, cached prompt. Gitignored, mounted as a volume. |
+| `templates/` | Committed reference assets (`default_prompt.md`, `default_config.json`) seeded into `data/` on first boot. |
 | `Dockerfile` | Slim single-stage build; deps cached before code; no `EXPOSE`. |
 | `docker-compose.yml` | Deploy template — image from `ghcr.io`, volume, audio port published to LAN, watchtower label. |
-| `.env.example` | Full list of env vars with placeholders. Copy to `.env`. |
 | `.github/workflows/` | CI: `test` → `build` → push to `ghcr.io` (`latest` + sha). |
 | `AGENTS.md` | Conventions / onboarding for agents. |
 
 ## Rules in one breath
 
-All mutable state in `data/`; all config and credentials from ENV / `.env` (never
-in code, never defaulted); tests are mandatory and gate the Docker build; deploy a
-prebuilt `ghcr.io` image via docker-compose. Unlike a public web service, the audio
-port is published straight to the LAN (no Traefik) so speakers can fetch audio.
+All mutable state in `data/`; all config in `data/config.json` (providers self-describe
+their settings; the config core never hardcodes provider fields); tests are mandatory and
+gate the Docker build; deploy a prebuilt `ghcr.io` image via docker-compose. Unlike a public
+web service, the audio port is published straight to the LAN (no Traefik) so speakers can
+fetch audio.

@@ -3,7 +3,9 @@ import os
 from datetime import datetime
 
 from src.context import append_context, load_context
-from src.settings import settings
+
+# Defaults baked into context.load_context / append_context.
+DEFAULT_TTL_SECONDS = 300
 
 
 def test_first_append_creates_file_and_loads(tmp_path):
@@ -32,14 +34,13 @@ def test_two_appends_within_ttl_accumulate(tmp_path):
     ]
 
 
-def test_trimming_drops_oldest(tmp_path, monkeypatch):
-    monkeypatch.setattr(settings, "context_max_turns", 2)
+def test_trimming_drops_oldest(tmp_path):
     path = str(tmp_path / "context_living.txt")
-    append_context(path, "u1", "a1")
-    append_context(path, "u2", "a2")
-    append_context(path, "u3", "a3")
+    append_context(path, "u1", "a1", max_turns=2)
+    append_context(path, "u2", "a2", max_turns=2)
+    append_context(path, "u3", "a3", max_turns=2)
     # Only the last 2*2=4 messages remain; the first exchange is dropped.
-    assert load_context(path) == [
+    assert load_context(path, max_turns=2) == [
         {"role": "user", "content": "u2"},
         {"role": "assistant", "content": "a2"},
         {"role": "user", "content": "u3"},
@@ -51,7 +52,7 @@ def test_stale_file_resets(tmp_path):
     path = str(tmp_path / "context_living.txt")
     append_context(path, "старый", "ответ")
     # Simulate the file being idle past the TTL.
-    old = datetime.now().timestamp() - (settings.context_ttl_seconds + 60)
+    old = datetime.now().timestamp() - (DEFAULT_TTL_SECONDS + 60)
     os.utime(path, (old, old))
     assert load_context(path) == []
     # A following append starts fresh: file holds only the new exchange.

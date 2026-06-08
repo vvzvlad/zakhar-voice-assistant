@@ -6,7 +6,10 @@
 # external `docker_main_net`. Instead the audio port is published straight to the
 # LAN (`ports`) so the speaker can fetch generated audio. Outbound connections to
 # the speaker (:6053) and to Node-RED / TTS work from the default bridge network.
-# AUDIO_PORT defaults to 8200 (see settings.py / .env.example).
+#
+# Config lives in data/config.json INSIDE the named volume (created from
+# templates/default_config.json on first boot). Edit it there to set providers,
+# API keys, devices, etc. There is no .env / environment-based config anymore.
 
 volumes:
   zakhar-voice-assistant:
@@ -19,19 +22,10 @@ services:
     volumes:
       - zakhar-voice-assistant:/app/data   # all mutable state survives restart/update
     ports:
-      - "${AUDIO_PORT}:${AUDIO_PORT}"       # publish the audio server to the LAN
+      # Must match core.audio.port in data/config.json (default 8200).
+      - "8200:8200"                          # publish the audio server to the LAN
     environment:
-      INTENT_API_KEY: XXX
-      STT_API_KEY: XXX
-      WEATHER_API_KEY: XXX
-      ESPHOME_DEVICES: "living|10.0.0.5|your_psk_here"
-      MCP_SMARTHOME_URL: http://10.0.0.5:8001/mcp
-      TTS_BASE_URL: http://10.0.0.5:8124
-      # To use Yandex SpeechKit instead of TeraTTS, set:
-      # TTS_BACKEND: yandex
-      # YANDEX_TTS_API_KEY: XXX
-      PUBLIC_BASE_URL: http://10.0.0.10:8200
-      AUDIO_PORT: 8200
+      # All app config is in data/config.json (in the volume), NOT in env vars.
       TZ: Europe/Moscow
     logging:
       driver: "json-file"

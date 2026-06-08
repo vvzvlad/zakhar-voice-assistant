@@ -10,8 +10,6 @@ from urllib.parse import quote
 import httpx
 from loguru import logger
 
-from src.settings import settings
-
 
 # Yandex SpeechKit marks word stress with "+" BEFORE the stressed vowel (e.g.
 # "прив+ет"). The pipeline's text post-processing (src/text.py) has already turned
@@ -91,14 +89,14 @@ class PiperTtsBackend(TtsBackend):
     transcoded to MP3 (audio/mpeg) because the speaker firmware can't decode WAV.
     """
 
-    def __init__(self, voice_path: str):
+    def __init__(self, voice_path: str, sentence_silence: float = 0.4):
         # Imported lazily so the heavy dependency/model are only required when the
         # Piper backend is actually selected at runtime (never in tests/CI).
         from piper import PiperVoice
 
         # The config json sits next to the onnx at <path>.json.
         self._voice = PiperVoice.load(voice_path, voice_path + ".json")
-        self._sentence_silence = max(0.0, float(settings.tts_sentence_silence))
+        self._sentence_silence = max(0.0, float(sentence_silence))
         logger.info(f"Piper TTS voice loaded: {voice_path}")
 
     def _synth(self, text: str) -> bytes:
@@ -176,25 +174,3 @@ class YandexTtsBackend(TtsBackend):
         resp = await self.client.post(self.url, headers=headers, data=data, timeout=self.timeout)
         resp.raise_for_status()
         return (resp.headers.get("Content-Type", "audio/mpeg"), resp.content)
-
-
-def make_tts_backend(
-    name: str, base_url: str, client: httpx.AsyncClient, timeout: int
-) -> TtsBackend:
-    """Construct a TTS backend by name."""
-    if name == "teratts":
-        return TeraTtsHttpBackend(base_url, client, timeout)
-    if name == "piper":
-        return PiperTtsBackend(settings.piper_voice_path)
-    if name == "yandex":
-        return YandexTtsBackend(
-            client,
-            api_key=settings.yandex_tts_api_key,
-            voice=settings.yandex_tts_voice,
-            emotion=settings.yandex_tts_emotion,
-            speed=settings.yandex_tts_speed,
-            folder_id=settings.yandex_tts_folder_id,
-            url=settings.yandex_tts_url,
-            timeout=timeout,
-        )
-    raise ValueError(f"Unknown TTS backend: {name}")
