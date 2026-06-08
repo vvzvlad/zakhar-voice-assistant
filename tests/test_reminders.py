@@ -21,7 +21,12 @@ from src.builtin_mcp.reminders import build_reminders_server
 from src.core_config import CoreConfig, PromptConfig
 from src.llm import call_llm_api
 from src.plugins.llm.base import LlmConfig
-from src.reminders import ReminderScheduler, RemindersStore
+from src.reminders import (
+    ReminderScheduler,
+    RemindersStore,
+    _format_ago,
+    _format_reminder_speech,
+)
 from src.run_context import current_device
 from src.tool_hub import BuiltinMcpSource
 
@@ -124,7 +129,11 @@ def test_scheduler_fires_deliver_after_due(tmp_path):
         await sched.stop()
 
     asyncio.run(main())
-    assert captured == [("kitchen", "молоко")]
+    assert len(captured) == 1
+    device, text = captured[0]
+    assert device == "kitchen"
+    assert "молоко" in text
+    assert "вы просили напомнить вам" in text
     store.close()
 
 
@@ -487,3 +496,29 @@ def test_announce_none_picks_first_online():
     asyncio.run(mgr.announce(None, "привет"))
     assert online.announced == ["привет"]
     assert offline.announced == []
+
+
+# --- Spoken-phrase helpers ---------------------------------------------------
+
+
+def test_format_ago_granularity():
+    assert _format_ago(30) == "минуту назад"
+    assert _format_ago(60) == "минуту назад"
+    assert _format_ago(120) == "2 минуты назад"
+    assert _format_ago(300) == "5 минут назад"
+    assert _format_ago(3600) == "час назад"
+    assert _format_ago(7200) == "2 часа назад"
+    assert _format_ago(86400) == "день назад"
+
+
+def test_format_reminder_speech_full_phrase_and_lowercased():
+    now = time.time()
+    out = _format_reminder_speech("Вытащить стирку", created_ts=now - 60, now=now)
+    assert out == "минуту назад вы просили напомнить вам вытащить стирку"
+    # The reminder body is lower-cased on its first letter.
+    assert "вытащить" in out
+
+
+def test_format_reminder_speech_falls_back_when_created_ts_none():
+    now = time.time()
+    assert _format_reminder_speech("что-то", created_ts=None, now=now) == "что-то"

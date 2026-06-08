@@ -34,6 +34,57 @@ _CREATE_INDEX = "CREATE INDEX IF NOT EXISTS idx_reminders_due_ts ON reminders(du
 _COLS = ["id", "text", "due_ts", "device", "created_ts"]
 
 
+def _plural_ru(n: int, one: str, few: str, many: str) -> str:
+    """Pick the Russian plural form for `n` (one / few / many)."""
+    n = abs(n) % 100
+    if 11 <= n <= 14:
+        return many
+    d = n % 10
+    if d == 1:
+        return one
+    if 2 <= d <= 4:
+        return few
+    return many
+
+
+def _format_ago(elapsed_s: float) -> str:
+    """Render elapsed seconds as a Russian "<duration> назад" phrase.
+
+    Granularity is one minute; sub-minute elapsed reads as "минуту назад".
+    Rolls up to hours, then days.
+    """
+    minutes = int(round(elapsed_s / 60))
+    if minutes < 1:
+        minutes = 1
+    if minutes < 60:
+        if minutes == 1:
+            return "минуту назад"
+        return f"{minutes} {_plural_ru(minutes, 'минуту', 'минуты', 'минут')} назад"
+    hours = int(round(minutes / 60))
+    if hours < 24:
+        if hours == 1:
+            return "час назад"
+        return f"{hours} {_plural_ru(hours, 'час', 'часа', 'часов')} назад"
+    days = int(round(hours / 24))
+    if days == 1:
+        return "день назад"
+    return f"{days} {_plural_ru(days, 'день', 'дня', 'дней')} назад"
+
+
+def _format_reminder_speech(text: str, created_ts, now: float) -> str:
+    """Build the spoken reminder phrase.
+
+    "<duration> назад вы просили напомнить вам <text>", with the reminder text
+    lower-cased on its first letter so it reads naturally inside the sentence.
+    Falls back to the raw `text` when the creation time is unknown (legacy rows).
+    """
+    if created_ts is None:
+        return text
+    body = text[:1].lower() + text[1:] if text else text
+    ago = _format_ago(max(0.0, now - created_ts))
+    return f"{ago} вы просили напомнить вам {body}"
+
+
 class RemindersStore:
     """One-shot reminder rows over a single SQLite file."""
 
@@ -180,13 +231,15 @@ class ReminderScheduler:
                     continue  # woken by add()/cancel(): re-evaluate earliest
                 except asyncio.TimeoutError:
                     pass  # delay elapsed: fire everything now due
-            for r in self.store.pop_due(time.time()):
+            now = time.time()
+            for r in self.store.pop_due(now):
                 if self.deliver is None:
                     logger.warning(
                         "reminder scheduler has no deliver callback; dropping"
                     )
                     continue
+                speech = _format_reminder_speech(r["text"], r.get("created_ts"), now)
                 try:
-                    await self.deliver(r["device"], r["text"])
+                    await self.deliver(r["device"], speech)
                 except Exception as e:
                     logger.error(f"reminder delivery failed: {e}")
