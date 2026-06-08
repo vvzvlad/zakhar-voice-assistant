@@ -1,29 +1,15 @@
 import React from "react";
-import { nav } from "../navStore.js";
 import { Selector, PageHeader, FormSaveBar, Seg, Field } from "../components/primitives.jsx";
 import SchemaForm, { schemaNeedsRestart } from "../components/SchemaForm.jsx";
 import { useAppData } from "../appData.jsx";
 import { useStageForm, errorLines } from "../useStageForm.js";
 import { getOptions } from "../api.js";
-import { STAGES } from "../stageMeta.js";
 
 function Card({ title, sub, children, foot }) {
   return <div className="z-card">
     {title && <div className="z-card-h"><b>{title}</b>{sub && <span className="sub">{sub}</span>}</div>}
     <div className="z-card-b">{children}</div>
     {foot}
-  </div>;
-}
-
-// Sub-nav across pipeline stages (status dots are not wired to live health yet).
-function StageNav({ active }) {
-  return <div className="z-snav">
-    {STAGES.map((s, i) => <React.Fragment key={s.key}>
-      <div className={"z-snav-i" + (s.key === active ? " on" : "")} onClick={() => nav(s.key)}>
-        <span className="z-dot ok" />{s.name}
-      </div>
-      {i < STAGES.length - 1 && <span className="z-snav-sep">›</span>}
-    </React.Fragment>)}
   </div>;
 }
 
@@ -51,7 +37,6 @@ function ProviderStage({ cat, title, crumb, desc }) {
 
   return <div className="z-page">
     <PageHeader title={title} crumb={crumb} desc={desc} />
-    <StageNav active={cat} />
     <Selector
       label="Provider"
       options={category.providers.map((p) => p.id)}
@@ -116,7 +101,6 @@ export function VAD() {
   return <div className="z-page">
     <PageHeader title="VAD · Voice capture" crumb="Pipeline / Stage 01"
       desc="The speaker streams audio continuously and never signals end-of-phrase — we detect it with WebRTC VAD. Tune sensitivity to pauses here." />
-    <StageNav active="vad" />
     <Card title="Sensitivity preset" sub="quick tuning · frontend macro">
       <Field label="Pause sensitivity" hint="Presets nudge trailing-silence and min-speech together. Fine-tune below.">
         <Seg full options={Object.keys(VAD_PRESETS)} value={preset || ""} onChange={applyPreset} />
