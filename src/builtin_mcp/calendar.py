@@ -1,25 +1,164 @@
 """Built-in calendar MCP server (CalDAV, in-process FastMCP).
 
 Exposes calendar reading/writing as on-demand tools backed by a CalDAV account
-(Nextcloud / iCloud / Fastmail / Google via app-password). The CalDAV client lib is
-SYNCHRONOUS (it talks plain HTTP), so the FastMCP tools offload every client call to a
-worker thread via asyncio.to_thread — the event loop is never blocked. The thin
-CalendarClient wrapper below stays pure-sync and has no asyncio in it.
+(Nextcloud / iCloud / Fastmail / Google / Yandex via app-password). The CalDAV client
+lib is SYNCHRONOUS (it talks plain HTTP), so the FastMCP tools offload every client
+call to a worker thread via asyncio.to_thread — the event loop is never blocked. The
+thin CalendarClient wrapper below stays pure-sync and has no asyncio in it.
 
-Scope for v1 is intentionally small: list/read events in a range (today / week /
-arbitrary), create a simple event, delete by uid, list calendars. Recurrence editing,
-attendees, priority and free-text search are out of scope for now.
+Feature parity with a typical CalDAV-MCP server: list/read events in a range
+(today / week / arbitrary / free-text search), read a single event by uid, create a
+rich event (description, location, priority, recurrence, reminders/alarms),
+delete by uid, list calendars.
+
+All event (de)serialization goes through the `icalendar` library. icalendar handles
+RFC 5545 TEXT escaping (`;`, `,`, `\\`, newlines) and property serialization itself —
+we never hand-escape strings, which would double-escape them.
 """
 
 import asyncio
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
+from urllib.parse import urlparse
 
 import caldav
 from caldav.lib.error import NotFoundError
+from icalendar import Alarm
 from icalendar import Calendar as ICalendar
 from icalendar import Event as IEvent
 from mcp.server.fastmcp import FastMCP
+
+# Valid RFC 5545 RRULE frequency keywords. Used to validate the freq of a recurrence.
+_VALID_FREQ = {"SECONDLY", "MINUTELY", "HOURLY", "DAILY", "WEEKLY", "MONTHLY", "YEARLY"}
+
+
+def _parse_until(value):
+    """Parse an RRULE UNTIL value into a tz-aware datetime (UTC) or a date.
+
+    icalendar's vRecur serializes UNTIL via `to_ical()` and requires a real
+    date/datetime object — a leftover string raises TypeError at serialization. We
+    accept the common shapes a model or caller might pass:
+      * iCalendar compact form: "YYYYMMDDTHHMMSSZ" / "YYYYMMDDTHHMMSS" (datetime),
+        "YYYYMMDD" (date-only);
+      * ISO form: "2026-12-31T00:00:00Z", "2026-12-31T00:00:00+00:00" (datetime),
+        "2026-12-31" (date-only).
+    A trailing `Z` is treated as UTC. Datetime results are returned tz-aware in UTC;
+    date-only inputs return a `date`. An already-parsed date/datetime passes through.
+    """
+    # Already a date/datetime — leave it untouched (datetime is a subclass of date).
+    if isinstance(value, (datetime, date)):
+        return value
+
+    text = str(value).strip()
+    if not text:
+        raise ValueError("UNTIL value is empty")
+
+    # Normalize a trailing Z (UTC designator) into an explicit +00:00 offset so the
+    # ISO parser produces a tz-aware datetime.
+    has_z = text.endswith("Z")
+    iso_text = (text[:-1] + "+00:00") if has_z else text
+
+    # ISO form (contains '-' separators in the date part).
+    if "-" in text:
+        # No time component -> date-only (datetime.fromisoformat would otherwise
+        # widen "2026-12-31" to a midnight datetime on 3.11+).
+        if "T" not in text:
+            return date.fromisoformat(text)
+        parsed = datetime.fromisoformat(iso_text)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+
+    # iCalendar compact form.
+    body = text[:-1] if has_z else text
+    if "T" in body:
+        parsed = datetime.strptime(body, "%Y%m%dT%H%M%S")
+        return parsed.replace(tzinfo=timezone.utc)
+    return datetime.strptime(body, "%Y%m%d").date()
+
+
+def _is_yandex(url: str) -> bool:
+    """True when the host of `url` contains "yandex" (case-insensitive).
+
+    Yandex's CalDAV endpoint prefers DTSTART/DTEND in UTC (with a trailing `Z`); we use
+    this flag to normalize event times before serialization.
+    """
+    host = urlparse(url or "").hostname or ""
+    return "yandex" in host.lower()
+
+
+def _format_rrule(recurrence) -> dict:
+    """Normalize a recurrence spec into a vRecur-compatible dict.
+
+    Accepts three input forms:
+      * a freq keyword, e.g. "WEEKLY" (case-insensitive) -> {"FREQ": ["WEEKLY"]};
+      * a full RRULE string, e.g.
+        "FREQ=WEEKLY;INTERVAL=2;COUNT=10;BYDAY=MO,WE" -> the parsed dict;
+      * a dict already in {KEY: value|list} form -> normalized in place.
+
+    The result is suitable for `event.add("rrule", <dict>)`. Each value is wrapped in a
+    list (icalendar's vRecur expects list values); comma-separated values (BYDAY etc.)
+    are split. INTERVAL/COUNT become ints; an UNTIL value is parsed into a real
+    date/datetime (icalendar's to_ical() rejects a leftover string). The FREQ key is
+    required and validated — a missing/empty or unknown freq raises ValueError.
+    """
+    if recurrence is None:
+        raise ValueError("recurrence is empty")
+
+    parsed: dict = {}
+    if isinstance(recurrence, dict):
+        # Already structured: just upper-case keys and coerce values to lists.
+        for key, value in recurrence.items():
+            parsed[str(key).strip().upper()] = value
+    else:
+        text = str(recurrence).strip()
+        if not text:
+            raise ValueError("recurrence is empty")
+        if "=" not in text:
+            # Bare freq keyword form, e.g. "weekly".
+            parsed["FREQ"] = text.upper()
+        else:
+            # Full RRULE string: split on ';' then 'KEY=VALUE'.
+            for part in text.split(";"):
+                part = part.strip()
+                if not part:
+                    continue
+                if "=" not in part:
+                    raise ValueError(f"bad RRULE part: {part!r}")
+                key, value = part.split("=", 1)
+                parsed[key.strip().upper()] = value.strip()
+
+    result: dict = {}
+    for key, value in parsed.items():
+        if key == "UNTIL":
+            # UNTIL must become a real date/datetime; icalendar's to_ical() raises
+            # TypeError on a leftover string. Parse strings; leave date/datetime as-is.
+            if isinstance(value, (list, tuple)):
+                items = [_parse_until(v) for v in value]
+            else:
+                items = [_parse_until(value)]
+            result[key] = items
+            continue
+        if isinstance(value, (list, tuple)):
+            items = [str(v).strip() for v in value if str(v).strip()]
+        else:
+            # Split comma-separated scalars (e.g. "MO,WE") into a list.
+            items = [v.strip() for v in str(value).split(",") if v.strip()]
+        # Numeric keys (INTERVAL/COUNT) become ints so vRecur serializes them cleanly.
+        if key in {"INTERVAL", "COUNT"}:
+            items = [int(v) for v in items]
+        result[key] = items
+
+    # FREQ is required for a usable RRULE. Guard against both a missing key and an
+    # empty value (e.g. "FREQ=;INTERVAL=2") so result["FREQ"][0] never IndexErrors.
+    if not result.get("FREQ"):
+        raise ValueError("recurrence is missing FREQ")
+
+    freq_value = str(result["FREQ"][0]).upper()
+    if freq_value not in _VALID_FREQ:
+        raise ValueError(f"unknown recurrence frequency: {freq_value!r}")
+    result["FREQ"] = [freq_value]
+    return result
 
 
 class CalendarClient:
@@ -35,6 +174,8 @@ class CalendarClient:
         self._username = username
         self._password = password
         self._calendar_name = calendar_name
+        # Yandex prefers UTC times; remember it so create_event normalizes accordingly.
+        self.is_yandex = _is_yandex(url)
         # Lazily resolved on the first call so construction never touches the network.
         self._calendar = None
 
@@ -83,11 +224,52 @@ class CalendarClient:
             return value.isoformat()
         return str(value)
 
+    @staticmethod
+    def _component_of(ev):
+        """Pull the icalendar component out of a caldav object, or None."""
+        comp = getattr(ev, "icalendar_component", None)
+        if comp is None:
+            getter = getattr(ev, "get_icalendar_component", None)
+            if getter is not None:
+                comp = getter()
+        return comp
+
+    @classmethod
+    def _event_dict(cls, comp) -> dict | None:
+        """Map an icalendar VEVENT component to the plain-dict event shape.
+
+        Returns None when the component lacks the minimum required fields (summary and
+        start), so callers can skip it defensively. The dict always carries
+        uid/summary/start/end/location and includes description/priority when present.
+        """
+        summary = comp.get("SUMMARY")
+        dtstart = comp.get("DTSTART")
+        if summary is None or dtstart is None:
+            return None
+        dtend = comp.get("DTEND")
+        result: dict = {
+            "uid": str(comp.get("UID", "")),
+            "summary": str(summary),
+            "start": cls._iso(dtstart.dt),
+            "end": cls._iso(dtend.dt) if dtend is not None else "",
+            "location": str(comp.get("LOCATION", "")),
+        }
+        description = comp.get("DESCRIPTION")
+        if description is not None:
+            result["description"] = str(description)
+        priority = comp.get("PRIORITY")
+        if priority is not None:
+            try:
+                result["priority"] = int(priority)
+            except (TypeError, ValueError):
+                pass
+        return result
+
     def get_events(self, start: datetime, end: datetime) -> list[dict]:
         """Return events overlapping [start, end) as plain dicts.
 
         Recurrences are expanded by the server/lib so a weekly event shows up once per
-        occurrence in range. Components missing a summary or both endpoints are skipped
+        occurrence in range. Components missing a summary or start are skipped
         defensively rather than raising.
         """
         results = self._get_calendar().search(
@@ -95,26 +277,12 @@ class CalendarClient:
         )
         events: list[dict] = []
         for ev in results:
-            comp = getattr(ev, "icalendar_component", None)
-            if comp is None:
-                comp = ev.get_icalendar_component()
+            comp = self._component_of(ev)
             if comp is None:
                 continue
-            summary = comp.get("SUMMARY")
-            dtstart = comp.get("DTSTART")
-            dtend = comp.get("DTEND")
-            if summary is None or dtstart is None:
-                # Required fields missing — not something we can present.
-                continue
-            events.append(
-                {
-                    "uid": str(comp.get("UID", "")),
-                    "summary": str(summary),
-                    "start": self._iso(dtstart.dt),
-                    "end": self._iso(dtend.dt) if dtend is not None else "",
-                    "location": str(comp.get("LOCATION", "")),
-                }
-            )
+            mapped = self._event_dict(comp)
+            if mapped is not None:
+                events.append(mapped)
         return events
 
     def get_today_events(self) -> list[dict]:
@@ -133,15 +301,76 @@ class CalendarClient:
         now = datetime.now().astimezone()
         return self.get_events(now, now + timedelta(days=7))
 
+    def search_events(
+        self, query: str, start: datetime | None = None, end: datetime | None = None
+    ) -> list[dict]:
+        """Free-text search over events in a range (default now-30d .. now+90d).
+
+        CalDAV has no portable full-text query, so we fetch the range and filter in
+        Python: an event matches when `query` (case-insensitive) is a substring of its
+        summary, description or location.
+        """
+        now = datetime.now().astimezone()
+        if start is None:
+            start = now - timedelta(days=30)
+        if end is None:
+            end = now + timedelta(days=90)
+        needle = (query or "").strip().lower()
+        events = self.get_events(start, end)
+        if not needle:
+            return events
+        matched: list[dict] = []
+        for ev in events:
+            haystacks = [
+                ev.get("summary", ""),
+                ev.get("description", ""),
+                ev.get("location", ""),
+            ]
+            if any(needle in str(h).lower() for h in haystacks):
+                matched.append(ev)
+        return matched
+
+    def _to_yandex_utc(self, value):
+        """Convert a datetime to UTC for Yandex (aware->astimezone; naive->assume local).
+
+        Plain dates (all-day events) are returned unchanged — they have no time to
+        normalize. Non-datetime values pass through untouched.
+        """
+        if isinstance(value, datetime):
+            if value.tzinfo is None:
+                value = value.astimezone()  # interpret naive as local time
+            return value.astimezone(timezone.utc)
+        return value
+
     def create_event(
         self,
         summary: str,
-        start: datetime,
-        end: datetime,
+        start: datetime | None = None,
+        end: datetime | None = None,
         description: str = "",
         location: str = "",
+        priority=None,
+        reminders=None,
+        recurrence=None,
     ) -> dict:
-        """Create a single VEVENT on the calendar and return its core fields."""
+        """Create a single VEVENT on the calendar and return its core fields.
+
+        Optional fields (description, location, priority, reminders, recurrence) are
+        added only when provided, so existing callers that pass just summary/start/end
+        keep working unchanged.
+        """
+        # Default times: start = next full hour, end = start + 1h.
+        if start is None:
+            now = datetime.now().astimezone()
+            start = now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+        if end is None:
+            end = start + timedelta(hours=1)
+
+        # Yandex prefers UTC: normalize so DTSTART/DTEND serialize with a trailing `Z`.
+        if self.is_yandex:
+            start = self._to_yandex_utc(start)
+            end = self._to_yandex_utc(end)
+
         uid = uuid.uuid4().hex + "@zakhar"
         cal = ICalendar()
         cal.add("prodid", "-//zakhar//calendar//EN")
@@ -158,6 +387,17 @@ class CalendarClient:
             event.add("description", description)
         if location:
             event.add("location", location)
+
+        if priority is not None:
+            # PRIORITY is 0..9 per RFC 5545; clamp to that range.
+            event.add("priority", max(0, min(9, int(priority))))
+
+        if recurrence:
+            event.add("rrule", _format_rrule(recurrence))
+
+        for alarm in self._build_alarms(reminders):
+            event.add_component(alarm)
+
         cal.add_component(event)
         ical_text = cal.to_ical().decode()
         self._get_calendar().add_event(ical_text)
@@ -167,6 +407,50 @@ class CalendarClient:
             "start": self._iso(start),
             "end": self._iso(end),
         }
+
+    @staticmethod
+    def _build_alarms(reminders) -> list[Alarm]:
+        """Build VALARM components from a list of reminder specs.
+
+        Each item is either an int (minutes before start, ACTION=DISPLAY) or a dict
+        {minutes, action} where action is DISPLAY or AUDIO. The TRIGGER is a negative
+        timedelta (relative to start); DISPLAY alarms carry a DESCRIPTION.
+        """
+        alarms: list[Alarm] = []
+        for item in reminders or []:
+            if isinstance(item, dict):
+                minutes = int(item.get("minutes", 0))
+                action = str(item.get("action") or "DISPLAY").upper()
+            else:
+                minutes = int(item)
+                action = "DISPLAY"
+            if action not in {"DISPLAY", "AUDIO"}:
+                action = "DISPLAY"
+            alarm = Alarm()
+            alarm.add("action", action)
+            alarm.add("trigger", timedelta(minutes=-minutes))
+            if action == "DISPLAY":
+                # DISPLAY alarms require a DESCRIPTION per RFC 5545.
+                alarm.add("description", "Reminder")
+            alarms.append(alarm)
+        return alarms
+
+    def get_event_by_uid(self, uid: str) -> dict:
+        """Fetch a single event by uid and map it to the full event dict.
+
+        Returns {"found": False, "uid": uid} when the event does not exist.
+        """
+        try:
+            ev = self._get_calendar().get_event_by_uid(uid)
+        except NotFoundError:
+            return {"found": False, "uid": uid}
+        comp = self._component_of(ev)
+        if comp is None:
+            return {"found": False, "uid": uid}
+        mapped = self._event_dict(comp)
+        if mapped is None:
+            return {"found": False, "uid": uid}
+        return mapped
 
     def delete_event(self, uid: str) -> dict:
         """Delete an event by its uid; report whether it existed."""
@@ -203,6 +487,25 @@ def _format_events(events: list[dict], empty_text: str) -> str:
         if ev.get("location"):
             line += f" ({ev['location']})"
         lines.append(line)
+    return "\n".join(lines)
+
+
+def _format_event_details(ev: dict) -> str:
+    """Render a single event dict as a multi-line Russian description."""
+    lines = [f"Событие: {ev.get('summary', '')}"]
+    span = ev.get("start", "")
+    if ev.get("end"):
+        span = f"{ev.get('start', '')}..{ev['end']}"
+    if span:
+        lines.append(f"Время: {span}")
+    if ev.get("location"):
+        lines.append(f"Место: {ev['location']}")
+    if ev.get("description"):
+        lines.append(f"Описание: {ev['description']}")
+    if ev.get("priority") is not None:
+        lines.append(f"Приоритет: {ev['priority']}")
+    if ev.get("uid"):
+        lines.append(f"uid: {ev['uid']}")
     return "\n".join(lines)
 
 
@@ -258,23 +561,88 @@ def build_calendar_server(client: CalendarClient) -> FastMCP:
         return _format_events(events, "В этом диапазоне событий нет.")
 
     @mcp.tool(
+        name="search_events",
+        description=(
+            "Поиск событий по тексту (в названии, описании или месте). "
+            "query — искомая строка; start и end необязательны (дата ГГГГ-ММ-ДД или "
+            "ISO дата-время), по умолчанию ищет в диапазоне от 30 дней назад до "
+            "90 дней вперёд."
+        ),
+    )
+    async def search_events(
+        query: str, start: str | None = None, end: str | None = None
+    ) -> str:
+        start_dt = None
+        end_dt = None
+        try:
+            if start:
+                start_dt = _parse_dt(start)
+            if end:
+                end_dt = _parse_dt(end)
+        except ValueError:
+            return "Не понял даты: используйте формат ГГГГ-ММ-ДД или ISO дату-время."
+        try:
+            events = await asyncio.to_thread(
+                client.search_events, query, start_dt, end_dt
+            )
+        except Exception as e:
+            return f"Не удалось выполнить поиск: {e}"
+        return _format_events(events, f"По запросу «{query}» ничего не найдено.")
+
+    @mcp.tool(
+        name="get_event_by_uid",
+        description="Получить полную информацию о событии по его uid.",
+    )
+    async def get_event_by_uid(uid: str) -> str:
+        try:
+            event = await asyncio.to_thread(client.get_event_by_uid, uid)
+        except Exception as e:
+            return f"Не удалось получить событие: {e}"
+        if not event or event.get("found") is False:
+            return f"Событие {uid} не найдено."
+        return _format_event_details(event)
+
+    @mcp.tool(
         name="create_event",
         description=(
-            "Создать событие в календаре. summary — название, start и end — "
-            "дата (ГГГГ-ММ-ДД) или ISO дата-время; description и location необязательны."
+            "Создать событие в календаре. summary — название; start и end — "
+            "дата (ГГГГ-ММ-ДД) или ISO дата-время (если не указаны, берётся ближайший "
+            "час и длительность 1 час). Необязательно: description, location, "
+            "priority (0-9), recurrence (правило повторения, напр. WEEKLY или "
+            "FREQ=WEEKLY;INTERVAL=2;BYDAY=MO,WE), reminders (список напоминаний "
+            "в минутах до начала)."
         ),
     )
     async def create_event(
-        summary: str, start: str, end: str, description: str = "", location: str = ""
+        summary: str,
+        start: str | None = None,
+        end: str | None = None,
+        description: str = "",
+        location: str = "",
+        priority: int | None = None,
+        recurrence: str | None = None,
+        reminders: list[int] | None = None,
     ) -> str:
+        start_dt = None
+        end_dt = None
         try:
-            start_dt = _parse_dt(start)
-            end_dt = _parse_dt(end)
+            if start:
+                start_dt = _parse_dt(start)
+            if end:
+                end_dt = _parse_dt(end)
         except ValueError:
             return "Не понял даты: используйте формат ГГГГ-ММ-ДД или ISO дату-время."
         try:
             created = await asyncio.to_thread(
-                client.create_event, summary, start_dt, end_dt, description, location
+                client.create_event,
+                summary,
+                start_dt,
+                end_dt,
+                description,
+                location,
+                priority,
+                reminders,
+                recurrence,
             )
         except Exception as e:
             return f"Не удалось создать событие: {e}"

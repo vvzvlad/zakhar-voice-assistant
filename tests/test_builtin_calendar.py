@@ -9,15 +9,40 @@ Two layers, both fully offline (no network / no real CalDAV):
     and the tuple-result normalization in BuiltinMcpSource).
 """
 
-from datetime import datetime
+from datetime import date, datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
 from caldav.lib.error import NotFoundError
+from icalendar import Calendar as ICalendar
 from icalendar import Event as IEvent
 
-import src.builtin_mcp.calendar as cal_mod
-from src.builtin_mcp.calendar import CalendarClient, build_calendar_server
+from src.builtin_mcp.calendar import (
+    CalendarClient,
+    _format_rrule,
+    _is_yandex,
+    build_calendar_server,
+)
 from src.tool_hub import BuiltinMcpSource
+
+
+def _ical_text(*events) -> bytes:
+    """Serialize one or more icalendar Events into a VCALENDAR byte string."""
+    cal = ICalendar()
+    cal.add("version", "2.0")
+    cal.add("prodid", "-//zakhar//test//EN")
+    for ev in events:
+        cal.add_component(ev)
+    return cal.to_ical()
+
+
+def _component_from(ev) -> IEvent:
+    """Round-trip an Event through serialization, returning the parsed VEVENT.
+
+    Used so parse-side tests see the same objects icalendar produces when reading a
+    component back off the wire.
+    """
+    parsed = ICalendar.from_ical(_ical_text(ev))
+    return next(iter(parsed.walk("VEVENT")))
 
 
 def _fake_calendar(name="Personal", url="https://dav.example/cal/personal/"):
@@ -28,15 +53,20 @@ def _fake_calendar(name="Personal", url="https://dav.example/cal/personal/"):
     return cal
 
 
-def _fake_event(summary, start, end, uid, location=None):
-    """A fake caldav Event exposing icalendar_component as a real icalendar Event."""
-    comp = IEvent()
-    comp.add("summary", summary)
-    comp.add("dtstart", start)
-    comp.add("dtend", end)
-    comp.add("uid", uid)
-    if location:
-        comp.add("location", location)
+def _fake_event(summary, start, end, uid, location=None, comp=None):
+    """A fake caldav Event exposing icalendar_component as a real icalendar Event.
+
+    Pass a prebuilt `comp` to wrap an arbitrary VEVENT; otherwise a minimal one is
+    built from summary/start/end/uid/location.
+    """
+    if comp is None:
+        comp = IEvent()
+        comp.add("summary", summary)
+        comp.add("dtstart", start)
+        comp.add("dtend", end)
+        comp.add("uid", uid)
+        if location:
+            comp.add("location", location)
     ev = MagicMock()
     ev.icalendar_component = comp
     return ev
@@ -195,6 +225,405 @@ def test_delete_event_not_found(dav_client):
     assert result == {"deleted": False, "uid": "nope@zakhar", "error": "not found"}
 
 
+# --- Pure helper unit tests (no mocks) --------------------------------------
+
+
+def test_format_rrule_freq_keyword():
+    assert _format_rrule("weekly") == {"FREQ": ["WEEKLY"]}
+    assert _format_rrule("DAILY") == {"FREQ": ["DAILY"]}
+
+
+def test_format_rrule_full_string():
+    assert _format_rrule("FREQ=WEEKLY;INTERVAL=2;COUNT=10;BYDAY=MO,WE") == {
+        "FREQ": ["WEEKLY"],
+        "INTERVAL": [2],
+        "COUNT": [10],
+        "BYDAY": ["MO", "WE"],
+    }
+
+
+def test_format_rrule_dict():
+    assert _format_rrule({"freq": "monthly", "interval": 3}) == {
+        "FREQ": ["MONTHLY"],
+        "INTERVAL": [3],
+    }
+
+
+def test_format_rrule_unknown_freq_raises():
+    for bad in ("nope", "FREQ=FORTNIGHTLY", {"interval": 2}):
+        try:
+            _format_rrule(bad)
+            assert False, f"expected ValueError for {bad!r}"
+        except ValueError:
+            pass
+
+
+def test_format_rrule_serializes_into_event():
+    # The dict must be usable directly by event.add("rrule", ...).
+    ev = IEvent()
+    ev.add("rrule", _format_rrule("FREQ=WEEKLY;INTERVAL=2;BYDAY=MO,WE"))
+    text = _ical_text(ev).decode()
+    assert "RRULE:FREQ=WEEKLY" in text
+    assert "INTERVAL=2" in text
+    assert "BYDAY=MO,WE" in text
+
+
+def test_format_rrule_until_compact_datetime():
+    # iCalendar compact UNTIL must become a tz-aware datetime (UTC), not a string,
+    # otherwise icalendar's to_ical() raises TypeError when serializing the RRULE.
+    result = _format_rrule("FREQ=DAILY;UNTIL=20261231T000000Z")
+    until = result["UNTIL"][0]
+    assert isinstance(until, datetime)
+    assert until.tzinfo is not None
+    assert until == datetime(2026, 12, 31, 0, 0, 0, tzinfo=timezone.utc)
+
+
+def test_format_rrule_until_iso_datetime():
+    # ISO form with a trailing Z is also normalized to a tz-aware UTC datetime.
+    result = _format_rrule("FREQ=DAILY;UNTIL=2026-12-31T00:00:00Z")
+    until = result["UNTIL"][0]
+    assert isinstance(until, datetime)
+    assert until == datetime(2026, 12, 31, 0, 0, 0, tzinfo=timezone.utc)
+
+
+def test_format_rrule_until_date_only():
+    # A date-only UNTIL (compact or ISO) yields a plain date, not a datetime.
+    compact = _format_rrule("FREQ=DAILY;UNTIL=20261231")["UNTIL"][0]
+    assert type(compact) is date
+    assert compact == date(2026, 12, 31)
+    iso = _format_rrule("FREQ=DAILY;UNTIL=2026-12-31")["UNTIL"][0]
+    assert type(iso) is date
+    assert iso == date(2026, 12, 31)
+
+
+def test_format_rrule_until_existing_datetime_passthrough():
+    # A dict that already carries UNTIL as a datetime/date is left untouched.
+    dt = datetime(2026, 12, 31, tzinfo=timezone.utc)
+    assert _format_rrule({"FREQ": "DAILY", "UNTIL": dt})["UNTIL"] == [dt]
+
+
+def test_format_rrule_empty_freq_raises():
+    # An empty FREQ (e.g. "FREQ=;INTERVAL=2") must raise ValueError, not IndexError.
+    try:
+        _format_rrule("FREQ=;INTERVAL=2")
+        assert False, "expected ValueError for empty FREQ"
+    except ValueError as e:
+        assert "FREQ" in str(e)
+
+
+def test_is_yandex():
+    assert _is_yandex("https://caldav.yandex.ru/") is True
+    assert _is_yandex("https://CalDAV.Yandex.RU/dav/") is True
+    assert _is_yandex("https://dav.example.com/") is False
+    assert _is_yandex("") is False
+
+
+# --- create_event rich-feature client tests ---------------------------------
+
+
+def _saved_ical(create_kwargs, url="https://dav.example"):
+    """Run create_event against a mocked DAVClient and return the saved ical text."""
+    with patch("src.builtin_mcp.calendar.caldav.DAVClient") as dav_client:
+        cal = _fake_calendar()
+        dav_client.return_value.principal.return_value.calendars.return_value = [cal]
+        client = CalendarClient(url, "user", "pw")
+        result = client.create_event(**create_kwargs)
+        return cal.add_event.call_args.args[0], result
+
+
+def test_create_event_with_reminders_emits_valarms():
+    ical, _ = _saved_ical(
+        {
+            "summary": "Standup",
+            "start": datetime(2026, 6, 10, 9, 0),
+            "end": datetime(2026, 6, 10, 9, 30),
+            "reminders": [15, {"minutes": 5, "action": "AUDIO"}],
+        }
+    )
+    assert ical.count("BEGIN:VALARM") == 2
+    assert "ACTION:DISPLAY" in ical
+    assert "ACTION:AUDIO" in ical
+    assert "TRIGGER:-PT15M" in ical
+    assert "TRIGGER:-PT5M" in ical
+
+
+def test_create_event_with_priority():
+    ical, _ = _saved_ical(
+        {
+            "summary": "Plan",
+            "start": datetime(2026, 6, 10, 9, 0),
+            "end": datetime(2026, 6, 10, 10, 0),
+            "priority": 2,
+        }
+    )
+    assert "PRIORITY:2" in ical
+
+
+def test_create_event_priority_clamped():
+    ical, _ = _saved_ical(
+        {
+            "summary": "Plan",
+            "start": datetime(2026, 6, 10, 9, 0),
+            "end": datetime(2026, 6, 10, 10, 0),
+            "priority": 99,
+        }
+    )
+    assert "PRIORITY:9" in ical
+
+
+def test_create_event_with_recurrence():
+    ical, _ = _saved_ical(
+        {
+            "summary": "Weekly",
+            "start": datetime(2026, 6, 10, 9, 0),
+            "end": datetime(2026, 6, 10, 10, 0),
+            "recurrence": "FREQ=WEEKLY;INTERVAL=2;BYDAY=MO,WE",
+        }
+    )
+    assert "RRULE:FREQ=WEEKLY" in ical
+    assert "INTERVAL=2" in ical
+    assert "BYDAY=MO,WE" in ical
+
+
+def test_create_event_recurrence_with_until_serializes():
+    # End-to-end guard: a recurrence with UNTIL must reach add_event with a real
+    # ical body. If UNTIL were left as a string, cal.to_ical() raises TypeError and
+    # add_event is never called — so reaching this assertion proves the fix.
+    cal_obj = None
+    with patch("src.builtin_mcp.calendar.caldav.DAVClient") as dav_client:
+        cal_obj = _fake_calendar()
+        dav_client.return_value.principal.return_value.calendars.return_value = [cal_obj]
+        client = CalendarClient("https://dav.example", "user", "pw")
+        client.create_event(
+            "Daily",
+            datetime(2026, 6, 10, 9, 0),
+            datetime(2026, 6, 10, 10, 0),
+            recurrence="FREQ=DAILY;UNTIL=20261231T000000Z",
+        )
+    # add_event was actually called => to_ical() did not raise.
+    cal_obj.add_event.assert_called_once()
+    ical = cal_obj.add_event.call_args.args[0]
+    assert "RRULE" in ical
+    assert "FREQ=DAILY" in ical
+    assert "UNTIL=20261231" in ical
+
+
+def test_create_event_default_times():
+    # Omitting start/end yields start = next full hour, end = start + 1h.
+    # Capture "now" at call time and assert the result is consistent with it rather
+    # than monkeypatching datetime (which would also break DTSTAMP / fromisoformat).
+    before = datetime.now().astimezone()
+    ical, result = _saved_ical({"summary": "NoTimes"})
+    after = datetime.now().astimezone()
+
+    start = datetime.fromisoformat(result["start"])
+    end = datetime.fromisoformat(result["end"])
+    # Start is on a full hour, within one hour after "now", and 1h before end.
+    assert start.minute == 0 and start.second == 0 and start.microsecond == 0
+    expected_floor = before.replace(minute=0, second=0, microsecond=0)
+    assert expected_floor + timedelta(hours=1) <= start <= after + timedelta(hours=1)
+    assert (end - start).total_seconds() == 3600
+    assert "DTSTART" in ical
+
+
+def test_create_event_escaping_round_trip():
+    # Special chars (; , \\ and newline) must survive create -> parse via icalendar,
+    # which handles RFC 5545 escaping itself (no manual escape helper).
+    tricky_summary = "Meet; with, a\\backslash"
+    tricky_desc = "line one\nline two; still, here"
+    tricky_loc = "Room, B; floor\\3"
+    ical, result = _saved_ical(
+        {
+            "summary": tricky_summary,
+            "start": datetime(2026, 6, 10, 9, 0),
+            "end": datetime(2026, 6, 10, 10, 0),
+            "description": tricky_desc,
+            "location": tricky_loc,
+        }
+    )
+    # Parse the saved text back and confirm the original values are recovered intact.
+    parsed = ICalendar.from_ical(ical)
+    comp = next(iter(parsed.walk("VEVENT")))
+    assert str(comp.get("SUMMARY")) == tricky_summary
+    assert str(comp.get("DESCRIPTION")) == tricky_desc
+    assert str(comp.get("LOCATION")) == tricky_loc
+
+
+def test_create_event_yandex_serializes_utc():
+    # Yandex client normalizes times to UTC so DTSTART/DTEND carry a trailing Z.
+    ical, _ = _saved_ical(
+        {
+            "summary": "Y",
+            "start": datetime(2026, 6, 10, 9, 0, tzinfo=timezone.utc),
+            "end": datetime(2026, 6, 10, 10, 0, tzinfo=timezone.utc),
+        },
+        url="https://caldav.yandex.ru/",
+    )
+    dtstart = next(l for l in ical.splitlines() if l.startswith("DTSTART"))
+    dtend = next(l for l in ical.splitlines() if l.startswith("DTEND"))
+    assert dtstart.endswith("Z")
+    assert dtend.endswith("Z")
+    assert dtstart == "DTSTART:20260610T090000Z"
+
+
+# --- get_event_by_uid client tests ------------------------------------------
+
+
+def _rich_component():
+    """A VEVENT carrying location, description and priority, round-tripped."""
+    ev = IEvent()
+    ev.add("summary", "Review")
+    ev.add("uid", "rich@zakhar")
+    ev.add("dtstart", datetime(2026, 6, 10, 9, 0))
+    ev.add("dtend", datetime(2026, 6, 10, 10, 0))
+    ev.add("location", "Room 5")
+    ev.add("description", "quarterly review")
+    ev.add("priority", 3)
+    return _component_from(ev)
+
+
+@patch("src.builtin_mcp.calendar.caldav.DAVClient")
+def test_get_event_by_uid_found_full_dict(dav_client):
+    cal = _fake_calendar()
+    cal.get_event_by_uid.return_value = _fake_event(
+        None, None, None, None, comp=_rich_component()
+    )
+    dav_client.return_value.principal.return_value.calendars.return_value = [cal]
+
+    client = CalendarClient("https://dav.example", "user", "pw")
+    ev = client.get_event_by_uid("rich@zakhar")
+
+    cal.get_event_by_uid.assert_called_once_with("rich@zakhar")
+    assert ev["uid"] == "rich@zakhar"
+    assert ev["summary"] == "Review"
+    assert ev["location"] == "Room 5"
+    assert ev["description"] == "quarterly review"
+    assert ev["priority"] == 3
+    assert "categories" not in ev
+    assert "attendees" not in ev
+
+
+@patch("src.builtin_mcp.calendar.caldav.DAVClient")
+def test_get_event_by_uid_not_found(dav_client):
+    cal = _fake_calendar()
+    cal.get_event_by_uid.side_effect = NotFoundError("missing")
+    dav_client.return_value.principal.return_value.calendars.return_value = [cal]
+
+    client = CalendarClient("https://dav.example", "user", "pw")
+    assert client.get_event_by_uid("nope@zakhar") == {
+        "found": False,
+        "uid": "nope@zakhar",
+    }
+
+
+# --- search_events client tests ---------------------------------------------
+
+
+def _search_corpus():
+    """Two events with distinct summary/location for filter tests."""
+    a = _fake_event(
+        "Dentist appointment",
+        datetime(2026, 6, 10, 9, 0),
+        datetime(2026, 6, 10, 9, 30),
+        "a@zakhar",
+        location="Clinic",
+    )
+    b = _fake_event(
+        "Team lunch",
+        datetime(2026, 6, 11, 13, 0),
+        datetime(2026, 6, 11, 14, 0),
+        "b@zakhar",
+        location="Cafe Downtown",
+    )
+    return [a, b]
+
+
+@patch("src.builtin_mcp.calendar.caldav.DAVClient")
+def test_search_events_filters_summary(dav_client):
+    cal = _fake_calendar()
+    cal.search.return_value = _search_corpus()
+    dav_client.return_value.principal.return_value.calendars.return_value = [cal]
+
+    client = CalendarClient("https://dav.example", "user", "pw")
+    out = client.search_events("dentist")
+    assert [e["summary"] for e in out] == ["Dentist appointment"]
+
+
+@patch("src.builtin_mcp.calendar.caldav.DAVClient")
+def test_search_events_filters_location(dav_client):
+    cal = _fake_calendar()
+    cal.search.return_value = _search_corpus()
+    dav_client.return_value.principal.return_value.calendars.return_value = [cal]
+
+    client = CalendarClient("https://dav.example", "user", "pw")
+    out = client.search_events("downtown")
+    assert [e["summary"] for e in out] == ["Team lunch"]
+
+
+@patch("src.builtin_mcp.calendar.caldav.DAVClient")
+def test_search_events_default_range(dav_client):
+    cal = _fake_calendar()
+    cal.search.return_value = []
+    dav_client.return_value.principal.return_value.calendars.return_value = [cal]
+
+    client = CalendarClient("https://dav.example", "user", "pw")
+    client.search_events("anything")
+
+    # No explicit dates -> default window roughly now-30d .. now+90d.
+    kwargs = cal.search.call_args.kwargs
+    span = kwargs["end"] - kwargs["start"]
+    assert 119 <= span.days <= 121
+
+
+# --- gap #1: all-day events ---------------------------------------------------
+
+
+@patch("src.builtin_mcp.calendar.caldav.DAVClient")
+def test_get_events_all_day_date_only(dav_client):
+    # A date-only DTSTART (all-day event) must map without crashing.
+    cal = _fake_calendar()
+    ev = IEvent()
+    ev.add("summary", "Birthday")
+    ev.add("uid", "ad@zakhar")
+    ev.add("dtstart", date(2026, 6, 10))
+    ev.add("dtend", date(2026, 6, 11))
+    cal.search.return_value = [_fake_event(None, None, None, None, comp=ev)]
+    dav_client.return_value.principal.return_value.calendars.return_value = [cal]
+
+    client = CalendarClient("https://dav.example", "user", "pw")
+    events = client.get_events(datetime(2026, 6, 10), datetime(2026, 6, 11))
+    assert events[0]["summary"] == "Birthday"
+    assert events[0]["start"] == "2026-06-10"
+    assert events[0]["end"] == "2026-06-11"
+
+
+# --- gap #2: connect failure surfaces, tool returns error string -------------
+
+
+@patch("src.builtin_mcp.calendar.caldav.DAVClient")
+def test_connect_failure_surfaces_in_client(dav_client):
+    dav_client.side_effect = ConnectionError("dns boom")
+    client = CalendarClient("https://dav.example", "user", "pw")
+    try:
+        client.get_today_events()
+        assert False, "expected the connection error to surface"
+    except ConnectionError as e:
+        assert "dns boom" in str(e)
+
+
+async def test_connect_failure_tool_returns_error_string():
+    # A real CalendarClient whose DAVClient raises on connect: the tool must catch it
+    # and return a Russian error string rather than crashing.
+    with patch("src.builtin_mcp.calendar.caldav.DAVClient") as dav_client:
+        dav_client.side_effect = ConnectionError("dns boom")
+        client = CalendarClient("https://dav.example", "user", "pw")
+        source = BuiltinMcpSource("calendar", build_calendar_server(client))
+        await source.start()
+        out = await source.call("get_today_events", {})
+    assert isinstance(out, str)
+    assert "dns boom" in out
+
+
 # --- Server / BuiltinMcpSource tests ----------------------------------------
 
 
@@ -210,6 +639,42 @@ def _fake_client():
             "location": "",
         }
     ]
+    client.get_week_events.return_value = [
+        {
+            "uid": "w1@zakhar",
+            "summary": "Planning",
+            "start": "2026-06-09T11:00:00",
+            "end": "2026-06-09T12:00:00",
+            "location": "Room 2",
+        }
+    ]
+    client.get_events.return_value = [
+        {
+            "uid": "r1@zakhar",
+            "summary": "Range event",
+            "start": "2026-06-09T11:00:00",
+            "end": "2026-06-09T12:00:00",
+            "location": "",
+        }
+    ]
+    client.search_events.return_value = [
+        {
+            "uid": "s1@zakhar",
+            "summary": "Found event",
+            "start": "2026-06-09T11:00:00",
+            "end": "2026-06-09T12:00:00",
+            "location": "Hall",
+        }
+    ]
+    client.get_event_by_uid.return_value = {
+        "uid": "rich@zakhar",
+        "summary": "Review",
+        "start": "2026-06-10T09:00:00",
+        "end": "2026-06-10T10:00:00",
+        "location": "Room 5",
+        "description": "quarterly review",
+        "priority": 3,
+    }
     client.list_calendars.return_value = [{"name": "Personal", "url": "https://x/"}]
     client.create_event.return_value = {
         "uid": "new@zakhar",
@@ -230,6 +695,8 @@ async def test_server_advertises_all_tools():
         "get_today_events",
         "get_week_events",
         "get_events",
+        "search_events",
+        "get_event_by_uid",
         "create_event",
         "delete_event",
         "list_calendars",
@@ -310,3 +777,168 @@ async def test_tool_error_returns_string_not_crash():
     out = await source.call("get_today_events", {})
     assert isinstance(out, str)
     assert "dav down" in out
+
+
+# --- gap #3: tool-level coverage for get_events / get_week_events ------------
+
+
+async def test_get_week_events_tool():
+    source = BuiltinMcpSource("calendar", build_calendar_server(_fake_client()))
+    await source.start()
+
+    out = await source.call("get_week_events", {})
+    assert "Planning" in out
+    assert "Room 2" in out
+
+
+async def test_get_week_events_tool_empty():
+    client = _fake_client()
+    client.get_week_events.return_value = []
+    source = BuiltinMcpSource("calendar", build_calendar_server(client))
+    await source.start()
+
+    out = await source.call("get_week_events", {})
+    assert out == "На ближайшую неделю событий нет."
+
+
+async def test_get_events_tool_parses_dates():
+    client = _fake_client()
+    source = BuiltinMcpSource("calendar", build_calendar_server(client))
+    await source.start()
+
+    out = await source.call(
+        "get_events", {"start": "2026-06-09", "end": "2026-06-10"}
+    )
+    assert "Range event" in out
+    args = client.get_events.call_args.args
+    assert args[0] == datetime(2026, 6, 9)
+    assert args[1] == datetime(2026, 6, 10)
+
+
+async def test_get_events_tool_bad_dates():
+    source = BuiltinMcpSource("calendar", build_calendar_server(_fake_client()))
+    await source.start()
+
+    out = await source.call("get_events", {"start": "not-a-date", "end": "also-bad"})
+    assert "Не понял даты" in out
+
+
+# --- search_events tool ------------------------------------------------------
+
+
+async def test_search_events_tool():
+    client = _fake_client()
+    source = BuiltinMcpSource("calendar", build_calendar_server(client))
+    await source.start()
+
+    out = await source.call("search_events", {"query": "found"})
+    assert "Found event" in out
+    args = client.search_events.call_args.args
+    assert args[0] == "found"
+    # Dates omitted -> the client receives None (it applies its own default range).
+    assert args[1] is None and args[2] is None
+
+
+async def test_search_events_tool_with_dates():
+    client = _fake_client()
+    source = BuiltinMcpSource("calendar", build_calendar_server(client))
+    await source.start()
+
+    await source.call(
+        "search_events",
+        {"query": "x", "start": "2026-06-01", "end": "2026-06-30"},
+    )
+    args = client.search_events.call_args.args
+    assert args[1] == datetime(2026, 6, 1)
+    assert args[2] == datetime(2026, 6, 30)
+
+
+async def test_search_events_tool_empty():
+    client = _fake_client()
+    client.search_events.return_value = []
+    source = BuiltinMcpSource("calendar", build_calendar_server(client))
+    await source.start()
+
+    out = await source.call("search_events", {"query": "nothing"})
+    assert "nothing" in out
+
+
+# --- get_event_by_uid tool ---------------------------------------------------
+
+
+async def test_get_event_by_uid_tool_found():
+    client = _fake_client()
+    source = BuiltinMcpSource("calendar", build_calendar_server(client))
+    await source.start()
+
+    out = await source.call("get_event_by_uid", {"uid": "rich@zakhar"})
+    client.get_event_by_uid.assert_called_once_with("rich@zakhar")
+    assert "Review" in out
+    assert "Room 5" in out
+    assert "quarterly review" in out
+
+
+async def test_get_event_by_uid_tool_not_found():
+    client = _fake_client()
+    client.get_event_by_uid.return_value = {"found": False, "uid": "nope@zakhar"}
+    source = BuiltinMcpSource("calendar", build_calendar_server(client))
+    await source.start()
+
+    out = await source.call("get_event_by_uid", {"uid": "nope@zakhar"})
+    assert "nope@zakhar" in out
+    assert "не найден" in out.lower()
+
+
+# --- create_event tool with the new optional params --------------------------
+
+
+async def test_create_event_tool_with_rich_params():
+    client = _fake_client()
+    source = BuiltinMcpSource("calendar", build_calendar_server(client))
+    await source.start()
+
+    out = await source.call(
+        "create_event",
+        {
+            "summary": "Planning",
+            "start": "2026-06-09T09:00:00",
+            "end": "2026-06-09T10:00:00",
+            "description": "agenda",
+            "location": "Room 1",
+            "priority": 2,
+            "recurrence": "WEEKLY",
+            "reminders": [10, 30],
+        },
+    )
+    assert "new@zakhar" in out
+    # All optional params reach the client positionally in the documented order:
+    # summary, start, end, description, location, priority, reminders, recurrence.
+    args = client.create_event.call_args.args
+    assert args[0] == "Planning"
+    assert args[1] == datetime(2026, 6, 9, 9, 0)
+    assert args[3] == "agenda"
+    assert args[4] == "Room 1"
+    assert args[5] == 2
+    assert args[6] == [10, 30]
+    assert args[7] == "WEEKLY"
+
+
+async def test_create_event_tool_default_times():
+    # Omitting start/end is allowed; the client receives None and applies defaults.
+    client = _fake_client()
+    source = BuiltinMcpSource("calendar", build_calendar_server(client))
+    await source.start()
+
+    out = await source.call("create_event", {"summary": "Quick"})
+    assert "new@zakhar" in out
+    args = client.create_event.call_args.args
+    assert args[0] == "Quick"
+    assert args[1] is None and args[2] is None
+
+
+async def test_create_event_tool_bad_dates():
+    source = BuiltinMcpSource("calendar", build_calendar_server(_fake_client()))
+    await source.start()
+
+    out = await source.call("create_event", {"summary": "X", "start": "garbage"})
+    assert "Не понял даты" in out
