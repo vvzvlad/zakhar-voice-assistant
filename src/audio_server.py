@@ -56,7 +56,7 @@ class AudioServer:
                 web.get("/health", self._handle_health),
             ]
         )
-        self._runner = web.AppRunner(app)
+        self._runner = web.AppRunner(app, access_log=None)  # disable per-request access logs
         await self._runner.setup()
         site = web.TCPSite(self._runner, self.host, self.port)
         await site.start()

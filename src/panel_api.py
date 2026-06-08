@@ -259,7 +259,7 @@ class PanelServer:
         return app
 
     async def start(self) -> None:
-        self._runner = web.AppRunner(self.build_app())
+        self._runner = web.AppRunner(self.build_app(), access_log=None)  # disable per-request access logs
         await self._runner.setup()
         site = web.TCPSite(self._runner, self.host, self.port)
         await site.start()
