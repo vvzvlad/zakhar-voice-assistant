@@ -6,7 +6,7 @@ catalog, the raw config document, generic patch/options endpoints, the system
 prompt file, system/version info, a restart trigger and live device status.
 
 Start/stop mirror AudioServer (AppRunner + TCPSite). CORS is restricted to the
-origins listed in core.panel.allowed_origins (empty by default); it never reflects a
+hardcoded `_ALLOWED_ORIGINS` allowlist (empty — see below); it never reflects a
 wildcard, so an arbitrary web page can't read the unauthenticated config (which
 carries plaintext secrets) via the operator's browser. The prod frontend is
 same-origin and the dev Vite server proxies /api, so neither needs CORS.
@@ -21,18 +21,26 @@ from aiohttp import web
 from loguru import logger
 from pydantic import ValidationError
 
+from src.pipeline import CAPTURE_MAX_SECONDS, CaptureBusyError, CaptureEmptyError
 from src.prompt import load_system_prompt, save_system_prompt
 
 # HTTP methods the API exposes (used by the CORS preflight headers).
 _ALLOW_METHODS = "GET, POST, PATCH, PUT, OPTIONS"
+
+# Browser origins allowed cross-origin access to the (unauthenticated) panel API.
+# Hardcoded empty: there is no cross-origin reflection. The prod frontend is
+# same-origin and the dev Vite server proxies /api, so neither needs CORS — and an
+# empty allowlist guarantees the unauthenticated config (with plaintext secrets) is
+# never readable from an arbitrary web page. Not a config knob.
+_ALLOWED_ORIGINS: frozenset[str] = frozenset()
 
 
 def _add_cors(resp: web.StreamResponse, request: web.Request, allowed_origins) -> web.StreamResponse:
     """Reflect an allowlisted request Origin into CORS headers (never a wildcard).
 
     Same-origin requests (prod static serving, the dev Vite proxy) need no CORS
-    headers; cross-origin browser access is granted only to origins the operator
-    explicitly lists in core.panel.allowed_origins.
+    headers; cross-origin browser access is granted only to origins in the
+    hardcoded `_ALLOWED_ORIGINS` allowlist (currently empty).
     """
     origin = request.headers.get("Origin")
     if origin and origin in allowed_origins:
@@ -78,8 +86,8 @@ class PanelServer:
                  run_events=None, pending_restart=None):
         # svc: ConfigService; started_at: float (time.time()); restart_event: asyncio.Event
         # device_status: optional callable -> list[dict]; static_dir: optional path to built frontend
-        # device_capture: optional async callable (device_name, seconds) -> None that triggers a
-        #   manual capture-only recording (DeviceManager.capture). None -> /api/capture returns 503.
+        # device_capture: optional async callable (device_name, seconds) -> bytes that records a
+        #   manual sample and returns it as WAV bytes (DeviceManager.capture). None -> /api/capture 503.
         # runs_store: optional RunsStore for the observability endpoints (None -> empty/zeros)
         # tool_sources: optional zero-arg callable -> list[dict] (ToolHub.describe()), None -> []
         # run_events: optional RunEventsHub for the live WS run stream (None -> WS closes)
@@ -171,12 +179,25 @@ class PanelServer:
         return web.json_response(self.device_status() if self.device_status else [])
 
     async def _post_capture(self, request: web.Request) -> web.Response:
-        """Trigger a manual capture-only recording on a speaker.
+        """Record a manual sample on a speaker and stream the WAV straight back.
 
-        Body: {"device": "<name>", "seconds": <int 1..30>}. The device records that
-        many seconds of mic audio; the server saves it to a WAV (no STT/LLM/TTS).
-        Returns 202 on success, 400 on bad input, 404 unknown device, 409 offline,
-        503 when capture is not wired (no DeviceManager).
+        Body: {"device": "<name>", "seconds": <int 1..300>}. The device records that
+        many seconds of mic audio (no STT/LLM/TTS); the recording is EPHEMERAL —
+        device_capture returns the WAV bytes in memory and we hand them to the
+        caller as an audio/wav attachment download. Nothing is kept on the server.
+
+        Status codes:
+          - 200 success (WAV body)
+          - 400 bad input
+          - 404 unknown device
+          - 409 not actionable now: device offline / no capture entities / a capture
+                is already in progress on that device (CaptureBusyError)
+          - 500 server-side capture failure, e.g. the recording produced no audio
+                (CaptureEmptyError) or any other unexpected error
+          - 503 capture not wired (no DeviceManager)
+          - 504 the recording timed out (device never streamed)
+        The handler may block for up to ~seconds + margin while the device streams
+        the audio — that is expected.
         """
         if self.device_capture is None:
             return web.json_response({"error": "capture not available"}, status=503)
@@ -192,23 +213,45 @@ class PanelServer:
         # Reject non-integers (bools are ints in Python, so exclude them explicitly).
         if not isinstance(seconds, int) or isinstance(seconds, bool):
             return web.json_response(
-                {"error": 'field "seconds" (integer 1..30) is required'}, status=400
+                {"error": f'field "seconds" (integer 1..{CAPTURE_MAX_SECONDS}) is required'},
+                status=400,
             )
-        if not (1 <= seconds <= 30):
+        if not (1 <= seconds <= CAPTURE_MAX_SECONDS):
             return web.json_response(
-                {"error": "seconds must be between 1 and 30"}, status=400
+                {"error": f"seconds must be between 1 and {CAPTURE_MAX_SECONDS}"},
+                status=400,
             )
         try:
-            await self.device_capture(device, seconds)
+            wav = await self.device_capture(device, seconds)
         except LookupError:
             return web.json_response(
                 {"error": f"unknown device {device!r}"}, status=404
             )
+        except TimeoutError as e:
+            # The device never streamed the audio in time -> gateway timeout.
+            return web.json_response({"error": str(e)}, status=504)
+        except CaptureBusyError as e:
+            # A capture is already armed/in-flight on this device -> conflict.
+            return web.json_response({"error": str(e)}, status=409)
+        except CaptureEmptyError as e:
+            # The capture ran but produced no audio -> server-side capture failure,
+            # NOT a "not actionable now" (409) condition.
+            return web.json_response({"error": str(e)}, status=500)
         except RuntimeError as e:
             # Offline device or missing firmware entities -> not actionable right now.
             return web.json_response({"error": str(e)}, status=409)
-        return web.json_response(
-            {"capturing": True, "device": device, "seconds": seconds}, status=202
+        except Exception as e:
+            # Any other unexpected capture failure -> server error.
+            return web.json_response({"error": str(e)}, status=500)
+        # Sanitize the device name for the download filename (ascii alnum/._- only).
+        safe_device = "".join(
+            c if c.isascii() and (c.isalnum() or c in "._-") else "_" for c in device
+        ) or "device"
+        filename = f"zakhar_{safe_device}_{seconds}s.wav"
+        return web.Response(
+            body=wav,
+            content_type="audio/wav",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
         )
 
     async def _get_tools(self, request: web.Request) -> web.Response:
@@ -284,7 +327,7 @@ class PanelServer:
 
     # --- wiring --------------------------------------------------------------
     def build_app(self) -> web.Application:
-        allowed = set(self.svc.core.panel.allowed_origins or [])
+        allowed = _ALLOWED_ORIGINS
         app = web.Application(middlewares=[_make_cors_middleware(allowed)])
         app.add_routes([
             web.get("/api/catalog", self._get_catalog),

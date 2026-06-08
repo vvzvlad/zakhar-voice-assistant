@@ -317,19 +317,75 @@ async def test_get_devices_default_empty(tmp_path):
         await client.close()
 
 
-async def test_capture_success_returns_202(tmp_path):
+def _wav_bytes(pcm=b"\x01\x02" * 16):
+    """Build a tiny valid 16k/mono/16-bit WAV for the capture-download assertions."""
+    import io
+    import wave
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(16000)
+        w.writeframes(pcm)
+    return buf.getvalue()
+
+
+async def test_capture_success_returns_wav_download(tmp_path):
+    # On success the route streams the recorded WAV back as an audio/wav attachment
+    # (no JSON 202); the body is a valid WAV and the filename carries device+seconds.
+    import io
+    import wave
+
     calls = []
+    wav = _wav_bytes()
 
     async def cap(device, seconds):
         calls.append((device, seconds))
+        return wav
 
     client, _svc_, _ev = await _client(tmp_path, device_capture=cap)
     try:
         resp = await client.post("/api/capture", json={"device": "hall", "seconds": 5})
-        assert resp.status == 202
-        body = await resp.json()
-        assert body == {"capturing": True, "device": "hall", "seconds": 5}
+        assert resp.status == 200
+        assert resp.headers["Content-Type"] == "audio/wav"
+        assert resp.headers["Content-Disposition"] == \
+            'attachment; filename="zakhar_hall_5s.wav"'
+        body = await resp.read()
+        assert body == wav
+        # The body parses as a valid 16k/mono/16-bit WAV.
+        with wave.open(io.BytesIO(body), "rb") as w:
+            assert w.getnchannels() == 1 and w.getsampwidth() == 2
+            assert w.getframerate() == 16000
         assert calls == [("hall", 5)]
+    finally:
+        await client.close()
+
+
+async def test_capture_filename_sanitizes_device(tmp_path):
+    # A device name with unsafe chars is sanitized in the download filename.
+    async def cap(device, seconds):
+        return _wav_bytes()
+
+    client, _svc_, _ev = await _client(tmp_path, device_capture=cap)
+    try:
+        resp = await client.post("/api/capture", json={"device": "living room/2", "seconds": 3})
+        assert resp.status == 200
+        assert resp.headers["Content-Disposition"] == \
+            'attachment; filename="zakhar_living_room_2_3s.wav"'
+    finally:
+        await client.close()
+
+
+async def test_capture_timeout_returns_504(tmp_path):
+    # A capture that times out (device never streamed) -> 504.
+    async def cap(device, seconds):
+        raise TimeoutError("hall capture timed out after 13s")
+
+    client, _svc_, _ev = await _client(tmp_path, device_capture=cap)
+    try:
+        resp = await client.post("/api/capture", json={"device": "hall", "seconds": 5})
+        assert resp.status == 504
+        assert "timed out" in (await resp.json())["error"]
     finally:
         await client.close()
 
@@ -360,6 +416,42 @@ async def test_capture_offline_device_returns_409(tmp_path):
         await client.close()
 
 
+async def test_capture_busy_returns_409(tmp_path):
+    # FIX A: a second concurrent capture on the same device surfaces as
+    # CaptureBusyError -> HTTP 409 with a "in progress" message (distinct from the
+    # generic 500 path).
+    from src.pipeline import CaptureBusyError
+
+    async def cap(device, seconds):
+        raise CaptureBusyError("hall capture already in progress")
+
+    client, _svc_, _ev = await _client(tmp_path, device_capture=cap)
+    try:
+        resp = await client.post("/api/capture", json={"device": "hall", "seconds": 5})
+        assert resp.status == 409
+        assert "in progress" in (await resp.json())["error"]
+    finally:
+        await client.close()
+
+
+async def test_capture_empty_recording_returns_500(tmp_path):
+    # FIX B: an empty recording is a server-side capture failure (CaptureEmptyError),
+    # so it maps to HTTP 500 — NOT 409, which is reserved for offline/missing-entity/
+    # busy conditions.
+    from src.pipeline import CaptureEmptyError
+
+    async def cap(device, seconds):
+        raise CaptureEmptyError("capture produced no audio")
+
+    client, _svc_, _ev = await _client(tmp_path, device_capture=cap)
+    try:
+        resp = await client.post("/api/capture", json={"device": "hall", "seconds": 5})
+        assert resp.status == 500
+        assert "no audio" in (await resp.json())["error"]
+    finally:
+        await client.close()
+
+
 async def test_capture_bad_seconds_returns_400(tmp_path):
     called = []
 
@@ -369,8 +461,10 @@ async def test_capture_bad_seconds_returns_400(tmp_path):
     client, _svc_, _ev = await _client(tmp_path, device_capture=cap)
     try:
         # Out of range, wrong type, missing device — all 400, capture never called.
+        # The accepted range is now 1..300, so 301 (and 0/negative) are rejected.
         for body in ({"device": "h", "seconds": 0},
-                     {"device": "h", "seconds": 31},
+                     {"device": "h", "seconds": -1},
+                     {"device": "h", "seconds": 301},
                      {"device": "h", "seconds": "5"},
                      {"device": "h", "seconds": True},
                      {"device": "", "seconds": 5},
@@ -378,6 +472,25 @@ async def test_capture_bad_seconds_returns_400(tmp_path):
             resp = await client.post("/api/capture", json=body)
             assert resp.status == 400, body
         assert called == []
+    finally:
+        await client.close()
+
+
+async def test_capture_max_seconds_boundary_accepted(tmp_path):
+    # The upper bound is now 300 (CAPTURE_MAX_SECONDS): exactly 300 is accepted and
+    # passed through to the capture callable; 301 is rejected (covered above).
+    calls = []
+    wav = _wav_bytes()
+
+    async def cap(device, seconds):
+        calls.append((device, seconds))
+        return wav
+
+    client, _svc_, _ev = await _client(tmp_path, device_capture=cap)
+    try:
+        resp = await client.post("/api/capture", json={"device": "hall", "seconds": 300})
+        assert resp.status == 200
+        assert calls == [("hall", 300)]
     finally:
         await client.close()
 
@@ -428,24 +541,21 @@ async def test_cors_preflight(tmp_path):
         await client.close()
 
 
-async def test_cors_reflects_allowlisted_origin(tmp_path):
-    prompt_path = tmp_path / "system_prompt.md"
-    prompt_path.write_text("seed prompt", encoding="utf-8")
-    doc = _doc(prompt_path)
-    doc["core"]["panel"] = {"allowed_origins": ["http://localhost:5173"]}
-    deps = Deps(http_cloud=httpx.AsyncClient(), http_local=httpx.AsyncClient())
-    svc = ConfigService(doc, deps, path=str(tmp_path / "config.json"))
-    srv = PanelServer(svc, "127.0.0.1", 0, version="9.9", started_at=time.time(),
-                      restart_event=asyncio.Event())
-    client = TestClient(TestServer(srv.build_app()))
-    await client.start_server()
+async def test_cors_allowlist_is_hardcoded_empty_never_reflects_origin(tmp_path):
+    # The CORS allowlist is hardcoded empty in panel_api (_ALLOWED_ORIGINS), so NO
+    # cross-origin request is ever reflected — not even one that used to be allowlisted
+    # via the removed core.panel.allowed_origins knob. Preflight still returns 204.
+    client, _svc_, _ev = await _client(tmp_path)
     try:
-        # Allowlisted origin is reflected (never "*").
-        ok = await client.get("/api/config", headers={"Origin": "http://localhost:5173"})
-        assert ok.headers.get("Access-Control-Allow-Origin") == "http://localhost:5173"
-        # A non-allowlisted origin gets no CORS header.
-        nope = await client.get("/api/config", headers={"Origin": "http://evil.example"})
-        assert "Access-Control-Allow-Origin" not in nope.headers
+        # A cross-origin GET carrying an Origin header gets NO ACAO header reflected.
+        resp = await client.get("/api/config", headers={"Origin": "http://localhost:5173"})
+        assert resp.status == 200
+        assert "Access-Control-Allow-Origin" not in resp.headers
+
+        # An OPTIONS preflight (even with an Origin) still returns 204 and reflects nothing.
+        pre = await client.options("/api/config", headers={"Origin": "http://localhost:5173"})
+        assert pre.status == 204
+        assert "Access-Control-Allow-Origin" not in pre.headers
     finally:
         await client.close()
 

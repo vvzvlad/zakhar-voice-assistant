@@ -4,7 +4,7 @@
   "llm": {"selected": "openrouter", "instances": {"openrouter": {"api_key": "", "model": "anthropic/claude-haiku-4.5", "timeout": 300, "reply_rate_limit": "У меня кончились ресурсы на вас, мясных мешков. Я занимаюсь своими делами, обратитесь позже, и может быть, я вас обслужу, раз вы сами не в состоянии", "reply_empty_after_tools": "Готово.", "reply_empty": "Я тебя не расслышала, повтори."}}},
   "tts": {"selected": "teratts", "instances": {"teratts": {"base_url": ""}}},
   "core": {
-    "context": {"max_turns": 5, "ttl_seconds": 300, "dir": "data"},
+    "context": {"max_turns": 5, "ttl_seconds": 300},
     "audio": {"host": "0.0.0.0", "port": 8200, "ttl": 300, "public_base_url": ""},
     "vad": {"aggressiveness": 2, "silence_ms": 800, "min_speech_ms": 200, "max_utterance_ms": 15000, "no_speech_timeout_ms": 8000},
     "network": {"external_proxy": ""},
@@ -13,7 +13,7 @@
     "calendar": {"url": "", "username": "", "password": "", "calendar": ""},
     "esphome": {"port": 6053},
     "prompt": {"system_prompt_path": "data/system_prompt.md"},
-    "panel": {"host": "0.0.0.0", "port": 8201, "allowed_origins": []},
+    "panel": {"host": "0.0.0.0", "port": 8201},
     "runs": {"enabled": true, "retention_days": 30},
     "reminders": {"enabled": true},
     "devices": [],

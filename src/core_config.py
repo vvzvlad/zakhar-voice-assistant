@@ -13,7 +13,6 @@ from pydantic import BaseModel, Field
 class ContextConfig(BaseModel):
     max_turns: int = Field(5, ge=1)
     ttl_seconds: int = Field(300, ge=0)
-    dir: str = "data"
 
 
 class AudioConfig(BaseModel):
@@ -77,11 +76,6 @@ class PromptConfig(BaseModel):
 class PanelConfig(BaseModel):
     host: str = "0.0.0.0"
     port: int = 8201
-    # Browser origins allowed cross-origin access to the (unauthenticated) panel API.
-    # Empty by default: the prod frontend is same-origin and the dev Vite server
-    # proxies /api, so neither needs CORS. Add a dev origin here only if you point the
-    # frontend straight at this API (e.g. "http://localhost:5173").
-    allowed_origins: list[str] = []
 
 
 class RunsConfig(BaseModel):

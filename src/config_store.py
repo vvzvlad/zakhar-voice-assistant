@@ -9,7 +9,10 @@ import os
 import shutil
 import tempfile
 
-DEFAULT_PATH = "data/config.json"
+# Hardcoded data directory: holds config.json, the per-device context files, and the
+# runs/reminders SQLite databases. Not a config knob — nobody changes it at runtime.
+DATA_DIR = "data"
+DEFAULT_PATH = f"{DATA_DIR}/config.json"
 
 
 def load(path: str = DEFAULT_PATH) -> dict:

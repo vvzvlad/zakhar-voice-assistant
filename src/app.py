@@ -69,7 +69,7 @@ async def main() -> None:
     # Pruned once at boot; the panel API serves the run log + 24h metrics from it.
     runs_store = None
     if core.runs.enabled:
-        runs_store = RunsStore(os.path.join(core.context.dir, "runs.db"))
+        runs_store = RunsStore(os.path.join(config_store.DATA_DIR, "runs.db"))
         runs_store.prune(now=time.time(), retention_days=core.runs.retention_days)
 
     # Live run stream: a broadcast hub shared by the pipeline (producer) and the
@@ -97,7 +97,7 @@ async def main() -> None:
     scheduler = None
     if core.reminders.enabled:
         from src.reminders import ReminderScheduler, RemindersStore
-        reminders_store = RemindersStore(os.path.join(core.context.dir, "reminders.db"))
+        reminders_store = RemindersStore(os.path.join(config_store.DATA_DIR, "reminders.db"))
         scheduler = ReminderScheduler(reminders_store)
 
     # Multi-source tool hub: an arbitrary list of external MCP servers (one

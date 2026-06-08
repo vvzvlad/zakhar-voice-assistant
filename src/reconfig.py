@@ -14,6 +14,7 @@ import time
 import httpx
 from loguru import logger
 
+from src import config_store
 from src.logging_setup import setup_logging
 from src.runs_store import RunsStore
 from src.tool_factory import build_sources
@@ -51,8 +52,6 @@ def action_for(path: str) -> str:
     # core.* rules (most specific first)
     if path == "core.log_level":
         return "logging"
-    if path == "core.context.dir":
-        return "restart"      # moving the data dir touches runs.db/reminders.db too
     if path.startswith("core.context") or path.startswith("core.vad"):
         return "live"
     if path.startswith("core.capture"):
@@ -88,7 +87,7 @@ def action_for(path: str) -> str:
 
 
 # Actions this build can apply without a restart. The only remaining UNSUPPORTED
-# action is "restart" (panel host/port, core.context.dir, unknown paths).
+# action is "restart" (panel host/port, unknown paths).
 # rebuild_backends/audio/runs/tools/http/devices/reminders are applied hot,
 # asynchronously (see ASYNC_ACTIONS / run_loop).
 SUPPORTED_ACTIONS = {"live", "logging", "rebuild_backends", "rebuild_audio",
@@ -264,7 +263,7 @@ class Reconfigurator:
                     # Enabling persistence is not retroactive: runs that finalize
                     # during the enable itself (before the store ref is published
                     # via _set_runs_store) are intentionally not recorded.
-                    path = os.path.join(core.context.dir, "runs.db")
+                    path = os.path.join(config_store.DATA_DIR, "runs.db")
                     store = await asyncio.to_thread(RunsStore, path)
                     await asyncio.to_thread(
                         store.prune, now=time.time(),
@@ -312,7 +311,7 @@ class Reconfigurator:
             if core.reminders.enabled and self.rt.scheduler is None:
                 from src.reminders import ReminderScheduler, RemindersStore
                 store = await asyncio.to_thread(
-                    RemindersStore, os.path.join(core.context.dir, "reminders.db")
+                    RemindersStore, os.path.join(config_store.DATA_DIR, "reminders.db")
                 )
                 scheduler = ReminderScheduler(store)
                 scheduler.deliver = self.rt.manager.announce

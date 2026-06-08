@@ -314,7 +314,10 @@ export function Prompt() {
 }
 
 // ── Devices ───────────────────────────────────────────────────────────────
-function DeviceModal({ initial, onSave, onClose, title }) {
+// The Edit modal also hosts the capture control, but only for an EXISTING device
+// (not in Add mode): `device` is the saved name to capture from, `online` whether
+// it is reachable. Add mode passes neither, so the control is hidden.
+function DeviceModal({ initial, onSave, onClose, title, device, online }) {
   const [name, setName] = useState(initial?.name || "");
   const [host, setHost] = useState(initial?.host || "");
   const [psk, setPsk] = useState(initial?.psk || "");
@@ -324,12 +327,14 @@ function DeviceModal({ initial, onSave, onClose, title }) {
     <Field label="Name" hint="Unique — also keys the dialog context."><div className="z-inp"><input value={name} placeholder="e.g. hallway" onChange={(e) => setName(e.target.value)} /></div></Field>
     <Field label="Host / IP"><div className="z-inp mono"><input value={host} placeholder="10.0.0.25" onChange={(e) => setHost(e.target.value)} /></div></Field>
     <Field label="PSK" hint="ESPHome API encryption key."><div className="z-inp mono"><input value={psk} placeholder="base64 key…" onChange={(e) => setPsk(e.target.value)} /></div></Field>
+    {device && <CaptureControl device={device} online={online} />}
   </Modal>;
 }
 
-// Per-device "record X seconds" control: sets the duration and POSTs /api/capture.
-// The speaker records that many seconds of mic audio; the server saves a WAV
-// (no STT/LLM/TTS). Disabled while the device is offline.
+// "Record X seconds" control shown inside the Edit-speaker modal: sets the
+// duration and POSTs /api/capture. The speaker records that many seconds of mic
+// audio and the WAV is streamed back and downloaded in the browser (no STT/LLM/
+// TTS, nothing kept on the server). Disabled — with a tooltip — while offline.
 function CaptureControl({ device, online }) {
   const [seconds, setSeconds] = useState(5);
   const [busy, setBusy] = useState(false);
@@ -341,11 +346,14 @@ function CaptureControl({ device, online }) {
     catch (e) { setErr(e.message || "failed"); }
     finally { setBusy(false); }
   };
-  return <div style={{ display: "flex", gap: 6, alignItems: "center", justifyContent: "flex-end" }}>
-    <Stepper value={seconds} min={1} max={30} onChange={setSeconds} />
-    <button className="z-mini" disabled={!online || busy} title={err || (online ? "" : "Speaker offline")}
-      onClick={record}>{busy ? "Recording…" : "Record sample"}</button>
-  </div>;
+  return <Field label="Capture sample" hint={`Records ${seconds}s of mic audio and downloads it as a WAV. Used for wake-word training.`}>
+    <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+      <Stepper value={seconds} min={1} max={300} onChange={setSeconds} unit="s" />
+      <button className="z-btn p" disabled={!online || busy} title={online ? "" : "Speaker offline"}
+        onClick={record}>{busy ? "Recording…" : "Record sample"}</button>
+    </div>
+    {err && <div className="z-fh" style={{ color: "#b91c1c" }}>{err}</div>}
+  </Field>;
 }
 
 export function Devices() {
@@ -391,16 +399,15 @@ export function Devices() {
     {busyErr && <div className="z-banner warn" style={{ margin: "0 0 12px" }}><Ic n="restart" w={15} /><span>{errorLines(busyErr).join(" · ")}</span></div>}
     <Card>
       <table className="z-tbl">
-        <thead><tr><th>Name</th><th>Host / IP</th><th>PSK</th><th>Status</th><th>Capture sample</th><th></th></tr></thead>
+        <thead><tr><th>Name</th><th>Host / IP</th><th>PSK</th><th>Status</th><th></th></tr></thead>
         <tbody>
           {devices.length === 0
-            ? <tr><td colSpan={6} style={{ color: "var(--mut)", padding: "14px 0" }}>No speakers configured.</td></tr>
+            ? <tr><td colSpan={5} style={{ color: "var(--mut)", padding: "14px 0" }}>No speakers configured.</td></tr>
             : devices.map((d, i) => <tr key={i} style={{ cursor: "default" }}>
               <td style={{ fontWeight: 600 }}>{d.name}</td>
               <td className="mono" style={{ fontSize: 11.5 }}>{d.host}<span style={{ color: "var(--mut2)" }}>:{esphomePort}</span></td>
               <td className="mono" style={{ fontSize: 11.5, color: "var(--mut)" }}>{d.psk ? "••••••••" : "—"}</td>
               <td><StatusPill status={statusOf(d.name)} /></td>
-              <td><CaptureControl device={d.name} online={statusOf(d.name) === "online"} /></td>
               <td style={{ textAlign: "right" }}><div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
                 <button className="z-mini" onClick={() => setModal({ mode: "edit", index: i })}>Edit</button>
                 <button className="z-mini" onClick={() => onDelete(i)}>Delete</button>
@@ -417,6 +424,7 @@ export function Devices() {
       </Field>
     </Card>
     {modal?.mode === "add" && <DeviceModal title="Add speaker" onSave={onAdd} onClose={() => setModal(null)} />}
-    {modal?.mode === "edit" && <DeviceModal title="Edit speaker" initial={devices[modal.index]} onSave={(d) => onEdit(modal.index, d)} onClose={() => setModal(null)} />}
+    {modal?.mode === "edit" && <DeviceModal title="Edit speaker" initial={devices[modal.index]} onSave={(d) => onEdit(modal.index, d)} onClose={() => setModal(null)}
+      device={devices[modal.index]?.name} online={statusOf(devices[modal.index]?.name) === "online"} />}
   </div>;
 }

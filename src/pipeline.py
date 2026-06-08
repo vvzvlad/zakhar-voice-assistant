@@ -18,14 +18,16 @@ run is finalized exactly once even under concurrent eager on_audio tasks.
 """
 
 import asyncio
+import io
 import os
 import time
+import wave
 
 import webrtcvad
 from aioesphomeapi import VoiceAssistantEventType as VAET
 from loguru import logger
 
-from src import context, llm
+from src import config_store, context, llm
 from src.audio_server import tts_url
 from src.runs_store import summary_row
 
@@ -37,8 +39,15 @@ FRAME_BYTES = 640  # 16-bit mono, 20 ms @ 16 kHz
 
 # Generous hard memory cap (~60s of 16 kHz / 16-bit mono PCM). VAD should end the
 # utterance long before this; the cap only guards against unbounded growth if VAD
-# misbehaves, and also forces a finalize when reached.
+# misbehaves, and also forces a finalize when reached. This applies to NORMAL
+# (wake-word) runs only; a manual capture sizes its own cap to the requested
+# duration (see _capture_cap_bytes) so a long sample isn't truncated here.
 HARD_CAP_BYTES = SAMPLE_RATE * 2 * 60
+
+# Maximum duration (seconds) of a manual "record X seconds" capture. Single source
+# of truth shared by the panel API / ESPHome client validation; the device-side
+# template number caps at the same value in esphome/zakhar-voice.yaml.
+CAPTURE_MAX_SECONDS = 300
 
 # How long an armed manual capture stays valid waiting for its voice_assistant.start
 # to arrive (the press -> start round-trip). If the button press is lost or the
@@ -47,15 +56,64 @@ HARD_CAP_BYTES = SAMPLE_RATE * 2 * 60
 # of (and much shorter than) the requested capture audio duration.
 ARM_TTL = 5.0
 
+# Known Whisper STT hallucination markers (lowercase). Whisper tends to emit
+# leftover subtitle-credit phrases (training-data artifacts) on silence/noise;
+# "DimaTorzok" is one such credit string. When a transcription contains one of
+# these, we treat the run as if nothing was said and drop it.
+STT_HALLUCINATION_MARKERS = ("dimatorzok",)
+
+
+def contains_stt_hallucination(text: str) -> bool:
+    """Return True if the STT text contains a known Whisper hallucination marker.
+
+    These are known STT (Whisper) hallucinations — subtitle-credit artifacts that
+    surface on silence/noise — and are dropped as if nothing was said. The check is
+    case-insensitive (Whisper varies the casing of the artifact).
+    """
+    folded = text.casefold()
+    return any(marker in folded for marker in STT_HALLUCINATION_MARKERS)
+
+
+class CaptureBusyError(Exception):
+    """A manual capture is already armed/in-flight on this pipeline.
+
+    Raised by arm_capture() when a second concurrent capture is requested for the
+    same device while the first is still pending. The panel API maps it to HTTP 409
+    ("capture already in progress") — the device can't record two samples at once.
+    """
+
+
+class CaptureEmptyError(Exception):
+    """A manual capture finished but produced no audio (empty PCM buffer).
+
+    Distinct from offline/missing-entity/busy errors (HTTP 409): this is a
+    server-side capture failure, so the panel API maps it to HTTP 500. Raised
+    (via the capture Future) by _finish_capture when the buffered PCM is empty.
+    """
+
 
 def _write_wav(path: str, pcm: bytes) -> None:
     """Write 16 kHz / mono / 16-bit PCM to a WAV file at `path`."""
-    import wave
     with wave.open(path, "wb") as w:
         w.setnchannels(1)
         w.setsampwidth(2)
         w.setframerate(SAMPLE_RATE)
         w.writeframes(pcm)
+
+
+def _pcm_to_wav_bytes(pcm: bytes) -> bytes:
+    """Build a 16 kHz / mono / 16-bit WAV container from PCM, fully in memory.
+
+    Used by the manual (ephemeral) capture path: the bytes are handed straight
+    back to the API caller, so nothing is ever written to disk.
+    """
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(SAMPLE_RATE)
+        w.writeframes(pcm)
+    return buf.getvalue()
 
 
 class Pipeline:
@@ -91,12 +149,17 @@ class Pipeline:
         # Manual "record X seconds" capture (see arm_capture). _capture_armed is set
         # BEFORE the device's voice_assistant.start fires; the next on_start consumes
         # it into the per-run _capture_run flag so a normal wake-word run is never
-        # affected. In a capture run we skip VAD/STT/LLM/TTS entirely and just save
-        # the PCM as a WAV when the device stops or the server-side deadline passes.
+        # affected. In a capture run we skip VAD/STT/LLM/TTS entirely and, when the
+        # device stops or the server-side deadline passes, return the PCM as WAV
+        # bytes to the API caller (ephemeral — nothing is written to the server).
+        # _capture_future is that channel: _finish_capture resolves it with the
+        # in-memory WAV bytes (or fails it when the armed run never produces audio),
+        # and DeviceClient.capture() awaits it.
         self._capture_armed = False
         self._capture_seconds = 0
         self._capture_run = False
         self._capture_deadline = 0.0
+        self._capture_future: asyncio.Future | None = None
         # Deadline (time.monotonic()) by which the armed capture's start must arrive;
         # set in arm_capture, checked in on_start so a lost press can't hijack a later run.
         self._capture_arm_deadline = 0.0
@@ -151,7 +214,9 @@ class Pipeline:
 
     @property
     def _context_path(self):
-        return os.path.join(self.rt.core.context.dir, f"context_{self.name}.txt")
+        # Data dir is hardcoded in config_store; accessed as a module attribute (not a
+        # bound copy) so tests can monkeypatch config_store.DATA_DIR.
+        return os.path.join(config_store.DATA_DIR, f"context_{self.name}.txt")
 
     def _emit(self, event_type, data=None):
         """Emit a voice_assistant event with a flat dict[str, str] payload."""
@@ -160,7 +225,7 @@ class Pipeline:
                 event_type, {str(k): str(v) for k, v in (data or {}).items()}
             )
 
-    def arm_capture(self, seconds: int) -> None:
+    def arm_capture(self, seconds: int) -> "asyncio.Future[bytes]":
         """Arm a manual capture-only run of `seconds` for the NEXT voice_assistant start.
 
         Called by DeviceClient.capture() BEFORE it presses the device button, so the
@@ -169,9 +234,28 @@ class Pipeline:
         never signals stop; the device normally stops itself after `seconds`. A
         separate arm-arrival deadline (ARM_TTL) bounds how long the flag waits for its
         start so a lost press can't silently capture a later real wake-word run.
+
+        Returns an asyncio.Future the caller awaits for the recorded WAV bytes (the
+        manual capture is ephemeral — nothing is written to disk). The Future
+        resolves with the WAV bytes in _finish_capture, or fails with an exception
+        if the armed run aborts / expires without producing audio.
         """
+        # Busy-guard (FIX A): refuse a second concurrent capture on the same
+        # pipeline. If a previous capture Future is still pending (armed and waiting,
+        # or a capture run is in flight), the device is already recording for another
+        # caller — racing a new arm here would overwrite that Future and leave the
+        # first awaiter hung until timeout. Reject with a distinct CaptureBusyError so
+        # the API can map it to HTTP 409.
+        if self._capture_future is not None and not self._capture_future.done():
+            raise CaptureBusyError(f"{self.name} capture already in progress")
+        # Safety net: never overwrite a still-pending Future. The busy-guard above
+        # already rejects that case, so this is unreachable in normal flow — but if it
+        # were ever bypassed, fail the orphan instead of silently dropping it so its
+        # awaiter can't hang forever. (_fail_capture_future is a no-op on a done one.)
+        self._fail_capture_future("superseded")
         self._capture_armed = True
         self._capture_seconds = seconds
+        self._capture_future = asyncio.get_running_loop().create_future()
         # Small margin so the device's own stop wins under normal timing; the deadline
         # only ends the capture if the device-stop is lost.
         self._capture_deadline = time.monotonic() + seconds + 2.0
@@ -179,6 +263,44 @@ class Pipeline:
         # within ARM_TTL. If it doesn't (lost press / device never starts), on_start
         # clears the stale flag instead of hijacking a later real wake-word run.
         self._capture_arm_deadline = time.monotonic() + ARM_TTL
+        return self._capture_future
+
+    def _capture_cap_bytes(self) -> int:
+        """Byte cap for the in-flight capture run, sized to the requested duration.
+
+        A capture run must NOT be truncated by the 60 s normal-run HARD_CAP_BYTES:
+        the user may have asked for up to CAPTURE_MAX_SECONDS. This returns a cap of
+        (_capture_seconds + 2) s of PCM (a couple seconds of margin), so the byte cap
+        is only a safety net sized to the request — the capture still ends primarily
+        on the device stop (on_stop) or the time-based deadline.
+        """
+        return (self._capture_seconds + 2) * SAMPLE_RATE * 2
+
+    def _fail_capture_future(self, message: str) -> None:
+        """Reject the pending capture Future so a waiting caller never hangs.
+
+        Safe to call when there is no Future or it's already resolved (no-op).
+        """
+        fut = self._capture_future
+        self._capture_future = None
+        if fut is not None and not fut.done():
+            fut.set_exception(RuntimeError(message))
+
+    def disarm_capture(self) -> None:
+        """Cancel a pending manual capture (e.g. the caller timed out waiting).
+
+        Clears the armed flag and fails the still-pending Future so the armed state
+        can't hijack a later run and the timed-out caller gets a clean error. If a
+        capture was already streaming (_capture_run), a later _finish_capture finds
+        the Future already done/None and is a safe no-op — no double-set.
+
+        Because arm_capture's busy-guard (FIX A) refuses a second concurrent capture,
+        there is only ever one armed Future per pipeline at a time, so this can only
+        ever fail the Future the matching capture() created — never a different
+        request's Future.
+        """
+        self._capture_armed = False
+        self._fail_capture_future("capture cancelled")
 
     async def on_start(
         self, conversation_id, flags, audio_settings, wake_word_phrase
@@ -217,6 +339,9 @@ class Pipeline:
                 f"running normally"
             )
             self._capture_armed = False
+            # Fail the pending Future so the awaiting caller doesn't hang for the
+            # full wait_for timeout — the capture will never produce audio now.
+            self._fail_capture_future("capture armed but no start arrived")
         # Only a phraseless (manual button) start consumes the flag; a phrased real
         # wake word leaves it armed for the genuine manual start still to come.
         self._capture_run = self._capture_armed and not wake_word_phrase
@@ -251,14 +376,18 @@ class Pipeline:
 
         # Manual capture-only mode: accumulate PCM, run NO VAD/STT/LLM/TTS. End on the
         # device stop (on_stop) or when the server-side deadline (seconds + margin) is
-        # exceeded — whichever comes first. The HARD_CAP below still guards memory.
+        # exceeded — whichever comes first; the buffered PCM is then returned as WAV
+        # bytes to the caller (never persisted). The byte cap here is sized to the
+        # requested duration (NOT the 60 s normal-run HARD_CAP_BYTES) so a long capture
+        # isn't silently truncated at 60 s; it's just a memory safety net.
         if self._capture_run:
             if not self._audio_logged:
                 self._audio_logged = True
                 logger.info(f"{self.name}: ⏺️ capturing sample...")
+            cap_bytes = self._capture_cap_bytes()
             self._buffer.extend(data)
-            if len(self._buffer) >= HARD_CAP_BYTES:
-                del self._buffer[HARD_CAP_BYTES:]
+            if len(self._buffer) >= cap_bytes:
+                del self._buffer[cap_bytes:]
                 await self._finish_capture("maxlen")
             elif time.monotonic() >= self._capture_deadline:
                 await self._finish_capture("deadline")
@@ -408,11 +537,20 @@ class Pipeline:
                 stt_t = time.perf_counter()
                 text = await self.stt_backend.transcribe(pcm)
                 record["t_stt"] = int((time.perf_counter() - stt_t) * 1000)
-                record["stt_text"] = text
                 logger.info(
                     f"{self.name}: 📝 STT ({time.perf_counter() - stt_t:.2f}s): "
                     f"{text!r}"
                 )
+                # Whisper emits leftover subtitle-credit artifacts (e.g.
+                # "DimaTorzok") on silence/noise. Blank such hallucinated text so it
+                # falls through into the empty-transcription branch below — the run
+                # ends exactly like an empty result (no LLM/TTS, recorded "empty").
+                if contains_stt_hallucination(text):
+                    logger.info(
+                        f"{self.name}: 🗑️ discarding STT hallucination: {text!r}"
+                    )
+                    text = ""
+                record["stt_text"] = text
                 self._emit(VAET.VOICE_ASSISTANT_STT_END, {"text": text})
                 if not text.strip():
                     # Empty transcription: result stays "empty"; record in finally.
@@ -546,12 +684,15 @@ class Pipeline:
                 logger.error(f"{self.name}: run broadcast failed: {e}")
 
     async def _finish_capture(self, reason: str) -> None:
-        """End a manual capture run: save the buffered PCM as a WAV and end the run.
+        """End a manual capture run: return the buffered PCM as WAV bytes, end the run.
 
-        Capture-only: NO STT/LLM/TTS. Claims the run synchronously (so a concurrent
-        on_audio/on_stop can't double-finalize), writes the WAV off the event loop,
-        and always emits RUN_END so the device returns to idle. A file-I/O failure is
-        logged and never wedges the connection. Clears the per-run capture flag.
+        EPHEMERAL: NO STT/LLM/TTS and NOTHING written to disk. Claims the run
+        synchronously (so a concurrent on_audio/on_stop can't double-finalize),
+        builds the WAV bytes in memory and resolves the capture Future with them so
+        DeviceClient.capture() can hand them back to the API caller. Empty audio
+        fails the Future instead (so the caller surfaces an error rather than an
+        empty WAV). Always emits RUN_END so the device returns to idle, and clears
+        the per-run capture flag.
         """
         pcm = self._claim()
         if pcm is None:
@@ -561,28 +702,24 @@ class Pipeline:
             f"{self.name}: ⏺️ capture ended ({len(pcm)} bytes, "
             f"~{len(pcm) / (SAMPLE_RATE * 2):.1f}s, reason={reason})"
         )
+        fut = self._capture_future
+        self._capture_future = None
         if pcm:
-            try:
-                capture_dir = self.core.capture.dir
-                safe_name = "".join(
-                    c if c.isascii() and (c.isalnum() or c in "._-") else "_"
-                    for c in self.name
-                )
-                fname = f"{safe_name}_manual_{time.time_ns()}.wav"
-                out_path = os.path.join(capture_dir, fname)
-
-                def _capture(d=capture_dir, p=out_path, data=pcm):
-                    os.makedirs(d, exist_ok=True)
-                    _write_wav(p, data)
-
-                await asyncio.to_thread(_capture)
-                logger.info(
-                    f"{self.name}: 💾 captured sample -> {out_path} ({len(pcm)} bytes)"
-                )
-            except Exception as e:
-                logger.error(f"{self.name}: manual capture write failed: {e}")
+            # Build the WAV container in memory (cheap, no disk) and hand it to the
+            # awaiting caller. Resolve on the loop thread — this coroutine runs there.
+            wav = _pcm_to_wav_bytes(pcm)
+            if fut is not None and not fut.done():
+                fut.set_result(wav)
+            logger.info(
+                f"{self.name}: 🎧 captured sample -> {len(wav)} WAV bytes "
+                f"(in-memory, {len(pcm)} PCM bytes)"
+            )
         else:
+            # No audio is a server-side capture failure, NOT an offline/missing-entity
+            # condition — use a distinct type so the API maps it to HTTP 500, not 409.
             logger.info(f"{self.name}: capture produced no audio")
+            if fut is not None and not fut.done():
+                fut.set_exception(CaptureEmptyError("capture produced no audio"))
         # Return the device to idle. No STT/LLM/TTS events are sent for a capture run.
         self._emit(VAET.VOICE_ASSISTANT_RUN_END, {})
 

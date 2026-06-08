@@ -56,9 +56,50 @@ export const putPrompt = (text) => request("/api/prompt", { method: "PUT", body:
 export const getSystem = () => request("/api/system");
 export const postRestart = () => request("/api/restart", { method: "POST" });
 export const getDevices = () => request("/api/devices");
-// Trigger a manual capture-only recording (seconds of mic audio -> WAV, no pipeline).
-export const postCapture = (device, seconds) =>
-  request("/api/capture", { method: "POST", body: { device, seconds } });
+
+// Record a manual sample (seconds of mic audio -> WAV, no pipeline) and download
+// it in the browser. The backend streams the WAV back as an attachment; we fetch
+// it as a blob and click a temporary <a download> so nothing is kept server-side.
+// On a non-OK response the JSON/text error body is read and thrown as an ApiError.
+export async function postCapture(device, seconds) {
+  let resp;
+  try {
+    resp = await fetch(BASE + "/api/capture", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ device, seconds }),
+    });
+  } catch (e) {
+    throw new ApiError("Failed to reach the server: " + e.message, { status: 0 });
+  }
+  if (!resp.ok) {
+    // Error responses are JSON (or text); surface the message like request() does.
+    const text = await resp.text();
+    let data = null;
+    if (text) { try { data = JSON.parse(text); } catch { data = text; } }
+    const msg = (data && (data.error || data.detail)) || `HTTP ${resp.status}`;
+    throw new ApiError(
+      typeof msg === "string" ? msg : `HTTP ${resp.status}`,
+      { status: resp.status, detail: data && data.detail, body: data }
+    );
+  }
+  const blob = await resp.blob();
+  // Prefer the server-provided filename from Content-Disposition; else a default.
+  const disp = resp.headers.get("Content-Disposition") || "";
+  const m = /filename="?([^"]+)"?/.exec(disp);
+  const filename = (m && m[1]) || `zakhar_${device}_${seconds}s.wav`;
+  const url = URL.createObjectURL(blob);
+  try {
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
 // Live tool sources (external MCP + built-ins) with their advertised tools.
 export const getTools = () => request("/api/tools");
 

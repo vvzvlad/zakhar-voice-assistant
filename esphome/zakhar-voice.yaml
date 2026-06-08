@@ -87,7 +87,7 @@ number:
     id: zakhar_capture_seconds
     optimistic: true
     min_value: 1
-    max_value: 30
+    max_value: 300
     step: 1
     initial_value: 5
     restore_value: true
@@ -97,7 +97,22 @@ button:
     name: "Zakhar Capture Sample"
     id: zakhar_capture_sample
     on_press:
+      # Stop micro_wake_word for the whole capture window. Otherwise the official
+      # package's on_wake_word_detected fires the moment the user says the wake
+      # word and calls voice_assistant.start, which aborts this manual session.
+      # Always restart it afterwards so normal on-device wake detection resumes.
+      #
+      # HARDWARE CAVEAT (verify on real hardware): the micro_wake_word.start below
+      # is our explicit wake-word recovery after voice_assistant.stop. The pinned
+      # home-assistant-voice@26.5.0 package ALSO has its own voice_assistant on_end
+      # teardown that may touch micro_wake_word (start/stop mww as part of its state
+      # machine). The two could race or double-toggle mww, so wake-word recovery
+      # after a manual capture MUST be confirmed on a real device against that exact
+      # pinned package version. This is not verifiable from the repo; do not change
+      # the action sequence without testing on hardware.
+      - micro_wake_word.stop:
       - voice_assistant.start:
           silence_detection: false
       - delay: !lambda 'return (int)(id(zakhar_capture_seconds).state * 1000);'
       - voice_assistant.stop:
+      - micro_wake_word.start:

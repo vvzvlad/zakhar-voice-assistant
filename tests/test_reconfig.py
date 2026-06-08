@@ -68,10 +68,9 @@ def test_changed_paths_removed_subtree_yields_specific_leaves():
 def test_action_for_representative_paths():
     cases = {
         "core.log_level": "logging",
-        "core.context.dir": "restart",       # moving the data dir touches runs.db/reminders.db
         "core.context.max_turns": "live",
         "core.capture.enabled": "live",      # read per-run via the Runtime read-through
-        "core.capture.dir": "live",          # ditto; NOT a data-dir move like core.context.dir
+        "core.capture.dir": "live",          # ditto; read per-run via the Runtime read-through
         "core.vad.aggressiveness": "live",
         "core.audio.public_base_url": "live",
         "core.audio.ttl": "live",
@@ -497,12 +496,12 @@ class _FakeRunsStore:
         self.closed = True
 
 
-def _runs_runtime(*, enabled, retention_days=7, runs_store=None, panel=None,
-                  context_dir="/tmp/zakhar-runs-test"):
+def _runs_runtime(*, enabled, retention_days=7, runs_store=None, panel=None):
+    # The runs.db path now derives from the hardcoded config_store.DATA_DIR (not from
+    # core.context.dir), so the runtime stub no longer needs a context dir.
     return types.SimpleNamespace(
         core=types.SimpleNamespace(
             runs=types.SimpleNamespace(enabled=enabled, retention_days=retention_days),
-            context=types.SimpleNamespace(dir=context_dir),
         ),
         runs_store=runs_store,
         panel=panel,
@@ -521,6 +520,8 @@ async def test_apply_job_runs_enable_creates_store_and_reaches_panel(monkeypatch
     # Enabling while runs_store is None: a store is created, pruned with the configured
     # retention, and BOTH the runtime and the panel are re-pointed at it.
     monkeypatch.setattr("src.reconfig.RunsStore", _FakeRunsStore)
+    # runs.db lives under the hardcoded DATA_DIR; pin it so we can assert the path.
+    monkeypatch.setattr("src.config_store.DATA_DIR", "/tmp/zakhar-runs-test")
     panel = types.SimpleNamespace(runs_store=None)
     rt = _runs_runtime(enabled=True, retention_days=14, runs_store=None, panel=panel)
     reconf = Reconfigurator(rt, types.SimpleNamespace(tts_timeout=30), asyncio.Queue())
@@ -920,16 +921,16 @@ def _reset_fake_reminder_instances():
     _FakeRemindersStore.instances.clear()
 
 
-def _reminders_runtime(*, enabled, scheduler, reminders_store, context_dir="/tmp/zk-rem"):
-    """Runtime stub for _rebuild_reminders: core.reminders.enabled + context.dir, a
-    manager with an announce coroutine, and swappable scheduler/reminders_store/hub."""
+def _reminders_runtime(*, enabled, scheduler, reminders_store):
+    """Runtime stub for _rebuild_reminders: core.reminders.enabled, a manager with an
+    announce coroutine, and swappable scheduler/reminders_store/hub. The reminders.db
+    path now derives from the hardcoded config_store.DATA_DIR, not core.context.dir."""
     async def _announce(device, text):  # the deliver callback the enable path wires
         return None
 
     return types.SimpleNamespace(
         core=types.SimpleNamespace(
             reminders=types.SimpleNamespace(enabled=enabled),
-            context=types.SimpleNamespace(dir=context_dir),
         ),
         manager=types.SimpleNamespace(announce=_announce),
         scheduler=scheduler,
@@ -944,10 +945,11 @@ async def test_apply_job_reminders_enable_starts_scheduler_and_rebuilds_tools(mo
     # is rebuilt (so build_sources can register the reminders source).
     monkeypatch.setattr("src.reminders.RemindersStore", _FakeRemindersStore)
     monkeypatch.setattr("src.reminders.ReminderScheduler", _FakeReminderScheduler)
+    # reminders.db lives under the hardcoded DATA_DIR; pin it so we can assert the path.
+    monkeypatch.setattr("src.config_store.DATA_DIR", "/tmp/zk-rem")
     rebuilt = []
 
-    rt = _reminders_runtime(enabled=True, scheduler=None, reminders_store=None,
-                            context_dir="/tmp/zk-rem")
+    rt = _reminders_runtime(enabled=True, scheduler=None, reminders_store=None)
     reconf = Reconfigurator(rt, types.SimpleNamespace(tts_timeout=30), asyncio.Queue())
     monkeypatch.setattr(reconf, "_rebuild_tools",
                         lambda: rebuilt.append(True) or _async_none())

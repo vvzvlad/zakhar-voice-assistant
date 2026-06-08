@@ -4,12 +4,19 @@ We are the CLIENT side: we connect TO each speaker (a TCP server on :6053),
 drive its voice_assistant, and route events through a per-device Pipeline.
 """
 
+import asyncio
+
 from aioesphomeapi import APIClient, ReconnectLogic
 from loguru import logger
 
 from src.audio_server import tts_url
 from src.core_config import DeviceConfig
-from src.pipeline import Pipeline
+from src.pipeline import CAPTURE_MAX_SECONDS, Pipeline
+
+# Extra wall-clock margin on top of the requested capture seconds when waiting for
+# the recorded WAV: covers the press -> voice_assistant.start round-trip plus the
+# device's own self-stop, which both run inside the requested window on the device.
+CAPTURE_WAIT_MARGIN = 8.0
 
 # Native API object_ids of the manual-capture template entities. The firmware
 # transmits object_id = slugify(name) over the API (NOT the YAML `id:` field), so
@@ -108,14 +115,19 @@ class DeviceClient:
                 f"flash the firmware with the capture entities to enable it"
             )
 
-    async def capture(self, seconds: int) -> None:
-        """Record `seconds` of mic audio on this speaker in capture-only mode.
+    async def capture(self, seconds: int) -> bytes:
+        """Record `seconds` of mic audio on this speaker and RETURN it as WAV bytes.
 
         Arms the pipeline for a capture-only run FIRST (so the flag is set before the
         device's voice_assistant.start arrives), sets the device-side duration, then
-        presses the device button. The device then streams audio for `seconds` and
-        stops itself; the pipeline writes the PCM to a WAV (no STT/LLM/TTS). Raises a
-        clear error when the speaker is offline or lacks the capture entities.
+        presses the device button. The device streams audio for `seconds` and stops
+        itself; the pipeline (capture-only, no STT/LLM/TTS) resolves the armed Future
+        with the recorded WAV bytes, which we await and return — the capture is
+        EPHEMERAL, nothing is written to the server. Raises a clear error when the
+        speaker is offline, lacks the capture entities, or the recording times out.
+        Raises CaptureBusyError (from arm_capture) when a capture is already armed /
+        in-flight on this device, so concurrent captures are rejected rather than
+        racing each other's Futures.
         """
         if not self.online:
             raise RuntimeError(f"{self.cfg.name} is offline")
@@ -124,12 +136,26 @@ class DeviceClient:
                 f"{self.cfg.name} has no manual-capture entities "
                 f"(firmware needs the zakhar_capture_sample/seconds template entities)"
             )
+        # Defensive clamp to the supported range (the panel API validates 1..MAX, but
+        # this guards any other caller). The device-side template number caps at the
+        # same CAPTURE_MAX_SECONDS, and the wait_for timeout below scales with seconds.
+        seconds = max(1, min(int(seconds), CAPTURE_MAX_SECONDS))
         # Arm BEFORE pressing so the resulting on_start is treated as capture-only.
-        self.pipeline.arm_capture(seconds)
+        # arm_capture hands back the Future the capture run resolves with WAV bytes.
+        future = self.pipeline.arm_capture(seconds)
         logger.info(f"{self.cfg.name}: ⏺️ manual capture {seconds}s")
         # number_command / button_command are sync (they just queue a protobuf send).
         self.cli.number_command(self._capture_seconds_key, float(seconds))
         self.cli.button_command(self._capture_button_key)
+        try:
+            return await asyncio.wait_for(future, timeout=seconds + CAPTURE_WAIT_MARGIN)
+        except asyncio.TimeoutError:
+            # The recording never arrived (lost press / device never streamed). Clear
+            # the armed state so a later run isn't hijacked, and surface a clear error.
+            self.pipeline.disarm_capture()
+            raise TimeoutError(
+                f"{self.cfg.name} capture timed out after {seconds + CAPTURE_WAIT_MARGIN:.0f}s"
+            )
 
     async def announce(self, text: str) -> None:
         """Proactively speak `text` on this speaker via the assist-satellite announce path."""
@@ -192,12 +218,13 @@ class DeviceManager:
             return
         await target.announce(text)
 
-    async def capture(self, device_name: str, seconds: int) -> None:
-        """Trigger a manual capture-only recording on the named speaker.
+    async def capture(self, device_name: str, seconds: int) -> bytes:
+        """Trigger a manual capture-only recording on the named speaker, return WAV bytes.
 
-        Routes to the matching online client (mirrors announce routing). Raises a
-        clear error when the device is unknown or offline so the caller (panel API)
-        can return the right status code.
+        Routes to the matching online client (mirrors announce routing) and returns
+        the recorded audio as WAV bytes (the capture is ephemeral — nothing is kept
+        on the server). Raises a clear error when the device is unknown or offline so
+        the caller (panel API) can return the right status code.
         """
         target = next(
             (c for c in self.clients if c.cfg.name == device_name), None
@@ -206,7 +233,7 @@ class DeviceManager:
             raise LookupError(f"unknown device {device_name!r}")
         if not target.online:
             raise RuntimeError(f"{device_name} is offline")
-        await target.capture(seconds)
+        return await target.capture(seconds)
 
     async def start(self) -> None:
         for c in self.clients:

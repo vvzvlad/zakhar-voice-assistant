@@ -1,4 +1,7 @@
+import asyncio
+import io
 import types
+import wave
 
 import pytest
 
@@ -57,24 +60,56 @@ class _CaptureCli:
         self.buttons.append(key)
 
 
-class _CapturePipeline:
-    """Fake pipeline recording the armed seconds."""
+def _wav_bytes(pcm=b"\x01\x02" * 8):
+    """Build a tiny valid 16k/mono/16-bit WAV for capture-return assertions."""
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(16000)
+        w.writeframes(pcm)
+    return buf.getvalue()
 
-    def __init__(self):
+
+class _CapturePipeline:
+    """Fake pipeline recording the armed seconds and returning a resolvable Future.
+
+    arm_capture() returns the Future DeviceClient.capture() awaits. By default it is
+    pre-resolved with a tiny WAV (the device "recorded" instantly); set `resolve` to
+    None to leave it pending so the wait_for timeout path can be exercised.
+    """
+
+    def __init__(self, resolve=_wav_bytes()):
         self.armed = []
+        self.disarmed = 0
+        self._resolve = resolve
 
     def arm_capture(self, seconds):
         self.armed.append(seconds)
+        fut = asyncio.get_event_loop().create_future()
+        if self._resolve is not None:
+            fut.set_result(self._resolve)
+        self._future = fut
+        return fut
+
+    def disarm_capture(self):
+        self.disarmed += 1
+        if getattr(self, "_future", None) is not None and not self._future.done():
+            self._future.set_exception(RuntimeError("cancelled"))
 
 
-def _capture_client(name="dev", *, online=True, btn_key=11, sec_key=22):
-    """Build a DeviceClient bypassing __init__, wired with capture fakes."""
+def _capture_client(name="dev", *, online=True, btn_key=11, sec_key=22,
+                    resolve=_wav_bytes()):
+    """Build a DeviceClient bypassing __init__, wired with capture fakes.
+
+    `resolve` is the WAV bytes the fake pipeline's Future resolves with (None ->
+    leave it pending so the capture() timeout path can be tested)."""
     from src.esphome_client import DeviceClient
     c = DeviceClient.__new__(DeviceClient)
     c.cfg = _Cfg(name)
     c.online = online
     c.cli = _CaptureCli()
-    c.pipeline = _CapturePipeline()
+    c.pipeline = _CapturePipeline(resolve=resolve)
     c._capture_button_key = btn_key
     c._capture_seconds_key = sec_key
     return c
@@ -102,14 +137,37 @@ def test_discover_capture_keys_absent_leaves_none():
     assert c._capture_seconds_key is None
 
 
-async def test_capture_arms_then_commands():
-    c = _capture_client(btn_key=11, sec_key=22)
-    await c.capture(7)
+async def test_capture_arms_commands_and_returns_wav_bytes():
+    wav = _wav_bytes(b"\x09\x0a" * 12)
+    c = _capture_client(btn_key=11, sec_key=22, resolve=wav)
+    out = await c.capture(7)
     # Pipeline armed BEFORE the device commands.
     assert c.pipeline.armed == [7]
     # seconds set first (as float), then the button pressed.
     assert c.cli.numbers == [(22, 7.0)]
     assert c.cli.buttons == [11]
+    # capture() returns the WAV bytes the pipeline's Future resolved with.
+    assert out == wav
+    with wave.open(io.BytesIO(out), "rb") as w:
+        assert w.getnchannels() == 1 and w.getsampwidth() == 2
+        assert w.getframerate() == 16000
+
+
+async def test_capture_times_out_and_disarms(monkeypatch):
+    # The pipeline Future never resolves (device never streamed). capture() must
+    # raise TimeoutError and disarm the pipeline so a later run isn't hijacked.
+    import src.esphome_client as ec
+    monkeypatch.setattr(ec, "CAPTURE_WAIT_MARGIN", 0.0)
+    c = _capture_client(btn_key=11, sec_key=22, resolve=None)
+
+    async def fast_wait_for(fut, timeout):
+        # Don't actually wait the requested seconds in the test.
+        raise asyncio.TimeoutError
+
+    monkeypatch.setattr(ec.asyncio, "wait_for", fast_wait_for)
+    with pytest.raises(TimeoutError):
+        await c.capture(2)
+    assert c.pipeline.disarmed == 1
 
 
 async def test_capture_raises_when_offline():
@@ -136,14 +194,17 @@ class _MgrCaptureClient:
 
     async def capture(self, seconds):
         self.captured.append(seconds)
+        return _wav_bytes(b"\x0b\x0c" * 10)
 
 
-async def test_manager_capture_routes_to_named_online_client():
+async def test_manager_capture_routes_to_named_online_client_and_returns_bytes():
     a = _MgrCaptureClient("a")
     b = _MgrCaptureClient("b")
     mgr = _manager([a, b])
-    await mgr.capture("b", 9)
+    out = await mgr.capture("b", 9)
     assert b.captured == [9] and a.captured == []
+    # The WAV bytes flow straight back through the manager to the caller.
+    assert out == _wav_bytes(b"\x0b\x0c" * 10)
 
 
 async def test_manager_capture_unknown_device_raises_lookup():

@@ -1,7 +1,13 @@
+import pytest
 from aioesphomeapi import VoiceAssistantEventType as VAET
 
 from src.core_config import AudioConfig, ContextConfig, CoreConfig
-from src.pipeline import Pipeline
+from src.pipeline import (
+    CaptureBusyError,
+    CaptureEmptyError,
+    Pipeline,
+    contains_stt_hallucination,
+)
 from src.plugins.llm.base import LlmConfig
 from src.runs_store import _LIST_COLS
 from src.runtime import Runtime
@@ -76,12 +82,16 @@ class FakeRunEvents:
         self.broadcasts.append(payload)
 
 
-def make_pipeline(tmp_path, name="dev", stt_text="распознанный текст",
+def make_pipeline(tmp_path, monkeypatch, name="dev", stt_text="распознанный текст",
                   tts_backend=None, runs_store=None, run_events=None):
+    # The data dir is hardcoded in config_store; the pipeline reads it as a module
+    # attribute, so isolate per-test context files by monkeypatching DATA_DIR to
+    # tmp_path BEFORE the pipeline (and its _context_path) is built.
+    monkeypatch.setattr("src.config_store.DATA_DIR", str(tmp_path))
     audio_server = FakeAudioServer()
     core = CoreConfig(
         audio=AudioConfig(public_base_url=PUBLIC_BASE_URL),
-        context=ContextConfig(dir=str(tmp_path)),
+        context=ContextConfig(),
     )
     rt = Runtime(
         FakeSvc(core, LlmConfig()),
@@ -153,7 +163,7 @@ def assert_all_str(events):
 
 async def test_happy_path(tmp_path, monkeypatch):
     patch_llm(monkeypatch, reply="готово")
-    pipeline, events = make_pipeline(tmp_path, stt_text="включи свет")
+    pipeline, events = make_pipeline(tmp_path, monkeypatch, stt_text="включи свет")
 
     assert await pipeline.on_start("cid", 0, None, None) == 0
     await pipeline.on_audio(b"\x01\x02" * 100)
@@ -185,7 +195,7 @@ async def test_happy_path_wav_extension(tmp_path, monkeypatch):
     # A WAV-producing backend (like Piper) -> url ends .wav and the stored mime is wav.
     patch_llm(monkeypatch, reply="готово")
     pipeline, events = make_pipeline(
-        tmp_path,
+        tmp_path, monkeypatch,
         stt_text="включи свет",
         tts_backend=FakeTtsBackend(mime="audio/wav", audio=b"RIFF...."),
     )
@@ -203,7 +213,7 @@ async def test_happy_path_wav_extension(tmp_path, monkeypatch):
 
 async def test_empty_audio(tmp_path, monkeypatch):
     patch_llm(monkeypatch)
-    pipeline, events = make_pipeline(tmp_path)
+    pipeline, events = make_pipeline(tmp_path, monkeypatch)
 
     await pipeline.on_start("cid", 0, None, None)
     await pipeline.on_stop(False)
@@ -218,7 +228,7 @@ async def test_empty_audio(tmp_path, monkeypatch):
 
 async def test_empty_stt(tmp_path, monkeypatch):
     patch_llm(monkeypatch)
-    pipeline, events = make_pipeline(tmp_path, stt_text="")
+    pipeline, events = make_pipeline(tmp_path, monkeypatch, stt_text="")
 
     await pipeline.on_start("cid", 0, None, None)
     await pipeline.on_audio(b"\x01\x02" * 100)
@@ -235,10 +245,58 @@ async def test_empty_stt(tmp_path, monkeypatch):
     assert_all_str(events)
 
 
+def test_contains_stt_hallucination():
+    assert contains_stt_hallucination("Субтитры создавал DimaTorzok")
+    assert contains_stt_hallucination("dimatorzok")
+    assert not contains_stt_hallucination("включи свет")
+
+
+async def test_stt_hallucination_discarded(tmp_path, monkeypatch):
+    # A Whisper hallucination ("DimaTorzok" subtitle-credit artifact) is blanked,
+    # so the run ends like an empty transcription: no INTENT/TTS, STT_END empty.
+    patch_llm(monkeypatch)
+    pipeline, events = make_pipeline(
+        tmp_path, monkeypatch, stt_text="Субтитры создавал DimaTorzok"
+    )
+
+    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_audio(b"\x01\x02" * 100)
+    await pipeline.on_stop(False)
+
+    assert types_of(events) == [
+        VAET.VOICE_ASSISTANT_RUN_START,
+        VAET.VOICE_ASSISTANT_STT_START,
+        VAET.VOICE_ASSISTANT_STT_END,
+        VAET.VOICE_ASSISTANT_RUN_END,
+    ]
+    data = dict(events)
+    assert data[VAET.VOICE_ASSISTANT_STT_END] == {"text": ""}
+    assert_all_str(events)
+
+
+async def test_run_recorded_on_stt_hallucination(tmp_path, monkeypatch):
+    patch_llm(monkeypatch)
+    store = FakeRunsStore()
+    pipeline, _ = make_pipeline(
+        tmp_path, monkeypatch,
+        stt_text="Субтитры создавал DimaTorzok", runs_store=store,
+    )
+
+    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_audio(b"\x01\x02" * 100)
+    await pipeline.on_stop(False)
+
+    # The hallucination is dropped: recorded like an empty transcription.
+    assert len(store.records) == 1
+    rec = store.records[0]
+    assert rec["result"] == "empty"
+    assert rec["stt_text"] == ""
+
+
 async def test_pipelines_are_independent(tmp_path, monkeypatch):
     patch_llm(monkeypatch)
-    a, _ = make_pipeline(tmp_path, name="a")
-    b, _ = make_pipeline(tmp_path, name="b")
+    a, _ = make_pipeline(tmp_path, monkeypatch, name="a")
+    b, _ = make_pipeline(tmp_path, monkeypatch, name="b")
 
     await a.on_start("cid", 0, None, None)
     await a.on_audio(b"\x01\x02" * 100)
@@ -268,7 +326,7 @@ FULL_SEQUENCE = [
 
 async def test_vad_endpoint_finalize(tmp_path, monkeypatch):
     patch_llm(monkeypatch, reply="готово")
-    pipeline, events = make_pipeline(tmp_path, stt_text="включи свет")
+    pipeline, events = make_pipeline(tmp_path, monkeypatch, stt_text="включи свет")
     set_small_vad_thresholds(pipeline)
     # 3 speech frames (>= 40 ms min) then 6 silence frames (>= 100 ms) -> endpoint.
     pipeline._vad = FakeVad([True, True, True, False, False, False, False, False, False])
@@ -289,7 +347,7 @@ async def test_vad_endpoint_finalize(tmp_path, monkeypatch):
 
 async def test_vad_maxlen_finalize(tmp_path, monkeypatch):
     patch_llm(monkeypatch, reply="ок")
-    pipeline, events = make_pipeline(tmp_path, stt_text="команда")
+    pipeline, events = make_pipeline(tmp_path, monkeypatch, stt_text="команда")
     set_small_vad_thresholds(pipeline)
     # Always speech: no trailing silence, so only the max-length cap can finalize.
     pipeline._vad = FakeVad([True])
@@ -311,7 +369,7 @@ async def test_vad_maxlen_finalize(tmp_path, monkeypatch):
 async def test_vad_no_speech_finalize(tmp_path, monkeypatch):
     # STT returns whitespace -> after STT_END the run ends without intent/TTS.
     patch_llm(monkeypatch)
-    pipeline, events = make_pipeline(tmp_path, stt_text="   ")
+    pipeline, events = make_pipeline(tmp_path, monkeypatch, stt_text="   ")
     set_small_vad_thresholds(pipeline)
     # Never any speech: only the no-speech timeout can finalize.
     pipeline._vad = FakeVad([False])
@@ -333,7 +391,7 @@ async def test_vad_no_speech_finalize(tmp_path, monkeypatch):
 
 async def test_finalize_once_race(tmp_path, monkeypatch):
     patch_llm(monkeypatch, reply="здравствуйте")
-    pipeline, events = make_pipeline(tmp_path, stt_text="привет")
+    pipeline, events = make_pipeline(tmp_path, monkeypatch, stt_text="привет")
     # Give it some audio so the first claim/run runs the full path. We claim+run
     # directly (no on_start), so it emits only the post-start subset.
     pipeline._buffer.extend(b"\x00" * 640)
@@ -373,7 +431,7 @@ async def test_history_flows_across_runs(tmp_path, monkeypatch):
 
     monkeypatch.setattr("src.llm.call_llm_api", fake)
 
-    pipeline, _ = make_pipeline(tmp_path, name="hist", stt_text="первый вопрос")
+    pipeline, _ = make_pipeline(tmp_path, monkeypatch, name="hist", stt_text="первый вопрос")
 
     # Run 1.
     await pipeline.on_start("cid", 0, None, None)
@@ -414,7 +472,7 @@ async def test_history_flows_across_runs(tmp_path, monkeypatch):
 async def test_run_recorded_on_happy_path(tmp_path, monkeypatch):
     patch_llm(monkeypatch, reply="готово")
     store = FakeRunsStore()
-    pipeline, _ = make_pipeline(tmp_path, stt_text="включи свет", runs_store=store)
+    pipeline, _ = make_pipeline(tmp_path, monkeypatch, stt_text="включи свет", runs_store=store)
 
     await pipeline.on_start("cid", 0, None, None)
     await pipeline.on_audio(b"\x01\x02" * 100)
@@ -443,7 +501,7 @@ async def test_run_broadcast_on_happy_path(tmp_path, monkeypatch):
     store = FakeRunsStore()
     hub = FakeRunEvents()
     pipeline, _ = make_pipeline(
-        tmp_path, stt_text="включи свет", runs_store=store, run_events=hub,
+        tmp_path, monkeypatch, stt_text="включи свет", runs_store=store, run_events=hub,
     )
 
     await pipeline.on_start("cid", 0, None, None)
@@ -465,7 +523,7 @@ async def test_no_broadcast_without_hub(tmp_path, monkeypatch):
     # run_events=None must not error and must record the run normally.
     patch_llm(monkeypatch, reply="готово")
     store = FakeRunsStore()
-    pipeline, _ = make_pipeline(tmp_path, stt_text="включи свет", runs_store=store)
+    pipeline, _ = make_pipeline(tmp_path, monkeypatch, stt_text="включи свет", runs_store=store)
 
     await pipeline.on_start("cid", 0, None, None)
     await pipeline.on_audio(b"\x01\x02" * 100)
@@ -477,7 +535,7 @@ async def test_no_broadcast_without_hub(tmp_path, monkeypatch):
 async def test_run_recorded_on_empty_stt(tmp_path, monkeypatch):
     patch_llm(monkeypatch)
     store = FakeRunsStore()
-    pipeline, _ = make_pipeline(tmp_path, stt_text="", runs_store=store)
+    pipeline, _ = make_pipeline(tmp_path, monkeypatch, stt_text="", runs_store=store)
 
     await pipeline.on_start("cid", 0, None, None)
     await pipeline.on_audio(b"\x01\x02" * 100)
@@ -496,7 +554,7 @@ async def test_truly_empty_audio_not_recorded(tmp_path, monkeypatch):
     # No PCM buffered at all -> early return before building a record; nothing logged.
     patch_llm(monkeypatch)
     store = FakeRunsStore()
-    pipeline, _ = make_pipeline(tmp_path, runs_store=store)
+    pipeline, _ = make_pipeline(tmp_path, monkeypatch, runs_store=store)
 
     await pipeline.on_start("cid", 0, None, None)
     await pipeline.on_stop(False)
@@ -518,7 +576,7 @@ async def test_llm_error_then_tts_fail_keeps_error_stage_llm(tmp_path, monkeypat
     patch_llm(monkeypatch, reply="Ошибка: модель недоступна")
     store = FakeRunsStore()
     pipeline, _ = make_pipeline(
-        tmp_path,
+        tmp_path, monkeypatch,
         stt_text="включи свет",
         tts_backend=RaisingTtsBackend(),
         runs_store=store,
@@ -543,7 +601,7 @@ async def test_raw_capture_writes_wav_when_enabled(tmp_path, monkeypatch):
 
     patch_llm(monkeypatch, reply="готово")
     cap_dir = tmp_path / "captures"
-    pipeline, _ = make_pipeline(tmp_path, name="dev", stt_text="включи свет")
+    pipeline, _ = make_pipeline(tmp_path, monkeypatch, name="dev", stt_text="включи свет")
     pipeline.rt.core.capture.enabled = True
     pipeline.rt.core.capture.dir = str(cap_dir)
 
@@ -567,7 +625,7 @@ async def test_raw_capture_disabled_by_default_writes_nothing(tmp_path, monkeypa
     # Default capture.enabled is False, so no WAV is written.
     patch_llm(monkeypatch, reply="готово")
     cap_dir = tmp_path / "captures"
-    pipeline, _ = make_pipeline(tmp_path, name="dev", stt_text="включи свет")
+    pipeline, _ = make_pipeline(tmp_path, monkeypatch, name="dev", stt_text="включи свет")
     # Point dir at our path but leave enabled at its default (False).
     pipeline.rt.core.capture.dir = str(cap_dir)
     assert pipeline.rt.core.capture.enabled is False
@@ -581,16 +639,26 @@ async def test_raw_capture_disabled_by_default_writes_nothing(tmp_path, monkeypa
 
 # --- manual "record X seconds" capture-only mode -----------------------------
 
-async def test_capture_run_writes_wav_and_skips_pipeline(tmp_path, monkeypatch):
-    # An armed capture run records the streamed PCM to a WAV and runs NO STT/LLM/TTS:
-    # only RUN_START and RUN_END are emitted, the WAV matches the buffered bytes, and
-    # neither the STT backend nor the LLM is ever called.
+def _read_wav_bytes(wav_bytes):
+    """Parse in-memory WAV bytes -> (nchannels, sampwidth, framerate, nframes, pcm)."""
+    import io
     import wave
+    with wave.open(io.BytesIO(wav_bytes), "rb") as w:
+        return (
+            w.getnchannels(), w.getsampwidth(), w.getframerate(),
+            w.getnframes(), w.readframes(w.getnframes()),
+        )
 
+
+async def test_capture_run_returns_wav_bytes_and_skips_pipeline(tmp_path, monkeypatch):
+    # An armed capture run resolves its Future with the streamed PCM as in-memory
+    # WAV bytes and runs NO STT/LLM/TTS: only RUN_START and RUN_END are emitted,
+    # neither the STT backend nor the LLM is ever called, and NOTHING is written to
+    # the capture dir (the manual capture is ephemeral).
     cap_dir = tmp_path / "captures"
     store = FakeRunsStore()
     pipeline, events = make_pipeline(
-        tmp_path, name="dev", stt_text="должно быть проигнорировано", runs_store=store,
+        tmp_path, monkeypatch, name="dev", stt_text="должно быть проигнорировано", runs_store=store,
     )
     pipeline.rt.core.capture.dir = str(cap_dir)
 
@@ -611,8 +679,8 @@ async def test_capture_run_writes_wav_and_skips_pipeline(tmp_path, monkeypatch):
 
     monkeypatch.setattr("src.llm.call_llm_api", fake_llm)
 
-    pcm = b"\x01\x02" * 100  # 400 bytes
-    pipeline.arm_capture(5)
+    pcm = b"\x01\x02" * 100  # 400 bytes -> 200 16-bit frames
+    future = pipeline.arm_capture(5)
     assert pipeline._capture_armed is True
     await pipeline.on_start("cid", 0, None, None)
     # arming is consumed into the per-run flag.
@@ -632,24 +700,25 @@ async def test_capture_run_writes_wav_and_skips_pipeline(tmp_path, monkeypatch):
     # The capture flag is cleared so the next start is a normal run.
     assert pipeline._capture_run is False
 
-    wavs = list(cap_dir.glob("*_manual_*.wav"))
-    assert len(wavs) == 1
-    with wave.open(str(wavs[0]), "rb") as w:
-        assert w.getnchannels() == 1 and w.getsampwidth() == 2
-        assert w.getframerate() == 16000
-        assert w.readframes(w.getnframes()) == pcm
+    # The Future resolved with a valid 16k/mono/16-bit WAV matching the PCM.
+    assert future.done()
+    nch, sw, fr, nframes, frames = _read_wav_bytes(future.result())
+    assert (nch, sw, fr) == (1, 2, 16000)
+    assert nframes == len(pcm) // 2  # 2-byte samples
+    assert frames == pcm
+    # Ephemeral: nothing written to the capture dir for the manual path.
+    assert not cap_dir.exists() or list(cap_dir.glob("*.wav")) == []
 
 
 async def test_capture_run_ends_on_deadline(tmp_path, monkeypatch):
     # When the device never signals stop, the server-side deadline ends the capture
-    # on the next audio chunk and still writes the WAV + emits RUN_END.
-    import wave
-
+    # on the next audio chunk and still resolves the Future with WAV bytes + emits
+    # RUN_END — and writes nothing to disk.
     cap_dir = tmp_path / "captures"
-    pipeline, events = make_pipeline(tmp_path, name="dev")
+    pipeline, events = make_pipeline(tmp_path, monkeypatch, name="dev")
     pipeline.rt.core.capture.dir = str(cap_dir)
 
-    pipeline.arm_capture(5)
+    future = pipeline.arm_capture(5)
     await pipeline.on_start("cid", 0, None, None)
     # Force the deadline into the past so the next chunk ends the capture.
     pipeline._capture_deadline = 0.0
@@ -660,10 +729,10 @@ async def test_capture_run_ends_on_deadline(tmp_path, monkeypatch):
         VAET.VOICE_ASSISTANT_RUN_START,
         VAET.VOICE_ASSISTANT_RUN_END,
     ]
-    wavs = list(cap_dir.glob("*_manual_*.wav"))
-    assert len(wavs) == 1
-    with wave.open(str(wavs[0]), "rb") as w:
-        assert w.readframes(w.getnframes()) == b"\x03\x04" * 50
+    assert future.done()
+    _nch, _sw, _fr, _n, frames = _read_wav_bytes(future.result())
+    assert frames == b"\x03\x04" * 50
+    assert not cap_dir.exists() or list(cap_dir.glob("*.wav")) == []
 
     # A later device stop must NOT emit anything again (finalize-once).
     before = len(events)
@@ -671,12 +740,79 @@ async def test_capture_run_ends_on_deadline(tmp_path, monkeypatch):
     assert len(events) == before
 
 
+async def test_capture_longer_than_60s_is_not_truncated_at_hard_cap(tmp_path, monkeypatch):
+    # A capture for > 60 s must NOT be cut at the 60 s normal-run HARD_CAP_BYTES:
+    # the capture branch sizes its own cap to (_capture_seconds + 2) s. Drive the
+    # branch with > 60 s of PCM and _capture_seconds = 120, then stop the device and
+    # assert the returned WAV contains ALL streamed bytes (well past HARD_CAP_BYTES).
+    from src.pipeline import HARD_CAP_BYTES, SAMPLE_RATE
+
+    pipeline, events = make_pipeline(tmp_path, monkeypatch, name="dev")
+    pipeline.rt.core.capture.dir = str(tmp_path / "captures")
+
+    future = pipeline.arm_capture(120)  # requested 120 s capture
+    await pipeline.on_start("cid", 0, None, None)
+    assert pipeline._capture_run is True
+    # The capture-specific cap is duration-based, not the 60 s HARD_CAP.
+    assert pipeline._capture_cap_bytes() == (120 + 2) * SAMPLE_RATE * 2
+    assert pipeline._capture_cap_bytes() > HARD_CAP_BYTES
+
+    # Stream ~65 s of PCM in 1 s chunks: more than HARD_CAP_BYTES (60 s) but under the
+    # 122 s capture cap, so none of it may be dropped.
+    one_second = b"\x05\x06" * SAMPLE_RATE  # SAMPLE_RATE * 2 bytes = 1 s of 16-bit PCM
+    total = bytearray()
+    for _ in range(65):
+        await pipeline.on_audio(bytes(one_second))
+        total.extend(one_second)
+    # Still capturing: neither the byte cap nor the deadline has fired.
+    assert pipeline._capture_run is True
+    assert len(total) > HARD_CAP_BYTES  # we really did exceed the 60 s normal cap
+
+    await pipeline.on_stop(False)
+    assert pipeline._capture_run is False
+    assert future.done()
+    _nch, _sw, _fr, _n, frames = _read_wav_bytes(future.result())
+    # ALL streamed bytes survive — not truncated at 60 s HARD_CAP_BYTES.
+    assert frames == bytes(total)
+    assert len(frames) > HARD_CAP_BYTES
+
+
+async def test_normal_run_hard_cap_truncates_at_60s(tmp_path, monkeypatch):
+    # Regression guard: a NORMAL (non-capture) run is still truncated at the 60 s
+    # HARD_CAP_BYTES — the duration-based capture cap must NOT leak into normal runs.
+    # Feed > 60 s of PCM in one chunk; the run finalizes ("maxlen") with the buffer
+    # capped at exactly HARD_CAP_BYTES.
+    from src.pipeline import HARD_CAP_BYTES, SAMPLE_RATE
+
+    captured = {}
+    patch_llm(monkeypatch, reply="ок")
+    pipeline, events = make_pipeline(tmp_path, monkeypatch, stt_text="команда")
+    pipeline._vad = FakeVad([True])  # always speech: only the cap can finalize
+
+    orig_transcribe = pipeline.stt_backend.transcribe
+
+    async def spy(pcm):
+        captured["len"] = len(pcm)
+        return await orig_transcribe(pcm)
+
+    pipeline.stt_backend.transcribe = spy
+
+    await pipeline.on_start("cid", 0, None, None)
+    # 65 s worth of PCM in a single chunk -> HARD_CAP fires, buffer trimmed to 60 s.
+    await pipeline.on_audio(b"\x07\x08" * (SAMPLE_RATE * 65))
+
+    assert pipeline._finalized is True
+    assert VAET.VOICE_ASSISTANT_RUN_END in types_of(events)
+    # The transcribed PCM was capped at exactly the 60 s HARD_CAP_BYTES.
+    assert captured["len"] == HARD_CAP_BYTES
+
+
 async def test_capture_arming_does_not_affect_normal_run(tmp_path, monkeypatch):
     # A normal wake-word run on a pipeline that was NEVER armed runs the full
     # STT->LLM->TTS path unchanged (regression guard for the capture branch).
     patch_llm(monkeypatch, reply="готово")
     cap_dir = tmp_path / "captures"
-    pipeline, events = make_pipeline(tmp_path, stt_text="включи свет")
+    pipeline, events = make_pipeline(tmp_path, monkeypatch, stt_text="включи свет")
     pipeline.rt.core.capture.dir = str(cap_dir)
 
     assert pipeline._capture_run is False
@@ -694,7 +830,7 @@ async def test_capture_run_after_normal_run_is_isolated(tmp_path, monkeypatch):
     # run 2 is capture-only. Confirms arming is per-run and does not leak backwards.
     patch_llm(monkeypatch, reply="готово")
     cap_dir = tmp_path / "captures"
-    pipeline, events = make_pipeline(tmp_path, name="dev", stt_text="включи свет")
+    pipeline, events = make_pipeline(tmp_path, monkeypatch, name="dev", stt_text="включи свет")
     pipeline.rt.core.capture.dir = str(cap_dir)
 
     # Run 1: normal.
@@ -705,15 +841,20 @@ async def test_capture_run_after_normal_run_is_isolated(tmp_path, monkeypatch):
     events.clear()
 
     # Run 2: capture-only.
-    pipeline.arm_capture(3)
+    pcm = b"\x05\x06" * 80
+    future = pipeline.arm_capture(3)
     await pipeline.on_start("cid", 0, None, None)
-    await pipeline.on_audio(b"\x05\x06" * 80)
+    await pipeline.on_audio(pcm)
     await pipeline.on_stop(False)
     assert types_of(events) == [
         VAET.VOICE_ASSISTANT_RUN_START,
         VAET.VOICE_ASSISTANT_RUN_END,
     ]
-    assert len(list(cap_dir.glob("*_manual_*.wav"))) == 1
+    # Capture returns WAV bytes via the Future; nothing is written to disk.
+    assert future.done()
+    _nch, _sw, _fr, _n, frames = _read_wav_bytes(future.result())
+    assert frames == pcm
+    assert not cap_dir.exists() or list(cap_dir.glob("*.wav")) == []
 
 
 async def test_expired_arm_does_not_capture_later_run(tmp_path, monkeypatch):
@@ -723,10 +864,10 @@ async def test_expired_arm_does_not_capture_later_run(tmp_path, monkeypatch):
     # run: it must run the full STT->LLM->TTS path, not capture.
     patch_llm(monkeypatch, reply="готово")
     cap_dir = tmp_path / "captures"
-    pipeline, events = make_pipeline(tmp_path, name="dev", stt_text="включи свет")
+    pipeline, events = make_pipeline(tmp_path, monkeypatch, name="dev", stt_text="включи свет")
     pipeline.rt.core.capture.dir = str(cap_dir)
 
-    pipeline.arm_capture(5)
+    future = pipeline.arm_capture(5)
     assert pipeline._capture_armed is True
     # Force the arm-arrival deadline into the past: the press effectively never landed.
     pipeline._capture_arm_deadline = 0.0
@@ -735,11 +876,15 @@ async def test_expired_arm_does_not_capture_later_run(tmp_path, monkeypatch):
     await pipeline.on_start("cid", 0, None, "захар")
     assert pipeline._capture_run is False
     assert pipeline._capture_armed is False  # stale flag cleared, not consumed
+    # The pending capture Future is failed so a waiting caller doesn't hang.
+    assert future.done()
+    with pytest.raises(RuntimeError):
+        future.result()
     await pipeline.on_audio(b"\x01\x02" * 100)
     await pipeline.on_stop(False)
 
     assert types_of(events) == FULL_SEQUENCE
-    assert not cap_dir.exists() or list(cap_dir.glob("*_manual_*.wav")) == []
+    assert not cap_dir.exists() or list(cap_dir.glob("*.wav")) == []
 
 
 async def test_wake_word_run_while_armed_keeps_flag_for_manual_start(tmp_path, monkeypatch):
@@ -747,14 +892,12 @@ async def test_wake_word_run_while_armed_keeps_flag_for_manual_start(tmp_path, m
     # could fire. Its on_start carries a wake_word_phrase, so it must NOT consume the
     # armed flag: it runs as a normal assistant run, and the flag survives so the
     # later phraseless manual start still gets captured.
-    import wave
-
     patch_llm(monkeypatch, reply="готово")
     cap_dir = tmp_path / "captures"
-    pipeline, events = make_pipeline(tmp_path, name="dev", stt_text="включи свет")
+    pipeline, events = make_pipeline(tmp_path, monkeypatch, name="dev", stt_text="включи свет")
     pipeline.rt.core.capture.dir = str(cap_dir)
 
-    pipeline.arm_capture(5)
+    future = pipeline.arm_capture(5)
     assert pipeline._capture_armed is True
 
     # A genuine wake-word run sneaks in WITH a phrase while armed.
@@ -764,7 +907,7 @@ async def test_wake_word_run_while_armed_keeps_flag_for_manual_start(tmp_path, m
     await pipeline.on_audio(b"\x01\x02" * 100)
     await pipeline.on_stop(False)
     assert types_of(events) == FULL_SEQUENCE        # ran the full assistant pipeline
-    assert not cap_dir.exists() or list(cap_dir.glob("*_manual_*.wav")) == []
+    assert not cap_dir.exists() or list(cap_dir.glob("*.wav")) == []
     events.clear()
 
     # Now the genuine manual start arrives (no phrase) and consumes the flag.
@@ -779,10 +922,76 @@ async def test_wake_word_run_while_armed_keeps_flag_for_manual_start(tmp_path, m
         VAET.VOICE_ASSISTANT_RUN_START,
         VAET.VOICE_ASSISTANT_RUN_END,
     ]
-    wavs = list(cap_dir.glob("*_manual_*.wav"))
-    assert len(wavs) == 1
-    with wave.open(str(wavs[0]), "rb") as w:
-        assert w.readframes(w.getnframes()) == pcm
+    # The capture resolved its Future with WAV bytes; nothing on disk.
+    assert future.done()
+    _nch, _sw, _fr, _n, frames = _read_wav_bytes(future.result())
+    assert frames == pcm
+    assert not cap_dir.exists() or list(cap_dir.glob("*.wav")) == []
+
+
+async def test_second_concurrent_capture_is_rejected_first_still_completes(
+    tmp_path, monkeypatch
+):
+    # FIX A: while one capture is armed/in-flight, a second arm_capture on the SAME
+    # pipeline must be refused with CaptureBusyError (no future overwrite, no cross-
+    # request cancellation) — and the FIRST capture must still complete normally.
+    cap_dir = tmp_path / "captures"
+    pipeline, events = make_pipeline(tmp_path, monkeypatch, name="dev")
+    pipeline.rt.core.capture.dir = str(cap_dir)
+
+    # First capture armed and still pending (no start/audio yet).
+    first = pipeline.arm_capture(5)
+    assert pipeline._capture_armed is True
+    assert not first.done()
+
+    # A second concurrent capture is rejected; the first future is untouched.
+    with pytest.raises(CaptureBusyError):
+        pipeline.arm_capture(5)
+    assert pipeline._capture_future is first  # not overwritten by the rejected arm
+    assert not first.done()
+
+    # The first capture now runs to completion and resolves its own future.
+    pcm = b"\x01\x02" * 100
+    await pipeline.on_start("cid", 0, None, None)
+    assert pipeline._capture_run is True
+    await pipeline.on_audio(pcm)
+    await pipeline.on_stop(False)
+
+    assert types_of(events) == [
+        VAET.VOICE_ASSISTANT_RUN_START,
+        VAET.VOICE_ASSISTANT_RUN_END,
+    ]
+    assert first.done()
+    _nch, _sw, _fr, _n, frames = _read_wav_bytes(first.result())
+    assert frames == pcm
+
+    # With the first capture finished (future done), a fresh capture is allowed again.
+    second = pipeline.arm_capture(3)
+    assert second is not first
+
+
+async def test_capture_empty_audio_fails_future_with_capture_empty_error(
+    tmp_path, monkeypatch
+):
+    # FIX B: a capture run that produces NO audio fails the future with the distinct
+    # CaptureEmptyError (mapped to HTTP 500 server-side), not a generic RuntimeError.
+    cap_dir = tmp_path / "captures"
+    pipeline, events = make_pipeline(tmp_path, monkeypatch, name="dev")
+    pipeline.rt.core.capture.dir = str(cap_dir)
+
+    future = pipeline.arm_capture(5)
+    await pipeline.on_start("cid", 0, None, None)
+    # Device stops without ever streaming any audio -> empty PCM buffer.
+    await pipeline.on_stop(False)
+
+    assert future.done()
+    with pytest.raises(CaptureEmptyError):
+        future.result()
+    assert types_of(events) == [
+        VAET.VOICE_ASSISTANT_RUN_START,
+        VAET.VOICE_ASSISTANT_RUN_END,
+    ]
+    assert pipeline._capture_run is False
 
 
 async def test_tts_fail_without_prior_error_sets_tts_stage(tmp_path, monkeypatch):
@@ -791,7 +1000,7 @@ async def test_tts_fail_without_prior_error_sets_tts_stage(tmp_path, monkeypatch
     patch_llm(monkeypatch, reply="готово")
     store = FakeRunsStore()
     pipeline, _ = make_pipeline(
-        tmp_path,
+        tmp_path, monkeypatch,
         stt_text="включи свет",
         tts_backend=RaisingTtsBackend(),
         runs_store=store,
