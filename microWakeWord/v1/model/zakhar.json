@@ -2,7 +2,7 @@
   "type": "micro",
   "wake_word": "Захар",
   "author": "vvzvlad",
-  "website": "",
+  "website": "https://github.com/vvzvlad/zakhar-voice-assistant",
   "model": "zakhar.tflite",
   "trained_languages": [
     "ru"
