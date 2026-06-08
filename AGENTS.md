@@ -47,10 +47,11 @@ App, required (no default — missing → fail at startup):
 
 App, optional (sensible defaults in code): `MCP_SMARTHOME_TOKEN` (bearer for the
 MCP server; empty = no auth), `ESPHOME_PORT`, `INTENT_PROVIDER`, `INTENT_MODEL`,
-`STT_PROVIDER`, `STT_MODEL`, `EXTERNAL_PROXY`, `WEATHER_CITY`, `TTS_BACKEND`,
-`TTS_TIMEOUT`, `AUDIO_HOST`, `AUDIO_PORT`, `AUDIO_TTL`, `LOG_LEVEL`,
-`SYSTEM_PROMPT_PATH`, `CONTEXT_DIR`, `CONTEXT_MAX_TURNS`, `CONTEXT_TTL_SECONDS`.
-See `.env.example`.
+`STT_PROVIDER`, `STT_MODEL`, `EXTERNAL_PROXY`, `WEATHER_CITY`, `TTS_BACKEND`
+(`teratts` | `piper` | `yandex`), `TTS_TIMEOUT`, `AUDIO_HOST`, `AUDIO_PORT`,
+`AUDIO_TTL`, `LOG_LEVEL`, `SYSTEM_PROMPT_PATH`, `CONTEXT_DIR`, `CONTEXT_MAX_TURNS`,
+`CONTEXT_TTL_SECONDS`. The `YANDEX_TTS_*` vars configure the Yandex SpeechKit cloud
+backend when `TTS_BACKEND=yandex`. See `.env.example`.
 
 ## Conventions
 - All mutable state goes under `data/`.

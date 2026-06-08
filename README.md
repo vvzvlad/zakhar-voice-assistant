@@ -38,9 +38,11 @@ node-red-contrib-mcp-server in Node-RED, e.g. `http://10.0.0.5:8001/mcp`),
 
 App, optional (defaults in code): `MCP_SMARTHOME_TOKEN` (bearer for the MCP
 server; empty = no auth), `ESPHOME_PORT`, `INTENT_PROVIDER`, `INTENT_MODEL`,
-`STT_PROVIDER`, `STT_MODEL`, `EXTERNAL_PROXY`, `WEATHER_CITY`, `TTS_BACKEND`,
-`TTS_TIMEOUT`, `AUDIO_HOST`, `AUDIO_PORT` (default 8200), `AUDIO_TTL`, `LOG_LEVEL`,
-`SYSTEM_PROMPT_PATH`, `CONTEXT_DIR`. See `.env.example` for the full list.
+`STT_PROVIDER`, `STT_MODEL`, `EXTERNAL_PROXY`, `WEATHER_CITY`, `TTS_BACKEND`
+(`teratts` | `piper` | `yandex`), `TTS_TIMEOUT`, `AUDIO_HOST`, `AUDIO_PORT`
+(default 8200), `AUDIO_TTL`, `LOG_LEVEL`, `SYSTEM_PROMPT_PATH`, `CONTEXT_DIR`. The
+`YANDEX_TTS_*` vars configure the Yandex SpeechKit cloud backend when
+`TTS_BACKEND=yandex`. See `.env.example` for the full list.
 
 ## What's here
 

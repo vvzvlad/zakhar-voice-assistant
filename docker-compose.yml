@@ -27,6 +27,9 @@ services:
       ESPHOME_DEVICES: "living|10.0.0.5|your_psk_here"
       MCP_SMARTHOME_URL: http://10.0.0.5:8001/mcp
       TTS_BASE_URL: http://10.0.0.5:8124
+      # To use Yandex SpeechKit instead of TeraTTS, set:
+      # TTS_BACKEND: yandex
+      # YANDEX_TTS_API_KEY: XXX
       PUBLIC_BASE_URL: http://10.0.0.10:8200
       AUDIO_PORT: 8200
       TZ: Europe/Moscow

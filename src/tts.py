@@ -13,6 +13,20 @@ from loguru import logger
 from src.settings import settings
 
 
+# Yandex SpeechKit marks word stress with "+" BEFORE the stressed vowel (e.g.
+# "прив+ет"). The pipeline's text post-processing (src/text.py) has already turned
+# the model's "+vowel" notation into "vowel" + combining acute accent (U+0301)
+# placed AFTER the vowel, for espeak/Piper. Translate it back to Yandex's "+vowel"
+# form here, and drop any orphan accents. Pure and unit-testable.
+_ACUTE = "́"
+_VOWEL_ACUTE_RE = re.compile(r"([аеёиоуыэюяАЕЁИОУЫЭЮЯ])́")
+
+
+def yandex_stress_markup(text: str) -> str:
+    text = _VOWEL_ACUTE_RE.sub(r"+\1", text)   # "приве́т" -> "прив+ет"
+    return text.replace(_ACUTE, "")            # remove any leftover orphan accents
+
+
 # Sentence-ending punctuation; ellipsis "…" is normalized to "." first because
 # espeak-ng does not treat the "…" character as a pause.
 def split_sentences(text: str) -> list[str]:
@@ -127,6 +141,43 @@ class PiperTtsBackend(TtsBackend):
         return ("audio/mpeg", mp3_bytes)
 
 
+class YandexTtsBackend(TtsBackend):
+    """Yandex SpeechKit v1 cloud TTS. Requests MP3 directly (audio/mpeg), so no
+    transcoding is needed. Auth uses an API key bound to a service account
+    (`Authorization: Api-Key <key>`); folderId is only needed for user-account (IAM)
+    auth, so it is optional and sent only when configured. Russian stress marks are
+    converted to Yandex's "+vowel" notation via yandex_stress_markup()."""
+
+    def __init__(self, client, *, api_key, voice, emotion, speed, folder_id, url, timeout):
+        if not api_key:
+            raise ValueError("YANDEX_TTS_API_KEY is required when TTS_BACKEND=yandex")
+        self.client = client
+        self.api_key = api_key
+        self.voice = voice
+        self.emotion = emotion
+        self.speed = speed
+        self.folder_id = folder_id
+        self.url = url
+        self.timeout = timeout
+
+    async def synthesize(self, text: str, lang: str = "ru") -> tuple[str, bytes]:
+        data = {
+            "text": yandex_stress_markup(text),
+            "lang": "ru-RU" if lang == "ru" else lang,
+            "voice": self.voice,
+            "emotion": self.emotion,
+            "speed": str(self.speed),
+            "format": "mp3",  # served straight to the speaker; no WAV->MP3 transcode
+        }
+        if self.folder_id:
+            # Only for user-account (IAM) auth; a service-account API key infers the folder.
+            data["folderId"] = self.folder_id
+        headers = {"Authorization": f"Api-Key {self.api_key}"}
+        resp = await self.client.post(self.url, headers=headers, data=data, timeout=self.timeout)
+        resp.raise_for_status()
+        return (resp.headers.get("Content-Type", "audio/mpeg"), resp.content)
+
+
 def make_tts_backend(
     name: str, base_url: str, client: httpx.AsyncClient, timeout: int
 ) -> TtsBackend:
@@ -135,4 +186,15 @@ def make_tts_backend(
         return TeraTtsHttpBackend(base_url, client, timeout)
     if name == "piper":
         return PiperTtsBackend(settings.piper_voice_path)
+    if name == "yandex":
+        return YandexTtsBackend(
+            client,
+            api_key=settings.yandex_tts_api_key,
+            voice=settings.yandex_tts_voice,
+            emotion=settings.yandex_tts_emotion,
+            speed=settings.yandex_tts_speed,
+            folder_id=settings.yandex_tts_folder_id,
+            url=settings.yandex_tts_url,
+            timeout=timeout,
+        )
     raise ValueError(f"Unknown TTS backend: {name}")

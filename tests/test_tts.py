@@ -1,7 +1,18 @@
 import io
 import wave
 
-from src.tts import split_sentences, wav_to_mp3
+import httpx
+import pytest
+import respx
+
+from src.tts import (
+    YandexTtsBackend,
+    split_sentences,
+    wav_to_mp3,
+    yandex_stress_markup,
+)
+
+YANDEX_URL = "https://tts.api.cloud.yandex.net/speech/v1/tts:synthesize"
 
 
 def _make_wav(sample_rate: int = 16000, channels: int = 1, seconds: float = 0.1) -> bytes:
@@ -58,3 +69,61 @@ def test_split_sentences_ellipsis_only():
 
 def test_split_sentences_drops_bang_only_fragment():
     assert split_sentences("Раз. ! Два.") == ["Раз.", "Два."]
+
+
+def test_yandex_stress_markup_single_word():
+    assert yandex_stress_markup("приве́т") == "прив+ет"
+
+
+def test_yandex_stress_markup_two_words():
+    assert yandex_stress_markup("больша́я ко́мната") == "больш+ая к+омната"
+
+
+def test_yandex_stress_markup_passthrough():
+    assert yandex_stress_markup("просто текст") == "просто текст"
+
+
+def test_yandex_stress_markup_orphan_acute_dropped():
+    # consonant + combining acute (U+0301) -> accent removed, no "+".
+    # Built explicitly so the input is "к" + U+0301, not the precomposed U+045C.
+    assert yandex_stress_markup("ќ") == "к"
+
+
+def test_yandex_backend_requires_api_key():
+    with pytest.raises(ValueError):
+        YandexTtsBackend(None, api_key="", voice="zahar", emotion="neutral",
+                         speed=1.0, folder_id="", url="http://x", timeout=5)
+
+
+@respx.mock
+async def test_yandex_synthesize_posts_mp3_and_returns_audio():
+    route = respx.post(YANDEX_URL).mock(
+        return_value=httpx.Response(200, content=b"\xff\xf3audio",
+                                    headers={"Content-Type": "audio/mpeg"}))
+    async with httpx.AsyncClient() as client:
+        backend = YandexTtsBackend(client, api_key="k", voice="zahar",
+                                   emotion="neutral", speed=1.0, folder_id="",
+                                   url=YANDEX_URL, timeout=10)
+        mime, audio = await backend.synthesize("приве́т", "ru")
+    assert mime == "audio/mpeg"
+    assert audio == b"\xff\xf3audio"
+    req = route.calls.last.request
+    assert req.headers["Authorization"] == "Api-Key k"
+    body = req.content.decode()
+    assert "voice=zahar" in body
+    assert "lang=ru-RU" in body
+    assert "format=mp3" in body
+    assert "%2B" in body          # the stress "+" (url-encoded), i.e. "прив+ет"
+    assert "folderId" not in body  # omitted when folder_id is empty
+
+
+@respx.mock
+async def test_yandex_synthesize_includes_folder_id_when_set():
+    route = respx.post(YANDEX_URL).mock(return_value=httpx.Response(200, content=b"x",
+                                        headers={"Content-Type": "audio/mpeg"}))
+    async with httpx.AsyncClient() as client:
+        backend = YandexTtsBackend(client, api_key="k", voice="zahar",
+                                   emotion="neutral", speed=1.0, folder_id="fld123",
+                                   url=YANDEX_URL, timeout=10)
+        await backend.synthesize("тест", "ru")
+    assert "folderId=fld123" in route.calls.last.request.content.decode()

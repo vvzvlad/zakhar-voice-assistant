@@ -22,8 +22,11 @@ async def main() -> None:
 
     # STT runs over client_ext (the proxied client GroqSttBackend uses).
     stt_backend = make_stt_backend(settings.stt_provider, client_ext, settings)
+    # Yandex SpeechKit is a cloud API -> route it through the proxied client (like
+    # STT/intent). Local TTS backends (teratts/piper) use the direct client.
+    tts_client = client_ext if settings.tts_backend == "yandex" else client_local
     tts_backend = make_tts_backend(
-        settings.tts_backend, settings.tts_base_url, client_local, settings.tts_timeout
+        settings.tts_backend, settings.tts_base_url, tts_client, settings.tts_timeout
     )
     audio_server = AudioServer(settings.audio_host, settings.audio_port, settings.audio_ttl)
     await audio_server.start()

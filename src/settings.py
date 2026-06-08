@@ -49,10 +49,18 @@ class Settings(BaseSettings):
     external_proxy: str = ""     # SOCKS/HTTP proxy for cloud APIs (STT, intent, weather); empty = direct
 
     vosk_model_path: str = "models/vosk-model-small-ru-0.22"
-    tts_backend: str = "teratts"  # teratts | piper
+    tts_backend: str = "teratts"  # teratts | piper | yandex
     piper_voice_path: str = "models/ru_RU-ruslan-medium.onnx"  # male adult RU; config json expected at <path>.json
     tts_sentence_silence: float = 0.4   # seconds of silence inserted between sentences (Piper)
     tts_timeout: int = 30
+
+    # --- Yandex SpeechKit TTS (used when tts_backend=yandex) ---
+    yandex_tts_api_key: str = ""        # SpeechKit API key (service-account); required when tts_backend=yandex
+    yandex_tts_voice: str = "zahar"     # male RU voice (fits the assistant's name)
+    yandex_tts_emotion: str = "neutral" # neutral | good | evil (voice-dependent)
+    yandex_tts_speed: float = 1.0       # 0.1..3.0
+    yandex_tts_folder_id: str = ""      # only for user-account (IAM) auth; empty for a service-account API key
+    yandex_tts_url: str = "https://tts.api.cloud.yandex.net/speech/v1/tts:synthesize"  # public API; default allowed
     audio_host: str = "0.0.0.0"
     audio_port: int = 8200
     audio_ttl: int = 300        # seconds an MP3 stays in the audio-server cache
