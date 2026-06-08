@@ -14,3 +14,6 @@ logs/
 data/*
 !data/.gitkeep
 models/
+
+# Claude Code git worktrees — must never be committed
+.claude/worktrees/
