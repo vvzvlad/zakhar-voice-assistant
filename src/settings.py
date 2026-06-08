@@ -41,7 +41,7 @@ class Settings(BaseSettings):
     stt_backend: str = "groq"   # groq | vosk
     vosk_model_path: str = "models/vosk-model-small-ru-0.22"
     tts_backend: str = "teratts"  # teratts | piper
-    piper_voice_path: str = "models/ru_RU-irina-medium.onnx"  # config json expected at <path>.json
+    piper_voice_path: str = "models/ru_RU-ruslan-medium.onnx"  # male adult RU; config json expected at <path>.json
     tts_timeout: int = 30
     audio_host: str = "0.0.0.0"
     audio_port: int = 8200
