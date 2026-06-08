@@ -25,13 +25,19 @@ packages:
       models:
         # Local path to the model already committed in this repo. ESPHome resolves
         # the manifest's relative "model": "zakhar.tflite" against this file's dir,
-        # so both .json and .tflite are read straight from microWakeWord/v1/model/.
+        # so both .json and .tflite are read straight from microWakeWord/v5/model/.
         # (A remote github:// / raw URL fails here: ESPHome can't resolve the
         # relative .tflite inside a manifest fetched that way.)
-        - model: ../microWakeWord/v1/model/zakhar.json
+        #
+        # v5 = drawn-out «захааар»-centered model (current best): 100% drawn-out
+        # recall, fewer «Сахар» misfires than earlier versions. Its low music
+        # false-accept rate relies on the VAD pre-gate — which the stock HA Voice PE
+        # firmware ALREADY enables (`vad:` in its own micro_wake_word block, inherited
+        # here), so continuous instrumental music stays ~0 false-accepts on-device.
+        - model: ../microWakeWord/v5/model/zakhar.json
           id: zakhar
-          # Manifest ships 0.9; 95% is the recommended day-to-day value.
-          # Raise to 97% if continuous music ever triggers it (no retrain needed).
+          # The v5 manifest already ships 0.95; this just makes it explicit.
+          # Raise to 97% if continuous (vocal) music ever triggers it (no retrain).
           probability_cutoff: 95%
 
   # Official Home Assistant Voice PE firmware, pinned to a release tag.
