@@ -70,6 +70,13 @@ async def main() -> None:
                 "weather", build_weather_server(client_ext, core.weather.api_key, core.weather.city)
             )
         )
+    # Built-in calendar MCP (CalDAV). Gated on url + username; the caldav lib is
+    # synchronous, so its tools offload to a worker thread inside the server.
+    if core.calendar.url and core.calendar.username:
+        from src.builtin_mcp.calendar import CalendarClient, build_calendar_server
+        cal_client = CalendarClient(core.calendar.url, core.calendar.username,
+                                    core.calendar.password, core.calendar.calendar)
+        sources.append(BuiltinMcpSource("calendar", build_calendar_server(cal_client)))
     hub = ToolHub(sources)
     await hub.start()
 

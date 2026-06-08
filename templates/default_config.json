@@ -10,6 +10,7 @@
     "network": {"external_proxy": ""},
     "weather": {"api_key": "", "city": "Moscow"},
     "mcp": {"url": "", "token": ""},
+    "calendar": {"url": "", "username": "", "password": "", "calendar": ""},
     "esphome": {"port": 6053},
     "prompt": {"system_prompt_path": "data/system_prompt.md"},
     "panel": {"host": "0.0.0.0", "port": 8201},

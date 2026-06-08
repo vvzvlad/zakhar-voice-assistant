@@ -44,6 +44,15 @@ class McpConfig(BaseModel):
     token: str = ""
 
 
+class CalendarConfig(BaseModel):
+    # CalDAV account for the built-in calendar MCP. `calendar` selects which calendar
+    # to use by name; empty means the first calendar on the account.
+    url: str = ""
+    username: str = ""
+    password: str = ""
+    calendar: str = ""
+
+
 class DeviceConfig(BaseModel):
     name: str
     host: str
@@ -70,6 +79,7 @@ class CoreConfig(BaseModel):
     network: NetworkConfig = NetworkConfig()
     weather: WeatherConfig = WeatherConfig()
     mcp: McpConfig = McpConfig()
+    calendar: CalendarConfig = CalendarConfig()
     esphome: EsphomeConfig = EsphomeConfig()
     prompt: PromptConfig = PromptConfig()
     panel: PanelConfig = PanelConfig()
