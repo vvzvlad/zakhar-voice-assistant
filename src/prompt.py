@@ -3,11 +3,9 @@
 import os
 from datetime import datetime
 
-import httpx
 from loguru import logger
 
 from src.core_config import CoreConfig
-from src.weather import get_weather_summary
 
 DEFAULT_PROMPT_PATH = "templates/default_prompt.md"
 
@@ -34,19 +32,27 @@ def load_system_prompt(prompt_path: str) -> str:
     return default_content
 
 
-async def build_system_prompt(client: httpx.AsyncClient, core: CoreConfig) -> str:
-    """Prefix SYSTEM_PROMPT with current time-of-day, date, and current weather."""
+def save_system_prompt(prompt_path: str, text: str) -> None:
+    """Write `text` to `prompt_path` (utf-8), creating the parent dir if needed."""
+    parent = os.path.dirname(prompt_path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    with open(prompt_path, "w", encoding="utf-8") as f:
+        f.write(text)
+    logger.info(f"System prompt saved to {prompt_path}")
+
+
+def build_system_prompt(core: CoreConfig) -> str:
+    """Prefix SYSTEM_PROMPT with the current time-of-day and date.
+
+    Weather used to be injected here; it is now an on-demand MCP tool (see
+    src.builtin_mcp.weather), so the prompt no longer makes a network call and is sync.
+    """
     now = datetime.now()
     date_time_text = now.strftime("%Y-%m-%d, %H:%M")  # 2025-09-18, 14:05
     week_day = now.strftime("%A")  # Tuesday
     day_time = now.strftime("%p")
     prefix = f"Сейчас (дата и время): {date_time_text}, {day_time}, {week_day}.\n"
-
-    weather_summary = await get_weather_summary(
-        client, core.weather.city, core.weather.api_key
-    )
-    if weather_summary is not None:
-        prefix += f"Погода в {core.weather.city}: {weather_summary}.\n"
 
     system_prompt = load_system_prompt(core.prompt.system_prompt_path)
     system_prompt = system_prompt.replace("<<<<<TDW>>>>>", prefix)

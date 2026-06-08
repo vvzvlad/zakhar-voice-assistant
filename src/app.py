@@ -10,10 +10,13 @@ from loguru import logger
 import src.plugins  # noqa: F401  triggers provider registration
 from src import config_store
 from src.audio_server import AudioServer
+from src.builtin_mcp.weather import build_weather_server
 from src.config_service import ConfigDoc, ConfigService
 from src.esphome_client import DeviceManager
 from src.mcp_client import McpToolHub
 from src.plugins.base import Deps
+from src.tool_hub import BuiltinMcpSource, HttpMcpSource, ToolHub
+from src.version import __version__
 
 
 def load_or_create_config() -> dict:
@@ -47,9 +50,21 @@ async def main() -> None:
     audio_server = AudioServer(core.audio.host, core.audio.port, core.audio.ttl)
     await audio_server.start()
 
-    # Smart-home MCP client: connect once here (same task as stop(), per anyio
-    # cancel-scope rules). A connect failure is handled gracefully inside start().
-    hub = McpToolHub(core.mcp.url, core.mcp.token or None)
+    # Multi-source tool hub: the external smart-home MCP server (HttpMcpSource) plus
+    # in-process built-in MCP servers (weather first). Built only here, in the same
+    # task as stop(), per anyio cancel-scope rules. A source failing to start is
+    # handled gracefully inside ToolHub.start(). The weather tool is gated on an OWM
+    # api key; built-in weather uses the proxied client_ext for its OWM call.
+    sources = []
+    if core.mcp.url:
+        sources.append(HttpMcpSource("home", McpToolHub(core.mcp.url, core.mcp.token or None)))
+    if core.weather.api_key:
+        sources.append(
+            BuiltinMcpSource(
+                "weather", build_weather_server(client_ext, core.weather.api_key, core.weather.city)
+            )
+        )
+    hub = ToolHub(sources)
     await hub.start()
 
     zc = zeroconf.Zeroconf()

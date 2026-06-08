@@ -1,12 +1,9 @@
 import httpx
-import pytest
-import respx
 
 from src.core_config import CoreConfig, PromptConfig, WeatherConfig
 from src.llm import call_llm_api
 from src.plugins.llm.base import LlmConfig
 from src.text import processing_response
-from src.weather import OPENWEATHERMAP_URL
 
 MAX_TOOL_ROUNDS = 5
 
@@ -106,27 +103,18 @@ def _core(tmp_path):
     )
 
 
-def _mock_weather_404():
-    """Mock OpenWeatherMap to 404 so weather is omitted from the prompt (deterministic)."""
-    respx.get(OPENWEATHERMAP_URL).mock(return_value=httpx.Response(404, json={}))
-
-
 async def _call(backend, hub, text, core, *, history=None, max_tool_rounds=MAX_TOOL_ROUNDS):
-    async with httpx.AsyncClient() as weather_client:
-        return await call_llm_api(
-            backend,
-            hub,
-            text,
-            weather_client=weather_client,
-            core=core,
-            llm_cfg=LlmConfig(max_tool_rounds=max_tool_rounds),
-            history=history,
-        )
+    return await call_llm_api(
+        backend,
+        hub,
+        text,
+        core=core,
+        llm_cfg=LlmConfig(max_tool_rounds=max_tool_rounds),
+        history=history,
+    )
 
 
-@respx.mock
 async def test_tool_path(tmp_path):
-    _mock_weather_404()
     hub = StubHub(tools=[SET_LIGHT_TOOL])
     backend = FakeLlmBackend([
         _tool_call("set_light", '{"device_id":"bright_room_light","state":"on"}'),
@@ -142,9 +130,7 @@ async def test_tool_path(tmp_path):
     assert result == processing_response("Готово.")
 
 
-@respx.mock
 async def test_no_tool_path(tmp_path):
-    _mock_weather_404()
     hub = StubHub(tools=[SET_LIGHT_TOOL])
     backend = FakeLlmBackend([_final("Привет, мясной мешок.")])
 
@@ -154,9 +140,7 @@ async def test_no_tool_path(tmp_path):
     assert result == processing_response("Привет, мясной мешок.")
 
 
-@respx.mock
 async def test_rate_limit_path(tmp_path):
-    _mock_weather_404()
     hub = StubHub(tools=[])
     backend = FakeLlmBackend([_http_status_error(429)])
 
@@ -165,9 +149,7 @@ async def test_rate_limit_path(tmp_path):
     assert result == LlmConfig().reply_rate_limit
 
 
-@respx.mock
 async def test_non_2xx_returns_error_message(tmp_path):
-    _mock_weather_404()
     hub = StubHub(tools=[])
     backend = FakeLlmBackend([_http_status_error(500, {"error": {"message": "boom"}})])
 
@@ -176,9 +158,7 @@ async def test_non_2xx_returns_error_message(tmp_path):
     assert result == "Ошибка: boom"
 
 
-@respx.mock
 async def test_httpx_error_returns_error_prefix(tmp_path):
-    _mock_weather_404()
     hub = StubHub(tools=[])
     backend = FakeLlmBackend([httpx.ConnectError("down")])
 
@@ -187,9 +167,7 @@ async def test_httpx_error_returns_error_prefix(tmp_path):
     assert result.startswith("Ошибка:")
 
 
-@respx.mock
 async def test_max_tool_rounds_exhausted(tmp_path):
-    _mock_weather_404()
     hub = StubHub(tools=[SET_LIGHT_TOOL])
     backend = FakeLlmBackend([
         _tool_call("set_light", "{}") for _ in range(MAX_TOOL_ROUNDS + 1)
@@ -200,10 +178,8 @@ async def test_max_tool_rounds_exhausted(tmp_path):
     assert result == "Ошибка: слишком много вызовов инструментов"
 
 
-@respx.mock
 async def test_empty_final_reply_uses_fallback(tmp_path):
     # No tool ever ran -> empty final content falls back to the "didn't hear" line.
-    _mock_weather_404()
     hub = StubHub(tools=[])
     backend = FakeLlmBackend([_final(None)])
 
@@ -212,11 +188,9 @@ async def test_empty_final_reply_uses_fallback(tmp_path):
     assert result == LlmConfig().reply_empty
 
 
-@respx.mock
 async def test_empty_reply_after_tools_uses_done(tmp_path):
     # A tool ran, then the model produced empty content -> "Готово." (not the
     # "didn't hear" fallback).
-    _mock_weather_404()
     hub = StubHub(tools=[SET_LIGHT_TOOL])
     backend = FakeLlmBackend([
         _tool_call("set_light", "{}"),
@@ -229,9 +203,7 @@ async def test_empty_reply_after_tools_uses_done(tmp_path):
     assert result == LlmConfig().reply_empty_after_tools
 
 
-@respx.mock
 async def test_history_is_included(tmp_path):
-    _mock_weather_404()
     hub = StubHub(tools=[])
     backend = FakeLlmBackend([_final("ответ")])
 
@@ -241,8 +213,9 @@ async def test_history_is_included(tmp_path):
     ]
     await _call(backend, hub, "новый вопрос", _core(tmp_path), history=history)
 
-    # System prompt + history + the new user turn, in order. The 404 weather is
-    # omitted, so the system message is just the prompt body with the time prefix.
+    # System prompt + history + the new user turn, in order. Weather is no longer in
+    # the prompt (it is a tool now), so the system message is just the prompt body
+    # with the time prefix.
     messages = backend.seen[0][0]
     assert messages[0]["role"] == "system"
     assert messages[1:] == [
@@ -252,10 +225,8 @@ async def test_history_is_included(tmp_path):
     ]
 
 
-@respx.mock
 async def test_no_tools_passes_none_to_backend(tmp_path):
     # hub.tools is [] -> the loop passes None (not []) to complete().
-    _mock_weather_404()
     hub = StubHub(tools=[])
     backend = FakeLlmBackend([_final("ок")])
 

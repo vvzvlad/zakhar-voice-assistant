@@ -48,7 +48,6 @@ def make_pipeline(tmp_path, name="dev", stt_text="распознанный те�
         llm_backend=object(),
         tts_backend=tts_backend or FakeTtsBackend(),
         audio_server=audio_server,
-        weather_client=object(),
         core=core,
         llm_cfg=LlmConfig(),
     )

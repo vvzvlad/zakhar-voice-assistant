@@ -50,18 +50,17 @@ class Pipeline:
         llm_backend,
         tts_backend,
         audio_server,
-        weather_client,
         core,
         llm_cfg,
     ):
         self.name = name
-        # MCP tool hub: advertises smart-home tools to the model and executes them.
+        # Multi-source tool hub: advertises smart-home + built-in tools (e.g. weather)
+        # to the model and executes them.
         self.hub = hub
         self.stt_backend = stt_backend
         self.llm_backend = llm_backend
         self.tts_backend = tts_backend
         self.audio_server = audio_server
-        self.weather_client = weather_client
         self.core = core
         self.llm_cfg = llm_cfg
         self.public_base_url = core.audio.public_base_url
@@ -248,7 +247,6 @@ class Pipeline:
                     self.llm_backend,
                     self.hub,
                     text,
-                    weather_client=self.weather_client,
                     core=self.core,
                     llm_cfg=self.llm_cfg,
                     history=history,

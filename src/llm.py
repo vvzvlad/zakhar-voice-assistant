@@ -19,7 +19,6 @@ async def call_llm_api(
     hub,
     text: str,
     *,
-    weather_client: httpx.AsyncClient,
     core,
     llm_cfg,
     history: list | None = None,
@@ -29,18 +28,18 @@ async def call_llm_api(
     `history` is the recent prior messages spliced between the system prompt and the
     new user turn so the model remembers the last few exchanges.
 
-    `weather_client` (proxied) and `core` are used to build the system prompt (which
-    encapsulates weather + the configured prompt file). Smart-home control is performed
-    by calling MCP tools (advertised to the model and executed via `hub`).
+    `core` is used to build the system prompt (date/time prefix + the configured prompt
+    file). Weather and smart-home control are performed by calling tools advertised to
+    the model and executed via `hub` (the multi-source tool hub).
 
-    Runs an agentic loop: model -> tool_calls -> execute via MCP -> feed results
+    Runs an agentic loop: model -> tool_calls -> execute via the hub -> feed results
     back -> final text. On success returns the assistant text. On error returns a
     human-readable string starting with "Ошибка: ".
     """
-    # Self-heal a startup race: pick up tools if the MCP server was down at boot.
+    # Self-heal a startup race: pick up tools if a source was down at boot.
     await hub.ensure_tools()
 
-    messages = [{"role": "system", "content": await build_system_prompt(weather_client, core)}]
+    messages = [{"role": "system", "content": build_system_prompt(core)}]
     if history:
         messages.extend(history)
     messages.append({"role": "user", "content": text})

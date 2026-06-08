@@ -1,9 +1,5 @@
-import httpx
-import respx
-
-from src.core_config import CoreConfig, PromptConfig, WeatherConfig
+from src.core_config import CoreConfig, PromptConfig
 from src.prompt import build_system_prompt, load_system_prompt
-from src.weather import OPENWEATHERMAP_URL
 
 
 def test_load_system_prompt_reads_existing(tmp_path):
@@ -21,48 +17,16 @@ def test_load_system_prompt_creates_from_default(tmp_path):
     assert content
 
 
-@respx.mock
-async def test_build_system_prompt_includes_weather_and_prefix(tmp_path):
+def test_build_system_prompt_replaces_marker_and_includes_body(tmp_path):
     path = tmp_path / "system_prompt.md"
     path.write_text("BODY <<<<<TDW>>>>>", encoding="utf-8")
-    core = CoreConfig(
-        prompt=PromptConfig(system_prompt_path=str(path)),
-        weather=WeatherConfig(api_key="k", city="Moscow"),
-    )
-    respx.get(OPENWEATHERMAP_URL).mock(
-        return_value=httpx.Response(
-            200,
-            json={
-                "main": {"temp": 5.0},
-                "wind": {"speed": 3},
-                "weather": [{"description": "ясно"}],
-            },
-        )
-    )
+    core = CoreConfig(prompt=PromptConfig(system_prompt_path=str(path)))
 
-    async with httpx.AsyncClient() as client:
-        out = await build_system_prompt(client, core)
+    out = build_system_prompt(core)
 
-    # The <<<<<TDW>>>>> marker is replaced in-place with the time/date/weather prefix.
+    # The <<<<<TDW>>>>> marker is replaced in-place with the time/date prefix; the
+    # prompt file body is included. Weather is no longer injected (it is a tool now).
     assert "<<<<<TDW>>>>>" not in out
     assert out.startswith("BODY ")
     assert "Сейчас (дата и время):" in out
-    assert "Погода в Moscow:" in out
-
-
-@respx.mock
-async def test_build_system_prompt_omits_weather_on_error(tmp_path):
-    path = tmp_path / "system_prompt.md"
-    path.write_text("BODY <<<<<TDW>>>>>", encoding="utf-8")
-    core = CoreConfig(
-        prompt=PromptConfig(system_prompt_path=str(path)),
-        weather=WeatherConfig(api_key="k", city="Moscow"),
-    )
-    respx.get(OPENWEATHERMAP_URL).mock(return_value=httpx.Response(404, json={}))
-
-    async with httpx.AsyncClient() as client:
-        out = await build_system_prompt(client, core)
-
     assert "Погода" not in out
-    assert out.startswith("BODY ")
-    assert "Сейчас (дата и время):" in out

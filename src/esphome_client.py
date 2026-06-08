@@ -23,7 +23,6 @@ class DeviceClient:
         llm_backend,
         tts_backend,
         audio_server,
-        weather_client,
         core,
         llm_cfg,
     ):
@@ -35,7 +34,6 @@ class DeviceClient:
             llm_backend,
             tts_backend,
             audio_server,
-            weather_client,
             core,
             llm_cfg,
         )
@@ -50,6 +48,7 @@ class DeviceClient:
             name=cfg.name,
         )
         self._unsub = None
+        self.online = False
 
     async def _on_connect(self) -> None:
         """Re-runs on every (re)connection: log device, wire & subscribe."""
@@ -71,11 +70,13 @@ class DeviceClient:
             handle_audio=self._handle_audio,
         )
         logger.info(f"subscribed voice_assistant for {self.cfg.name}")
+        self.online = True
 
     async def _on_disconnect(self, expected: bool) -> None:
         logger.info(f"disconnected {self.cfg.name} (expected={expected})")
         # Subscription is re-created on the next on_connect.
         self._unsub = None
+        self.online = False
 
     async def _handle_start(self, conversation_id, flags, audio_settings, wake_word_phrase):
         return await self.pipeline.on_start(
@@ -110,7 +111,6 @@ class DeviceManager:
         llm_backend,
         tts_backend,
         audio_server,
-        weather_client,
         core,
         llm_cfg,
     ):
@@ -123,11 +123,17 @@ class DeviceManager:
                 llm_backend,
                 tts_backend,
                 audio_server,
-                weather_client,
                 core,
                 llm_cfg,
             )
             for cfg in core.devices
+        ]
+
+    def statuses(self) -> list[dict]:
+        """Live connection status for every configured speaker (for the panel API)."""
+        return [
+            {"name": c.cfg.name, "host": c.cfg.host, "online": c.online}
+            for c in self.clients
         ]
 
     async def start(self) -> None:
