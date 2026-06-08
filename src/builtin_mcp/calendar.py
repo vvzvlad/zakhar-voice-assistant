@@ -514,7 +514,7 @@ def build_calendar_server(client: CalendarClient) -> FastMCP:
 
     Every tool offloads the blocking caldav calls via asyncio.to_thread and returns a
     short human-readable string. Errors are caught and returned as text (never raised),
-    mirroring the weather tool / ToolHub contract so a failure reaches the model as a
+    mirroring the OpenWeatherMap tool / ToolHub contract so a failure reaches the model as a
     message instead of crashing the run.
     """
     mcp = FastMCP("calendar")

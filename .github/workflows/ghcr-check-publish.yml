@@ -29,7 +29,7 @@ jobs:
       env:                               # required ENV so importing settings works
         INTENT_API_KEY: test-intent-key
         STT_API_KEY: test-stt-key
-        WEATHER_API_KEY: test-weather-key
+        OPENWEATHERMAP_API_KEY: test-openweathermap-key
         MCP_SMARTHOME_URL: http://mcp.test:8001/mcp
         TTS_BASE_URL: http://tts.test:8124
         PUBLIC_BASE_URL: http://10.0.0.10:8200

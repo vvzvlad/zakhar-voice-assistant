@@ -3,7 +3,7 @@
 The LLM tool-loop only ever touches `hub.tools` (the merged tool list) and
 `hub.call(name, args)` (routed to the owning source). This lets the model see,
 through ONE interface, both the external smart-home MCP server (HttpMcpSource) and
-in-process built-in MCP servers (BuiltinMcpSource, e.g. weather).
+in-process built-in MCP servers (BuiltinMcpSource, e.g. OpenWeatherMap).
 
 Tool names are advertised RAW (unchanged from each source), so the system prompt and
 the external MCP server keep working with their existing names. The hub routes by raw

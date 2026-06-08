@@ -12,7 +12,7 @@ from loguru import logger
 import src.plugins  # noqa: F401  triggers provider registration
 from src import config_store
 from src.audio_server import AudioServer
-from src.builtin_mcp.weather import build_weather_server
+from src.builtin_mcp.openweathermap import build_openweathermap_server
 from src.config_service import ConfigDoc, ConfigService
 from src.esphome_client import DeviceManager
 from src.mcp_client import McpToolHub
@@ -88,19 +88,22 @@ async def main() -> None:
     await audio_server.start()
 
     # Multi-source tool hub: an arbitrary list of external MCP servers (one
-    # HttpMcpSource each) plus in-process built-in MCP servers (weather first). Built
-    # only here, in the same task as stop(), per anyio cancel-scope rules. A source
-    # failing to start is handled gracefully inside ToolHub.start(). The weather tool
-    # is gated on an OWM api key; built-in weather uses the proxied client_ext for its
-    # OWM call. Each external server's source id is its (unique) name.
+    # HttpMcpSource each) plus in-process built-in MCP servers (openweathermap first).
+    # Built only here, in the same task as stop(), per anyio cancel-scope rules. A
+    # source failing to start is handled gracefully inside ToolHub.start(). The weather
+    # tool is gated on an OWM api key; built-in OpenWeatherMap uses the proxied
+    # client_ext for its OWM call. Each external server's source id is its (unique) name.
     sources = []
     for srv in core.mcp_servers:
         if srv.url and srv.name:
             sources.append(HttpMcpSource(srv.name, McpToolHub(srv.url, srv.token or None, srv.transport)))
-    if core.weather.api_key:
+    if core.openweathermap.api_key:
         sources.append(
             BuiltinMcpSource(
-                "weather", build_weather_server(client_ext, core.weather.api_key, core.weather.city)
+                "openweathermap",
+                build_openweathermap_server(
+                    client_ext, core.openweathermap.api_key, core.openweathermap.city
+                ),
             )
         )
     # Built-in calendar MCP (CalDAV). Gated on url + username; the caldav lib is

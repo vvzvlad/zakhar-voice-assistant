@@ -46,7 +46,7 @@ def build_system_prompt(core: CoreConfig) -> str:
     """Prefix SYSTEM_PROMPT with the current time-of-day and date.
 
     Weather used to be injected here; it is now an on-demand MCP tool (see
-    src.builtin_mcp.weather), so the prompt no longer makes a network call and is sync.
+    src.builtin_mcp.openweathermap), so the prompt no longer makes a network call and is sync.
     """
     now = datetime.now()
     date_time_text = now.strftime("%Y-%m-%d, %H:%M")  # 2025-09-18, 14:05

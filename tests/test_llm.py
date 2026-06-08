@@ -1,6 +1,6 @@
 import httpx
 
-from src.core_config import CoreConfig, PromptConfig, WeatherConfig
+from src.core_config import CoreConfig, OpenWeatherMapConfig, PromptConfig
 from src.llm import call_llm_api
 from src.plugins.llm.base import LlmConfig
 from src.text import processing_response
@@ -126,7 +126,7 @@ def _core(tmp_path):
     prompt_path.write_text("PROMPT BODY <<<<<TDW>>>>>", encoding="utf-8")
     return CoreConfig(
         prompt=PromptConfig(system_prompt_path=str(prompt_path)),
-        weather=WeatherConfig(api_key="w-key", city="Moscow"),
+        openweathermap=OpenWeatherMapConfig(api_key="w-key", city="Moscow"),
     )
 
 

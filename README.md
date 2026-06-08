@@ -42,7 +42,7 @@ Shape (see `templates/default_config.json` for the full default):
   provider is one file, no changes to the config core.
 - **`core`** — non-provider settings: `context` (max_turns / ttl_seconds / dir), `audio`
   (host / port / ttl / public_base_url), `vad` thresholds, `network.external_proxy`,
-  `weather` (api_key / city), `mcp` (url / token), `esphome.port`, `prompt.system_prompt_path`,
+  `openweathermap` (api_key / city), `mcp` (url / token), `esphome.port`, `prompt.system_prompt_path`,
   `devices` (list of `{name, host, psk}`), `tts_timeout`, `log_level`.
 
 API keys are plain string fields in the JSON (this is a trusted-LAN service); `data/` is

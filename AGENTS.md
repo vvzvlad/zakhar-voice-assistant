@@ -46,7 +46,7 @@ All config lives in `data/config.json` (created on first boot from
   defines its own settings via a pydantic `ConfigModel` in `src/plugins/<stage>/<id>.py`.
   The config core (`ConfigService`/`config_store`) is provider-agnostic — it never names a
   provider's fields. Adding a provider = one new plugin file; zero changes to the core.
-- `core.*` holds non-provider settings (context, audio, vad, network, weather, mcp,
+- `core.*` holds non-provider settings (context, audio, vad, network, openweathermap, mcp,
   esphome, prompt, devices, tts_timeout, log_level) as plain `CoreConfig` pydantic sections.
 - API keys are plain string fields in the JSON (trusted-LAN service, no masking). `data/`
   is gitignored so `config.json` never gets committed.

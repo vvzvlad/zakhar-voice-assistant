@@ -5,7 +5,7 @@ Exposes one-shot voice reminders as tools the model calls when the user says e.g
 timestamp, read the originating speaker from the per-run ContextVar (never an
 LLM-visible argument), and hand off to the ReminderScheduler. Every tool catches
 its exceptions and returns a human-readable Russian string (it never raises),
-mirroring the calendar/weather tool contract.
+mirroring the calendar/OpenWeatherMap tool contract.
 """
 
 import time

@@ -29,7 +29,7 @@ def _doc():
             "selected": "yandex",
             "instances": {"yandex": {"api_key": "AQVN-secret", "voice": "jane", "speed": 1.2}},
         },
-        "core": {"weather": {"api_key": "weather-secret", "city": "Москва"}},
+        "core": {"openweathermap": {"api_key": "weather-secret", "city": "Москва"}},
     }
 
 
@@ -54,7 +54,7 @@ def test_create_builds_backend(tmp_path):
 def test_core_property_is_core_config(tmp_path):
     svc = _service(tmp_path)
     assert isinstance(svc.core, CoreConfig)
-    assert svc.core.weather.city == "Москва"
+    assert svc.core.openweathermap.city == "Москва"
 
 
 def test_constructor_validates_selected_instances(tmp_path):
@@ -78,7 +78,7 @@ def test_catalog_lists_all_categories_with_schemas(tmp_path):
 def test_catalog_exposes_values_plainly(tmp_path):
     # Secrets are plain config values now: catalog() emits them verbatim (no masking).
     doc = _doc()
-    doc["core"]["weather"]["api_key"] = "wkey"
+    doc["core"]["openweathermap"]["api_key"] = "wkey"
     doc["core"]["devices"] = [
         {"name": "kitchen", "host": "10.0.0.5", "psk": "psk-plaintext-1"},
     ]
@@ -90,8 +90,8 @@ def test_catalog_exposes_values_plainly(tmp_path):
     assert yandex["values"]["api_key"] == "AQVN-secret"
     assert yandex["values"]["voice"] == "jane"
 
-    # Core weather api_key and device psk are plaintext too.
-    assert cat["core"]["values"]["weather"]["api_key"] == "wkey"
+    # Core openweathermap api_key and device psk are plaintext too.
+    assert cat["core"]["values"]["openweathermap"]["api_key"] == "wkey"
     assert cat["core"]["values"]["devices"][0]["psk"] == "psk-plaintext-1"
 
     # JSON Schema is still emitted per provider and for core.
@@ -114,7 +114,7 @@ def test_apply_persists_and_updates_get(tmp_path):
     # Persisted to disk, with the secret intact (not corrupted to "**********").
     saved = config_store.load(path)
     assert saved["tts"]["instances"]["yandex"]["voice"] == "filipp"
-    assert saved["core"]["weather"]["api_key"] == "weather-secret"
+    assert saved["core"]["openweathermap"]["api_key"] == "weather-secret"
 
 
 def test_apply_invalid_patch_raises_and_does_not_persist(tmp_path):

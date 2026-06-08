@@ -57,7 +57,7 @@ class Pipeline:
         run_events=None,
     ):
         self.name = name
-        # Multi-source tool hub: advertises smart-home + built-in tools (e.g. weather)
+        # Multi-source tool hub: advertises smart-home + built-in tools (e.g. OpenWeatherMap)
         # to the model and executes them.
         self.hub = hub
         self.stt_backend = stt_backend

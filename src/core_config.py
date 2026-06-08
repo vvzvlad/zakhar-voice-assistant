@@ -35,7 +35,7 @@ class NetworkConfig(BaseModel):
     external_proxy: str = ""
 
 
-class WeatherConfig(BaseModel):
+class OpenWeatherMapConfig(BaseModel):
     api_key: str = ""
     city: str = "Moscow"
 
@@ -96,7 +96,7 @@ class CoreConfig(BaseModel):
     audio: AudioConfig = AudioConfig()
     vad: VadConfig = VadConfig()
     network: NetworkConfig = NetworkConfig()
-    weather: WeatherConfig = WeatherConfig()
+    openweathermap: OpenWeatherMapConfig = OpenWeatherMapConfig()
     mcp_servers: list[McpServerConfig] = []
     calendar: CalendarConfig = CalendarConfig()
     esphome: EsphomeConfig = EsphomeConfig()

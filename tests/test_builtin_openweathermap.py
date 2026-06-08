@@ -1,11 +1,11 @@
-import src.builtin_mcp.weather as weather_mcp
-from src.builtin_mcp.weather import build_weather_server
+import src.builtin_mcp.openweathermap as owm_mcp
+from src.builtin_mcp.openweathermap import build_openweathermap_server
 from src.tool_hub import BuiltinMcpSource
 
 
 async def test_server_advertises_get_current_weather():
-    server = build_weather_server(object(), "key", "Moscow")
-    source = BuiltinMcpSource("weather", server)
+    server = build_openweathermap_server(object(), "key", "Moscow")
+    source = BuiltinMcpSource("openweathermap", server)
     await source.start()
 
     tools = source.raw_tools()
@@ -24,10 +24,10 @@ async def test_call_returns_weather_text(monkeypatch):
         assert city == "Moscow"
         return "10 градусов, ясно"
 
-    monkeypatch.setattr(weather_mcp, "get_weather_summary", fake_summary)
+    monkeypatch.setattr(owm_mcp, "get_weather_summary", fake_summary)
 
-    server = build_weather_server(object(), "key", "DefaultCity")
-    source = BuiltinMcpSource("weather", server)
+    server = build_openweathermap_server(object(), "key", "DefaultCity")
+    source = BuiltinMcpSource("openweathermap", server)
     await source.start()
 
     # Implicitly exercises the tuple-return normalization in BuiltinMcpSource.call.
@@ -39,10 +39,10 @@ async def test_call_no_data_path(monkeypatch):
     async def fake_summary(client, city, api_key):
         return None
 
-    monkeypatch.setattr(weather_mcp, "get_weather_summary", fake_summary)
+    monkeypatch.setattr(owm_mcp, "get_weather_summary", fake_summary)
 
-    server = build_weather_server(object(), "key", "Moscow")
-    source = BuiltinMcpSource("weather", server)
+    server = build_openweathermap_server(object(), "key", "Moscow")
+    source = BuiltinMcpSource("openweathermap", server)
     await source.start()
 
     out = await source.call("get_current_weather", {})

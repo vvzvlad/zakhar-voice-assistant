@@ -1,7 +1,7 @@
 import httpx
 import respx
 
-from src.weather import OPENWEATHERMAP_URL, get_weather_summary
+from src.openweathermap import OPENWEATHERMAP_URL, get_weather_summary
 
 
 SAMPLE_PAYLOAD = {

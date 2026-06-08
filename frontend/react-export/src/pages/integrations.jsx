@@ -41,7 +41,7 @@ function ToolChips({ tools }) {
 
 // One integration source card: header (name + kind badge + status pill), an
 // editable SchemaForm bound to its core.* sub-section, and the live tool chips.
-//   id        — source id matched against /api/tools ("home"/"weather"/"calendar")
+//   id        — source id matched against /api/tools ("home"/"openweathermap"/"calendar")
 //   name      — human title; sub — short caption under it
 //   schema    — resolved JSON sub-schema (from core.schema, $defs available on root)
 //   root      — full core schema (holds $defs for the SchemaForm)
@@ -91,8 +91,8 @@ function SourceCard({ id, name, sub, schema, root, values, buildPatch, configure
 // transport (Literal), prompt (describes the server's tools to the model).
 const TRANSPORTS = ["auto", "streamable_http", "sse"];
 // Built-in ToolHub source ids — an external server may not shadow them, or it
-// would hide the weather/calendar status in /api/tools.
-const RESERVED_NAMES = ["weather", "calendar"];
+// would hide the openweathermap/calendar status in /api/tools.
+const RESERVED_NAMES = ["openweathermap", "calendar"];
 function McpServerModal({ initial, onSave, onClose, title, takenNames }) {
   const [name, setName] = useState(initial?.name || "");
   const [url, setUrl] = useState(initial?.url || "");
@@ -219,10 +219,10 @@ export function MCP() {
               onEdit={() => setModal({ mode: "edit", index: i })} onDelete={() => onDelete(i)} />)}
         <div className="z-sl">Встроенные источники<div className="ln" /></div>
         <SourceCard
-          id="weather" name="Погода (встроенный)" sub="core.weather · built-in MCP"
-          schema={sub("weather")} root={coreSchema} values={coreValues.weather || { api_key: "", city: "Moscow" }}
-          buildPatch={(d) => ({ core: { weather: d } })}
-          configured={(v) => !!(v && v.api_key)} live={liveOf("weather")} patch={patchAndRefresh} />
+          id="openweathermap" name="OpenWeatherMap (встроенный)" sub="core.openweathermap · built-in MCP"
+          schema={sub("openweathermap")} root={coreSchema} values={coreValues.openweathermap || { api_key: "", city: "Moscow" }}
+          buildPatch={(d) => ({ core: { openweathermap: d } })}
+          configured={(v) => !!(v && v.api_key)} live={liveOf("openweathermap")} patch={patchAndRefresh} />
         <SourceCard
           id="calendar" name="Календарь (встроенный)" sub="core.calendar · built-in MCP (CalDAV)"
           schema={sub("calendar")} root={coreSchema}

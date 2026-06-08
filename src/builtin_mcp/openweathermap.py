@@ -1,23 +1,23 @@
-"""Built-in weather MCP server (in-process FastMCP).
+"""Built-in OpenWeatherMap MCP server (in-process FastMCP).
 
 Exposes current weather as an on-demand tool instead of always injecting it into the
 system prompt. The server closes over the proxied http client, the OWM api key and the
-default city; the actual OWM call still lives in src.weather.get_weather_summary.
+default city; the actual OWM call still lives in src.openweathermap.get_weather_summary.
 """
 
 from mcp.server.fastmcp import FastMCP
 
-from src.weather import get_weather_summary
+from src.openweathermap import get_weather_summary
 
 
-def build_weather_server(client, api_key: str, default_city: str) -> FastMCP:
+def build_openweathermap_server(client, api_key: str, default_city: str) -> FastMCP:
     """Build a FastMCP server exposing a single get_current_weather tool.
 
     `client` is the shared (proxied) httpx client used for the OWM request; `api_key`
-    and `default_city` come from core.weather. The returned server is wrapped in a
-    BuiltinMcpSource by the caller.
+    and `default_city` come from core.openweathermap. The returned server is wrapped in
+    a BuiltinMcpSource by the caller.
     """
-    mcp = FastMCP("weather")
+    mcp = FastMCP("openweathermap")
 
     @mcp.tool(
         name="get_current_weather",
