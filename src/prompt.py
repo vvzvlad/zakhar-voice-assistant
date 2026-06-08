@@ -57,4 +57,10 @@ def build_system_prompt(core: CoreConfig) -> str:
     system_prompt = load_system_prompt(core.prompt.system_prompt_path)
     system_prompt = system_prompt.replace("<<<<<TDW>>>>>", prefix)
 
+    # Append each external MCP server's non-empty prompt so the model learns what
+    # those servers' tools do (one block per server, blank-line separated).
+    extra = [s.prompt.strip() for s in core.mcp_servers if s.prompt.strip()]
+    if extra:
+        system_prompt = system_prompt + "\n\n" + "\n\n".join(extra)
+
     return system_prompt

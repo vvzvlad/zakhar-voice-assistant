@@ -40,11 +40,15 @@ class WeatherConfig(BaseModel):
     city: str = "Moscow"
 
 
-class McpConfig(BaseModel):
-    # Single smart-home MCP server for now (multi-server is a later feature).
+class McpServerConfig(BaseModel):
+    # One external MCP server entry. `name` is unique and also the ToolHub source id
+    # (so it matches the /api/tools source id). `prompt` is appended to the system
+    # prompt to describe this server's tools to the model.
+    name: str
     url: str = ""
     token: str = ""
     transport: Literal["auto", "streamable_http", "sse"] = "auto"
+    prompt: str = ""
 
 
 class CalendarConfig(BaseModel):
@@ -93,7 +97,7 @@ class CoreConfig(BaseModel):
     vad: VadConfig = VadConfig()
     network: NetworkConfig = NetworkConfig()
     weather: WeatherConfig = WeatherConfig()
-    mcp: McpConfig = McpConfig()
+    mcp_servers: list[McpServerConfig] = []
     calendar: CalendarConfig = CalendarConfig()
     esphome: EsphomeConfig = EsphomeConfig()
     prompt: PromptConfig = PromptConfig()

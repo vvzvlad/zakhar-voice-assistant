@@ -8,8 +8,7 @@ import { fmtUptime } from "../format.js";
 export function Sidebar({ active, onNav }) {
   const { system, config } = useAppData();
   const version = system?.version || "—";
-  const mcpUrl = config?.core?.mcp?.url;
-  const mcpCount = mcpUrl ? 1 : 0;
+  const mcpCount = (config?.core?.mcp_servers || []).length;
   const devCfg = config?.core?.devices || [];
 
   const [devStatus, setDevStatus] = useState([]);

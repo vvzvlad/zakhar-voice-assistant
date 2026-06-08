@@ -1,4 +1,4 @@
-from src.core_config import CoreConfig, PromptConfig
+from src.core_config import CoreConfig, McpServerConfig, PromptConfig
 from src.prompt import build_system_prompt, load_system_prompt
 
 
@@ -30,3 +30,22 @@ def test_build_system_prompt_replaces_marker_and_includes_body(tmp_path):
     assert out.startswith("BODY ")
     assert "Сейчас (дата и время):" in out
     assert "Погода" not in out
+
+
+def test_build_system_prompt_appends_mcp_server_prompts(tmp_path):
+    path = tmp_path / "system_prompt.md"
+    path.write_text("BODY <<<<<TDW>>>>>", encoding="utf-8")
+    core = CoreConfig(
+        prompt=PromptConfig(system_prompt_path=str(path)),
+        mcp_servers=[
+            McpServerConfig(name="home", url="http://ha/sse", prompt="Controls the lights."),
+            McpServerConfig(name="empty", url="http://other", prompt=""),
+        ],
+    )
+
+    out = build_system_prompt(core)
+
+    # The configured server's non-empty prompt is appended; the empty one contributes
+    # nothing, so there is no trailing blank block from it.
+    assert "Controls the lights." in out
+    assert out.rstrip().endswith("Controls the lights.")

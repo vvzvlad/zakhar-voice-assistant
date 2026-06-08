@@ -101,7 +101,7 @@ function Dashboard() {
             <div className="lat">{avg != null
               ? <><b style={{ color: SC[s.key] }}>{(avg / 1000).toFixed(2)}</b><s>s avg</s></>
               : <span style={{ fontSize: 12, color: "var(--mut)" }}>{s.role}</span>}</div>
-            {s.key === "llm" && config?.core?.mcp?.url
+            {s.key === "llm" && (config?.core?.mcp_servers?.length > 0)
               ? <span className="z-mcpchip" onClick={(e) => { e.stopPropagation(); nav("mcp"); }}>◆ MCP</span>
               : <span style={{ height: 16 }} />}
             <span className="cfg">Configure <svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M2 6h7M6 3l3 3-3 3" /></svg></span>

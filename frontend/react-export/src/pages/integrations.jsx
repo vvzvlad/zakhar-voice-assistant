@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useCallback } from "react";
 import { Ic } from "../components/icons.jsx";
 import {
-  Field, PageHeader, FormSaveBar, StatusPill, Pill, Modal, Stepper, Loading,
+  Field, PageHeader, FormSaveBar, StatusPill, Pill, Modal, Stepper, Loading, Select,
 } from "../components/primitives.jsx";
 import SchemaForm from "../components/SchemaForm.jsx";
 import { useAppData } from "../appData.jsx";
@@ -51,7 +51,7 @@ function ToolChips({ tools }) {
 function SourceCard({ id, name, sub, schema, root, values, buildPatch, configured, live, patch }) {
   const { draft, onChange, dirty, saving, err, save } = useStageForm(values, buildPatch, patch);
   const isConfigured = configured(draft);
-  const kind = live?.kind || (id === "home" ? "http" : "builtin");
+  const kind = live?.kind || "builtin";
 
   // Status: online/offline come from the live source; otherwise "not configured"
   // when the relevant config is empty (a configured source absent from /api/tools
@@ -86,7 +86,78 @@ function SourceCard({ id, name, sub, schema, root, values, buildPatch, configure
   </div>;
 }
 
-// ── MCP / Integrations: the three tool sources ────────────────────────────
+// ── External MCP server modal (add / edit) ────────────────────────────────
+// Fields mirror McpServerConfig: name (unique source id), url, token (masked),
+// transport (Literal), prompt (describes the server's tools to the model).
+const TRANSPORTS = ["auto", "streamable_http", "sse"];
+// Built-in ToolHub source ids — an external server may not shadow them, or it
+// would hide the weather/calendar status in /api/tools.
+const RESERVED_NAMES = ["weather", "calendar"];
+function McpServerModal({ initial, onSave, onClose, title, takenNames }) {
+  const [name, setName] = useState(initial?.name || "");
+  const [url, setUrl] = useState(initial?.url || "");
+  const [token, setToken] = useState(initial?.token || "");
+  const [transport, setTransport] = useState(initial?.transport || "auto");
+  const [prompt, setPrompt] = useState(initial?.prompt || "");
+  // Name must be non-empty, valid URL non-empty, unique among the OTHER servers,
+  // and not collide with a reserved built-in source id (case-insensitive).
+  const dup = !!name && takenNames.includes(name);
+  const reserved = !!name && RESERVED_NAMES.includes(name.trim().toLowerCase());
+  const valid = !!name && !!url && !dup && !reserved;
+  return <Modal title={title} onClose={onClose}
+    footer={<><button className="z-btn g" onClick={onClose}>Cancel</button>
+      <button className="z-btn p" disabled={!valid} onClick={() => onSave({ name, url, token, transport, prompt })}>Save</button></>}>
+    <Field label="Name" hint="Уникальное имя — оно же id источника в /api/tools.">
+      <div className="z-inp"><input value={name} placeholder="e.g. home" onChange={(e) => setName(e.target.value)} /></div>
+      {dup && <div className="z-fh" style={{ color: "#b91c1c" }}>Имя уже используется.</div>}
+      {!dup && reserved && <div className="z-fh" style={{ color: "#b91c1c" }}>Имя зарезервировано встроенным источником.</div>}
+    </Field>
+    <Field label="URL"><div className="z-inp mono"><input value={url} placeholder="http://10.0.0.5:8123/mcp_server/sse" onChange={(e) => setUrl(e.target.value)} /></div></Field>
+    <Field label="Token" hint="Опциональный Bearer-токен.">
+      <div className="z-inp mono"><input type="password" value={token} placeholder="optional…" onChange={(e) => setToken(e.target.value)} /></div>
+    </Field>
+    <Field label="Transport" hint="auto определяет sse по адресу, оканчивающемуся на /sse.">
+      <Select value={transport} options={TRANSPORTS} onChange={setTransport} />
+    </Field>
+    <Field label="Prompt" hint="Описывает инструменты этого сервера для модели (добавляется к системному промпту).">
+      <textarea value={prompt} onChange={(e) => setPrompt(e.target.value)} spellCheck={false}
+        style={{ width: "100%", minHeight: 90, resize: "vertical", border: "1px solid var(--line)", borderRadius: 8, padding: "10px 12px", fontFamily: "var(--mono)", fontSize: 12, lineHeight: 1.6, color: "var(--ink)", outline: "none", background: "var(--panel2)" }} />
+    </Field>
+  </Modal>;
+}
+
+// One external MCP server card: header (name + external tag + status pill), the
+// url in mono, and the live tool chips matched from /api/tools by source id ===
+// server name. Edit / Delete buttons drive the CRUD flow above.
+function McpServerCard({ server, live, onEdit, onDelete }) {
+  let pill;
+  if (live) pill = <StatusPill status={live.online ? "online" : "offline"} />;
+  else pill = <StatusPill status="offline" />;
+  return <div className="z-card" style={{ marginBottom: 14 }}>
+    <div className="z-card-h">
+      <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
+        <Ic n="mcp" w={17} />
+        <div style={{ minWidth: 0 }}>
+          <b style={{ display: "block" }}>{server.name}</b>
+          <span className="mono" style={{ fontSize: 11, color: "var(--mut)" }}>{server.url}</span>
+        </div>
+      </div>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, marginLeft: "auto" }}>
+        <Pill tone="warn">external</Pill>
+        {pill}
+        <div style={{ display: "flex", gap: 6 }}>
+          <button className="z-mini" onClick={onEdit}>Edit</button>
+          <button className="z-mini" onClick={onDelete}>Delete</button>
+        </div>
+      </div>
+    </div>
+    <div className="z-card-b">
+      <ToolChips tools={live?.tools} />
+    </div>
+  </div>;
+}
+
+// ── MCP / Integrations: external servers + built-in tool sources ──────────
 export function MCP() {
   const { catalog, patch } = useAppData();
   const coreSchema = catalog.core.schema;
@@ -94,6 +165,8 @@ export function MCP() {
   // properties.<section> is a $ref into $defs; resolve it so SchemaForm gets a
   // schema with `.properties` (and pass the full core schema as `root` for $defs).
   const sub = (key) => deref(coreSchema.properties?.[key] || {}, coreSchema);
+
+  const servers = coreValues.mcp_servers || [];   // [{name,url,token,transport,prompt}]
 
   const [tools, setTools] = useState(null);   // null = loading; [] = loaded/empty
   const [toolsErr, setToolsErr] = useState(null);
@@ -113,20 +186,38 @@ export function MCP() {
     return r;
   }, [patch, loadTools]);
 
+  // External-servers CRUD: full-array replace via patch({ core: { mcp_servers } }),
+  // mirroring the Devices page. Sources rebuild at boot, so changes need a restart.
+  const [modal, setModal] = useState(null); // { mode:'add'|'edit', index }
+  const [busyErr, setBusyErr] = useState(null);
+  const saveList = async (list) => {
+    setBusyErr(null);
+    try { await patchAndRefresh({ core: { mcp_servers: list } }); setModal(null); }
+    catch (e) { setBusyErr(e); }
+  };
+  const onAdd = (s) => saveList([...servers, s]);
+  const onEdit = (i, s) => saveList(servers.map((x, idx) => (idx === i ? s : x)));
+  const onDelete = (i) => saveList(servers.filter((_, idx) => idx !== i));
+
   return <div className="z-page">
-    <PageHeader title="Tool sources" desc="Источники инструментов, которые модель вызывает: внешний MCP умного дома и встроенные погода/календарь. Источники собираются при старте — после изменения нужен перезапуск." />
+    <PageHeader title="Tool sources" desc="Источники инструментов, которые модель вызывает: внешние MCP-серверы умного дома и встроенные погода/календарь. Источники собираются при старте — после изменения нужен перезапуск."
+      actions={<button className="z-btn p" onClick={() => setModal({ mode: "add" })}><Ic n="add" w={14} />Add server</button>} />
     {toolsErr && <div className="z-banner warn" style={{ margin: "0 0 14px" }}>
       <Ic n="restart" w={15} />
       <span><b>Статус недоступен.</b> Не удалось получить список инструментов: {errorLines(toolsErr).join(" · ")}</span>
     </div>}
+    {busyErr && <div className="z-banner warn" style={{ margin: "0 0 12px" }}>
+      <Ic n="restart" w={15} /><span>{errorLines(busyErr).join(" · ")}</span>
+    </div>}
     {tools === null
       ? <Card><Loading /></Card>
       : <>
-        <SourceCard
-          id="home" name="Умный дом (внешний MCP)" sub="core.mcp · external MCP server"
-          schema={sub("mcp")} root={coreSchema} values={coreValues.mcp || { url: "", token: "" }}
-          buildPatch={(d) => ({ core: { mcp: d } })}
-          configured={(v) => !!(v && v.url)} live={liveOf("home")} patch={patchAndRefresh} />
+        <div className="z-sl">Внешние MCP-серверы<div className="ln" /></div>
+        {servers.length === 0
+          ? <Card><div className="z-fh" style={{ padding: "6px 0" }}>Нет внешних MCP-серверов — умный дом недоступен.</div></Card>
+          : servers.map((s, i) => <McpServerCard key={s.name || i} server={s} live={liveOf(s.name)}
+              onEdit={() => setModal({ mode: "edit", index: i })} onDelete={() => onDelete(i)} />)}
+        <div className="z-sl">Встроенные источники<div className="ln" /></div>
         <SourceCard
           id="weather" name="Погода (встроенный)" sub="core.weather · built-in MCP"
           schema={sub("weather")} root={coreSchema} values={coreValues.weather || { api_key: "", city: "Moscow" }}
@@ -139,6 +230,11 @@ export function MCP() {
           buildPatch={(d) => ({ core: { calendar: d } })}
           configured={(v) => !!(v && v.url && v.username)} live={liveOf("calendar")} patch={patchAndRefresh} />
       </>}
+    {modal?.mode === "add" && <McpServerModal title="Add MCP server" onSave={onAdd} onClose={() => setModal(null)}
+      takenNames={servers.map((s) => s.name)} />}
+    {modal?.mode === "edit" && <McpServerModal title="Edit MCP server" initial={servers[modal.index]}
+      onSave={(s) => onEdit(modal.index, s)} onClose={() => setModal(null)}
+      takenNames={servers.filter((_, idx) => idx !== modal.index).map((s) => s.name)} />}
   </div>;
 }
 

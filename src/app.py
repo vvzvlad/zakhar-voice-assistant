@@ -40,6 +40,15 @@ async def main() -> None:
     started_at = time.time()
 
     doc = load_or_create_config()
+
+    # The legacy single-server 'core.mcp' key was replaced by the 'core.mcp_servers'
+    # list; it is silently dropped on parse. Surface that once so the drop is visible.
+    if isinstance(doc.get("core"), dict) and "mcp" in doc["core"]:
+        logger.warning(
+            "config: legacy 'core.mcp' is ignored — add external servers under "
+            "'core.mcp_servers' (panel: Tool sources)."
+        )
+
     core = ConfigDoc(**doc).core  # parse once to read proxy/timeout for Deps
 
     # client_ext (proxied) -> cloud STT/LLM + weather; client_local -> local TTS.
@@ -73,14 +82,16 @@ async def main() -> None:
     audio_server = AudioServer(core.audio.host, core.audio.port, core.audio.ttl)
     await audio_server.start()
 
-    # Multi-source tool hub: the external smart-home MCP server (HttpMcpSource) plus
-    # in-process built-in MCP servers (weather first). Built only here, in the same
-    # task as stop(), per anyio cancel-scope rules. A source failing to start is
-    # handled gracefully inside ToolHub.start(). The weather tool is gated on an OWM
-    # api key; built-in weather uses the proxied client_ext for its OWM call.
+    # Multi-source tool hub: an arbitrary list of external MCP servers (one
+    # HttpMcpSource each) plus in-process built-in MCP servers (weather first). Built
+    # only here, in the same task as stop(), per anyio cancel-scope rules. A source
+    # failing to start is handled gracefully inside ToolHub.start(). The weather tool
+    # is gated on an OWM api key; built-in weather uses the proxied client_ext for its
+    # OWM call. Each external server's source id is its (unique) name.
     sources = []
-    if core.mcp.url:
-        sources.append(HttpMcpSource("home", McpToolHub(core.mcp.url, core.mcp.token or None, core.mcp.transport)))
+    for srv in core.mcp_servers:
+        if srv.url and srv.name:
+            sources.append(HttpMcpSource(srv.name, McpToolHub(srv.url, srv.token or None, srv.transport)))
     if core.weather.api_key:
         sources.append(
             BuiltinMcpSource(

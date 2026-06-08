@@ -9,7 +9,7 @@
     "vad": {"aggressiveness": 2, "silence_ms": 800, "min_speech_ms": 200, "max_utterance_ms": 15000, "no_speech_timeout_ms": 8000},
     "network": {"external_proxy": ""},
     "weather": {"api_key": "", "city": "Moscow"},
-    "mcp": {"url": "", "token": "", "transport": "auto"},
+    "mcp_servers": [],
     "calendar": {"url": "", "username": "", "password": "", "calendar": ""},
     "esphome": {"port": 6053},
     "prompt": {"system_prompt_path": "data/system_prompt.md"},
