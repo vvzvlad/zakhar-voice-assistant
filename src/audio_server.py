@@ -10,8 +10,8 @@ from loguru import logger
 class AudioServer:
     """One shared HTTP server for all speakers with an in-memory TTL cache.
 
-    Speakers fetch generated audio from /tts/<id>.<ext> (e.g. .mp3 for TeraTTS,
-    .wav for Piper). Each entry stores its own content type. Entries expire after
+    Speakers fetch generated audio from /tts/<id>.<ext> (.mp3 for both TeraTTS and
+    Piper). Each entry stores its own content type. Entries expire after
     `ttl` seconds (measured on the monotonic event-loop clock) and are pruned on put.
     """
 
