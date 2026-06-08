@@ -11,6 +11,11 @@ PY     := $(VENV)/bin/python
 PIP    := $(VENV)/bin/pip
 PYTEST := $(VENV)/bin/pytest
 
+# Frontend (Vite/React admin panel). The backend serves its built output from
+# $(FRONTEND_DIST) (see src/app.py), so the dist must be built before `make run`.
+FRONTEND_DIR  ?= frontend/react-export
+FRONTEND_DIST := $(FRONTEND_DIR)/dist
+
 .DEFAULT_GOAL := help
 
 # --- Help --------------------------------------------------------------------
@@ -46,13 +51,33 @@ config: ## Create data/config.json from the template if it does not exist
 models: ## Download Vosk + Piper models into models/
 	bash scripts/download_models.sh
 
+# --- Frontend ----------------------------------------------------------------
+# The admin panel is a Vite/React app. The backend serves the built dist, so it
+# must exist before the app runs. Both steps are incremental (sentinel-gated):
+#   * npm deps are reinstalled only when package.json / package-lock.json change;
+#   * the dist is rebuilt only when a frontend source file or manifest changes.
+FRONTEND_SRC := $(shell find $(FRONTEND_DIR)/src -type f 2>/dev/null) \
+                $(FRONTEND_DIR)/index.html $(FRONTEND_DIR)/vite.config.js
+
+# Sentinel: a clean, reproducible install keyed on the lockfile.
+$(FRONTEND_DIR)/node_modules/.installed: $(FRONTEND_DIR)/package.json $(FRONTEND_DIR)/package-lock.json
+	cd $(FRONTEND_DIR) && npm ci
+	touch $@
+
+# Build output target: rebuilds when deps or any source/manifest file changes.
+$(FRONTEND_DIST)/index.html: $(FRONTEND_DIR)/node_modules/.installed $(FRONTEND_SRC)
+	cd $(FRONTEND_DIR) && npm run build
+
+.PHONY: frontend
+frontend: $(FRONTEND_DIST)/index.html ## Build the admin panel frontend (Vite) into dist/
+
 # --- Develop -----------------------------------------------------------------
 .PHONY: test
 test: install ## Run the test suite (auto-creates .venv if missing)
 	$(PYTEST)
 
 .PHONY: run
-run: install ## Run the application (auto-creates .venv if missing)
+run: install frontend ## Run the app (auto-creates .venv, builds the frontend)
 	$(PY) main.py
 
 # --- Housekeeping ------------------------------------------------------------
