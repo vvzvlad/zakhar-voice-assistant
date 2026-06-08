@@ -1,7 +1,7 @@
 {
   "type": "micro",
   "wake_word": "Захар",
-  "author": "autopilot (OHF-Voice/micro-wake-word pipeline)",
+  "author": "vvzvlad",
   "website": "",
   "model": "zakhar.tflite",
   "trained_languages": [
