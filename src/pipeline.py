@@ -41,53 +41,35 @@ FRAME_BYTES = 640  # 16-bit mono, 20 ms @ 16 kHz
 HARD_CAP_BYTES = SAMPLE_RATE * 2 * 60
 
 
+def _write_wav(path: str, pcm: bytes) -> None:
+    """Write 16 kHz / mono / 16-bit PCM to a WAV file at `path`."""
+    import wave
+    with wave.open(path, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(SAMPLE_RATE)
+        w.writeframes(pcm)
+
+
 class Pipeline:
     """Drives one voice run for a single speaker."""
 
-    def __init__(
-        self,
-        name,
-        hub,
-        stt_backend,
-        llm_backend,
-        tts_backend,
-        audio_server,
-        core,
-        llm_cfg,
-        runs_store=None,
-        run_events=None,
-    ):
+    def __init__(self, name, runtime):
         self.name = name
-        # Multi-source tool hub: advertises smart-home + built-in tools (e.g. OpenWeatherMap)
-        # to the model and executes them.
-        self.hub = hub
-        self.stt_backend = stt_backend
-        self.llm_backend = llm_backend
-        self.tts_backend = tts_backend
-        self.audio_server = audio_server
-        self.core = core
-        self.llm_cfg = llm_cfg
-        # Optional observability sink: a RunsStore (or compatible) whose insert()
-        # is offloaded to a thread. None disables run recording.
-        self.runs_store = runs_store
-        # Optional live-broadcast hub: a RunEventsHub fanning out finalized runs to
-        # connected panel WebSocket clients. None disables live broadcasting.
-        self.run_events = run_events
-        self.public_base_url = core.audio.public_base_url
+        # The mutable Runtime holder: all config and backends are read THROUGH it
+        # per request (no frozen copies), so reconfiguration takes effect live.
+        self.rt = runtime
         self._buffer = bytearray()
         self._lock = asyncio.Lock()
         self._conversation_id = ""
-        self._context_path = os.path.join(core.context.dir, f"context_{name}.txt")
 
-        # VAD end-pointing tunables (non-secret, defaulted in core.vad). Stored as
-        # plain ints so tests can shrink the thresholds on the instance directly.
-        self.vad_silence_ms = core.vad.silence_ms
-        self.vad_min_speech_ms = core.vad.min_speech_ms
-        self.vad_max_utterance_ms = core.vad.max_utterance_ms
-        self.vad_no_speech_timeout_ms = core.vad.no_speech_timeout_ms
-        # Instance attribute so tests can monkeypatch it with a fake exposing
-        # is_speech(frame, rate) -> bool.
-        self._vad = webrtcvad.Vad(core.vad.aggressiveness)
+        # VAD aggressiveness is baked into the webrtcvad.Vad object, so the object
+        # must be rebuilt when it changes (handled in on_start). Keep _vad a plain
+        # instance attr so tests can monkeypatch it with a fake exposing
+        # is_speech(frame, rate) -> bool. The other VAD thresholds are read live in
+        # on_audio straight off self.rt.core.vad, so they are NOT copied here.
+        self._vad_aggressiveness = self.rt.core.vad.aggressiveness
+        self._vad = webrtcvad.Vad(self._vad_aggressiveness)
 
         # Per-run VAD state (reset in on_start).
         self._frame_rem = bytearray()  # leftover bytes between non-640-aligned chunks
@@ -103,6 +85,54 @@ class Pipeline:
         self.send_event = None
         self.send_audio = None
 
+    # Read-through convenience properties: external callers (DeviceClient.announce,
+    # tests) and the run logic below all reach config/backends THROUGH the runtime,
+    # so a reconfiguration (live field change or backend swap) takes effect without
+    # rebuilding the pipeline.
+    @property
+    def core(self):
+        return self.rt.core
+
+    @property
+    def llm_cfg(self):
+        return self.rt.llm_cfg
+
+    @property
+    def stt_backend(self):
+        return self.rt.stt_backend
+
+    @property
+    def llm_backend(self):
+        return self.rt.llm_backend
+
+    @property
+    def tts_backend(self):
+        return self.rt.tts_backend
+
+    @property
+    def hub(self):
+        return self.rt.hub
+
+    @property
+    def audio_server(self):
+        return self.rt.audio_server
+
+    @property
+    def runs_store(self):
+        return self.rt.runs_store
+
+    @property
+    def run_events(self):
+        return self.rt.run_events
+
+    @property
+    def public_base_url(self):
+        return self.rt.core.audio.public_base_url
+
+    @property
+    def _context_path(self):
+        return os.path.join(self.rt.core.context.dir, f"context_{self.name}.txt")
+
     def _emit(self, event_type, data=None):
         """Emit a voice_assistant event with a flat dict[str, str] payload."""
         if self.send_event is not None:
@@ -114,6 +144,12 @@ class Pipeline:
         self, conversation_id, flags, audio_settings, wake_word_phrase
     ) -> int:
         """Handle voice_assistant start: reset ALL per-run state, announce run."""
+        # webrtcvad.Vad bakes the aggressiveness in at construction, so rebuild the
+        # object when the live config value has changed since we last built it.
+        aggr = self.rt.core.vad.aggressiveness
+        if aggr != self._vad_aggressiveness:
+            self._vad = webrtcvad.Vad(aggr)
+            self._vad_aggressiveness = aggr
         self._conversation_id = conversation_id or ""
         self._buffer.clear()
         self._frame_rem.clear()
@@ -171,7 +207,7 @@ class Pipeline:
                 if speech:
                     self._speech_ms += FRAME_MS
                     self._silence_ms = 0
-                    if self._speech_ms >= self.vad_min_speech_ms:
+                    if self._speech_ms >= self.rt.core.vad.min_speech_ms:
                         self._speech_detected = True
                 else:
                     # Trailing silence only counts once real speech has been observed.
@@ -181,13 +217,14 @@ class Pipeline:
         # Decide end-of-utterance (reason or None). The HARD_CAP "maxlen" set above
         # takes precedence; otherwise check VAD endpoint, max length, no-speech.
         if reason is None:
-            if self._speech_detected and self._silence_ms >= self.vad_silence_ms:
+            vad = self.rt.core.vad
+            if self._speech_detected and self._silence_ms >= vad.silence_ms:
                 reason = "endpoint"
-            elif self._elapsed_ms >= self.vad_max_utterance_ms:
+            elif self._elapsed_ms >= vad.max_utterance_ms:
                 reason = "maxlen"
             elif (
                 not self._speech_detected
-                and self._elapsed_ms >= self.vad_no_speech_timeout_ms
+                and self._elapsed_ms >= vad.no_speech_timeout_ms
             ):
                 reason = "no_speech"
 
@@ -235,6 +272,31 @@ class Pipeline:
                 logger.info(f"{self.name}: empty audio, ending run")
                 self._emit(VAET.VOICE_ASSISTANT_RUN_END, {})
                 return
+
+            # Optional raw audio capture: save the WHOLE finalized utterance PCM as a
+            # 16 kHz / mono / 16-bit WAV. Off by default; enabled per capture session.
+            # A capture failure must NEVER break the run, so it is fully wrapped.
+            if self.core.capture.enabled:
+                try:
+                    capture_dir = self.core.capture.dir
+                    safe_name = "".join(
+                        c if c.isascii() and (c.isalnum() or c in "._-") else "_"
+                        for c in self.name
+                    )
+                    fname = f"{safe_name}_{int(time.time() * 1000)}_{reason}.wav"
+                    out_path = os.path.join(capture_dir, fname)
+
+                    def _capture(d=capture_dir, p=out_path, data=pcm):
+                        os.makedirs(d, exist_ok=True)
+                        _write_wav(p, data)
+
+                    await asyncio.to_thread(_capture)
+                    logger.info(
+                        f"{self.name}: 💾 captured raw audio -> {out_path} "
+                        f"({len(pcm)} bytes)"
+                    )
+                except Exception as e:
+                    logger.error(f"{self.name}: raw audio capture failed: {e}")
 
             # Observability record for this run. Accumulated across all terminal
             # paths below and inserted exactly once in the finally; the rest of

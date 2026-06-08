@@ -69,6 +69,7 @@ class YandexTtsProvider(Provider):
     id = "yandex"
     label = "Yandex SpeechKit"
     ConfigModel = YandexTtsConfig
+    uses_http_cloud = True
 
     def create(self, cfg: YandexTtsConfig, deps: Deps):
         from src.tts import YandexTtsBackend

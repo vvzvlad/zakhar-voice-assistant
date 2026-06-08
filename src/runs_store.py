@@ -180,7 +180,12 @@ class RunsStore:
             self._conn.commit()
 
     def close(self):
-        self._conn.close()
+        # Serialize close with insert/list/get/metrics/prune: those run on
+        # to_thread workers under the same lock on the shared sqlite3.Connection.
+        # Closing without the lock would be a use-after-close race when
+        # _rebuild_runs disables runs while a concurrent DB op is still running.
+        with self._lock:
+            self._conn.close()
 
 
 def _percentile(sorted_values: list, pct: int):

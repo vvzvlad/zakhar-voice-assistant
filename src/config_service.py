@@ -51,7 +51,6 @@ class ConfigService:
         self._deps = deps
         self._path = path or config_store.DEFAULT_PATH
         self._cbs = []
-        self._pending_restart = False
         # Eagerly validate the selected providers' instance configs.
         for cat in STAGE_CATEGORIES:
             self.get(cat)
@@ -59,10 +58,6 @@ class ConfigService:
     @property
     def core(self) -> CoreConfig:
         return self._doc.core
-
-    @property
-    def pending_restart(self) -> bool:
-        return self._pending_restart
 
     def document(self) -> dict:
         """Return the current raw config document (as plain JSON-able dict)."""
@@ -81,6 +76,10 @@ class ConfigService:
         slot = self._slot(category)
         prov = get_provider(category, slot.selected)
         return prov.create(self.get(category), self._deps)
+
+    def provider(self, category: str):
+        """Return the selected provider instance for a category (for runtime reconfig)."""
+        return get_provider(category, self._slot(category).selected)
 
     def options(self, category, plugin, field):
         prov = get_provider(category, plugin)
@@ -113,7 +112,9 @@ class ConfigService:
 
     def apply(self, patch: dict):
         """Deep-merge `patch` into the current document, re-validate, persist, then
-        fire callbacks. Raises (without persisting) on any validation error.
+        fire callbacks with the set of changed dotted paths. Raises (without
+        persisting and without firing callbacks) on any validation error. Returns
+        the changed paths.
 
         A partial patch only overrides the keys it carries; sibling keys survive the
         deep merge untouched."""
@@ -126,14 +127,16 @@ class ConfigService:
             prov = get_provider(cat, slot.selected)
             prov.ConfigModel(**slot.instances.get(slot.selected, {}))
 
+        # Compute the change set BEFORE swapping the document. Imported locally to
+        # avoid any import-cycle risk with src.reconfig.
+        from src.reconfig import changed_paths
+        paths = changed_paths(base, merged)
+
         config_store.save(merged, self._path)
         self._doc = new_doc
-        # MVP: any successful config change suggests a restart, because backends are
-        # built once at boot. Refining this via per-field apply-class diffing (live vs
-        # rebuild, per settings-storage-design.md §10) is future work.
-        self._pending_restart = True
         for cb in self._cbs:
-            cb()
+            cb(paths)
+        return paths
 
     def on_change(self, cb):
         self._cbs.append(cb)

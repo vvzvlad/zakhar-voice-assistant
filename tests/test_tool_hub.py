@@ -167,6 +167,58 @@ async def test_stop_calls_sources():
     assert weather.stopped is True
 
 
+# --- set_sources(): hot-swap the live source set -----------------------------
+
+async def test_set_sources_swaps_advertised_routes_and_lifecycle():
+    # Start with one source, then hot-swap to two new sources. The advertised list and
+    # routing reflect the NEW sources; the new sources were start()ed and the old one
+    # stop()ped.
+    old = FakeSource("old", ["old_tool"])
+    hub = ToolHub([old])
+    await hub.start()
+    assert [t["function"]["name"] for t in hub.tools] == ["old_tool"]
+
+    new_a = FakeSource("a", ["alpha"])
+    new_b = FakeSource("b", ["beta"])
+    await hub.set_sources([new_a, new_b])
+
+    # Advertised list + routing now reflect ONLY the new sources.
+    names = [t["function"]["name"] for t in hub.tools]
+    assert names == ["alpha", "beta"]
+    assert await hub.call("alpha", {}) == "a:alpha"
+    assert await hub.call("beta", {}) == "b:beta"
+    # The old tool no longer routes.
+    assert await hub.call("old_tool", {}) == "error: unknown tool old_tool"
+
+    # New sources were started; the old source was stopped.
+    assert new_a.started is True
+    assert new_b.started is True
+    assert old.stopped is True
+
+
+async def test_set_sources_start_failure_does_not_abort_swap():
+    # One new source failing start() must NOT abort the swap: the other new sources are
+    # still started/advertised, the swap completes, and the old source is still stopped.
+    old = FakeSource("old", ["old_tool"])
+    hub = ToolHub([old])
+    await hub.start()
+
+    broken = FakeSource("broken", ["x"], fail_start=True)
+    healthy = FakeSource("healthy", ["good"])
+    await hub.set_sources([broken, healthy])
+
+    # The healthy source was started and is advertised/callable despite the sibling's
+    # start() raising (the loop logs and continues, then swaps).
+    assert healthy.started is True
+    assert broken.started is False
+    assert await hub.call("good", {}) == "healthy:good"
+    names = [t["function"]["name"] for t in hub.tools]
+    assert "good" in names
+    # The old source no longer routes and was stopped despite the start failure.
+    assert await hub.call("old_tool", {}) == "error: unknown tool old_tool"
+    assert old.stopped is True
+
+
 # --- describe(): per-source info for the admin panel -------------------------
 
 async def test_describe_returns_one_entry_per_source():

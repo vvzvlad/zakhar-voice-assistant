@@ -29,6 +29,7 @@ class Provider:
     id: str = ""              # unique within category, e.g. "yandex"
     label: str = ""           # human label for the UI
     ConfigModel: type[BaseModel] = BaseModel
+    uses_http_cloud: bool = False   # True if create() builds a backend bound to deps.http_cloud (proxied)
 
     def create(self, cfg: BaseModel, deps: Deps):
         raise NotImplementedError

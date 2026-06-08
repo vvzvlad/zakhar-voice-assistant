@@ -131,15 +131,17 @@ def test_apply_invalid_patch_raises_and_does_not_persist(tmp_path):
 def test_on_change_fires_after_successful_apply(tmp_path):
     svc = _service(tmp_path)
     fired = []
-    svc.on_change(lambda: fired.append(True))
+    svc.on_change(lambda paths: fired.append(paths))
     svc.apply({"tts": {"instances": {"yandex": {"voice": "ermil"}}}})
-    assert fired == [True]
+    # Fired exactly once with a non-empty change set carrying the touched leaf.
+    assert len(fired) == 1
+    assert "tts.instances.yandex.voice" in fired[0]
 
 
 def test_on_change_does_not_fire_on_failed_apply(tmp_path):
     svc = _service(tmp_path)
     fired = []
-    svc.on_change(lambda: fired.append(True))
+    svc.on_change(lambda paths: fired.append(paths))
     with pytest.raises(ValidationError):
         svc.apply({"tts": {"instances": {"yandex": {"speed": 9.9}}}})
     assert fired == []

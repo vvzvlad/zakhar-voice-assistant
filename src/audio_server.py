@@ -75,9 +75,24 @@ class AudioServer:
         await self._runner.setup()
         site = web.TCPSite(self._runner, self.host, self.port)
         await site.start()
+        # When bound to an OS-assigned port (0), record the actual port so rebind()'s
+        # no-op check and any port readers see the real value.
+        if self.port == 0 and self._runner is not None:
+            addrs = self._runner.addresses
+            if addrs:
+                self.port = addrs[0][1]
         logger.info(f"audio server on {self.host}:{self.port}")
 
     async def stop(self) -> None:
         if self._runner is not None:
             await self._runner.cleanup()
             self._runner = None
+
+    async def rebind(self, host: str, port: int) -> None:
+        """Re-bind the listening socket to a new host/port. No-op if unchanged.
+        The in-memory TTL cache (self._cache) is preserved across the rebind."""
+        if host == self.host and port == self.port:
+            return
+        await self.stop()
+        self.host, self.port = host, port
+        await self.start()

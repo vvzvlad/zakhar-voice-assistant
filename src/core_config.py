@@ -96,6 +96,14 @@ class RemindersConfig(BaseModel):
     enabled: bool = True
 
 
+class CaptureConfig(BaseModel):
+    # Raw audio capture: when enabled, every finalized utterance's post-frontend PCM
+    # (what the Voice PE streams over the Native API) is saved as a 16 kHz / mono /
+    # 16-bit WAV under `dir`. Off by default; toggle it on for a capture session.
+    enabled: bool = False
+    dir: str = "data/captures"
+
+
 class CoreConfig(BaseModel):
     context: ContextConfig = ContextConfig()
     audio: AudioConfig = AudioConfig()
@@ -109,6 +117,7 @@ class CoreConfig(BaseModel):
     panel: PanelConfig = PanelConfig()
     runs: RunsConfig = RunsConfig()
     reminders: RemindersConfig = RemindersConfig()
+    capture: CaptureConfig = CaptureConfig()
     devices: list[DeviceConfig] = []
     tts_timeout: int = 30
     log_level: str = "INFO"

@@ -19,6 +19,7 @@ class GroqSttProvider(Provider):
     id = "groq"
     label = "Groq Whisper"
     ConfigModel = GroqSttConfig
+    uses_http_cloud = True
 
     def create(self, cfg: GroqSttConfig, deps: Deps):
         from src.stt import GroqSttBackend

@@ -1,6 +1,7 @@
 """Application composition root: boots from data/config.json and runs forever."""
 
 import asyncio
+import contextlib
 import json
 import os
 import time
@@ -12,15 +13,16 @@ from loguru import logger
 import src.plugins  # noqa: F401  triggers provider registration
 from src import config_store
 from src.audio_server import AudioServer
-from src.builtin_mcp.openweathermap import build_openweathermap_server
 from src.config_service import ConfigDoc, ConfigService
 from src.esphome_client import DeviceManager
-from src.mcp_client import McpToolHub
 from src.panel_api import PanelServer
 from src.plugins.base import Deps
+from src.reconfig import Reconfigurator
 from src.run_events import RunEventsHub
 from src.runs_store import RunsStore
-from src.tool_hub import BuiltinMcpSource, HttpMcpSource, ToolHub
+from src.runtime import Runtime
+from src.tool_factory import build_sources
+from src.tool_hub import ToolHub
 from src.version import __version__
 
 
@@ -62,7 +64,6 @@ async def main() -> None:
     stt_backend = svc.create("stt")
     tts_backend = svc.create("tts")
     llm_backend = svc.create("llm")
-    llm_cfg = svc.get("llm")
 
     # Observability: persist every finalized pipeline run to SQLite (gated on config).
     # Pruned once at boot; the panel API serves the run log + 24h metrics from it.
@@ -87,55 +88,59 @@ async def main() -> None:
     audio_server = AudioServer(core.audio.host, core.audio.port, core.audio.ttl)
     await audio_server.start()
 
-    # Multi-source tool hub: an arbitrary list of external MCP servers (one
-    # HttpMcpSource each) plus in-process built-in MCP servers (openweathermap first).
-    # Built only here, in the same task as stop(), per anyio cancel-scope rules. A
-    # source failing to start is handled gracefully inside ToolHub.start(). The weather
-    # tool is gated on an OWM api key; built-in OpenWeatherMap uses the proxied
-    # client_ext for its OWM call. Each external server's source id is its (unique) name.
-    sources = []
-    for srv in core.mcp_servers:
-        if srv.url and srv.name:
-            sources.append(HttpMcpSource(srv.name, McpToolHub(srv.url, srv.token or None, srv.transport)))
-    if core.openweathermap.api_key:
-        sources.append(
-            BuiltinMcpSource(
-                "openweathermap",
-                build_openweathermap_server(
-                    client_ext, core.openweathermap.api_key, core.openweathermap.city
-                ),
-            )
-        )
-    # Built-in calendar MCP (CalDAV). Gated on url + username; the caldav lib is
-    # synchronous, so its tools offload to a worker thread inside the server.
-    if core.calendar.url and core.calendar.username:
-        from src.builtin_mcp.calendar import CalendarClient, build_calendar_server
-        cal_client = CalendarClient(core.calendar.url, core.calendar.username,
-                                    core.calendar.password, core.calendar.calendar)
-        sources.append(BuiltinMcpSource("calendar", build_calendar_server(cal_client)))
     # Built-in reminders MCP (one-shot voice reminders). The scheduler needs the device
     # manager to deliver; the manager needs the hub that holds this source — so the
-    # deliver callback is late-bound after the manager is constructed (below).
+    # deliver callback is late-bound after the manager is constructed (below). The
+    # scheduler is built here (before build_sources) because it gates the reminders
+    # source; build_sources omits reminders when scheduler is None.
     reminders_store = None
     scheduler = None
     if core.reminders.enabled:
         from src.reminders import ReminderScheduler, RemindersStore
         reminders_store = RemindersStore(os.path.join(core.context.dir, "reminders.db"))
         scheduler = ReminderScheduler(reminders_store)
-        from src.builtin_mcp.reminders import build_reminders_server
-        sources.append(BuiltinMcpSource("reminders", build_reminders_server(scheduler)))
+
+    # Multi-source tool hub: an arbitrary list of external MCP servers (one
+    # HttpMcpSource each) plus in-process built-in MCP servers (openweathermap first).
+    # The source list is built by the shared build_sources() factory so boot and
+    # hot-reload produce exactly the same set. Built only here, in the same task as
+    # stop(), per anyio cancel-scope rules. A source failing to start is handled
+    # gracefully inside ToolHub.start(). The weather tool is gated on an OWM api key;
+    # built-in OpenWeatherMap uses the proxied client_ext for its OWM call. Each
+    # external server's source id is its (unique) name.
+    sources = build_sources(core, client_ext, scheduler)
     hub = ToolHub(sources)
     await hub.start()
 
-    zc = zeroconf.Zeroconf()
-    manager = DeviceManager(
-        zc, hub, stt_backend, llm_backend, tts_backend, audio_server,
-        core, llm_cfg, runs_store=runs_store, run_events=run_events,
+    # Mutable runtime holder shared by reference across all pipelines. Live config
+    # is read THROUGH it (via svc); backends/subsystems are swappable attributes for
+    # later hot-reload tiers. Built once hub/audio_server exist, before the manager.
+    rt = Runtime(
+        svc,
+        stt_backend=stt_backend, llm_backend=llm_backend, tts_backend=tts_backend,
+        hub=hub, audio_server=audio_server,
+        runs_store=runs_store, run_events=run_events,
     )
+
+    zc = zeroconf.Zeroconf()
+    manager = DeviceManager(zc, rt)
+    # Back-refs so the Reconfigurator can reach these subsystems on hot-reload.
+    rt.zc = zc
+    rt.manager = manager
+
+    # Hot-reload coordinator: classifies each config change and owns the
+    # pending_restart flag. Registered as a ConfigService change callback. Heavy
+    # rebuilds (e.g. backends) are queued here and drained by run_loop in the main
+    # task, off the panel request task. Reuses the SAME deps bag built above.
+    reconfig_queue: asyncio.Queue = asyncio.Queue()
+    reconf = Reconfigurator(rt, deps, reconfig_queue)
+    svc.on_change(reconf.on_config_change)
 
     # Late-bind delivery now that the manager exists (resolves the circular dependency).
     if scheduler is not None:
         scheduler.deliver = manager.announce
+    rt.scheduler = scheduler                 # may be None
+    rt.reminders_store = reminders_store     # may be None; a hot toggle may swap both
 
     # Admin panel HTTP API. Serves the built frontend if it has been bundled into
     # frontend/react-export/dist; otherwise runs API-only. Constructed and started
@@ -143,6 +148,7 @@ async def main() -> None:
     # the finally cleanup for the resources opened above.
     static_dir = "frontend/react-export/dist"
     panel = None
+    reconfig_task = None
 
     try:
         panel = PanelServer(
@@ -153,28 +159,46 @@ async def main() -> None:
             runs_store=runs_store,
             tool_sources=hub.describe,
             run_events=run_events,
+            pending_restart=reconf.pending_restart,
         )
+        # Back-ref so the Reconfigurator can re-point the panel's runs-store at a
+        # hot-swapped store. Set before the reconfig loop can run.
+        rt.panel = panel
         await panel.start()
         await manager.start()
         if scheduler is not None:
             await scheduler.start()
+        # Drain heavy reconfiguration jobs in this (main) task so blocking model
+        # loads stay off the panel request task and off the event loop (to_thread).
+        reconfig_task = asyncio.create_task(reconf.run_loop())
         # Block until POST /api/restart sets the event (or the task is cancelled).
         # docker `restart: always` brings the process back after the clean exit.
         await restart_event.wait()
     except (asyncio.CancelledError, KeyboardInterrupt):
         logger.info("shutting down")
     finally:
+        # Stop draining reconfiguration jobs before tearing down the resources the
+        # jobs touch. May be unbound if main() failed before the task was created.
+        if reconfig_task is not None:
+            reconfig_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await reconfig_task
         if panel is not None:
             await panel.stop()
-        if scheduler is not None:
-            await scheduler.stop()
+        # Tear down the LIVE scheduler/store: a reminders hot toggle may have swapped
+        # rt.scheduler/rt.reminders_store away from the boot-time locals (or to None).
+        if rt.scheduler is not None:
+            await rt.scheduler.stop()
         await manager.stop()
         await hub.stop()
         await audio_server.stop()
-        await client_ext.aclose()
-        await client_local.aclose()
+        # Close the CURRENT clients from deps: _rebuild_http may have swapped (and
+        # already closed) the boot-time client_ext local, so deps holds the live ones.
+        # httpx aclose() is idempotent, so re-closing an already-closed client is safe.
+        await deps.http_cloud.aclose()
+        await deps.http_local.aclose()
         if runs_store is not None:
             runs_store.close()
-        if reminders_store is not None:
-            reminders_store.close()
+        if rt.reminders_store is not None:
+            rt.reminders_store.close()
         zc.close()

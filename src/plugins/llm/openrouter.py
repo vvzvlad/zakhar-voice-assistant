@@ -13,6 +13,7 @@ class OpenRouterProvider(Provider):
     id = "openrouter"
     label = "OpenRouter"
     ConfigModel = LlmConfig
+    uses_http_cloud = True
 
     def create(self, cfg: LlmConfig, deps: Deps):
         return OpenAICompatLlmBackend(

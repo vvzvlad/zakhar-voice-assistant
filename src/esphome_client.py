@@ -15,35 +15,13 @@ from src.pipeline import Pipeline
 class DeviceClient:
     """One ESPHome speaker: connection lifecycle + voice_assistant wiring."""
 
-    def __init__(
-        self,
-        cfg: DeviceConfig,
-        zc,
-        hub,
-        stt_backend,
-        llm_backend,
-        tts_backend,
-        audio_server,
-        core,
-        llm_cfg,
-        runs_store=None,
-        run_events=None,
-    ):
+    def __init__(self, cfg: DeviceConfig, zc, runtime):
         self.cfg = cfg
-        self.pipeline = Pipeline(
-            cfg.name,
-            hub,
-            stt_backend,
-            llm_backend,
-            tts_backend,
-            audio_server,
-            core,
-            llm_cfg,
-            runs_store=runs_store,
-            run_events=run_events,
-        )
+        self.rt = runtime
+        self.pipeline = Pipeline(cfg.name, runtime)
         self.cli = APIClient(
-            cfg.host, core.esphome.port, None, noise_psk=cfg.psk, zeroconf_instance=zc
+            cfg.host, runtime.core.esphome.port, None,
+            noise_psk=cfg.psk, zeroconf_instance=zc,
         )
         self.reconnect = ReconnectLogic(
             client=self.cli,
@@ -125,34 +103,14 @@ class DeviceClient:
 class DeviceManager:
     """Owns one DeviceClient per configured speaker; starts/stops them all."""
 
-    def __init__(
-        self,
-        zc,
-        hub,
-        stt_backend,
-        llm_backend,
-        tts_backend,
-        audio_server,
-        core,
-        llm_cfg,
-        runs_store=None,
-        run_events=None,
-    ):
+    def __init__(self, zc, runtime):
+        self.zc = zc
+        self.rt = runtime
+        # The esphome port is global (not per-device); track the value the live
+        # clients were built with so reconfigure() can detect a port change.
+        self._esphome_port = runtime.core.esphome.port
         self.clients = [
-            DeviceClient(
-                cfg,
-                zc,
-                hub,
-                stt_backend,
-                llm_backend,
-                tts_backend,
-                audio_server,
-                core,
-                llm_cfg,
-                runs_store=runs_store,
-                run_events=run_events,
-            )
-            for cfg in core.devices
+            DeviceClient(cfg, zc, runtime) for cfg in runtime.core.devices
         ]
 
     def statuses(self) -> list[dict]:
@@ -189,3 +147,30 @@ class DeviceManager:
                 await c.stop()
             except Exception as e:
                 logger.error(f"failed to stop device client {c.cfg.name}: {e}")
+
+    async def reconfigure(self) -> None:
+        """Reconcile running device clients with the current config (hot).
+
+        A device is keyed by (name, host, psk); changed keys are stopped+recreated.
+        A global esphome.port change rebuilds every client (the port is not per-device).
+        `self.clients` is mutated in place so the panel/scheduler keep their bound
+        `statuses`/`announce` methods (we never replace the manager object)."""
+        core = self.rt.core
+        port = core.esphome.port
+        if port != self._esphome_port:
+            await self.stop()
+            self._esphome_port = port
+            self.clients = [DeviceClient(cfg, self.zc, self.rt) for cfg in core.devices]
+            await self.start()
+            return
+        desired = {(d.name, d.host, d.psk): d for d in core.devices}
+        current = {(c.cfg.name, c.cfg.host, c.cfg.psk): c for c in self.clients}
+        for key, client in list(current.items()):
+            if key not in desired:
+                await client.stop()
+                self.clients.remove(client)
+        for key, cfg in desired.items():
+            if key not in current:
+                client = DeviceClient(cfg, self.zc, self.rt)
+                self.clients.append(client)
+                await client.start()

@@ -74,12 +74,15 @@ async def _read_json(request: web.Request):
 class PanelServer:
     def __init__(self, svc, host, port, *, version, started_at,
                  restart_event, device_status=None, static_dir=None,
-                 runs_store=None, tool_sources=None, run_events=None):
+                 runs_store=None, tool_sources=None, run_events=None,
+                 pending_restart=None):
         # svc: ConfigService; started_at: float (time.time()); restart_event: asyncio.Event
         # device_status: optional callable -> list[dict]; static_dir: optional path to built frontend
         # runs_store: optional RunsStore for the observability endpoints (None -> empty/zeros)
         # tool_sources: optional zero-arg callable -> list[dict] (ToolHub.describe()), None -> []
         # run_events: optional RunEventsHub for the live WS run stream (None -> WS closes)
+        # pending_restart: optional zero-arg callable -> bool (the Reconfigurator's flag);
+        #   None -> always reports False (e.g. in tests without a reconfigurator).
         self.svc = svc
         self.host = host
         self.port = port
@@ -91,6 +94,7 @@ class PanelServer:
         self.runs_store = runs_store
         self.tool_sources = tool_sources
         self.run_events = run_events
+        self.pending_restart = pending_restart
         self._runner: web.AppRunner | None = None
 
     # --- handlers ------------------------------------------------------------
@@ -153,7 +157,7 @@ class PanelServer:
             "uptime_seconds": int(time.time() - self.started_at),
             "running": True,
             "log_level": self.svc.core.log_level,
-            "pending_restart": self.svc.pending_restart,
+            "pending_restart": bool(self.pending_restart()) if self.pending_restart else False,
         })
 
     async def _post_restart(self, request: web.Request) -> web.Response:

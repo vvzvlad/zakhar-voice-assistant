@@ -83,14 +83,13 @@ async def test_get_config(tmp_path):
 async def test_patch_config_valid(tmp_path):
     client, svc, _ev = await _client(tmp_path)
     try:
-        assert svc.pending_restart is False
         resp = await client.patch("/api/config",
                                   json={"core": {"context": {"max_turns": 9}}})
         assert resp.status == 200
-        # GET reflects the change and pending_restart flipped on.
+        # GET reflects the applied change. (pending_restart is owned by the
+        # Reconfigurator now; this test wires no reconfigurator, so it stays False.)
         got = await (await client.get("/api/config")).json()
         assert got["core"]["context"]["max_turns"] == 9
-        assert svc.pending_restart is True
     finally:
         await client.close()
 
@@ -127,9 +126,8 @@ async def test_patch_config_invalid_leaves_config_unchanged(tmp_path):
         resp = await client.patch("/api/config",
                                   json={"core": {"vad": {"aggressiveness": 9}}})
         assert resp.status == 422
-        # On-disk/in-memory config kept the old value and no restart was queued.
+        # On-disk/in-memory config kept the old value.
         assert svc.document()["core"]["vad"]["aggressiveness"] == 2
-        assert svc.pending_restart is False
     finally:
         await client.close()
 
@@ -141,8 +139,8 @@ async def test_patch_config_non_object_body_returns_400(tmp_path):
             resp = await client.patch("/api/config", json=bad)
             assert resp.status == 400
             assert "error" in await resp.json()
-        # Nothing was applied.
-        assert svc.pending_restart is False
+        # Nothing was applied: config document is untouched.
+        assert svc.document()["core"]["vad"]["aggressiveness"] == 2
     finally:
         await client.close()
 
@@ -271,6 +269,18 @@ async def test_get_system(tmp_path):
         assert body["log_level"] == "DEBUG"
         assert "started" in body
         assert isinstance(body["uptime_seconds"], int)
+    finally:
+        await client.close()
+
+
+async def test_get_system_pending_restart_true(tmp_path):
+    # A reconfigurator whose flag is set surfaces as pending_restart=True.
+    client, _svc_, _ev = await _client(tmp_path, pending_restart=lambda: True)
+    try:
+        resp = await client.get("/api/system")
+        assert resp.status == 200
+        body = await resp.json()
+        assert body["pending_restart"] is True
     finally:
         await client.close()
 

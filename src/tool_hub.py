@@ -185,6 +185,28 @@ class ToolHub:
                 logger.error(f"tool source {source.id!r} start failed: {e}")
         self._rebuild()
 
+    async def set_sources(self, sources) -> None:
+        """Replace the live source set (hot-reload). Starts the new sources, atomically
+        swaps the advertised list + routing, then stops the old ones. Safe to call from
+        the reconfig drain task: sources use per-operation sessions (anyio-safe)."""
+        new = list(sources)
+        for source in new:
+            try:
+                await source.start()
+            except Exception as e:
+                logger.error(f"tool source {source.id!r} start failed: {e}")
+        old = self._sources
+        self._sources = new
+        self._rebuild()        # sync: atomic swap of advertised/routes relative to call()
+        for source in old:
+            stop = getattr(source, "stop", None)
+            if stop is None:
+                continue
+            try:
+                await stop()
+            except Exception as e:
+                logger.warning(f"tool source {source.id!r} stop failed: {e}")
+
     async def ensure_tools(self) -> None:
         # Called by the LLM loop each run. Refresh each source independently.
         for source in self._sources:

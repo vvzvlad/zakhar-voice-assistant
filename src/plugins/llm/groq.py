@@ -18,6 +18,7 @@ class GroqLlmProvider(Provider):
     id = "groq"
     label = "Groq"
     ConfigModel = GroqLlmConfig
+    uses_http_cloud = True
 
     def create(self, cfg: GroqLlmConfig, deps: Deps):
         return OpenAICompatLlmBackend(

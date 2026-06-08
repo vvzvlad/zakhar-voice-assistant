@@ -4,8 +4,26 @@ from src.core_config import AudioConfig, ContextConfig, CoreConfig
 from src.pipeline import Pipeline
 from src.plugins.llm.base import LlmConfig
 from src.runs_store import _LIST_COLS
+from src.runtime import Runtime
 
 PUBLIC_BASE_URL = "http://10.0.0.10:8200"
+
+
+class FakeSvc:
+    """Tiny ConfigService stand-in for the Runtime: just exposes a live CoreConfig
+    via `.core` and the selected LLM config via `.get("llm")`. The pipeline reads
+    both through the Runtime, so mutating `core` here changes them live."""
+
+    def __init__(self, core, llm_cfg):
+        self._core = core
+        self._llm = llm_cfg
+
+    @property
+    def core(self):
+        return self._core
+
+    def get(self, _category):
+        return self._llm
 
 
 class FakeSttBackend:
@@ -65,18 +83,17 @@ def make_pipeline(tmp_path, name="dev", stt_text="распознанный те�
         audio=AudioConfig(public_base_url=PUBLIC_BASE_URL),
         context=ContextConfig(dir=str(tmp_path)),
     )
-    pipeline = Pipeline(
-        name,
-        hub=object(),
+    rt = Runtime(
+        FakeSvc(core, LlmConfig()),
         stt_backend=FakeSttBackend(stt_text),
         llm_backend=object(),
         tts_backend=tts_backend or FakeTtsBackend(),
+        hub=object(),
         audio_server=audio_server,
-        core=core,
-        llm_cfg=LlmConfig(),
         runs_store=runs_store,
         run_events=run_events,
     )
+    pipeline = Pipeline(name, rt)
     events = []
     pipeline.send_event = lambda et, data: events.append((et, data))
     return pipeline, events
@@ -103,11 +120,15 @@ class FakeVad:
 
 
 def set_small_vad_thresholds(pipeline):
-    """Shrink VAD thresholds so end-pointing fires after only a few 20 ms frames."""
-    pipeline.vad_min_speech_ms = 40       # 2 frames of speech to arm
-    pipeline.vad_silence_ms = 100         # 5 frames of trailing silence to end
-    pipeline.vad_max_utterance_ms = 400   # 20 frames hard cap
-    pipeline.vad_no_speech_timeout_ms = 200  # 10 frames with no speech -> finalize
+    """Shrink VAD thresholds so end-pointing fires after only a few 20 ms frames.
+
+    The pipeline reads these live off rt.core.vad, so we mutate the CoreConfig the
+    runtime hands out (CoreConfig is a pydantic model: attribute assignment works)."""
+    vad = pipeline.rt.core.vad
+    vad.min_speech_ms = 40         # 2 frames of speech to arm
+    vad.silence_ms = 100           # 5 frames of trailing silence to end
+    vad.max_utterance_ms = 400     # 20 frames hard cap
+    vad.no_speech_timeout_ms = 200  # 10 frames with no speech -> finalize
 
 
 def patch_llm(monkeypatch, reply="ответ"):
@@ -513,6 +534,49 @@ async def test_llm_error_then_tts_fail_keeps_error_stage_llm(tmp_path, monkeypat
     # LLM stage/text preserved despite the later TTS failure.
     assert rec["error_stage"] == "LLM"
     assert rec["error_text"] == "Ошибка: модель недоступна"
+
+
+async def test_raw_capture_writes_wav_when_enabled(tmp_path, monkeypatch):
+    # With capture enabled, the finalized utterance PCM is saved as a single
+    # 16 kHz / mono / 16-bit WAV under capture.dir, matching the buffered bytes.
+    import wave
+
+    patch_llm(monkeypatch, reply="готово")
+    cap_dir = tmp_path / "captures"
+    pipeline, _ = make_pipeline(tmp_path, name="dev", stt_text="включи свет")
+    pipeline.rt.core.capture.enabled = True
+    pipeline.rt.core.capture.dir = str(cap_dir)
+
+    pcm = b"\x01\x02" * 100  # 400 bytes -> 200 16-bit frames
+    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_audio(pcm)
+    await pipeline.on_stop(False)
+
+    wavs = list(cap_dir.glob("*.wav"))
+    assert len(wavs) == 1
+    with wave.open(str(wavs[0]), "rb") as w:
+        assert w.getnchannels() == 1
+        assert w.getsampwidth() == 2
+        assert w.getframerate() == 16000
+        # 2-byte samples: frame count == len(pcm) / 2.
+        assert w.getnframes() == len(pcm) // 2
+        assert w.readframes(w.getnframes()) == pcm
+
+
+async def test_raw_capture_disabled_by_default_writes_nothing(tmp_path, monkeypatch):
+    # Default capture.enabled is False, so no WAV is written.
+    patch_llm(monkeypatch, reply="готово")
+    cap_dir = tmp_path / "captures"
+    pipeline, _ = make_pipeline(tmp_path, name="dev", stt_text="включи свет")
+    # Point dir at our path but leave enabled at its default (False).
+    pipeline.rt.core.capture.dir = str(cap_dir)
+    assert pipeline.rt.core.capture.enabled is False
+
+    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_audio(b"\x01\x02" * 100)
+    await pipeline.on_stop(False)
+
+    assert not cap_dir.exists() or list(cap_dir.glob("*.wav")) == []
 
 
 async def test_tts_fail_without_prior_error_sets_tts_stage(tmp_path, monkeypatch):
