@@ -1,0 +1,19 @@
+# ESPHome micro_wake_word — "Захар" v4 (strictly beats v1: higher recall + lower music-FAPH)
+# Target: ESP32-S3 + PSRAM (Home Assistant Voice PE). ESPHome >= 2024.7.
+#
+# Host zakhar.tflite + zakhar.json and point `model:` at the JSON.
+# Thresholds come from zakhar.json (probability_cutoff 0.95, sliding_window_size 3)
+# and can be overridden here without retraining.
+
+micro_wake_word:
+  vad:                  # VAD PRE-GATE — KEEP ENABLED.
+  # ^ Drops continuous-music false-accepts to ~0 (instrumental music is non-speech and
+  #   is blocked before the wake-word decision). No effect on real-voice recall.
+  models:
+    - model: https://YOUR_HOST/zakhar.json
+      # id: zakhar
+      # probability_cutoff: 0.95     # override (higher -> fewer false accepts)
+      # sliding_window_size: 3
+  on_wake_word_detected:
+    - voice_assistant.start:
+        wake_word: !lambda return wake_word;

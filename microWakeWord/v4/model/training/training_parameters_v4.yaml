@@ -1,0 +1,110 @@
+window_step_ms: 10
+train_dir: /home/claude/zakhar-mww/trained_models/zakhar_v4
+
+features:
+  # ===== Positives (many speakers: piper 4 + Silero 5+random; real x5 aug) =====
+  - features_dir: /home/claude/zakhar-mww/features_v4_real
+    sampling_weight: 6.0
+    penalty_weight: 1.0
+    truth: true
+    truncation_strategy: truncate_start
+    type: mmap
+  - features_dir: /home/claude/zakhar-mww/features_v4_synth
+    sampling_weight: 3.0
+    penalty_weight: 1.0
+    truth: true
+    truncation_strategy: truncate_start
+    type: mmap
+  # ===== Confusable hard-negatives (phonetic twins) — malonestar weights =====
+  - features_dir: /home/claude/zakhar-mww/features_v4_hardneg
+    sampling_weight: 8.0
+    penalty_weight: 5.0
+    truth: false
+    truncation_strategy: truncate_start
+    type: mmap
+  # ===== MUSIC negatives (tens of hours; coverage is the lever) =====
+  - features_dir: /home/claude/zakhar-mww/v3_neg/music          # fma_medium 124900
+    sampling_weight: 12.0
+    penalty_weight: 1.0
+    truth: false
+    truncation_strategy: random
+    type: mmap
+  - features_dir: /home/claude/zakhar-mww/v3c/fma_small_neg     # 7996
+    sampling_weight: 6.0
+    penalty_weight: 1.0
+    truth: false
+    truncation_strategy: random
+    type: mmap
+  - features_dir: /home/claude/zakhar-mww/v4/neg_musan_music    # MUSAN music (train split)
+    sampling_weight: 8.0
+    penalty_weight: 1.0
+    truth: false
+    truncation_strategy: random
+    type: mmap
+  # ===== Noise / environmental =====
+  - features_dir: /home/claude/zakhar-mww/v3_neg/noise          # fsd50k + wham
+    sampling_weight: 5.0
+    penalty_weight: 1.0
+    truth: false
+    truncation_strategy: random
+    type: mmap
+  - features_dir: /home/claude/zakhar-mww/v4/neg_esc50          # ESC-50
+    sampling_weight: 4.0
+    penalty_weight: 1.0
+    truth: false
+    truncation_strategy: random
+    type: mmap
+  - features_dir: /home/claude/zakhar-mww/v4/neg_musan_noise    # MUSAN noise
+    sampling_weight: 4.0
+    penalty_weight: 1.0
+    truth: false
+    truncation_strategy: random
+    type: mmap
+  # ===== Speech negatives =====
+  - features_dir: /home/claude/zakhar-mww/negative_datasets/speech
+    sampling_weight: 10.0
+    penalty_weight: 1.0
+    truth: false
+    truncation_strategy: random
+    type: mmap
+  - features_dir: /home/claude/zakhar-mww/negative_datasets/dinner_party
+    sampling_weight: 8.0
+    penalty_weight: 1.0
+    truth: false
+    truncation_strategy: random
+    type: mmap
+  # ===== Ambient sets for best-weights selection (split) =====
+  - features_dir: /home/claude/zakhar-mww/negative_datasets/dinner_party_eval  # conversational FAPH
+    sampling_weight: 0.0
+    penalty_weight: 1.0
+    truth: false
+    truncation_strategy: split
+    type: mmap
+  - features_dir: /home/claude/zakhar-mww/v4/musan_amb          # MUSIC FAPH (selection!)
+    sampling_weight: 0.0
+    penalty_weight: 1.0
+    truth: false
+    truncation_strategy: split
+    type: mmap
+
+# 100k steps (research: 80-150k).
+training_steps: [40000, 40000, 20000]
+learning_rates: [0.001, 0.0005, 0.0001]
+# Moderate-high (VAD already handles most music; protect recall). pos x2 per research.
+positive_class_weight: [2, 2, 2]
+negative_class_weight: [30, 40, 50]
+
+batch_size: 128
+
+time_mask_max_size: [5, 5, 5]
+time_mask_count: [2, 2, 2]
+freq_mask_max_size: [5, 5, 5]
+freq_mask_count: [2, 2, 2]
+
+eval_step_interval: 1000
+clip_duration_ms: 1500
+
+# Target a REAL music-FAPH goal (not 0). Selection minimizes ambient FA/h (now incl. MUSIC).
+target_minimization: 1.0
+minimization_metric: ambient_false_positives_per_hour
+maximization_metric: average_viable_recall
