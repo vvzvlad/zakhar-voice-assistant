@@ -158,7 +158,14 @@ class ConfigService:
 
     def apply(self, patch: dict):
         """Deep-merge `patch` into the current document, re-validate, persist, then
-        fire callbacks. Raises (without persisting) on any validation error."""
+        fire callbacks. Raises (without persisting) on any validation error.
+
+        Masked-secret contract: the panel MUST NOT send back masked secret
+        placeholders (the {"is_set": ...} shape catalog() emits). To keep a secret's
+        current value, omit that field from the patch — it survives the merge
+        untouched. Sending a masked placeholder for a secret field fails validation
+        by design (a dict is not a valid SecretStr), so the file is NOT written and
+        the plaintext is never clobbered with the placeholder."""
         base = _reveal(self._doc.model_dump(mode="python"))
         merged = _deep_merge(base, patch)
         new_doc = ConfigDoc(**merged)      # structural + core validation

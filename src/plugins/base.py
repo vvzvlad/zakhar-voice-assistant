@@ -43,6 +43,10 @@ REGISTRY: dict[str, dict[str, Provider]] = defaultdict(dict)
 def register(cls):
     """Class decorator: instantiate and register the provider under its category/id."""
     inst = cls()
+    # Refuse to silently shadow an already-registered provider: as the set grows a
+    # duplicate category/id would otherwise overwrite the earlier one without a trace.
+    if inst.id in REGISTRY[inst.category]:
+        raise ValueError(f"Duplicate provider {inst.category}/{inst.id!r} already registered")
     REGISTRY[inst.category][inst.id] = inst
     return cls
 

@@ -1,7 +1,7 @@
 import pytest
 
 import src.plugins  # noqa: F401  triggers @register on all providers
-from src.plugins.base import REGISTRY, get_provider, providers
+from src.plugins.base import REGISTRY, Provider, get_provider, providers, register
 
 
 def test_tts_ids_registered():
@@ -37,3 +37,18 @@ def test_providers_returns_copy():
     snap = providers("tts")
     snap["fake"] = object()
     assert "fake" not in REGISTRY["tts"]
+
+
+def test_duplicate_registration_raises():
+    # Register under a fresh fake category to avoid polluting the real REGISTRY;
+    # a second register of the same id must raise instead of silently shadowing.
+    class _Fake(Provider):
+        category = "fake-cat"
+        id = "dup"
+
+    try:
+        register(_Fake)  # first registration succeeds
+        with pytest.raises(ValueError):
+            register(_Fake)  # duplicate category/id -> guard fires
+    finally:
+        REGISTRY.pop("fake-cat", None)  # keep the real REGISTRY clean

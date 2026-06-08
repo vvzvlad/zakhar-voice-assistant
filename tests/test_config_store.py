@@ -59,3 +59,31 @@ def test_unicode_preserved(tmp_path):
     config_store.save({"city": "Москва"}, path)
     raw = (tmp_path / "config.json").read_text(encoding="utf-8")
     assert "Москва" in raw  # ensure_ascii=False keeps it readable
+
+
+def test_successful_overwrite_leaves_no_tmp(tmp_path):
+    # After a normal overwrite there must be exactly the config (+ its .bak), never
+    # a leftover *.tmp file.
+    path = str(tmp_path / "config.json")
+    config_store.save({"v": 1}, path)
+    config_store.save({"v": 2}, path)
+    files = os.listdir(tmp_path)
+    assert "config.json" in files
+    assert not any(name.endswith(".tmp") for name in files)
+
+
+def test_failed_save_leaves_no_tmp_and_keeps_good_file(tmp_path, monkeypatch):
+    # Write a good file first, then force the next save to blow up mid-write.
+    path = str(tmp_path / "config.json")
+    config_store.save({"v": "good"}, path)
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("serialization failed")
+
+    monkeypatch.setattr(config_store.json, "dump", boom)
+    with pytest.raises(RuntimeError):
+        config_store.save({"v": "new"}, path)
+
+    # No temp garbage left behind, and the previous good file is intact.
+    assert not any(name.endswith(".tmp") for name in os.listdir(tmp_path))
+    assert config_store.load(path) == {"v": "good"}

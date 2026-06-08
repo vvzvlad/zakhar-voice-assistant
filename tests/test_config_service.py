@@ -99,6 +99,41 @@ def test_mask_secrets_unset_secret_is_false():
     assert masked["mcp"]["token"] == {"is_set": False}
 
 
+def test_catalog_masks_psk_in_device_list(tmp_path):
+    # devices is a list of models, each with a secret `psk` field — masking must
+    # recurse into the list and never leak the plaintext psk.
+    doc = _doc()
+    doc["core"]["devices"] = [
+        {"name": "kitchen", "host": "10.0.0.5", "psk": "psk-plaintext-1"},
+        {"name": "bedroom", "host": "10.0.0.6", "psk": "psk-plaintext-2"},
+    ]
+    cat = ConfigService(doc, _deps(), path=str(tmp_path / "config.json")).catalog()
+
+    blob = repr(cat)
+    assert "psk-plaintext-1" not in blob
+    assert "psk-plaintext-2" not in blob
+
+    devices = cat["core"]["values"]["devices"]
+    assert len(devices) == 2
+    for dev in devices:
+        assert dev["psk"] == {"is_set": True}
+    assert {d["name"] for d in devices} == {"kitchen", "bedroom"}
+
+
+def test_apply_with_masked_secret_placeholder_raises_and_does_not_persist(tmp_path):
+    # Documented contract: a masked placeholder ({"is_set": ...}) sent back for a
+    # secret field fails validation and the file is not written.
+    path = str(tmp_path / "config.json")
+    svc = ConfigService(_doc(), _deps(), path=path)
+    with pytest.raises(ValidationError):
+        svc.apply({"core": {"weather": {"api_key": {"is_set": True}}}})
+
+    import os
+    assert not os.path.exists(path)  # nothing persisted
+    # In-memory secret is untouched.
+    assert svc.core.weather.api_key.get_secret_value() == "weather-secret"
+
+
 def test_options_proxies_provider(tmp_path):
     svc = _service(tmp_path)
     assert "zahar" in svc.options("tts", "yandex", "voice")
