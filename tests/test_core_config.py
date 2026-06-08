@@ -1,7 +1,7 @@
 import pytest
 from pydantic import ValidationError
 
-from src.core_config import CoreConfig, McpServerConfig
+from src.core_config import CoreConfig, McpServerConfig, VadConfig
 
 
 def test_mcp_servers_accepts_list_of_entries():
@@ -34,3 +34,12 @@ def test_mcp_server_transport_literal_is_validated():
 def test_mcp_server_requires_name():
     with pytest.raises(ValidationError):
         McpServerConfig(url="http://x")
+
+
+def test_vad_trim_start_ms_defaults_to_200():
+    assert CoreConfig().vad.trim_start_ms == 200
+
+
+def test_vad_trim_start_ms_rejects_negative():
+    with pytest.raises(ValidationError):
+        VadConfig(trim_start_ms=-1)

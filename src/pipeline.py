@@ -57,10 +57,12 @@ CAPTURE_MAX_SECONDS = 300
 ARM_TTL = 5.0
 
 # Known Whisper STT hallucination markers (lowercase). Whisper tends to emit
-# leftover subtitle-credit phrases (training-data artifacts) on silence/noise;
-# "DimaTorzok" is one such credit string. When a transcription contains one of
-# these, we treat the run as if nothing was said and drop it.
-STT_HALLUCINATION_MARKERS = ("dimatorzok",)
+# leftover subtitle-credit / stock phrases (training-data artifacts) on
+# silence/noise: "DimaTorzok" is one such credit string and "Продолжение
+# следует..." ("to be continued") is a recurring stock caption. When a
+# transcription contains one of these (substring, case-insensitive), we treat
+# the run as if nothing was said and drop it.
+STT_HALLUCINATION_MARKERS = ("dimatorzok", "продолжение следует")
 
 
 def contains_stt_hallucination(text: str) -> bool:
@@ -114,6 +116,23 @@ def _pcm_to_wav_bytes(pcm: bytes) -> bytes:
         w.setframerate(SAMPLE_RATE)
         w.writeframes(pcm)
     return buf.getvalue()
+
+
+def _trim_start_pcm(pcm: bytes, trim_ms: int) -> bytes:
+    """Drop the first ``trim_ms`` of 16 kHz / mono / 16-bit PCM from an utterance.
+
+    Used to cut the wake-word tail / button-press lead-in off the captured sample
+    before STT, so it does not pollute the transcription. The cut is sample-aligned
+    (SAMPLE_RATE * 2 / 1000 = 32 bytes/ms is always even). If the trim would consume
+    the whole sample (or more), the PCM is returned unchanged so we never hand empty
+    audio to STT.
+    """
+    if trim_ms <= 0:
+        return pcm
+    trim_bytes = int(trim_ms * SAMPLE_RATE * 2 / 1000)
+    if trim_bytes <= 0 or trim_bytes >= len(pcm):
+        return pcm
+    return pcm[trim_bytes:]
 
 
 class Pipeline:
@@ -474,248 +493,275 @@ class Pipeline:
         RUN_END is always sent.
         """
         pending_run = None
-        async with self._lock:
-            # Total-run timer (logging only); started after the claim/lock.
-            t0 = time.perf_counter()
-            logger.info(
-                f"{self.name}: 🎙️ captured {len(pcm)} bytes "
-                f"(~{len(pcm) / (SAMPLE_RATE * 2):.1f}s), reason={reason}"
-            )
-            if not pcm:
-                # Truly-empty audio: nothing to transcribe and nothing to record.
-                logger.info(f"{self.name}: empty audio, ending run")
-                self._emit(VAET.VOICE_ASSISTANT_RUN_END, {})
-                return
-
-            # Optional raw audio capture: save the WHOLE finalized utterance PCM as a
-            # 16 kHz / mono / 16-bit WAV. Off by default; enabled per capture session.
-            # A capture failure must NEVER break the run, so it is fully wrapped.
-            if self.core.capture.enabled:
-                try:
-                    capture_dir = self.core.capture.dir
-                    safe_name = "".join(
-                        c if c.isascii() and (c.isalnum() or c in "._-") else "_"
-                        for c in self.name
-                    )
-                    fname = f"{safe_name}_{time.time_ns()}_{reason}.wav"
-                    out_path = os.path.join(capture_dir, fname)
-
-                    def _capture(d=capture_dir, p=out_path, data=pcm):
-                        os.makedirs(d, exist_ok=True)
-                        _write_wav(p, data)
-
-                    await asyncio.to_thread(_capture)
-                    logger.info(
-                        f"{self.name}: 💾 captured raw audio -> {out_path} "
-                        f"({len(pcm)} bytes)"
-                    )
-                except Exception as e:
-                    logger.error(f"{self.name}: raw audio capture failed: {e}")
-
-            # Observability record for this run. Accumulated across all terminal
-            # paths below and inserted exactly once in the finally; the rest of
-            # the timings fill in as stages complete.
-            # t_vad is the captured-utterance duration in ms (the "VAD capture"
-            # segment shown in the UI waterfall), derived from the PCM length —
-            # NOT the CPU time spent running the VAD.
-            # audio_ms is intentionally left None for now: we don't decode the
-            # synthesized mp3 to measure its playback duration yet.
-            record = {
-                "ts": time.time(),
-                "device": self.name,
-                "reason": reason,
-                "result": "empty",
-                "t_vad": int(len(pcm) / (SAMPLE_RATE * 2) * 1000),
-                "t_stt": 0, "t_llm": 0, "t_ruaccent": 0, "t_tts": 0,
-                "stt_text": "", "llm_text": "",
-                "model": None, "tokens": None,
-                "audio_ms": None, "audio_bytes": None, "audio_fmt": None,
-                "error_stage": None, "error_text": None,
-                "rounds": [],
-            }
-            try:
-                # VAD found no speech in the whole window — this is silence/noise,
-                # not an utterance. Skip STT entirely: Whisper hallucinates stray
-                # phrases on non-speech audio (e.g. "Продолжение следует..."), which
-                # would then pollute the run log or flow into the LLM/TTS. Balance the
-                # STT_START emitted in on_start with an empty STT_END, end the run, and
-                # let the finally below record it as an empty run (result="empty",
-                # stt_text="", t_stt=0 — all left at their defaults).
-                if reason == "no_speech":
-                    logger.info(
-                        f"{self.name}: 😶 no speech detected by VAD, skipping STT"
-                    )
-                    self._emit(VAET.VOICE_ASSISTANT_STT_END, {"text": ""})
-                    self._emit(VAET.VOICE_ASSISTANT_RUN_END, {})
-                    return
-                stt_t = time.perf_counter()
-                text = await self.stt_backend.transcribe(pcm)
-                record["t_stt"] = int((time.perf_counter() - stt_t) * 1000)
+        try:
+            async with self._lock:
+                # Total-run timer (logging only); started after the claim/lock.
+                t0 = time.perf_counter()
                 logger.info(
-                    f"{self.name}: 📝 STT ({time.perf_counter() - stt_t:.2f}s): "
-                    f"{text!r}"
+                    f"{self.name}: 🎙️ captured {len(pcm)} bytes "
+                    f"(~{len(pcm) / (SAMPLE_RATE * 2):.1f}s), reason={reason}"
                 )
-                # Whisper emits leftover subtitle-credit artifacts (e.g.
-                # "DimaTorzok") on silence/noise. Blank such hallucinated text so it
-                # falls through into the empty-transcription branch below — the run
-                # ends exactly like an empty result (no LLM/TTS, recorded "empty").
-                if contains_stt_hallucination(text):
-                    logger.info(
-                        f"{self.name}: 🗑️ discarding STT hallucination: {text!r}"
-                    )
-                    text = ""
-                record["stt_text"] = text
-                self._emit(VAET.VOICE_ASSISTANT_STT_END, {"text": text})
-                if not text.strip():
-                    # Empty transcription: result stays "empty"; record in finally.
-                    logger.info(f"{self.name}: empty transcription, ending run")
+                if not pcm:
+                    # Truly-empty audio: nothing to transcribe and nothing to record.
+                    logger.info(f"{self.name}: empty audio, ending run")
                     self._emit(VAET.VOICE_ASSISTANT_RUN_END, {})
                     return
 
-                self._emit(VAET.VOICE_ASSISTANT_INTENT_START, {})
-                logger.info(f"{self.name}: 🤖 → LLM: {text!r}")
-                llm_t = time.perf_counter()
-                history = context.load_context(
-                    self._context_path,
-                    max_turns=self.core.context.max_turns,
-                    ttl_seconds=self.core.context.ttl_seconds,
-                )
-                trace: dict = {}
-                reply = await llm.call_llm_api(
-                    self.llm_backend,
-                    self.hub,
-                    text,
-                    core=self.core,
-                    llm_cfg=self.llm_cfg,
-                    history=history,
-                    trace=trace,
-                    device=self.name,
-                )
-                record["t_llm"] = int((time.perf_counter() - llm_t) * 1000)
-                record["llm_text"] = reply
-                record["model"] = trace.get("model")
-                record["tokens"] = trace.get("tokens")
-                record["rounds"] = trace.get("rounds") or []
-                # Did the model actually run any tool this round?
-                tool_used = any(r.get("calls") for r in record["rounds"])
-                if reply.startswith("Ошибка:"):
-                    # LLM-layer error (already a human-readable string). Classify it
-                    # but keep current behavior: continue on to the TTS attempt.
-                    record["result"] = "error"
-                    record["error_stage"] = "LLM"
-                    record["error_text"] = reply
-                else:
-                    record["result"] = "tool" if tool_used else "ok"
-                logger.info(
-                    f"{self.name}: 💬 LLM reply ({time.perf_counter() - llm_t:.2f}s): "
-                    f"{reply!r}"
-                )
+                # Trim the configured lead-in (wake-word tail / button-press click) off the
+                # start of the captured sample. The trim is applied ONCE here, so every
+                # downstream consumer in this run uses the trimmed sample: STT, the t_vad
+                # metric, the capture-session WAV and the stored diagnostic audio. Read live
+                # off core.vad so it hot-applies. _trim_start_pcm never returns empty audio,
+                # so the non-empty guard above still holds afterwards. The manual
+                # "record N seconds" capture-only path bypasses _run and is unaffected.
+                trim_ms = self.core.vad.trim_start_ms
+                if trim_ms > 0:
+                    trimmed = _trim_start_pcm(pcm, trim_ms)
+                    if len(trimmed) != len(pcm):
+                        logger.info(
+                            f"{self.name}: ✂️ trimmed {len(pcm) - len(trimmed)} bytes "
+                            f"(~{trim_ms} ms) off sample start"
+                        )
+                    pcm = trimmed
 
+                # Optional raw audio capture: save the finalized utterance PCM (already
+                # trimmed by core.vad.trim_start_ms above) as a 16 kHz / mono / 16-bit WAV.
+                # Off by default; enabled per capture session. A capture failure must NEVER
+                # break the run, so it is fully wrapped.
+                if self.core.capture.enabled:
+                    try:
+                        capture_dir = self.core.capture.dir
+                        safe_name = "".join(
+                            c if c.isascii() and (c.isalnum() or c in "._-") else "_"
+                            for c in self.name
+                        )
+                        fname = f"{safe_name}_{time.time_ns()}_{reason}.wav"
+                        out_path = os.path.join(capture_dir, fname)
+
+                        def _capture(d=capture_dir, p=out_path, data=pcm):
+                            os.makedirs(d, exist_ok=True)
+                            _write_wav(p, data)
+
+                        await asyncio.to_thread(_capture)
+                        logger.info(
+                            f"{self.name}: 💾 captured raw audio -> {out_path} "
+                            f"({len(pcm)} bytes)"
+                        )
+                    except Exception as e:
+                        logger.error(f"{self.name}: raw audio capture failed: {e}")
+
+                # Observability record for this run. Accumulated across all terminal
+                # paths below and inserted exactly once in the finally; the rest of
+                # the timings fill in as stages complete.
+                # t_vad is the captured-utterance duration in ms (the "VAD capture"
+                # segment shown in the UI waterfall), derived from the PCM length —
+                # NOT the CPU time spent running the VAD.
+                # audio_ms is intentionally left None for now: we don't decode the
+                # synthesized mp3 to measure its playback duration yet.
+                record = {
+                    "ts": time.time(),
+                    "device": self.name,
+                    "reason": reason,
+                    "result": "empty",
+                    "t_vad": int(len(pcm) / (SAMPLE_RATE * 2) * 1000),
+                    "t_stt": 0, "t_llm": 0, "t_ruaccent": 0, "t_tts": 0,
+                    "stt_text": "", "llm_text": "",
+                    "model": None, "tokens": None,
+                    "audio_ms": None, "audio_bytes": None, "audio_fmt": None,
+                    "error_stage": None, "error_text": None,
+                    "rounds": [],
+                }
                 try:
-                    context.append_context(
+                    # VAD found no speech in the whole window — this is silence/noise,
+                    # not an utterance. Skip STT entirely: Whisper hallucinates stray
+                    # phrases on non-speech audio (e.g. "Продолжение следует..."), which
+                    # would then pollute the run log or flow into the LLM/TTS. Balance the
+                    # STT_START emitted in on_start with an empty STT_END, end the run, and
+                    # let the finally below record it as an empty run (result="empty",
+                    # stt_text="", t_stt=0 — all left at their defaults).
+                    if reason == "no_speech":
+                        logger.info(
+                            f"{self.name}: 😶 no speech detected by VAD, skipping STT"
+                        )
+                        self._emit(VAET.VOICE_ASSISTANT_STT_END, {"text": ""})
+                        self._emit(VAET.VOICE_ASSISTANT_RUN_END, {})
+                        return
+                    stt_t = time.perf_counter()
+                    text = await self.stt_backend.transcribe(pcm)
+                    record["t_stt"] = int((time.perf_counter() - stt_t) * 1000)
+                    logger.info(
+                        f"{self.name}: 📝 STT ({time.perf_counter() - stt_t:.2f}s): "
+                        f"{text!r}"
+                    )
+                    # Whisper emits leftover subtitle-credit artifacts (e.g.
+                    # "DimaTorzok") on silence/noise. Blank such hallucinated text so it
+                    # falls through into the empty-transcription branch below — the run
+                    # ends exactly like an empty result (no LLM/TTS, recorded "empty").
+                    if contains_stt_hallucination(text):
+                        logger.info(
+                            f"{self.name}: 🗑️ discarding STT hallucination: {text!r}"
+                        )
+                        text = ""
+                    record["stt_text"] = text
+                    self._emit(VAET.VOICE_ASSISTANT_STT_END, {"text": text})
+                    if not text.strip():
+                        # Empty transcription: result stays "empty"; record in finally.
+                        logger.info(f"{self.name}: empty transcription, ending run")
+                        self._emit(VAET.VOICE_ASSISTANT_RUN_END, {})
+                        return
+
+                    self._emit(VAET.VOICE_ASSISTANT_INTENT_START, {})
+                    logger.info(f"{self.name}: 🤖 → LLM: {text!r}")
+                    llm_t = time.perf_counter()
+                    history = context.load_context(
                         self._context_path,
-                        text,
-                        reply,
                         max_turns=self.core.context.max_turns,
                         ttl_seconds=self.core.context.ttl_seconds,
                     )
-                except Exception as e:
-                    # Context persistence failure must not break the run.
-                    logger.error(f"{self.name}: context append failed: {e}")
-
-                self._emit(
-                    VAET.VOICE_ASSISTANT_INTENT_END,
-                    {
-                        "conversation_id": conversation_id,
-                        "continue_conversation": "0",
-                    },
-                )
-
-                self._emit(VAET.VOICE_ASSISTANT_TTS_START, {"text": reply})
-                try:
-                    tts_t = time.perf_counter()
-                    mime, audio = await self.tts_backend.synthesize(reply, "ru")
-                    record["t_tts"] = int((time.perf_counter() - tts_t) * 1000)
-                    logger.info(
-                        f"{self.name}: 🔊 TTS ({time.perf_counter() - tts_t:.2f}s, "
-                        f"{len(audio)} bytes)"
+                    trace: dict = {}
+                    reply = await llm.call_llm_api(
+                        self.llm_backend,
+                        self.hub,
+                        text,
+                        core=self.core,
+                        llm_cfg=self.llm_cfg,
+                        history=history,
+                        trace=trace,
+                        device=self.name,
                     )
-                    audio_id = self.audio_server.put(audio, mime)
-                    ext, url = tts_url(self.public_base_url, audio_id, mime)
-                    record["audio_bytes"] = len(audio)
-                    record["audio_fmt"] = ext
-                    logger.info(f"{self.name}: ▶ serving {url}")
-                    self._emit(VAET.VOICE_ASSISTANT_TTS_END, {"url": url})
-                except Exception as e:
-                    # No TTS_END on failure; the run still ends cleanly.
-                    # result="error" unconditionally, but only claim the stage/
-                    # text if nothing earlier set them: when the LLM already
-                    # reported an error (error_stage="LLM") we continued into TTS
-                    # anyway, so a TTS failure here must not overwrite the LLM
-                    # root cause.
-                    record["result"] = "error"
-                    if record["error_stage"] is None:
-                        record["error_stage"] = "TTS"
-                        record["error_text"] = str(e)
-                    logger.error(f"TTS failed: {e}")
-
-                logger.info(
-                    f"{self.name}: ✅ run complete in {time.perf_counter() - t0:.2f}s"
-                )
-                self._emit(VAET.VOICE_ASSISTANT_RUN_END, {})
-            except Exception as e:
-                record["result"] = "error"
-                record["error_stage"] = "pipeline"
-                record["error_text"] = str(e)
-                logger.exception(f"{self.name}: pipeline run failed: {e}")
-                self._emit(
-                    VAET.VOICE_ASSISTANT_ERROR,
-                    {"code": "server_error", "message": str(e)},
-                )
-                self._emit(VAET.VOICE_ASSISTANT_RUN_END, {})
-            finally:
-                # Record the run on every non-empty-pcm path (empty-STT return,
-                # success, TTS-fail, exception). A recording failure must never
-                # break the run or swallow RUN_END, so it is fully wrapped.
-                if self.runs_store is not None:
-                    record["t_total"] = int((time.perf_counter() - t0) * 1000)
-                    try:
-                        run_id = await asyncio.to_thread(self.runs_store.insert, record)
-                    except Exception as e:
-                        logger.error(f"{self.name}: run record failed: {e}")
+                    record["t_llm"] = int((time.perf_counter() - llm_t) * 1000)
+                    record["llm_text"] = reply
+                    record["model"] = trace.get("model")
+                    record["tokens"] = trace.get("tokens")
+                    record["rounds"] = trace.get("rounds") or []
+                    # Did the model actually run any tool this round?
+                    tool_used = any(r.get("calls") for r in record["rounds"])
+                    if reply.startswith("Ошибка:"):
+                        # LLM-layer error (already a human-readable string). Classify it
+                        # but keep current behavior: continue on to the TTS attempt.
+                        record["result"] = "error"
+                        record["error_stage"] = "LLM"
+                        record["error_text"] = reply
                     else:
-                        # Store the finalized utterance audio (the exact PCM sent to
-                        # STT) in a rolling window of the last runs.audio_keep, so it
-                        # can be downloaded/played from the log to diagnose mis-triggers
-                        # (e.g. a wake-word tail reaching STT). Best-effort: a storage
-                        # failure must never break the run or swallow the broadcast.
-                        stored_audio = False
-                        if self.core.runs.store_audio and pcm:
-                            try:
-                                wav = _pcm_to_wav_bytes(pcm)
-                                await asyncio.to_thread(
-                                    self.runs_store.put_audio,
-                                    run_id, wav, self.core.runs.audio_keep,
-                                )
-                                stored_audio = True
-                            except Exception as e:
-                                logger.error(
-                                    f"{self.name}: utterance audio store failed: {e}"
-                                )
-                        # Defer the live broadcast until the lock is released so a slow
-                        # WebSocket consumer can't backpressure the next run on this speaker.
-                        if self.run_events is not None:
-                            pending_run = summary_row(
-                                record, run_id, has_audio=stored_audio
-                            )
+                        record["result"] = "tool" if tool_used else "ok"
+                    logger.info(
+                        f"{self.name}: 💬 LLM reply ({time.perf_counter() - llm_t:.2f}s): "
+                        f"{reply!r}"
+                    )
 
-        # Outside the lock: push to live panel subscribers. Fully isolated — a
-        # broadcast failure (or a slow client) must never affect the run or the lock.
-        if pending_run is not None:
-            try:
-                await self.run_events.broadcast({"type": "run", "run": pending_run})
-            except Exception as e:
-                logger.error(f"{self.name}: run broadcast failed: {e}")
+                    try:
+                        context.append_context(
+                            self._context_path,
+                            text,
+                            reply,
+                            max_turns=self.core.context.max_turns,
+                            ttl_seconds=self.core.context.ttl_seconds,
+                        )
+                    except Exception as e:
+                        # Context persistence failure must not break the run.
+                        logger.error(f"{self.name}: context append failed: {e}")
+
+                    self._emit(
+                        VAET.VOICE_ASSISTANT_INTENT_END,
+                        {
+                            "conversation_id": conversation_id,
+                            "continue_conversation": "0",
+                        },
+                    )
+
+                    self._emit(VAET.VOICE_ASSISTANT_TTS_START, {"text": reply})
+                    try:
+                        tts_t = time.perf_counter()
+                        mime, audio = await self.tts_backend.synthesize(reply, "ru")
+                        record["t_tts"] = int((time.perf_counter() - tts_t) * 1000)
+                        logger.info(
+                            f"{self.name}: 🔊 TTS ({time.perf_counter() - tts_t:.2f}s, "
+                            f"{len(audio)} bytes)"
+                        )
+                        audio_id = self.audio_server.put(audio, mime)
+                        ext, url = tts_url(self.public_base_url, audio_id, mime)
+                        record["audio_bytes"] = len(audio)
+                        record["audio_fmt"] = ext
+                        logger.info(f"{self.name}: ▶ serving {url}")
+                        self._emit(VAET.VOICE_ASSISTANT_TTS_END, {"url": url})
+                    except Exception as e:
+                        # No TTS_END on failure; the run still ends cleanly.
+                        # result="error" unconditionally, but only claim the stage/
+                        # text if nothing earlier set them: when the LLM already
+                        # reported an error (error_stage="LLM") we continued into TTS
+                        # anyway, so a TTS failure here must not overwrite the LLM
+                        # root cause.
+                        record["result"] = "error"
+                        if record["error_stage"] is None:
+                            record["error_stage"] = "TTS"
+                            record["error_text"] = str(e)
+                        logger.error(f"TTS failed: {e}")
+
+                    logger.info(
+                        f"{self.name}: ✅ run complete in {time.perf_counter() - t0:.2f}s"
+                    )
+                    self._emit(VAET.VOICE_ASSISTANT_RUN_END, {})
+                except Exception as e:
+                    record["result"] = "error"
+                    record["error_stage"] = "pipeline"
+                    record["error_text"] = str(e)
+                    logger.exception(f"{self.name}: pipeline run failed: {e}")
+                    self._emit(
+                        VAET.VOICE_ASSISTANT_ERROR,
+                        {"code": "server_error", "message": str(e)},
+                    )
+                    self._emit(VAET.VOICE_ASSISTANT_RUN_END, {})
+                finally:
+                    # Record the run on every non-empty-pcm path (empty-STT return,
+                    # success, TTS-fail, exception). A recording failure must never
+                    # break the run or swallow RUN_END, so it is fully wrapped.
+                    if self.runs_store is not None:
+                        record["t_total"] = int((time.perf_counter() - t0) * 1000)
+                        try:
+                            run_id = await asyncio.to_thread(self.runs_store.insert, record)
+                        except Exception as e:
+                            logger.error(f"{self.name}: run record failed: {e}")
+                        else:
+                            # Store the finalized utterance audio (the captured sample after
+                            # the core.vad.trim_start_ms lead-in trim — exactly what STT
+                            # received) in a rolling window of the last runs.audio_keep, so
+                            # it can be downloaded/played from the log to diagnose
+                            # mis-triggers (e.g. a wake-word tail reaching STT). Best-effort:
+                            # a storage failure must never break the run or swallow the
+                            # broadcast.
+                            stored_audio = False
+                            if self.core.runs.store_audio and pcm:
+                                try:
+                                    wav = _pcm_to_wav_bytes(pcm)
+                                    await asyncio.to_thread(
+                                        self.runs_store.put_audio,
+                                        run_id, wav, self.core.runs.audio_keep,
+                                    )
+                                    stored_audio = True
+                                except Exception as e:
+                                    logger.error(
+                                        f"{self.name}: utterance audio store failed: {e}"
+                                    )
+                            # Defer the live broadcast until the lock is released so a slow
+                            # WebSocket consumer can't backpressure the next run on this speaker.
+                            if self.run_events is not None:
+                                pending_run = summary_row(
+                                    record, run_id, has_audio=stored_audio
+                                )
+        finally:
+            # Outside the lock: push the finalized run to live panel subscribers.
+            # In a `finally` (not merely after the `async with`) so the broadcast
+            # still fires on the early-return paths inside the lock — a no_speech or
+            # empty-transcription run is recorded in the lock's `finally` and sets
+            # `pending_run`, but `return`s before this point, which previously skipped
+            # its live WS update. Kept outside the lock so a slow WebSocket consumer
+            # can't backpressure the next run on this speaker. Fully isolated — a
+            # broadcast failure (or a slow client) must never affect the run or the lock.
+            if pending_run is not None:
+                try:
+                    await self.run_events.broadcast({"type": "run", "run": pending_run})
+                except Exception as e:
+                    logger.error(f"{self.name}: run broadcast failed: {e}")
 
     async def _finish_capture(self, reason: str) -> None:
         """End a manual capture run: return the buffered PCM as WAV bytes, end the run.

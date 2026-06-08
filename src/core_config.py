@@ -28,6 +28,11 @@ class VadConfig(BaseModel):
     min_speech_ms: int = 200
     max_utterance_ms: int = 15000
     no_speech_timeout_ms: int = 8000
+    trim_start_ms: int = Field(
+        200,
+        ge=0,
+        description="Drop this many ms off the start of the captured sample before STT (cuts the wake-word tail / button-press click). 0 disables.",
+    )
 
 
 class NetworkConfig(BaseModel):

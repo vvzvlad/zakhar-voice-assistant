@@ -3,9 +3,12 @@ from aioesphomeapi import VoiceAssistantEventType as VAET
 
 from src.core_config import AudioConfig, ContextConfig, CoreConfig
 from src.pipeline import (
+    SAMPLE_RATE,
     CaptureBusyError,
     CaptureEmptyError,
     Pipeline,
+    _pcm_to_wav_bytes,
+    _trim_start_pcm,
     contains_stt_hallucination,
 )
 from src.plugins.llm.base import LlmConfig
@@ -257,6 +260,7 @@ async def test_empty_stt(tmp_path, monkeypatch):
 def test_contains_stt_hallucination():
     assert contains_stt_hallucination("Субтитры создавал DimaTorzok")
     assert contains_stt_hallucination("dimatorzok")
+    assert contains_stt_hallucination("Продолжение следует...")
     assert not contains_stt_hallucination("включи свет")
 
 
@@ -445,6 +449,32 @@ async def test_no_speech_run_is_recorded_as_empty(tmp_path, monkeypatch):
     assert rec["stt_text"] == ""
     assert rec["t_stt"] == 0
     assert rec["reason"] == "no_speech"
+
+
+async def test_run_broadcast_on_no_speech(tmp_path, monkeypatch):
+    # Regression guard: a no_speech finalization returns early INSIDE the lock, but
+    # the run must still be pushed to live admin-panel WS subscribers (it used to be
+    # recorded yet never broadcast, so the live log only caught up on a manual reload).
+    patch_llm(monkeypatch)
+    store = FakeRunsStore()
+    hub = FakeRunEvents()
+    pipeline, _ = make_pipeline(
+        tmp_path, monkeypatch, stt_text="   ", runs_store=store, run_events=hub,
+    )
+    set_small_vad_thresholds(pipeline)
+    # Never any speech: only the no-speech timeout can finalize.
+    pipeline._vad = FakeVad([False])
+
+    await pipeline.on_start("cid", 0, None, None)
+    # no_speech_timeout_ms=200 -> 10 frames; feed 11 to cross it.
+    await pipeline.on_audio(FRAME * 11)
+
+    # The empty run is recorded once AND broadcast once to live subscribers.
+    assert len(store.records) == 1
+    assert store.records[0]["reason"] == "no_speech"
+    assert len(hub.broadcasts) == 1
+    assert hub.broadcasts[0]["type"] == "run"
+    assert hub.broadcasts[0]["run"]["result"] == "empty"
 
 
 async def test_on_start_rebuilds_vad_when_aggressiveness_changed(tmp_path, monkeypatch):
@@ -689,6 +719,28 @@ async def test_run_recorded_on_empty_stt(tmp_path, monkeypatch):
     assert rec["t_total"] >= 0
 
 
+async def test_run_broadcast_on_empty_stt(tmp_path, monkeypatch):
+    # Regression guard: an empty transcription returns early INSIDE the lock, but the
+    # run must still be pushed to live admin-panel WS subscribers (it used to be
+    # recorded yet never broadcast, so the live log only caught up on a manual reload).
+    patch_llm(monkeypatch)
+    store = FakeRunsStore()
+    hub = FakeRunEvents()
+    pipeline, _ = make_pipeline(
+        tmp_path, monkeypatch, stt_text="", runs_store=store, run_events=hub,
+    )
+
+    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_audio(b"\x01\x02" * 100)
+    await pipeline.on_stop(False)
+
+    # The empty run is recorded once AND broadcast once to live subscribers.
+    assert len(store.records) == 1
+    assert len(hub.broadcasts) == 1
+    assert hub.broadcasts[0]["type"] == "run"
+    assert hub.broadcasts[0]["run"]["result"] == "empty"
+
+
 async def test_truly_empty_audio_not_recorded(tmp_path, monkeypatch):
     # No PCM buffered at all -> early return before building a record; nothing logged.
     patch_llm(monkeypatch)
@@ -926,6 +978,9 @@ async def test_normal_run_hard_cap_truncates_at_60s(tmp_path, monkeypatch):
     captured = {}
     patch_llm(monkeypatch, reply="ок")
     pipeline, events = make_pipeline(tmp_path, monkeypatch, stt_text="команда")
+    # This test asserts the HARD_CAP length reaches STT; disable the lead-in trim so
+    # it stays a pure cap regression guard and is not coupled to trim_start_ms.
+    pipeline.rt.core.vad.trim_start_ms = 0
     pipeline._vad = FakeVad([True])  # always speech: only the cap can finalize
 
     orig_transcribe = pipeline.stt_backend.transcribe
@@ -1154,3 +1209,124 @@ async def test_tts_fail_without_prior_error_sets_tts_stage(tmp_path, monkeypatch
     assert rec["result"] == "error"
     assert rec["error_stage"] == "TTS"
     assert rec["error_text"] == "tts boom"
+
+
+# --- _trim_start_pcm (lead-in trim before STT) -----------------------------------
+
+def test_trim_start_pcm_trims_normal_buffer():
+    # 10 ms @ 16 kHz / 16-bit = 320 bytes off the front of a 1000-byte buffer.
+    pcm = bytes(range(256)) * 4  # 1024 bytes; slice the first 1000 for a known size
+    pcm = pcm[:1000]
+    out = _trim_start_pcm(pcm, 10)
+    assert out == pcm[320:]
+    assert len(out) == 680
+
+
+def test_trim_start_pcm_zero_returns_unchanged():
+    pcm = b"\x01\x02" * 100
+    out = _trim_start_pcm(pcm, 0)
+    assert out == pcm
+
+
+def test_trim_start_pcm_trim_exceeds_buffer_returns_unchanged():
+    # 200 ms -> 6400 bytes, far larger than the 100-byte buffer: keep it intact so
+    # we never hand empty audio to STT.
+    pcm = b"\x01\x02" * 50  # 100 bytes
+    out = _trim_start_pcm(pcm, 200)
+    assert out == pcm
+
+
+def test_trim_start_pcm_negative_returns_unchanged():
+    pcm = b"\x01\x02" * 100
+    out = _trim_start_pcm(pcm, -5)
+    assert out == pcm
+
+
+def test_trim_start_pcm_200ms_byte_count():
+    # Sanity: 200 ms maps to exactly 6400 bytes when the buffer is long enough.
+    pcm = b"\x00" * 10000
+    out = _trim_start_pcm(pcm, 200)
+    assert len(pcm) - len(out) == 6400
+    assert out == pcm[6400:]
+
+
+async def test_stt_receives_trimmed_pcm(tmp_path, monkeypatch):
+    # The STT backend must receive the captured sample minus the configured lead-in.
+    patch_llm(monkeypatch)
+    pipeline, _ = make_pipeline(tmp_path, monkeypatch, stt_text="включи свет")
+    # 10 ms -> 320 bytes trimmed; the device-stop path claims the whole buffer.
+    pipeline.rt.core.vad.trim_start_ms = 10
+
+    stt_calls = []
+    orig_transcribe = pipeline.stt_backend.transcribe
+
+    async def spy_transcribe(pcm):
+        stt_calls.append(pcm)
+        return await orig_transcribe(pcm)
+
+    pipeline.stt_backend.transcribe = spy_transcribe
+
+    fed = b"\x01\x02" * 400  # 800 bytes
+    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_audio(fed)
+    await pipeline.on_stop(False)
+
+    assert len(stt_calls) == 1
+    assert stt_calls[0] == _trim_start_pcm(fed, 10)
+    assert len(stt_calls[0]) == 800 - 320 == 480
+
+
+async def test_stt_receives_full_pcm_when_trim_exceeds_short_utterance(
+    tmp_path, monkeypatch
+):
+    # Default trim (200 ms = 6400 bytes) vs a short utterance (800 bytes): the guard
+    # returns the PCM unchanged end-to-end, so STT still gets the full sample.
+    patch_llm(monkeypatch)
+    pipeline, _ = make_pipeline(tmp_path, monkeypatch, stt_text="включи свет")
+    # Leave trim_start_ms at its default (200).
+    assert pipeline.rt.core.vad.trim_start_ms == 200
+
+    stt_calls = []
+    orig_transcribe = pipeline.stt_backend.transcribe
+
+    async def spy_transcribe(pcm):
+        stt_calls.append(pcm)
+        return await orig_transcribe(pcm)
+
+    pipeline.stt_backend.transcribe = spy_transcribe
+
+    fed = b"\x01\x02" * 400  # 800 bytes, far shorter than 6400
+    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_audio(fed)
+    await pipeline.on_stop(False)
+
+    assert len(stt_calls) == 1
+    assert stt_calls[0] == fed
+    assert len(stt_calls[0]) == 800
+
+
+async def test_trim_applies_to_record_and_stored_audio(tmp_path, monkeypatch):
+    # The lead-in trim is applied to the sample ITSELF, once, so it affects every
+    # consumer in the run — not just STT. Here we prove the run record's t_vad and the
+    # stored diagnostic audio both reflect the trimmed (not the full) sample.
+    patch_llm(monkeypatch)
+    store = FakeRunsStore()
+    pipeline, _ = make_pipeline(
+        tmp_path, monkeypatch, stt_text="включи свет", runs_store=store,
+    )
+    # 10 ms -> 320 bytes trimmed.
+    pipeline.rt.core.vad.trim_start_ms = 10
+
+    fed = b"\x01\x02" * 400  # 800 bytes
+    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_audio(fed)
+    await pipeline.on_stop(False)
+
+    # The run record's t_vad reflects the trimmed-length duration, not the full 800 B.
+    assert len(store.records) == 1
+    rec = store.records[0]
+    assert rec["t_vad"] == int((800 - 320) / (SAMPLE_RATE * 2) * 1000)
+
+    # The stored diagnostic audio is the WAV built from the trimmed pcm. The first
+    # insert returns run_id 1.
+    assert store.get_audio(1) == _pcm_to_wav_bytes(_trim_start_pcm(fed, 10))
