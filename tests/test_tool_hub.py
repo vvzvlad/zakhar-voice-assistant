@@ -1,6 +1,6 @@
 from loguru import logger
 
-from src.tool_hub import ToolHub
+from src.tool_hub import BuiltinMcpSource, HttpMcpSource, ToolHub
 
 
 def _tool(name):
@@ -165,3 +165,72 @@ async def test_stop_calls_sources():
     await hub.stop()
     assert home.stopped is True
     assert weather.stopped is True
+
+
+# --- describe(): per-source info for the admin panel -------------------------
+
+async def test_describe_returns_one_entry_per_source():
+    home = FakeSource("home", ["set_light", "list_devices"])
+    weather = FakeSource("weather", ["get_current_weather"])
+    hub = ToolHub([home, weather])
+    await hub.start()
+
+    described = hub.describe()
+    assert [s["id"] for s in described] == ["home", "weather"]
+    # Every entry carries the full id/kind/online/tools shape.
+    for entry in described:
+        assert set(entry) == {"id", "kind", "online", "tools"}
+
+    home_entry = described[0]
+    assert home_entry["online"] is True
+    assert [t["name"] for t in home_entry["tools"]] == ["set_light", "list_devices"]
+    # Tool descriptions come straight from the groq-shape function dicts.
+    assert home_entry["tools"][0]["description"] == "desc set_light"
+
+
+async def test_describe_online_reflects_having_tools():
+    # A source advertising zero tools (e.g. a configured-but-unreachable MCP)
+    # reports online=False; one with tools reports online=True.
+    empty = FakeSource("empty", [])
+    full = FakeSource("full", ["x"])
+    hub = ToolHub([empty, full])
+    await hub.start()
+
+    described = {s["id"]: s for s in hub.describe()}
+    assert described["empty"]["online"] is False
+    assert described["empty"]["tools"] == []
+    assert described["full"]["online"] is True
+
+
+async def test_describe_kind_for_http_and_builtin_wrappers():
+    # The real wrappers expose kind "http"/"builtin"; describe() surfaces it.
+    class _FakeMcpHub:
+        tools = [_tool("set_light")]
+
+        async def start(self):
+            return None
+
+        async def ensure_tools(self):
+            return None
+
+        async def call(self, name, args):
+            return ""
+
+        async def stop(self):
+            return None
+
+    class _FakeFastMcp:
+        async def list_tools(self):
+            return []
+
+        async def call_tool(self, name, args):
+            return ""
+
+    http = HttpMcpSource("home", _FakeMcpHub())
+    builtin = BuiltinMcpSource("weather", _FakeFastMcp())
+    hub = ToolHub([http, builtin])
+    await hub.start()
+
+    described = {s["id"]: s for s in hub.describe()}
+    assert described["home"]["kind"] == "http"
+    assert described["weather"]["kind"] == "builtin"

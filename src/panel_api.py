@@ -63,10 +63,11 @@ async def _read_json(request: web.Request):
 class PanelServer:
     def __init__(self, svc, host, port, *, version, started_at,
                  restart_event, device_status=None, static_dir=None,
-                 runs_store=None):
+                 runs_store=None, tool_sources=None):
         # svc: ConfigService; started_at: float (time.time()); restart_event: asyncio.Event
         # device_status: optional callable -> list[dict]; static_dir: optional path to built frontend
         # runs_store: optional RunsStore for the observability endpoints (None -> empty/zeros)
+        # tool_sources: optional zero-arg callable -> list[dict] (ToolHub.describe()), None -> []
         self.svc = svc
         self.host = host
         self.port = port
@@ -76,6 +77,7 @@ class PanelServer:
         self.device_status = device_status
         self.static_dir = static_dir
         self.runs_store = runs_store
+        self.tool_sources = tool_sources
         self._runner: web.AppRunner | None = None
 
     # --- handlers ------------------------------------------------------------
@@ -148,6 +150,12 @@ class PanelServer:
     async def _get_devices(self, request: web.Request) -> web.Response:
         return web.json_response(self.device_status() if self.device_status else [])
 
+    async def _get_tools(self, request: web.Request) -> web.Response:
+        # Live tool sources from the ToolHub (external MCP + built-ins). describe()
+        # is in-memory/sync, so no to_thread is needed. None -> empty list.
+        sources = self.tool_sources() if self.tool_sources else []
+        return web.json_response({"sources": sources})
+
     # --- observability (run log + metrics) -----------------------------------
     async def _get_runs(self, request: web.Request) -> web.Response:
         if self.runs_store is None:
@@ -207,6 +215,7 @@ class PanelServer:
             web.get("/api/system", self._get_system),
             web.post("/api/restart", self._post_restart),
             web.get("/api/devices", self._get_devices),
+            web.get("/api/tools", self._get_tools),
             web.get("/api/runs", self._get_runs),
             web.get("/api/runs/{id}", self._get_run),
             web.get("/api/metrics", self._get_metrics),

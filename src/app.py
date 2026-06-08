@@ -108,6 +108,7 @@ async def main() -> None:
             restart_event=restart_event, device_status=manager.statuses,
             static_dir=static_dir if os.path.isdir(static_dir) else None,
             runs_store=runs_store,
+            tool_sources=hub.describe,
         )
         await panel.start()
         await manager.start()

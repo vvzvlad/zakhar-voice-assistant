@@ -1,12 +1,13 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useCallback } from "react";
 import { Ic } from "../components/icons.jsx";
 import {
-  Field, PageHeader, FormSaveBar, StatusPill, Modal, Stepper, Loading,
+  Field, PageHeader, FormSaveBar, StatusPill, Pill, Modal, Stepper, Loading,
 } from "../components/primitives.jsx";
 import SchemaForm from "../components/SchemaForm.jsx";
 import { useAppData } from "../appData.jsx";
 import { useStageForm, errorLines } from "../useStageForm.js";
-import { getPrompt, putPrompt, getDevices } from "../api.js";
+import { deref } from "../schema.js";
+import { getPrompt, putPrompt, getDevices, getTools } from "../api.js";
 
 function Card({ title, sub, children, foot, right }) {
   return <div className="z-card">
@@ -16,32 +17,128 @@ function Card({ title, sub, children, foot, right }) {
   </div>;
 }
 
-// ── MCP (single server bound to core.mcp) ─────────────────────────────────
+// ── Tool sources (multi-source view of the ToolHub) ───────────────────────
+// Three integration cards driven by CONFIG (so each shows even before it is
+// configured), each enriched with LIVE status/tools from GET /api/tools matched
+// by source id. Sources are built once at boot, so enabling one needs a restart.
+
+// Read-only chip row of advertised tool names with a "show all / hide" toggle,
+// mirroring the original MCP card design (first 5 shown, "+N" collapsed).
+function ToolChips({ tools }) {
+  const [showAll, setShowAll] = useState(false);
+  const list = tools || [];
+  return <div className="z-f" style={{ borderBottom: "none" }}>
+    <div className="z-fl"><b style={{ fontSize: 12 }}>Advertised tools <span style={{ color: "var(--mut2)", fontWeight: 400 }}>(read-only)</span></b>
+      {list.length > 5 && <a style={{ fontSize: 11.5, color: "var(--acc)", cursor: "pointer", fontWeight: 600 }} onClick={() => setShowAll((v) => !v)}>{showAll ? "Hide" : "Show all"}</a>}</div>
+    {list.length === 0
+      ? <div className="z-fh">Нет инструментов — источник не отвечает или выключен.</div>
+      : <div className="z-chiprow">
+          {(showAll ? list : list.slice(0, 5)).map((t) => <span className="z-toolchip" key={t.name} title={t.description || ""}>{t.name}</span>)}
+          {!showAll && list.length > 5 && <span className="z-toolchip" style={{ color: "var(--mut)" }}>+{list.length - 5}</span>}
+        </div>}
+  </div>;
+}
+
+// One integration source card: header (name + kind badge + status pill), an
+// editable SchemaForm bound to its core.* sub-section, and the live tool chips.
+//   id        — source id matched against /api/tools ("home"/"weather"/"calendar")
+//   name      — human title; sub — short caption under it
+//   schema    — resolved JSON sub-schema (from core.schema, $defs available on root)
+//   root      — full core schema (holds $defs for the SchemaForm)
+//   values    — current core.<section> values
+//   buildPatch(draft) -> patch object; configured(values) -> bool ("настроено")
+//   live      — matching /api/tools entry, or null when absent
+function SourceCard({ id, name, sub, schema, root, values, buildPatch, configured, live, patch }) {
+  const { draft, onChange, dirty, saving, err, save } = useStageForm(values, buildPatch, patch);
+  const isConfigured = configured(draft);
+  const kind = live?.kind || (id === "home" ? "http" : "builtin");
+
+  // Status: online/offline come from the live source; otherwise "not configured"
+  // when the relevant config is empty (a configured source absent from /api/tools
+  // failed to start — shown as offline rather than "not configured").
+  let pill;
+  if (live) pill = <StatusPill status={live.online ? "online" : "offline"} />;
+  else if (!isConfigured) pill = <Pill tone="muted">не настроено</Pill>;
+  else pill = <StatusPill status="offline" />;
+
+  return <div className="z-card" style={{ marginBottom: 14 }}>
+    <div className="z-card-h">
+      <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
+        <Ic n={kind === "http" ? "mcp" : "network"} w={17} />
+        <div style={{ minWidth: 0 }}>
+          <b style={{ display: "block" }}>{name}</b>
+          {sub && <span style={{ fontSize: 11, color: "var(--mut)" }}>{sub}</span>}
+        </div>
+      </div>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, marginLeft: "auto" }}>
+        <Pill tone={kind === "http" ? "warn" : "muted"}>{kind === "http" ? "external" : "built-in"}</Pill>
+        {pill}
+      </div>
+    </div>
+    <div className="z-card-b">
+      {schema
+        ? <SchemaForm schema={schema} root={root} values={draft} onChange={onChange} />
+        : <div className="z-fh">Схема недоступна.</div>}
+      <ToolChips tools={live?.tools} />
+    </div>
+    {/* Sources are rebuilt at boot, so any change requires a restart. */}
+    <FormSaveBar dirty={dirty} saving={saving} onSave={save} restart errors={errorLines(err)} />
+  </div>;
+}
+
+// ── MCP / Integrations: the three tool sources ────────────────────────────
 export function MCP() {
   const { catalog, patch } = useAppData();
-  const mcpSchema = catalog.core.schema.$defs?.McpConfig;
-  const mcpValues = catalog.core.values.mcp || { url: "", token: "" };
-  const buildPatch = (draft) => ({ core: { mcp: draft } });
-  const { draft, onChange, dirty, saving, err, save } = useStageForm(mcpValues, buildPatch, patch);
+  const coreSchema = catalog.core.schema;
+  const coreValues = catalog.core.values;
+  // properties.<section> is a $ref into $defs; resolve it so SchemaForm gets a
+  // schema with `.properties` (and pass the full core schema as `root` for $defs).
+  const sub = (key) => deref(coreSchema.properties?.[key] || {}, coreSchema);
+
+  const [tools, setTools] = useState(null);   // null = loading; [] = loaded/empty
+  const [toolsErr, setToolsErr] = useState(null);
+  const loadTools = useCallback(() => {
+    getTools()
+      .then((r) => { setTools(Array.isArray(r?.sources) ? r.sources : []); setToolsErr(null); })
+      .catch((e) => { setTools([]); setToolsErr(e); });
+  }, []);
+  useEffect(() => { loadTools(); }, [loadTools]);
+  const liveOf = (id) => (tools || []).find((s) => s.id === id) || null;
+
+  // Wrap the shared patch() so a successful save also refreshes /api/tools (the
+  // source list only really changes after a restart, but this keeps it fresh).
+  const patchAndRefresh = useCallback(async (p) => {
+    const r = await patch(p);
+    loadTools();
+    return r;
+  }, [patch, loadTools]);
 
   return <div className="z-page">
-    <PageHeader title="MCP server" desc="Smart-home integration the LLM calls for tools. One server for now — multi-server support is coming." />
-    <div className="z-banner warn" style={{ margin: "0 0 14px" }}>
-      <Ic n="mcp" w={15} />
-      <span><b>Один сервер.</b> Несколько MCP-серверов, список инструментов и пер-серверные промпты появятся позже.</span>
-    </div>
-    <Card title="node-red.home" foot={<FormSaveBar dirty={dirty} saving={saving} onSave={save} errors={errorLines(err)} />}>
-      {mcpSchema
-        ? <SchemaForm schema={mcpSchema} values={draft} onChange={onChange} />
-        : <>
-          <Field label="Endpoint URL" hint="Empty = smart home disabled.">
-            <div className="z-inp mono"><input value={draft.url ?? ""} placeholder="http://10.0.0.5:8001/mcp" onChange={(e) => onChange("url", e.target.value)} /></div>
-          </Field>
-          <Field label="Bearer token" hint="Empty = no auth.">
-            <div className="z-inp mono"><input type="password" value={draft.token ?? ""} placeholder="— none —" onChange={(e) => onChange("token", e.target.value)} /></div>
-          </Field>
-        </>}
-    </Card>
+    <PageHeader title="Tool sources" desc="Источники инструментов, которые модель вызывает: внешний MCP умного дома и встроенные погода/календарь. Источники собираются при старте — после изменения нужен перезапуск." />
+    {toolsErr && <div className="z-banner warn" style={{ margin: "0 0 14px" }}>
+      <Ic n="restart" w={15} />
+      <span><b>Статус недоступен.</b> Не удалось получить список инструментов: {errorLines(toolsErr).join(" · ")}</span>
+    </div>}
+    {tools === null
+      ? <Card><Loading /></Card>
+      : <>
+        <SourceCard
+          id="home" name="Умный дом (внешний MCP)" sub="core.mcp · external MCP server"
+          schema={sub("mcp")} root={coreSchema} values={coreValues.mcp || { url: "", token: "" }}
+          buildPatch={(d) => ({ core: { mcp: d } })}
+          configured={(v) => !!(v && v.url)} live={liveOf("home")} patch={patchAndRefresh} />
+        <SourceCard
+          id="weather" name="Погода (встроенный)" sub="core.weather · built-in MCP"
+          schema={sub("weather")} root={coreSchema} values={coreValues.weather || { api_key: "", city: "Moscow" }}
+          buildPatch={(d) => ({ core: { weather: d } })}
+          configured={(v) => !!(v && v.api_key)} live={liveOf("weather")} patch={patchAndRefresh} />
+        <SourceCard
+          id="calendar" name="Календарь (встроенный)" sub="core.calendar · built-in MCP (CalDAV)"
+          schema={sub("calendar")} root={coreSchema}
+          values={coreValues.calendar || { url: "", username: "", password: "", calendar: "" }}
+          buildPatch={(d) => ({ core: { calendar: d } })}
+          configured={(v) => !!(v && v.url && v.username)} live={liveOf("calendar")} patch={patchAndRefresh} />
+      </>}
   </div>;
 }
 

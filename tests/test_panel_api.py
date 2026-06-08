@@ -304,6 +304,32 @@ async def test_get_devices_default_empty(tmp_path):
         await client.close()
 
 
+async def test_get_tools(tmp_path):
+    # tool_sources is a zero-arg callable returning ToolHub.describe() output.
+    sources = [{
+        "id": "home", "kind": "http", "online": True,
+        "tools": [{"name": "light.set", "description": "x"}],
+    }]
+    client, _svc_, _ev = await _client(tmp_path, tool_sources=lambda: sources)
+    try:
+        resp = await client.get("/api/tools")
+        assert resp.status == 200
+        assert (await resp.json()) == {"sources": sources}
+    finally:
+        await client.close()
+
+
+async def test_get_tools_default_empty(tmp_path):
+    # No tool_sources -> empty list.
+    client, _svc_, _ev = await _client(tmp_path)
+    try:
+        resp = await client.get("/api/tools")
+        assert resp.status == 200
+        assert (await resp.json()) == {"sources": []}
+    finally:
+        await client.close()
+
+
 async def test_cors_preflight(tmp_path):
     client, _svc_, _ev = await _client(tmp_path)
     try:

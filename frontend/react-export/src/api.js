@@ -56,6 +56,8 @@ export const putPrompt = (text) => request("/api/prompt", { method: "PUT", body:
 export const getSystem = () => request("/api/system");
 export const postRestart = () => request("/api/restart", { method: "POST" });
 export const getDevices = () => request("/api/devices");
+// Live tool sources (external MCP + built-ins) with their advertised tools.
+export const getTools = () => request("/api/tools");
 
 // --- observability (run log + metrics) -------------------------------------
 // Builds /api/runs?device=&result=&search=&limit= from the given params,

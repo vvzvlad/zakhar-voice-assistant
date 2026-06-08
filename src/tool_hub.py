@@ -27,6 +27,9 @@ class ToolSource:
     """
 
     id: str
+    # Coarse source category surfaced to the admin panel ("http" external MCP,
+    # "builtin" in-process MCP). The base default is a generic "tool".
+    kind: str = "tool"
 
     async def start(self) -> None:
         """Initial load of this source's tools."""
@@ -52,6 +55,8 @@ class HttpMcpSource(ToolSource):
     McpToolHub already handles short-lived sessions, graceful start and error-as-string
     calls; this adapter just delegates and is intentionally thin.
     """
+
+    kind = "http"
 
     def __init__(self, id: str, hub: McpToolHub):
         self.id = id
@@ -80,6 +85,8 @@ class BuiltinMcpSource(ToolSource):
     FastMCP.call_tool, whose return shape varies across SDK versions; we normalize it
     to plain text defensively here.
     """
+
+    kind = "builtin"
 
     def __init__(self, id: str, server: FastMCP):
         self.id = id
@@ -190,6 +197,32 @@ class ToolHub:
     @property
     def tools(self) -> list:
         return self._advertised or []
+
+    def describe(self) -> list[dict]:
+        """Snapshot of each source for the admin panel: id, kind, online, tools.
+
+        `online` is a PROXY for reachability: it is True only when the source
+        currently advertises at least one tool. A configured-but-unreachable
+        external MCP loads zero tools, so it reports online=False — which is the
+        signal the panel needs. The tool list mirrors what `tools` exposes
+        (raw groq-shape names + descriptions), per source rather than merged.
+        """
+        result: list[dict] = []
+        for source in self._sources:
+            raw = source.raw_tools()
+            result.append({
+                "id": source.id,
+                "kind": getattr(source, "kind", "tool"),
+                "online": bool(raw),
+                "tools": [
+                    {
+                        "name": t["function"]["name"],
+                        "description": t["function"].get("description", ""),
+                    }
+                    for t in raw
+                ],
+            })
+        return result
 
     async def call(self, name: str, args: dict) -> str:
         source = self._routes.get(name)

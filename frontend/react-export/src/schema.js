@@ -50,7 +50,7 @@ export function enumOf(node, root) {
   return null;
 }
 
-const KEYISH = /(api_key|token|psk|secret|key)/i;
+const KEYISH = /(api_key|token|psk|secret|key|password|passwd|pwd)/i;
 export const isSecret = (name) => KEYISH.test(name);
 
 // Title-case a snake_case field name as a fallback label.
