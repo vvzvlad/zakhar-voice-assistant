@@ -87,7 +87,10 @@ export function StatusPill({ status }) {
 const SC = STAGE_COLOR;
 export const total = (t) => Object.values(t).reduce((a, b) => a + b, 0);
 export function segsFor(r) {
-  if (r.result === "empty") return [{ label: "no speech · 8.00s", pct: 100, bg: "#cbd2dd", col: "#8a93a4" }];
+  if (r.result === "empty") {
+    const ms = r.t_total != null ? r.t_total : total(r.t);  // real capture duration, not a mock constant
+    return [{ label: "no speech · " + (ms / 1000).toFixed(2) + "s", pct: 100, bg: "#cbd2dd", col: "#8a93a4" }];
+  }
   const tot = total(r.t) || 1;
   const arr = STAGE_ORDER.filter((k) => r.t[k] > 0).map((k) => { const pct = r.t[k] / tot * 100; return { label: pct >= 15 ? `${k} ${r.t[k]}` : String(r.t[k]), pct, bg: SC[k], col: SC[k] }; });
   if (r.result === "error") arr.push({ label: "fail", pct: 24, bg: "repeating-linear-gradient(45deg,#dc2626,#dc2626 3px,#fecaca 3px,#fecaca 6px)", col: "#dc2626" });

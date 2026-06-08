@@ -56,3 +56,18 @@ export const putPrompt = (text) => request("/api/prompt", { method: "PUT", body:
 export const getSystem = () => request("/api/system");
 export const postRestart = () => request("/api/restart", { method: "POST" });
 export const getDevices = () => request("/api/devices");
+
+// --- observability (run log + metrics) -------------------------------------
+// Builds /api/runs?device=&result=&search=&limit= from the given params,
+// dropping empty/undefined ones so the backend sees a clean query string.
+export const getRuns = (params = {}) => {
+  const q = new URLSearchParams();
+  for (const k of ["device", "result", "search", "limit"]) {
+    const v = params[k];
+    if (v !== undefined && v !== null && v !== "") q.set(k, String(v));
+  }
+  const qs = q.toString();
+  return request("/api/runs" + (qs ? "?" + qs : ""));
+};
+export const getRun = (id) => request(`/api/runs/${encodeURIComponent(id)}`);
+export const getMetrics = () => request("/api/metrics");

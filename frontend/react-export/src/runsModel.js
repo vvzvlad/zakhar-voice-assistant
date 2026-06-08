@@ -1,0 +1,64 @@
+// Adapts backend run rows (snake_case, epoch ts, flat timings) into the UI shape
+// the Log/Dashboard components expect, plus the presentation consts they read.
+//
+// Backend row (list)  : { id, ts, device, result, reason, stt_text, llm_text,
+//                         tokens, t_vad, t_stt, t_llm, t_ruaccent, t_tts, t_total }
+// Backend row (detail): the above PLUS model, rounds[], audio_*, error_*.
+
+// result -> { label, tone }; tone drives the pill/dot color (good|muted|bad).
+export const RESULT_META = {
+  ok:    { label: "OK",        tone: "good" },
+  tool:  { label: "OK · tool", tone: "good" },
+  empty: { label: "Empty",     tone: "muted" },
+  error: { label: "Error",     tone: "bad" },
+};
+
+// Per-stage accent colors for the waterfall / gantt segments.
+export const STAGE_COLOR = {
+  vad:      "#64748b",
+  stt:      "#0891b2",
+  llm:      "#4f46e5",
+  ruaccent: "#9333ea",
+  tts:      "#0d9488",
+};
+
+// ms -> "1.23s". Null/undefined timings render as an em dash.
+export function fmtSec(ms) {
+  if (ms == null || isNaN(ms)) return "—";
+  return (ms / 1000).toFixed(2) + "s";
+}
+
+// epoch seconds (float) -> "HH:MM:SS" in local time.
+function fmtTime(ts) {
+  if (ts == null || isNaN(ts)) return "—";
+  const d = new Date(ts * 1000);
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
+// Map a backend row to the UI run object. `t` groups per-stage timings (ms);
+// 0/null are coerced to 0 so the waterfall's `> 0` filter drops empty stages
+// (ruaccent is always 0 today, so it never shows). `audio`/`error` are null
+// unless the detail payload carries them.
+export function mapRun(row) {
+  if (!row) return row;
+  return {
+    ...row,
+    time: fmtTime(row.ts),
+    stt: row.stt_text,
+    llm: row.llm_text,
+    t: {
+      vad: row.t_vad || 0,
+      stt: row.t_stt || 0,
+      llm: row.t_llm || 0,
+      ruaccent: row.t_ruaccent || 0,
+      tts: row.t_tts || 0,
+    },
+    audio: row.audio_bytes
+      ? { ms: row.audio_ms, bytes: row.audio_bytes, fmt: row.audio_fmt }
+      : null,
+    error: row.error_stage
+      ? { stage: row.error_stage, text: row.error_text }
+      : null,
+  };
+}
