@@ -109,7 +109,7 @@ export function System() {
       <div className="z-aside">
         <Card title="Lifecycle">
           <div style={{ padding: "10px 0 12px" }}>
-            {system?.pending_restart && <div className="z-banner warn" style={{ margin: "0 0 12px" }}><Ic n="restart" w={15} /><span>Есть несохранённые в рантайм изменения — нужен перезапуск.</span></div>}
+            {system?.pending_restart && <div className="z-banner warn" style={{ margin: "0 0 12px" }}><Ic n="restart" w={15} /><span>There are changes not yet applied to runtime — a restart is required.</span></div>}
             <button className="z-btn warn" style={{ width: "100%", justifyContent: "center" }} onClick={() => setRestarting(true)}><Ic n="restart" w={14} />Restart service</button>
           </div>
         </Card>

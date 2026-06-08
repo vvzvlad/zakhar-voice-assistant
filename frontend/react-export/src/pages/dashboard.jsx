@@ -124,7 +124,7 @@ function Dashboard() {
     <div className="z-sl">Recent requests<div className="ln" /><a onClick={() => nav("log")}>View full log →</a></div>
     <div className="z-card">
       {loading ? <Loading />
-        : recent.length === 0 ? <div className="z-empty"><div className="ic"><Ic n="log" w={20} /></div><b>Нет прогонов</b>Недавние запросы появятся здесь после первой обработки.</div>
+        : recent.length === 0 ? <div className="z-empty"><div className="ic"><Ic n="log" w={20} /></div><b>No runs</b>Recent requests will appear here after the first one is processed.</div>
           : <>
             <div className="z-tblwrap">
               <table className="z-tbl">

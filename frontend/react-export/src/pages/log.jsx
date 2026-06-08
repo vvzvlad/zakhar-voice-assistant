@@ -126,7 +126,7 @@ function Drawer({ r, loading, error, onClose }) {
           <div className="z-sl">Synthesized audio</div>
           {r.audio ? <>
             <Player audio={r.audio} bars={54} />
-            <div style={{ fontSize: 11, color: "var(--mut2)", marginTop: 6, fontFamily: "var(--mono)" }}>аудио не хранится, только метаданные</div>
+            <div style={{ fontSize: 11, color: "var(--mut2)", marginTop: 6, fontFamily: "var(--mono)" }}>audio is not stored, metadata only</div>
           </> : <div className="z-card"><div className="z-empty" style={{ padding: "26px 20px" }}><div className="ic"><Ic n="tts" w={18} /></div><b>No audio</b>{r.result === "empty" ? "Empty input — nothing was synthesized." : "TTS produced no retained audio."}</div></div>}
 
           <div className="z-sl">Metadata</div>
@@ -226,7 +226,7 @@ function Log() {
 
       {loading ? <Loading />
         : error ? <ErrorBox error={error} onRetry={load} />
-          : runs.length === 0 ? <div className="z-empty"><div className="ic"><Ic n="log" w={20} /></div><b>Пока нет записанных прогонов</b>Когда ассистент обработает запрос, он появится здесь.</div>
+          : runs.length === 0 ? <div className="z-empty"><div className="ic"><Ic n="log" w={20} /></div><b>No recorded runs yet</b>Once the assistant processes a request, it will appear here.</div>
             : <>
               <div className="z-tblwrap">
                 <table className="z-tbl">

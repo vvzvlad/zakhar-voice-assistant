@@ -26,7 +26,7 @@ async function request(path, { method = "GET", body } = {}) {
   try {
     resp = await fetch(BASE + path, opts);
   } catch (e) {
-    throw new ApiError("Не удалось связаться с сервером: " + e.message, { status: 0 });
+    throw new ApiError("Failed to reach the server: " + e.message, { status: 0 });
   }
   // 202/204 and other 2xx with no JSON body are fine.
   let data = null;

@@ -96,7 +96,7 @@ export function VAD() {
     onChange("min_speech_ms", p.min_speech_ms);
   };
 
-  if (!vadSchema) return <div className="z-page"><div className="z-card"><div className="z-empty"><b>VAD</b>Схема недоступна.</div></div></div>;
+  if (!vadSchema) return <div className="z-page"><div className="z-card"><div className="z-empty"><b>VAD</b>Schema unavailable.</div></div></div>;
 
   return <div className="z-page">
     <PageHeader title="VAD · Voice capture" crumb="Pipeline / Stage 01"

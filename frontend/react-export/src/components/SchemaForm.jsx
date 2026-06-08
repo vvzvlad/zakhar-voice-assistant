@@ -55,7 +55,7 @@ function SchemaField({ name, node, root, value, onChange, optionsFor }) {
   const label = node.title || r.title || humanize(name);
   const hint = node.description || r.description;
   const restart = (node.apply || r.apply) === "rebuild";
-  const finalHint = restart ? (hint ? hint + " · требует перезапуска" : "Требует перезапуска") : hint;
+  const finalHint = restart ? (hint ? hint + " · restart required" : "Restart required") : hint;
 
   const set = (v) => onChange(name, v);
   const enums = enumOf(node, root);

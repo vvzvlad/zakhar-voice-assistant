@@ -129,7 +129,7 @@ export function FormSaveBar({ dirty, saving, onSave, restart, errors = [] }) {
   return <>
     {errors.length > 0 && <div className="z-banner" style={{ background: "var(--bad-bg)", border: "1px solid #f3c8c8", color: "#b91c1c", margin: "0 17px 0", borderRadius: 8 }}>
       <Ic n="restart" w={15} />
-      <span><b>Не сохранено.</b> {errors.join(" · ")}</span>
+      <span><b>Not saved.</b> {errors.join(" · ")}</span>
     </div>}
     <div className="z-foot">
       <button className="z-btn p" disabled={!dirty || saving} onClick={onSave}>{saving ? "Saving…" : "Save changes"}</button>
@@ -139,14 +139,14 @@ export function FormSaveBar({ dirty, saving, onSave, restart, errors = [] }) {
   </>;
 }
 
-export function Loading({ label = "Загрузка…" }) {
-  return <div className="z-empty"><b>{label}</b>Получаем данные с сервера.</div>;
+export function Loading({ label = "Loading…" }) {
+  return <div className="z-empty"><b>{label}</b>Fetching data from the server.</div>;
 }
 export function ErrorBox({ error, onRetry }) {
   return <div className="z-empty">
-    <b>Ошибка загрузки</b>
-    {(error && (error.message || String(error))) || "Не удалось получить данные."}
-    {onRetry && <button className="z-btn g sm" style={{ marginTop: 12 }} onClick={onRetry}>Повторить</button>}
+    <b>Failed to load</b>
+    {(error && (error.message || String(error))) || "Failed to fetch data."}
+    {onRetry && <button className="z-btn g sm" style={{ marginTop: 12 }} onClick={onRetry}>Retry</button>}
   </div>;
 }
 export function Modal({ title, children, footer, onClose }) {

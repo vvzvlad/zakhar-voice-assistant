@@ -31,7 +31,7 @@ function ToolChips({ tools }) {
     <div className="z-fl"><b style={{ fontSize: 12 }}>Advertised tools <span style={{ color: "var(--mut2)", fontWeight: 400 }}>(read-only)</span></b>
       {list.length > 5 && <a style={{ fontSize: 11.5, color: "var(--acc)", cursor: "pointer", fontWeight: 600 }} onClick={() => setShowAll((v) => !v)}>{showAll ? "Hide" : "Show all"}</a>}</div>
     {list.length === 0
-      ? <div className="z-fh">Нет инструментов — источник не отвечает или выключен.</div>
+      ? <div className="z-fh">No tools — the source is not responding or disabled.</div>
       : <div className="z-chiprow">
           {(showAll ? list : list.slice(0, 5)).map((t) => <span className="z-toolchip" key={t.name} title={t.description || ""}>{t.name}</span>)}
           {!showAll && list.length > 5 && <span className="z-toolchip" style={{ color: "var(--mut)" }}>+{list.length - 5}</span>}
@@ -46,7 +46,7 @@ function ToolChips({ tools }) {
 //   schema    — resolved JSON sub-schema (from core.schema, $defs available on root)
 //   root      — full core schema (holds $defs for the SchemaForm)
 //   values    — current core.<section> values
-//   buildPatch(draft) -> patch object; configured(values) -> bool ("настроено")
+//   buildPatch(draft) -> patch object; configured(values) -> bool ("configured")
 //   live      — matching /api/tools entry, or null when absent
 function SourceCard({ id, name, sub, schema, root, values, buildPatch, configured, live, patch }) {
   const { draft, onChange, dirty, saving, err, save } = useStageForm(values, buildPatch, patch);
@@ -58,7 +58,7 @@ function SourceCard({ id, name, sub, schema, root, values, buildPatch, configure
   // failed to start — shown as offline rather than "not configured").
   let pill;
   if (live) pill = <StatusPill status={live.online ? "online" : "offline"} />;
-  else if (!isConfigured) pill = <Pill tone="muted">не настроено</Pill>;
+  else if (!isConfigured) pill = <Pill tone="muted">not configured</Pill>;
   else pill = <StatusPill status="offline" />;
 
   return <div className="z-card" style={{ marginBottom: 14 }}>
@@ -78,7 +78,7 @@ function SourceCard({ id, name, sub, schema, root, values, buildPatch, configure
     <div className="z-card-b">
       {schema
         ? <SchemaForm schema={schema} root={root} values={draft} onChange={onChange} />
-        : <div className="z-fh">Схема недоступна.</div>}
+        : <div className="z-fh">Schema unavailable.</div>}
       <ToolChips tools={live?.tools} />
     </div>
     {/* Sources are rebuilt at boot, so any change requires a restart. */}
@@ -107,19 +107,19 @@ function McpServerModal({ initial, onSave, onClose, title, takenNames }) {
   return <Modal title={title} onClose={onClose}
     footer={<><button className="z-btn g" onClick={onClose}>Cancel</button>
       <button className="z-btn p" disabled={!valid} onClick={() => onSave({ name, url, token, transport, prompt })}>Save</button></>}>
-    <Field label="Name" hint="Уникальное имя — оно же id источника в /api/tools.">
+    <Field label="Name" hint="Unique name — it is also the source id in /api/tools.">
       <div className="z-inp"><input value={name} placeholder="e.g. home" onChange={(e) => setName(e.target.value)} /></div>
-      {dup && <div className="z-fh" style={{ color: "#b91c1c" }}>Имя уже используется.</div>}
-      {!dup && reserved && <div className="z-fh" style={{ color: "#b91c1c" }}>Имя зарезервировано встроенным источником.</div>}
+      {dup && <div className="z-fh" style={{ color: "#b91c1c" }}>Name is already in use.</div>}
+      {!dup && reserved && <div className="z-fh" style={{ color: "#b91c1c" }}>Name is reserved by a built-in source.</div>}
     </Field>
     <Field label="URL"><div className="z-inp mono"><input value={url} placeholder="http://10.0.0.5:8123/mcp_server/sse" onChange={(e) => setUrl(e.target.value)} /></div></Field>
-    <Field label="Token" hint="Опциональный Bearer-токен.">
+    <Field label="Token" hint="Optional Bearer token.">
       <div className="z-inp mono"><input type="password" value={token} placeholder="optional…" onChange={(e) => setToken(e.target.value)} /></div>
     </Field>
-    <Field label="Transport" hint="auto определяет sse по адресу, оканчивающемуся на /sse.">
+    <Field label="Transport" hint="auto detects sse from a URL ending in /sse.">
       <Select value={transport} options={TRANSPORTS} onChange={setTransport} />
     </Field>
-    <Field label="Prompt" hint="Описывает инструменты этого сервера для модели (добавляется к системному промпту).">
+    <Field label="Prompt" hint="Describes this server's tools to the model (appended to the system prompt).">
       <textarea value={prompt} onChange={(e) => setPrompt(e.target.value)} spellCheck={false}
         style={{ width: "100%", minHeight: 90, resize: "vertical", border: "1px solid var(--line)", borderRadius: 8, padding: "10px 12px", fontFamily: "var(--mono)", fontSize: 12, lineHeight: 1.6, color: "var(--ink)", outline: "none", background: "var(--panel2)" }} />
     </Field>
@@ -200,11 +200,11 @@ export function MCP() {
   const onDelete = (i) => saveList(servers.filter((_, idx) => idx !== i));
 
   return <div className="z-page">
-    <PageHeader title="Tool sources" desc="Источники инструментов, которые модель вызывает: внешние MCP-серверы умного дома и встроенные погода/календарь. Источники собираются при старте — после изменения нужен перезапуск."
+    <PageHeader title="Tool sources" desc="Tool sources the model calls: external smart-home MCP servers and built-in weather/calendar. Sources are assembled at startup — a restart is required after any change."
       actions={<button className="z-btn p" onClick={() => setModal({ mode: "add" })}><Ic n="add" w={14} />Add server</button>} />
     {toolsErr && <div className="z-banner warn" style={{ margin: "0 0 14px" }}>
       <Ic n="restart" w={15} />
-      <span><b>Статус недоступен.</b> Не удалось получить список инструментов: {errorLines(toolsErr).join(" · ")}</span>
+      <span><b>Status unavailable.</b> Failed to fetch the tool list: {errorLines(toolsErr).join(" · ")}</span>
     </div>}
     {busyErr && <div className="z-banner warn" style={{ margin: "0 0 12px" }}>
       <Ic n="restart" w={15} /><span>{errorLines(busyErr).join(" · ")}</span>
@@ -212,19 +212,19 @@ export function MCP() {
     {tools === null
       ? <Card><Loading /></Card>
       : <>
-        <div className="z-sl">Внешние MCP-серверы<div className="ln" /></div>
+        <div className="z-sl">External MCP servers<div className="ln" /></div>
         {servers.length === 0
-          ? <Card><div className="z-fh" style={{ padding: "6px 0" }}>Нет внешних MCP-серверов — умный дом недоступен.</div></Card>
+          ? <Card><div className="z-fh" style={{ padding: "6px 0" }}>No external MCP servers — smart home is unavailable.</div></Card>
           : servers.map((s, i) => <McpServerCard key={s.name || i} server={s} live={liveOf(s.name)}
               onEdit={() => setModal({ mode: "edit", index: i })} onDelete={() => onDelete(i)} />)}
-        <div className="z-sl">Встроенные источники<div className="ln" /></div>
+        <div className="z-sl">Built-in sources<div className="ln" /></div>
         <SourceCard
-          id="openweathermap" name="OpenWeatherMap (встроенный)" sub="core.openweathermap · built-in MCP"
+          id="openweathermap" name="OpenWeatherMap (built-in)" sub="core.openweathermap · built-in MCP"
           schema={sub("openweathermap")} root={coreSchema} values={coreValues.openweathermap || { api_key: "", city: "Moscow" }}
           buildPatch={(d) => ({ core: { openweathermap: d } })}
           configured={(v) => !!(v && v.api_key)} live={liveOf("openweathermap")} patch={patchAndRefresh} />
         <SourceCard
-          id="calendar" name="Календарь (встроенный)" sub="core.calendar · built-in MCP (CalDAV)"
+          id="calendar" name="Calendar (built-in)" sub="core.calendar · built-in MCP (CalDAV)"
           schema={sub("calendar")} root={coreSchema}
           values={coreValues.calendar || { url: "", username: "", password: "", calendar: "" }}
           buildPatch={(d) => ({ core: { calendar: d } })}
