@@ -268,6 +268,15 @@ export function Prompt() {
   const ctxBuildPatch = (d) => ({ core: { context: d } });
   const { draft: ctxDraft, onChange: ctxOnChange, dirty: ctxDirty, saving: ctxSaving, err: ctxErr, save: ctxSave } = useStageForm(ctxValues, ctxBuildPatch, patch);
 
+  // A single header Save persists both the prompt text and the dialog-context
+  // settings. Each underlying save handles its own error/saving state, so this
+  // never rejects; we just await whichever forms are dirty.
+  const anyDirty = dirty || ctxDirty;
+  const busy = saving || ctxSaving;
+  const saveAll = async () => {
+    await Promise.all([dirty ? save() : null, ctxDirty ? ctxSave() : null].filter(Boolean));
+  };
+
   if (text == null) return <div className="z-page"><div className="z-card"><Loading /></div></div>;
 
   return <div className="z-page">
@@ -275,7 +284,7 @@ export function Prompt() {
       desc="Zahar's character, rules and answer format. The placeholder is replaced with live date/time at request time."
       actions={<>
         <button className="z-btn g" onClick={load}>Reload</button>
-        <button className="z-btn p" disabled={!dirty || saving} onClick={save}>{saving ? "Saving…" : "Save"}</button>
+        <button className="z-btn p" disabled={!anyDirty || busy} onClick={saveAll}>{busy ? "Saving…" : "Save"}</button>
       </>} />
     <div className="z-cols wide">
       <Card right={<span className="sub" style={{ marginLeft: "auto" }}>{text.length} chars · {path}</span>} title="Editor"
@@ -286,7 +295,8 @@ export function Prompt() {
         </div>
       </Card>
       <div className="z-aside">
-        <Card title="Dialog context" foot={<FormSaveBar dirty={ctxDirty} saving={ctxSaving} onSave={ctxSave} errors={errorLines(ctxErr)} />}>
+        <Card title="Dialog context"
+          foot={ctxErr ? <div className="z-foot"><span className="z-dirty" style={{ color: "#b91c1c" }}>{errorLines(ctxErr).join(" · ")}</span></div> : undefined}>
           {ctxSchema
             ? <SchemaForm schema={ctxSchema} values={ctxDraft} onChange={ctxOnChange} skip={["dir"]} />
             : <>
