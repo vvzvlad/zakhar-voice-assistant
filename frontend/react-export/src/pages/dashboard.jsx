@@ -4,16 +4,13 @@
 import React, { useState, useEffect } from "react";
 import { nav } from "../navStore.js";
 import { Ic } from "../components/icons.jsx";
-import { PageHeader, Waterfall, total, Loading } from "../components/primitives.jsx";
+import { PageHeader, Waterfall, Loading } from "../components/primitives.jsx";
 import { useAppData } from "../appData.jsx";
 import { STAGES } from "../stageMeta.js";
 import { getMetrics, getRuns, openRunsStream } from "../api.js";
-import { RESULT_META, STAGE_COLOR, fmtSec, mapRun } from "../runsModel.js";
+import { RESULT_META, STAGE_COLOR, fmtSec, mapRun, totalMs } from "../runsModel.js";
 
 const SC = STAGE_COLOR;
-
-// Authoritative total: prefer backend t_total, fall back to summing r.t.
-const totalMs = (r) => (r.t_total != null ? r.t_total : total(r.t));
 
 // Pick a short, human "detail" line for a stage from its selected provider values.
 function detailFor(stage, catalog, config) {

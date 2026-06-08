@@ -5,6 +5,8 @@
 //                         tokens, t_vad, t_stt, t_llm, t_ruaccent, t_tts, t_total }
 // Backend row (detail): the above PLUS model, rounds[], audio_*, error_*.
 
+import { total } from "./components/primitives.jsx";
+
 // result -> { label, tone }; tone drives the pill/dot color (good|muted|bad).
 export const RESULT_META = {
   ok:    { label: "OK",        tone: "good" },
@@ -27,6 +29,9 @@ export function fmtSec(ms) {
   if (ms == null || isNaN(ms)) return "—";
   return (ms / 1000).toFixed(2) + "s";
 }
+
+// Authoritative total run time: prefer the backend t_total, fall back to summing r.t.
+export const totalMs = (r) => (r.t_total != null ? r.t_total : total(r.t));
 
 // epoch seconds (float) -> "HH:MM:SS" in local time.
 function fmtTime(ts) {

@@ -77,6 +77,11 @@ class PromptConfig(BaseModel):
 class PanelConfig(BaseModel):
     host: str = "0.0.0.0"
     port: int = 8201
+    # Browser origins allowed cross-origin access to the (unauthenticated) panel API.
+    # Empty by default: the prod frontend is same-origin and the dev Vite server
+    # proxies /api, so neither needs CORS. Add a dev origin here only if you point the
+    # frontend straight at this API (e.g. "http://localhost:5173").
+    allowed_origins: list[str] = []
 
 
 class RunsConfig(BaseModel):

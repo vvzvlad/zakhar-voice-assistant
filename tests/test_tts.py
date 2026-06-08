@@ -6,6 +6,7 @@ import pytest
 import respx
 
 from src.tts import (
+    TeraTtsHttpBackend,
     YandexTtsBackend,
     split_sentences,
     wav_to_mp3,
@@ -136,3 +137,38 @@ async def test_yandex_synthesize_includes_folder_id_when_set():
                                    url=YANDEX_URL, timeout=10)
         await backend.synthesize("тест", "ru")
     assert route.calls.last.request.headers["x-folder-id"] == "fld123"
+
+
+@respx.mock
+async def test_teratts_synthesize_builds_url_and_returns_audio():
+    audio = b"\xff\xf3mp3-bytes"
+    # The text is URL-encoded into the path (quote(text, safe="")).
+    route = respx.get("http://tera.local/synthesize/%D0%BF%D1%80%D0%B8%D0%B2%D0%B5%D1%82").mock(
+        return_value=httpx.Response(200, content=audio, headers={"Content-Type": "audio/mpeg"}))
+    async with httpx.AsyncClient() as client:
+        backend = TeraTtsHttpBackend("http://tera.local/", client, timeout=10)
+        mime, data = await backend.synthesize("привет", "ru")
+    assert route.called
+    assert mime == "audio/mpeg"
+    assert data == audio
+
+
+@respx.mock
+async def test_teratts_synthesize_defaults_mime_when_header_absent():
+    # No Content-Type header -> falls back to audio/mpeg.
+    route = respx.get("http://tera.local/synthesize/hi").mock(
+        return_value=httpx.Response(200, content=b"x"))
+    async with httpx.AsyncClient() as client:
+        backend = TeraTtsHttpBackend("http://tera.local", client, timeout=10)
+        mime, _ = await backend.synthesize("hi", "ru")
+    assert route.called
+    assert mime == "audio/mpeg"
+
+
+@respx.mock
+async def test_teratts_synthesize_raises_on_non_2xx():
+    respx.get("http://tera.local/synthesize/hi").mock(return_value=httpx.Response(503))
+    async with httpx.AsyncClient() as client:
+        backend = TeraTtsHttpBackend("http://tera.local", client, timeout=10)
+        with pytest.raises(httpx.HTTPStatusError):
+            await backend.synthesize("hi", "ru")

@@ -10,8 +10,7 @@ export function Spark({ pts, color, w = 56, h = 22 }) {
 }
 
 // ── Form primitives ────────────────────────────────────
-export function Field({ label, param, hint, children, row }) {
-  // `param` (the env-var name) is kept in source for reference but intentionally NOT rendered in the UI.
+export function Field({ label, hint, children, row }) {
   return <div className={"z-f" + (row ? " row" : "")}>
     <div className={row ? "z-fmeta" : ""}>
       <div className="z-fl"><b>{label}</b></div>
@@ -37,7 +36,10 @@ export function Selector({ label, caption, options, value, onChange }) {
   </div>;
 }
 export function Toggle({ on, onChange, sm }) {
-  return <span className={"z-toggle" + (sm ? " sm" : "") + (on ? " on" : "")} onClick={() => onChange && onChange(!on)} role="switch" aria-checked={on} />;
+  const toggle = () => onChange && onChange(!on);
+  return <span className={"z-toggle" + (sm ? " sm" : "") + (on ? " on" : "")} onClick={toggle}
+    role="switch" aria-checked={on} tabIndex={0}
+    onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); } }} />;
 }
 export function Slider({ min = 0, max = 100, step = 1, value, onChange, fmt }) {
   const ref = useRef(null);
@@ -70,9 +72,12 @@ export function Select({ value, options, onChange, w }) {
   const ref = useRef(null);
   useEffect(() => { const h = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); }; document.addEventListener("pointerdown", h); return () => document.removeEventListener("pointerdown", h); }, []);
   return <div ref={ref} style={{ position: "relative", width: w || "100%" }}>
-    <div className="z-select" onClick={() => setOpen((o) => !o)}>{value}<svg width="11" height="11" viewBox="0 0 11 11" fill="none" stroke="currentColor" strokeWidth="1.6"><path d="M2 4l3.5 3.5L9 4" /></svg></div>
-    {open && <div style={{ position: "absolute", top: "100%", left: 0, right: 0, marginTop: 4, background: "#fff", border: "1px solid var(--line)", borderRadius: 7, boxShadow: "0 8px 28px rgba(16,24,40,.16)", padding: 4, zIndex: 20, maxHeight: 240, overflowY: "auto" }}>
-      {options.map((o) => <div key={o} onClick={() => { onChange && onChange(o); setOpen(false); }} style={{ padding: "7px 10px", borderRadius: 5, fontSize: 12.5, fontWeight: o === value ? 600 : 400, color: o === value ? "var(--acc-ink)" : "var(--ink)", background: o === value ? "var(--acc-bg)" : "transparent", cursor: "pointer" }} onMouseEnter={(e) => { if (o !== value) e.currentTarget.style.background = "var(--panel2)"; }} onMouseLeave={(e) => { if (o !== value) e.currentTarget.style.background = "transparent"; }}>{o}</div>)}
+    <div className="z-select" role="button" tabIndex={0} aria-haspopup="listbox" aria-expanded={open}
+      onClick={() => setOpen((o) => !o)}
+      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setOpen((o) => !o); } }}>
+      {value}<svg width="11" height="11" viewBox="0 0 11 11" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><path d="M2 4l3.5 3.5L9 4" /></svg></div>
+    {open && <div role="listbox" style={{ position: "absolute", top: "100%", left: 0, right: 0, marginTop: 4, background: "#fff", border: "1px solid var(--line)", borderRadius: 7, boxShadow: "0 8px 28px rgba(16,24,40,.16)", padding: 4, zIndex: 20, maxHeight: 240, overflowY: "auto" }}>
+      {options.map((o) => <div key={o} role="option" aria-selected={o === value} tabIndex={0} onClick={() => { onChange && onChange(o); setOpen(false); }} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onChange && onChange(o); setOpen(false); } }} style={{ padding: "7px 10px", borderRadius: 5, fontSize: 12.5, fontWeight: o === value ? 600 : 400, color: o === value ? "var(--acc-ink)" : "var(--ink)", background: o === value ? "var(--acc-bg)" : "transparent", cursor: "pointer" }} onMouseEnter={(e) => { if (o !== value) e.currentTarget.style.background = "var(--panel2)"; }} onMouseLeave={(e) => { if (o !== value) e.currentTarget.style.background = "transparent"; }}>{o}</div>)}
     </div>}
   </div>;
 }
@@ -152,7 +157,7 @@ export function ErrorBox({ error, onRetry }) {
 export function Modal({ title, children, footer, onClose }) {
   return <div className="z-modal" onClick={onClose}>
     <div className="z-modal-c" onClick={(e) => e.stopPropagation()}>
-      <div className="z-modal-h"><b>{title}</b><button className="z-x" style={{ marginLeft: "auto" }} onClick={onClose}><svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><path d="M4 4l8 8M12 4l-8 8" /></svg></button></div>
+      <div className="z-modal-h"><b>{title}</b><button className="z-x" aria-label="Close" style={{ marginLeft: "auto" }} onClick={onClose}><svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" /></svg></button></div>
       <div className="z-modal-b">{children}</div>
       {footer && <div className="z-modal-f">{footer}</div>}
     </div>
@@ -161,7 +166,7 @@ export function Modal({ title, children, footer, onClose }) {
 export function Player({ audio, bars = 46 }) {
   if (!audio) return null;
   return <div className="z-player">
-    <button className="z-play"><svg width="12" height="12" viewBox="0 0 12 12" fill="#fff"><path d="M2 1l9 5-9 5z" /></svg></button>
+    <button className="z-play" aria-label="Play"><svg width="12" height="12" viewBox="0 0 12 12" fill="#fff" aria-hidden="true"><path d="M2 1l9 5-9 5z" /></svg></button>
     <div className="z-wave">{Array.from({ length: bars }).map((_, i) => <i key={i} className={i < bars * 0.4 ? "a" : ""} style={{ height: (8 + Math.abs(Math.sin(i * 0.8)) * 22) + "px" }} />)}</div>
     <span className="tt">0:0{Math.max(1, Math.round(audio.ms / 1000))} · {(audio.bytes / 1024).toFixed(0)} kB · {audio.fmt}</span>
   </div>;

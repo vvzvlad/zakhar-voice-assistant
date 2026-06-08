@@ -4,9 +4,9 @@
 // the existing CSS (z-tbl/z-gantt/z-drawer/...).
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import { Ic } from "../components/icons.jsx";
-import { PageHeader, Waterfall, total, KV, Loading, ErrorBox } from "../components/primitives.jsx";
+import { PageHeader, Waterfall, KV, Loading, ErrorBox } from "../components/primitives.jsx";
 import { getRuns, getRun, openRunsStream } from "../api.js";
-import { RESULT_META, STAGE_COLOR, fmtSec, mapRun } from "../runsModel.js";
+import { RESULT_META, STAGE_COLOR, fmtSec, mapRun, totalMs } from "../runsModel.js";
 
 const SC = STAGE_COLOR;
 
@@ -16,11 +16,6 @@ const GSTAGES = [
   { k: "vad", label: "VAD capture" }, { k: "stt", label: "STT" },
   { k: "llm", label: "LLM + tools" }, { k: "tts", label: "TTS synth" },
 ];
-
-// Authoritative total: prefer the backend t_total, fall back to summing r.t.
-function totalMs(r) {
-  return r.t_total != null ? r.t_total : total(r.t);
-}
 
 // Client-side mirror of the backend /api/runs filters, for live-prepending pushed
 // runs. device: exact; result: all|errors|ok; search: case-insensitive substring
@@ -88,7 +83,7 @@ function Drawer({ r, loading, error, onClose }) {
           {r && <div style={{ fontSize: 11.5, color: "var(--mut)", marginTop: 2, fontFamily: "var(--mono)" }}>id {r.id} · end: {r.reason || "—"}</div>}
         </div>
         {r && <span className={"z-pill " + m.tone} style={{ marginLeft: 12 }}><span className={"z-dot " + (m.tone === "good" ? "ok" : m.tone === "bad" ? "error" : "off")} />{m.label}</span>}
-        <button className="z-x" onClick={onClose}><svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><path d="M4 4l8 8M12 4l-8 8" /></svg></button>
+        <button className="z-x" aria-label="Close" onClick={onClose}><svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" /></svg></button>
       </div>
       <div className="z-drawer-b">
         {loading && <Loading />}

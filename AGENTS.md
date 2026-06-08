@@ -7,8 +7,8 @@ smart-home tools via an external MCP server →
 TTS (local TeraTTS HTTP service), and serves the resulting audio back to N speakers.
 It replaces Home Assistant in this loop. Smart-home control is an MCP integration:
 the app is an MCP client (running an agentic tool-calling loop) that connects to an
-external smart-home MCP server hosted in Node-RED (node-red-contrib-mcp-server) at
-`MCP_SMARTHOME_URL`.
+external smart-home MCP server hosted in Node-RED (node-red-contrib-mcp-server)
+configured under `core.mcp_servers` in `data/config.json`.
 
 ## Project structure
 - `src/` — application code. Config core: `config_store.py` (atomic JSON load/save) +
@@ -46,8 +46,9 @@ All config lives in `data/config.json` (created on first boot from
   defines its own settings via a pydantic `ConfigModel` in `src/plugins/<stage>/<id>.py`.
   The config core (`ConfigService`/`config_store`) is provider-agnostic — it never names a
   provider's fields. Adding a provider = one new plugin file; zero changes to the core.
-- `core.*` holds non-provider settings (context, audio, vad, network, openweathermap, mcp,
-  esphome, prompt, devices, tts_timeout, log_level) as plain `CoreConfig` pydantic sections.
+- `core.*` holds non-provider settings (context, audio, vad, network, openweathermap, mcp_servers,
+  calendar, esphome, prompt, panel, runs, reminders, devices, tts_timeout, log_level) as plain
+  `CoreConfig` pydantic sections.
 - API keys are plain string fields in the JSON (trusted-LAN service, no masking). `data/`
   is gitignored so `config.json` never gets committed.
 

@@ -319,7 +319,7 @@ async def test_finalize_once_race(tmp_path, monkeypatch):
 
     pcm = pipeline._claim()
     assert pcm is not None
-    await pipeline._run("a", pcm)
+    await pipeline._run("a", pcm, pipeline._conversation_id)
     after_first = list(types_of(events))
     assert after_first == [
         VAET.VOICE_ASSISTANT_STT_END,

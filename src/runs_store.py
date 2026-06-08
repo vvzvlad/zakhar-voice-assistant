@@ -171,7 +171,9 @@ class RunsStore:
         }
 
     def prune(self, *, now: float, retention_days: int):
-        """Delete runs older than `retention_days`."""
+        """Delete runs older than `retention_days`. retention_days<=0 keeps all rows."""
+        if retention_days <= 0:
+            return  # 0 (or negative) means "keep forever" — never prune.
         cutoff = now - retention_days * _DAY_SECONDS
         with self._lock:
             self._conn.execute("DELETE FROM runs WHERE ts < ?", (cutoff,))

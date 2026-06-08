@@ -340,3 +340,24 @@ async def test_trace_none_is_a_noop(tmp_path):
     backend = FakeLlmBackend([_final("ответ")])
     result = await _call(backend, hub, "привет", _core(tmp_path))
     assert result == processing_response("ответ")
+
+
+async def test_no_choices_returns_error(tmp_path):
+    # Provider returned a response with no choices -> user-facing error, no KeyError.
+    hub = StubHub(tools=[])
+    backend = FakeLlmBackend([{"model": "x", "usage": {}}])  # no "choices"
+    result = await _call(backend, hub, "привет", _core(tmp_path))
+    assert result == "Ошибка: не найден ответ от модели"
+
+
+async def test_malformed_tool_args_degrade_to_empty_dict(tmp_path):
+    # Model emitted invalid JSON in tool arguments -> args fall back to {} and the
+    # tool still runs; the loop then returns the final reply.
+    hub = StubHub(tools=[SET_LIGHT_TOOL])
+    backend = FakeLlmBackend([
+        _tool_call("set_light", "{not json"),
+        _final("Готово."),
+    ])
+    result = await _call(backend, hub, "включи свет", _core(tmp_path))
+    assert hub.calls == [("set_light", {})]
+    assert result == processing_response("Готово.")

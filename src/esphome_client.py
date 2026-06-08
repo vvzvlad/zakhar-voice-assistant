@@ -7,6 +7,7 @@ drive its voice_assistant, and route events through a per-device Pipeline.
 from aioesphomeapi import APIClient, ReconnectLogic
 from loguru import logger
 
+from src.audio_server import tts_url
 from src.core_config import DeviceConfig
 from src.pipeline import Pipeline
 
@@ -100,8 +101,7 @@ class DeviceClient:
         # Synthesize at fire time so the audio-cache TTL never matters (URL is fresh).
         mime, audio = await self.pipeline.tts_backend.synthesize(text, "ru")
         audio_id = self.pipeline.audio_server.put(audio, mime)
-        ext = {"audio/wav": "wav", "audio/mpeg": "mp3", "audio/flac": "flac"}.get(mime, "mp3")
-        url = f"{self.pipeline.public_base_url.rstrip('/')}/tts/{audio_id}.{ext}"
+        _ext, url = tts_url(self.pipeline.public_base_url, audio_id, mime)
         logger.info(f"{self.cfg.name}: 🔔 announce: {text!r} -> {url}")
         # Assist-satellite announce ducks any current audio and plays while idle.
         await self.cli.send_voice_assistant_announcement_await_response(
@@ -112,7 +112,10 @@ class DeviceClient:
         await self.reconnect.start()
 
     async def stop(self) -> None:
-        await self.reconnect.stop()
+        try:
+            await self.reconnect.stop()
+        except Exception as e:
+            logger.warning(f"{self.cfg.name}: reconnect.stop failed: {e}")
         try:
             await self.cli.disconnect(force=True)
         except Exception:
@@ -174,9 +177,15 @@ class DeviceManager:
 
     async def start(self) -> None:
         for c in self.clients:
-            await c.start()
+            try:
+                await c.start()
+            except Exception as e:
+                logger.error(f"failed to start device client {c.cfg.name}: {e}")
         logger.info(f"started {len(self.clients)} device client(s)")
 
     async def stop(self) -> None:
         for c in self.clients:
-            await c.stop()
+            try:
+                await c.stop()
+            except Exception as e:
+                logger.error(f"failed to stop device client {c.cfg.name}: {e}")

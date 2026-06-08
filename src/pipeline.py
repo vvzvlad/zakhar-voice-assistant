@@ -26,6 +26,7 @@ from aioesphomeapi import VoiceAssistantEventType as VAET
 from loguru import logger
 
 from src import context, llm
+from src.audio_server import tts_url
 from src.runs_store import summary_row
 
 # WebRTC VAD requires mono 16-bit PCM frames of exactly 10/20/30 ms at 16 kHz.
@@ -196,7 +197,9 @@ class Pipeline:
         if reason is not None:
             pcm = self._claim()
             if pcm is not None:
-                await self._run(reason, pcm)
+                # Snapshot the conversation id synchronously with the claim so a
+                # re-triggered wake word can't relabel this run's events.
+                await self._run(reason, pcm, self._conversation_id)
 
     def _claim(self) -> bytes | None:
         """Atomically claim this run for finalization and snapshot the audio.
@@ -211,7 +214,7 @@ class Pipeline:
         self._buffer.clear()
         return pcm
 
-    async def _run(self, reason, pcm) -> None:
+    async def _run(self, reason, pcm, conversation_id) -> None:
         """Run STT -> LLM -> TTS -> events on the already-claimed audio, once.
 
         The caller claims the run via _claim() (which sets _finalized, snapshots
@@ -219,6 +222,7 @@ class Pipeline:
         provides defensive serialization; _claim() already guarantees single entry.
         RUN_END is always sent.
         """
+        pending_run = None
         async with self._lock:
             # Total-run timer (logging only); started after the claim/lock.
             t0 = time.perf_counter()
@@ -323,7 +327,7 @@ class Pipeline:
                 self._emit(
                     VAET.VOICE_ASSISTANT_INTENT_END,
                     {
-                        "conversation_id": self._conversation_id,
+                        "conversation_id": conversation_id,
                         "continue_conversation": "0",
                     },
                 )
@@ -337,15 +341,10 @@ class Pipeline:
                         f"{self.name}: 🔊 TTS ({time.perf_counter() - tts_t:.2f}s, "
                         f"{len(audio)} bytes)"
                     )
-                    ext = {
-                        "audio/wav": "wav",
-                        "audio/mpeg": "mp3",
-                        "audio/flac": "flac",
-                    }.get(mime, "mp3")
+                    audio_id = self.audio_server.put(audio, mime)
+                    ext, url = tts_url(self.public_base_url, audio_id, mime)
                     record["audio_bytes"] = len(audio)
                     record["audio_fmt"] = ext
-                    audio_id = self.audio_server.put(audio, mime)
-                    url = f"{self.public_base_url.rstrip('/')}/tts/{audio_id}.{ext}"
                     logger.info(f"{self.name}: ▶ serving {url}")
                     self._emit(VAET.VOICE_ASSISTANT_TTS_END, {"url": url})
                 except Exception as e:
@@ -386,18 +385,21 @@ class Pipeline:
                     except Exception as e:
                         logger.error(f"{self.name}: run record failed: {e}")
                     else:
-                        # Push the freshly recorded run to live panel subscribers.
-                        # Fully isolated: a broadcast failure must never affect the run.
+                        # Defer the live broadcast until the lock is released so a slow
+                        # WebSocket consumer can't backpressure the next run on this speaker.
                         if self.run_events is not None:
-                            try:
-                                await self.run_events.broadcast(
-                                    {"type": "run", "run": summary_row(record, run_id)}
-                                )
-                            except Exception as e:
-                                logger.error(f"{self.name}: run broadcast failed: {e}")
+                            pending_run = summary_row(record, run_id)
+
+        # Outside the lock: push to live panel subscribers. Fully isolated — a
+        # broadcast failure (or a slow client) must never affect the run or the lock.
+        if pending_run is not None:
+            try:
+                await self.run_events.broadcast({"type": "run", "run": pending_run})
+            except Exception as e:
+                logger.error(f"{self.name}: run broadcast failed: {e}")
 
     async def on_stop(self, abort: bool = False) -> None:
         """Explicit device stop: finalize the run (exactly once)."""
         pcm = self._claim()
         if pcm is not None:
-            await self._run("device_stop", pcm)
+            await self._run("device_stop", pcm, self._conversation_id)

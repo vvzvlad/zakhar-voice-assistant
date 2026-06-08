@@ -29,7 +29,9 @@ export function Sidebar({ active, onNav }) {
       {NAV.map((g) => <div key={g.grp}>
         <div className="z-navgrp">{g.grp}</div>
         {g.items.map(([id, label]) => (
-          <div key={id} className={"z-navi" + (id === active ? " on" : "")} onClick={() => onNav(id)}>
+          <div key={id} className={"z-navi" + (id === active ? " on" : "")} role="button" tabIndex={0}
+            onClick={() => onNav(id)}
+            onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onNav(id); } }}>
             <Ic n={id} />{label}
             {id === "mcp" && <span className="badge">{mcpCount}</span>}
             {id === "devices" && devTotal > 0 && <span className="badge">{online}/{devTotal}</span>}

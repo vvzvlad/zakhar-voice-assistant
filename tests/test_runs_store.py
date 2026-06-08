@@ -229,3 +229,16 @@ def test_prune_drops_old_rows(tmp_path):
     assert store.get(old) is None
     assert [r["stt_text"] for r in store.list()] == ["recent"]
     store.close()
+
+
+def test_prune_keeps_all_when_retention_zero(tmp_path):
+    store = _store(tmp_path)
+    now = time.time()
+    recent = store.insert(_rec(ts=now, stt_text="recent"))
+    ancient = store.insert(_rec(ts=now - 999 * 86400, stt_text="ancient"))
+
+    store.prune(now=now, retention_days=0)  # 0 == keep forever
+
+    assert store.get(recent) is not None
+    assert store.get(ancient) is not None
+    store.close()

@@ -240,20 +240,21 @@ async def test_put_prompt_missing_text_returns_400(tmp_path):
 async def test_cors_header_present_on_error_response(tmp_path):
     client, _svc_, _ev = await _client(tmp_path)
     try:
-        # 400 (missing options params) and 404 (unknown plugin) still carry CORS.
+        # Default config has an empty allowlist, so error responses emit no ACAO
+        # header (and never a wildcard) while status codes are unaffected.
         bad = await client.get("/api/options")
         assert bad.status == 400
-        assert bad.headers["Access-Control-Allow-Origin"] == "*"
+        assert "Access-Control-Allow-Origin" not in bad.headers
 
         not_found = await client.get("/api/options",
                                      params={"category": "tts", "plugin": "nope", "field": "voice"})
         assert not_found.status == 404
-        assert not_found.headers["Access-Control-Allow-Origin"] == "*"
+        assert "Access-Control-Allow-Origin" not in not_found.headers
 
-        # A router-level 404 (raised HTTPException) also carries CORS now.
+        # A router-level 404 (raised HTTPException) also carries no wildcard.
         missing = await client.get("/api/does-not-exist")
         assert missing.status == 404
-        assert missing.headers["Access-Control-Allow-Origin"] == "*"
+        assert "Access-Control-Allow-Origin" not in missing.headers
     finally:
         await client.close()
 
@@ -337,7 +338,29 @@ async def test_cors_preflight(tmp_path):
     try:
         resp = await client.options("/api/config")
         assert resp.status == 204
-        assert resp.headers["Access-Control-Allow-Origin"] == "*"
+        assert "Access-Control-Allow-Origin" not in resp.headers
+    finally:
+        await client.close()
+
+
+async def test_cors_reflects_allowlisted_origin(tmp_path):
+    prompt_path = tmp_path / "system_prompt.md"
+    prompt_path.write_text("seed prompt", encoding="utf-8")
+    doc = _doc(prompt_path)
+    doc["core"]["panel"] = {"allowed_origins": ["http://localhost:5173"]}
+    deps = Deps(http_cloud=httpx.AsyncClient(), http_local=httpx.AsyncClient())
+    svc = ConfigService(doc, deps, path=str(tmp_path / "config.json"))
+    srv = PanelServer(svc, "127.0.0.1", 0, version="9.9", started_at=time.time(),
+                      restart_event=asyncio.Event())
+    client = TestClient(TestServer(srv.build_app()))
+    await client.start_server()
+    try:
+        # Allowlisted origin is reflected (never "*").
+        ok = await client.get("/api/config", headers={"Origin": "http://localhost:5173"})
+        assert ok.headers.get("Access-Control-Allow-Origin") == "http://localhost:5173"
+        # A non-allowlisted origin gets no CORS header.
+        nope = await client.get("/api/config", headers={"Origin": "http://evil.example"})
+        assert "Access-Control-Allow-Origin" not in nope.headers
     finally:
         await client.close()
 

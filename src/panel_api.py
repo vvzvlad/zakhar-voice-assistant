@@ -5,9 +5,11 @@ by ConfigService, so it carries no provider-specific knowledge: it exposes the
 catalog, the raw config document, generic patch/options endpoints, the system
 prompt file, system/version info, a restart trigger and live device status.
 
-Start/stop mirror AudioServer (AppRunner + TCPSite). A permissive wildcard CORS
-middleware is fine here because the panel always runs in a trusted segment and the
-Vite dev server lives on a different port.
+Start/stop mirror AudioServer (AppRunner + TCPSite). CORS is restricted to the
+origins listed in core.panel.allowed_origins (empty by default); it never reflects a
+wildcard, so an arbitrary web page can't read the unauthenticated config (which
+carries plaintext secrets) via the operator's browser. The prod frontend is
+same-origin and the dev Vite server proxies /api, so neither needs CORS.
 """
 
 import asyncio
@@ -25,34 +27,39 @@ from src.prompt import load_system_prompt, save_system_prompt
 _ALLOW_METHODS = "GET, POST, PATCH, PUT, OPTIONS"
 
 
-def _add_cors(resp: web.StreamResponse) -> web.StreamResponse:
-    """Add permissive wildcard CORS headers to a response (or HTTP exception)."""
-    resp.headers["Access-Control-Allow-Origin"] = "*"
-    resp.headers["Access-Control-Allow-Methods"] = _ALLOW_METHODS
-    resp.headers["Access-Control-Allow-Headers"] = "Content-Type"
+def _add_cors(resp: web.StreamResponse, request: web.Request, allowed_origins) -> web.StreamResponse:
+    """Reflect an allowlisted request Origin into CORS headers (never a wildcard).
+
+    Same-origin requests (prod static serving, the dev Vite proxy) need no CORS
+    headers; cross-origin browser access is granted only to origins the operator
+    explicitly lists in core.panel.allowed_origins.
+    """
+    origin = request.headers.get("Origin")
+    if origin and origin in allowed_origins:
+        resp.headers["Access-Control-Allow-Origin"] = origin
+        resp.headers["Access-Control-Allow-Methods"] = _ALLOW_METHODS
+        resp.headers["Access-Control-Allow-Headers"] = "Content-Type"
+        resp.headers["Vary"] = "Origin"
     return resp
 
 
-@web.middleware
-async def _cors_middleware(request: web.Request, handler):
-    """Permissive wildcard CORS (trusted zone) + 204 preflight for OPTIONS.
-
-    CORS headers are attached to BOTH normal responses and raised HTTP
-    exceptions (bad JSON -> 400, router 404, our 400s) so error responses stay
-    readable by the browser frontend on a different port.
-    """
-    if request.method == "OPTIONS":
-        return _add_cors(web.Response(status=204))
-    # WebSocket upgrades: the response is already sent by the time the handler
-    # returns, so its headers can't be mutated; CORS also doesn't gate WS. Pass through.
-    if request.headers.get("Upgrade", "").lower() == "websocket":
-        return await handler(request)
-    try:
-        return _add_cors(await handler(request))
-    except web.HTTPException as ex:
-        # ex is itself a Response subclass; mutate its headers in place.
-        _add_cors(ex)
-        raise
+def _make_cors_middleware(allowed_origins):
+    """Build the CORS middleware bound to a fixed allowlist (set of origin strings)."""
+    @web.middleware
+    async def _cors_middleware(request: web.Request, handler):
+        # CORS headers are attached to BOTH normal responses and raised HTTP
+        # exceptions so allowlisted cross-origin clients can read error bodies.
+        if request.method == "OPTIONS":
+            return _add_cors(web.Response(status=204), request, allowed_origins)
+        # WebSocket upgrades: headers are already sent; CORS doesn't gate WS. Pass through.
+        if request.headers.get("Upgrade", "").lower() == "websocket":
+            return await handler(request)
+        try:
+            return _add_cors(await handler(request), request, allowed_origins)
+        except web.HTTPException as ex:
+            _add_cors(ex, request, allowed_origins)
+            raise
+    return _cors_middleware
 
 
 async def _read_json(request: web.Request):
@@ -229,7 +236,8 @@ class PanelServer:
 
     # --- wiring --------------------------------------------------------------
     def build_app(self) -> web.Application:
-        app = web.Application(middlewares=[_cors_middleware])
+        allowed = set(self.svc.core.panel.allowed_origins or [])
+        app = web.Application(middlewares=[_make_cors_middleware(allowed)])
         app.add_routes([
             web.get("/api/catalog", self._get_catalog),
             web.get("/api/config", self._get_config),

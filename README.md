@@ -9,8 +9,9 @@ audio to N speakers.
 
 Smart-home control is an MCP integration: the app is an MCP client that connects
 to an external smart-home MCP server (hosted in Node-RED via
-node-red-contrib-mcp-server) at `MCP_SMARTHOME_URL`, advertises its tools to the
-model and runs an agentic tool-calling loop.
+node-red-contrib-mcp-server) configured under `core.mcp_servers` in
+`data/config.json`, advertises its tools to the model and runs an agentic
+tool-calling loop.
 
 ## Quick start
 
@@ -42,8 +43,10 @@ Shape (see `templates/default_config.json` for the full default):
   provider is one file, no changes to the config core.
 - **`core`** — non-provider settings: `context` (max_turns / ttl_seconds / dir), `audio`
   (host / port / ttl / public_base_url), `vad` thresholds, `network.external_proxy`,
-  `openweathermap` (api_key / city), `mcp` (url / token), `esphome.port`, `prompt.system_prompt_path`,
-  `devices` (list of `{name, host, psk}`), `tts_timeout`, `log_level`.
+  `openweathermap` (api_key / city), `mcp_servers` (list of `{name, url, token, transport, prompt}`),
+  `calendar` (url / username / password / calendar), `esphome.port`, `prompt.system_prompt_path`,
+  `panel` (host / port / allowed_origins), `runs` (enabled / retention_days),
+  `reminders` (enabled), `devices` (list of `{name, host, psk}`), `tts_timeout`, `log_level`.
 
 API keys are plain string fields in the JSON (this is a trusted-LAN service); `data/` is
 gitignored, so `config.json` and its keys never get committed.

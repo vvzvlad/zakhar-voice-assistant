@@ -10,7 +10,7 @@ exchanges are kept.
 
 import json
 import os
-from datetime import datetime
+import time
 
 from loguru import logger
 
@@ -22,7 +22,7 @@ def _is_stale(context_path: str, ttl_seconds: int) -> bool:
     than ttl_seconds is treated as finished.
     """
     try:
-        age_seconds = datetime.now().timestamp() - os.path.getmtime(context_path)
+        age_seconds = time.time() - os.path.getmtime(context_path)
     except OSError:
         return True
     return age_seconds > ttl_seconds

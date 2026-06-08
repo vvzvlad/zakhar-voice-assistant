@@ -242,4 +242,9 @@ class ReminderScheduler:
                 try:
                     await self.deliver(r["device"], speech)
                 except Exception as e:
-                    logger.error(f"reminder delivery failed: {e}")
+                    # One-shot semantics: the row is already gone (pop_due deleted it),
+                    # so log what was lost so the drop is visible to an operator.
+                    logger.error(
+                        f"reminder delivery failed (device={r['device']!r}, "
+                        f"text={r['text']!r}): {e}"
+                    )

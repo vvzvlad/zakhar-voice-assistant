@@ -7,6 +7,21 @@ from aiohttp import web
 from loguru import logger
 
 
+# mime -> file extension for the /tts/<id>.<ext> URL the speaker fetches.
+_EXT_FOR_MIME = {"audio/wav": "wav", "audio/mpeg": "mp3", "audio/flac": "flac"}
+
+
+def tts_url(public_base_url: str, audio_id: str, mime: str) -> tuple[str, str]:
+    """Return (ext, url) for a cached TTS audio id of the given mime type.
+
+    Centralizes the mime->extension table and the /tts/<id>.<ext> URL shape so the
+    pipeline and the announce path stay in sync.
+    """
+    ext = _EXT_FOR_MIME.get(mime, "mp3")
+    url = f"{public_base_url.rstrip('/')}/tts/{audio_id}.{ext}"
+    return ext, url
+
+
 class AudioServer:
     """One shared HTTP server for all speakers with an in-memory TTL cache.
 
