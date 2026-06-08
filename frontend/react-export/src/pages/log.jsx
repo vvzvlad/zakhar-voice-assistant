@@ -1,10 +1,10 @@
 // Request Log — API-driven. Lists pipeline runs from /api/runs, opens a per-run
-// drawer (full timeline + transcript + tool calls + audio + metadata) via
-// /api/runs/{id}. Reuses the design-system primitives (Waterfall/Player/KV) and
+// drawer (full timeline + transcript + tool calls + metadata) via
+// /api/runs/{id}. Reuses the design-system primitives (Waterfall/KV) and
 // the existing CSS (z-tbl/z-gantt/z-drawer/...).
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import { Ic } from "../components/icons.jsx";
-import { PageHeader, Waterfall, total, Player, KV, Loading, ErrorBox } from "../components/primitives.jsx";
+import { PageHeader, Waterfall, total, KV, Loading, ErrorBox } from "../components/primitives.jsx";
 import { getRuns, getRun, openRunsStream } from "../api.js";
 import { RESULT_META, STAGE_COLOR, fmtSec, mapRun } from "../runsModel.js";
 
@@ -123,12 +123,6 @@ function Drawer({ r, loading, error, onClose }) {
             </div>)}
           </>}
 
-          <div className="z-sl">Synthesized audio</div>
-          {r.audio ? <>
-            <Player audio={r.audio} bars={54} />
-            <div style={{ fontSize: 11, color: "var(--mut2)", marginTop: 6, fontFamily: "var(--mono)" }}>audio is not stored, metadata only</div>
-          </> : <div className="z-card"><div className="z-empty" style={{ padding: "26px 20px" }}><div className="ic"><Ic n="tts" w={18} /></div><b>No audio</b>{r.result === "empty" ? "Empty input — nothing was synthesized." : "TTS produced no retained audio."}</div></div>}
-
           <div className="z-sl">Metadata</div>
           <div className="z-card"><div style={{ padding: "6px 17px" }}>
             <KV k="Device" v={r.device || "—"} />
@@ -206,7 +200,7 @@ function Log() {
   const close = () => { setOpenId(null); setDetail(null); setDetailError(null); };
 
   return <div className="z-page">
-    <PageHeader title="Request log" desc="Every pipeline run with per-stage timings. Click a row for the full waterfall, tool calls and audio." />
+    <PageHeader title="Request log" desc="Every pipeline run with per-stage timings. Click a row for the full waterfall, tool calls and metadata." />
     <div className="z-card">
       <div className="z-filters">
         <div className="z-search"><Ic n="search" w={13} />
