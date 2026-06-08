@@ -22,6 +22,7 @@ async def call_llm_api(
     core,
     llm_cfg,
     history: list | None = None,
+    trace: dict | None = None,
 ) -> str:
     """Drive the LLM backend with the given text and return a plain-text result.
 
@@ -31,6 +32,11 @@ async def call_llm_api(
     `core` is used to build the system prompt (date/time prefix + the configured prompt
     file). Weather and smart-home control are performed by calling tools advertised to
     the model and executed via `hub` (the multi-source tool hub).
+
+    `trace`, when given, is populated for observability as the loop runs:
+    `trace["model"]` (last seen), `trace["tokens"]` (summed total_tokens across rounds)
+    and `trace["rounds"]` (one entry per round with its note/tokens/tool calls). It
+    never changes the return value or any behavior; error paths may leave it partial.
 
     Runs an agentic loop: model -> tool_calls -> execute via the hub -> feed results
     back -> final text. On success returns the assistant text. On error returns a
@@ -44,9 +50,17 @@ async def call_llm_api(
         messages.extend(history)
     messages.append({"role": "user", "content": text})
 
+    # Observability trace (optional). Accumulate model/tokens/rounds as we go.
+    if trace is not None:
+        trace.setdefault("model", None)
+        trace.setdefault("tokens", None)
+        trace.setdefault("rounds", [])
+
     last_content = ""
     tool_executed = False
+    round_no = 0
     for _ in range(llm_cfg.max_tool_rounds):
+        round_no += 1
         try:
             data = await llm_backend.complete(messages, hub.tools or None)
         except httpx.HTTPStatusError as e:
@@ -70,12 +84,19 @@ async def call_llm_api(
 
         message = choices[0]["message"]
         usage = data.get("usage", {})
+        round_tokens = usage.get("total_tokens")
         logger.info(
             f"LLM response: model={data.get('model')} "
-            f"total_tokens={usage.get('total_tokens')} "
+            f"total_tokens={round_tokens} "
             f"content={message.get('content')!r} "
             f"tool_calls={len(message.get('tool_calls') or [])}"
         )
+
+        if trace is not None:
+            if data.get("model") is not None:
+                trace["model"] = data.get("model")
+            if round_tokens is not None:
+                trace["tokens"] = (trace["tokens"] or 0) + round_tokens
 
         # Append the assistant message verbatim (carries content + tool_calls).
         messages.append(message)
@@ -83,12 +104,20 @@ async def call_llm_api(
 
         tool_calls = message.get("tool_calls")
         if not tool_calls:
+            if trace is not None:
+                trace["rounds"].append({
+                    "round": round_no,
+                    "note": "final answer",
+                    "tokens": round_tokens,
+                    "calls": [],
+                })
             reply = processing_response(last_content)
             if reply:
                 return reply
             return llm_cfg.reply_empty_after_tools if tool_executed else llm_cfg.reply_empty
 
         # Execute each requested tool via MCP and feed results back.
+        round_calls = []
         for tc in tool_calls:
             fn = tc["function"]
             name = fn["name"]
@@ -99,11 +128,19 @@ async def call_llm_api(
             out = await hub.call(name, args)
             tool_executed = True
             logger.info(f"tool {name}({args}) -> {out!r}")
+            round_calls.append({"name": name, "args": args, "result": out})
             messages.append({
                 "role": "tool",
                 "tool_call_id": tc["id"],
                 "name": name,
                 "content": out,
+            })
+        if trace is not None:
+            trace["rounds"].append({
+                "round": round_no,
+                "note": "tool call",
+                "tokens": round_tokens,
+                "calls": round_calls,
             })
         # Loop again so the model can produce its final spoken reply.
         continue

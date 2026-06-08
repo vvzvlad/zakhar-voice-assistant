@@ -72,6 +72,13 @@ class PanelConfig(BaseModel):
     port: int = 8201
 
 
+class RunsConfig(BaseModel):
+    # Observability: persist every pipeline run to SQLite (data/runs.db). Disable
+    # to skip recording entirely; retention_days=0 keeps rows forever.
+    enabled: bool = True
+    retention_days: int = Field(30, ge=0)
+
+
 class CoreConfig(BaseModel):
     context: ContextConfig = ContextConfig()
     audio: AudioConfig = AudioConfig()
@@ -83,6 +90,7 @@ class CoreConfig(BaseModel):
     esphome: EsphomeConfig = EsphomeConfig()
     prompt: PromptConfig = PromptConfig()
     panel: PanelConfig = PanelConfig()
+    runs: RunsConfig = RunsConfig()
     devices: list[DeviceConfig] = []
     tts_timeout: int = 30
     log_level: str = "INFO"

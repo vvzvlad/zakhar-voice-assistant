@@ -18,6 +18,7 @@ from src.esphome_client import DeviceManager
 from src.mcp_client import McpToolHub
 from src.panel_api import PanelServer
 from src.plugins.base import Deps
+from src.runs_store import RunsStore
 from src.tool_hub import BuiltinMcpSource, HttpMcpSource, ToolHub
 from src.version import __version__
 
@@ -53,6 +54,13 @@ async def main() -> None:
     llm_backend = svc.create("llm")
     llm_cfg = svc.get("llm")
 
+    # Observability: persist every finalized pipeline run to SQLite (gated on config).
+    # Pruned once at boot; the panel API serves the run log + 24h metrics from it.
+    runs_store = None
+    if core.runs.enabled:
+        runs_store = RunsStore(os.path.join(core.context.dir, "runs.db"))
+        runs_store.prune(now=time.time(), retention_days=core.runs.retention_days)
+
     audio_server = AudioServer(core.audio.host, core.audio.port, core.audio.ttl)
     await audio_server.start()
 
@@ -83,7 +91,7 @@ async def main() -> None:
     zc = zeroconf.Zeroconf()
     manager = DeviceManager(
         zc, hub, stt_backend, llm_backend, tts_backend, audio_server,
-        core, llm_cfg,
+        core, llm_cfg, runs_store=runs_store,
     )
 
     # Admin panel HTTP API. Serves the built frontend if it has been bundled into
@@ -99,6 +107,7 @@ async def main() -> None:
             version=__version__, started_at=started_at,
             restart_event=restart_event, device_status=manager.statuses,
             static_dir=static_dir if os.path.isdir(static_dir) else None,
+            runs_store=runs_store,
         )
         await panel.start()
         await manager.start()
@@ -115,4 +124,6 @@ async def main() -> None:
         await audio_server.stop()
         await client_ext.aclose()
         await client_local.aclose()
+        if runs_store is not None:
+            runs_store.close()
         zc.close()

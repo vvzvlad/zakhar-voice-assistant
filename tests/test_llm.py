@@ -285,3 +285,58 @@ async def test_no_tools_passes_none_to_backend(tmp_path):
     await _call(backend, hub, "привет", _core(tmp_path))
 
     assert backend.seen[0][1] is None
+
+
+def _tool_call_usage(name, arguments_json, *, model, total_tokens):
+    resp = _tool_call(name, arguments_json)
+    resp["model"] = model
+    resp["usage"] = {"total_tokens": total_tokens}
+    return resp
+
+
+def _final_usage(content, *, model, total_tokens):
+    resp = _final(content)
+    resp["model"] = model
+    resp["usage"] = {"total_tokens": total_tokens}
+    return resp
+
+
+async def test_trace_is_populated(tmp_path):
+    hub = StubHub(tools=[SET_LIGHT_TOOL])
+    backend = FakeLlmBackend([
+        _tool_call_usage("set_light", '{"device_id":"lamp","state":"on"}',
+                         model="m-tool", total_tokens=30),
+        _final_usage("Готово.", model="m-final", total_tokens=12),
+    ])
+
+    trace: dict = {}
+    result = await call_llm_api(
+        backend, hub, "включи свет",
+        core=_core(tmp_path), llm_cfg=LlmConfig(max_tool_rounds=MAX_TOOL_ROUNDS),
+        trace=trace,
+    )
+    assert result == processing_response("Готово.")
+
+    # model = last seen; tokens summed across rounds.
+    assert trace["model"] == "m-final"
+    assert trace["tokens"] == 42
+
+    # Two rounds: a tool-call round carrying the executed call, then a final answer.
+    assert [r["note"] for r in trace["rounds"]] == ["tool call", "final answer"]
+    tool_round = trace["rounds"][0]
+    assert tool_round["round"] == 1
+    assert tool_round["tokens"] == 30
+    assert tool_round["calls"] == [
+        {"name": "set_light", "args": {"device_id": "lamp", "state": "on"}, "result": "ok"}
+    ]
+    final_round = trace["rounds"][1]
+    assert final_round["round"] == 2
+    assert final_round["calls"] == []
+
+
+async def test_trace_none_is_a_noop(tmp_path):
+    # Omitting trace must not change behavior or raise.
+    hub = StubHub(tools=[])
+    backend = FakeLlmBackend([_final("ответ")])
+    result = await _call(backend, hub, "привет", _core(tmp_path))
+    assert result == processing_response("ответ")

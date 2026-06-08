@@ -16,6 +16,7 @@ from aiohttp.test_utils import TestClient, TestServer
 from src.config_service import ConfigService
 from src.panel_api import PanelServer
 from src.plugins.base import Deps
+from src.runs_store import RunsStore
 
 
 def _doc(prompt_path):
@@ -309,5 +310,109 @@ async def test_cors_preflight(tmp_path):
         resp = await client.options("/api/config")
         assert resp.status == 204
         assert resp.headers["Access-Control-Allow-Origin"] == "*"
+    finally:
+        await client.close()
+
+
+# --- observability endpoints (runs + metrics) --------------------------------
+
+def _seed_runs(tmp_path):
+    """A RunsStore over a tmp db seeded with a couple of runs."""
+    store = RunsStore(str(tmp_path / "runs.db"))
+    now = time.time()
+    store.insert({
+        "ts": now, "device": "kitchen", "result": "ok", "reason": "endpoint",
+        "stt_text": "включи свет", "llm_text": "Готово.", "model": "m1", "tokens": 10,
+        "t_vad": 1000, "t_stt": 200, "t_llm": 300, "t_ruaccent": 0, "t_tts": 100,
+        "t_total": 1600, "audio_ms": None, "audio_bytes": 500, "audio_fmt": "mp3",
+        "error_stage": None, "error_text": None,
+        "rounds": [{"round": 1, "note": "final answer", "tokens": 10, "calls": []}],
+    })
+    store.insert({
+        "ts": now, "device": "bedroom", "result": "error", "reason": "endpoint",
+        "stt_text": "сломайся", "llm_text": "Ошибка: boom", "model": None, "tokens": None,
+        "t_vad": 1000, "t_stt": 200, "t_llm": 300, "t_ruaccent": 0, "t_tts": 0,
+        "t_total": 1500, "audio_ms": None, "audio_bytes": None, "audio_fmt": None,
+        "error_stage": "LLM", "error_text": "Ошибка: boom", "rounds": [],
+    })
+    return store
+
+
+async def test_get_runs_list_and_filters(tmp_path):
+    store = _seed_runs(tmp_path)
+    client, _svc_, _ev = await _client(tmp_path, runs_store=store)
+    try:
+        resp = await client.get("/api/runs")
+        assert resp.status == 200
+        runs = (await resp.json())["runs"]
+        assert len(runs) == 2
+        # Summary payload omits the heavy rounds field.
+        assert "rounds" not in runs[0]
+
+        # device filter.
+        only_kitchen = await (await client.get("/api/runs", params={"device": "kitchen"})).json()
+        assert [r["device"] for r in only_kitchen["runs"]] == ["kitchen"]
+
+        # result=errors filter.
+        errs = await (await client.get("/api/runs", params={"result": "errors"})).json()
+        assert [r["result"] for r in errs["runs"]] == ["error"]
+
+        # search filter.
+        found = await (await client.get("/api/runs", params={"search": "свет"})).json()
+        assert [r["stt_text"] for r in found["runs"]] == ["включи свет"]
+    finally:
+        await client.close()
+        store.close()
+
+
+async def test_get_run_by_id_and_404(tmp_path):
+    store = _seed_runs(tmp_path)
+    client, _svc_, _ev = await _client(tmp_path, runs_store=store)
+    try:
+        # The first inserted run has id 1; it carries the parsed rounds list.
+        resp = await client.get("/api/runs/1")
+        assert resp.status == 200
+        body = await resp.json()
+        assert body["id"] == 1
+        assert body["device"] == "kitchen"
+        assert body["rounds"] == [{"round": 1, "note": "final answer", "tokens": 10, "calls": []}]
+
+        missing = await client.get("/api/runs/9999")
+        assert missing.status == 404
+    finally:
+        await client.close()
+        store.close()
+
+
+async def test_get_metrics(tmp_path):
+    store = _seed_runs(tmp_path)
+    client, _svc_, _ev = await _client(tmp_path, runs_store=store)
+    try:
+        resp = await client.get("/api/metrics")
+        assert resp.status == 200
+        body = await resp.json()
+        assert body["requests_24h"] == 2
+        assert body["error_rate"] == 0.5
+        assert "p50_ms" in body and "p95_ms" in body
+        assert set(body["per_stage_avg_ms"]) == {"vad", "stt", "llm", "tts"}
+    finally:
+        await client.close()
+        store.close()
+
+
+async def test_runs_endpoints_empty_without_store(tmp_path):
+    # No runs_store -> list returns empty, metrics returns zeros, get id is 404.
+    client, _svc_, _ev = await _client(tmp_path)
+    try:
+        runs = await (await client.get("/api/runs")).json()
+        assert runs == {"runs": []}
+
+        metrics = await (await client.get("/api/metrics")).json()
+        assert metrics["requests_24h"] == 0
+        assert metrics["error_rate"] == 0.0
+        assert metrics["p50_ms"] is None
+
+        missing = await client.get("/api/runs/1")
+        assert missing.status == 404
     finally:
         await client.close()

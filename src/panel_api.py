@@ -10,6 +10,7 @@ middleware is fine here because the panel always runs in a trusted segment and t
 Vite dev server lives on a different port.
 """
 
+import asyncio
 import os
 import time
 from datetime import datetime, timezone
@@ -61,9 +62,11 @@ async def _read_json(request: web.Request):
 
 class PanelServer:
     def __init__(self, svc, host, port, *, version, started_at,
-                 restart_event, device_status=None, static_dir=None):
+                 restart_event, device_status=None, static_dir=None,
+                 runs_store=None):
         # svc: ConfigService; started_at: float (time.time()); restart_event: asyncio.Event
         # device_status: optional callable -> list[dict]; static_dir: optional path to built frontend
+        # runs_store: optional RunsStore for the observability endpoints (None -> empty/zeros)
         self.svc = svc
         self.host = host
         self.port = port
@@ -72,6 +75,7 @@ class PanelServer:
         self.restart_event = restart_event
         self.device_status = device_status
         self.static_dir = static_dir
+        self.runs_store = runs_store
         self._runner: web.AppRunner | None = None
 
     # --- handlers ------------------------------------------------------------
@@ -144,6 +148,48 @@ class PanelServer:
     async def _get_devices(self, request: web.Request) -> web.Response:
         return web.json_response(self.device_status() if self.device_status else [])
 
+    # --- observability (run log + metrics) -----------------------------------
+    async def _get_runs(self, request: web.Request) -> web.Response:
+        if self.runs_store is None:
+            return web.json_response({"runs": []})
+        device = request.query.get("device") or None
+        result = request.query.get("result") or None
+        search = request.query.get("search") or None
+        try:
+            limit = int(request.query.get("limit", 100))
+        except (TypeError, ValueError):
+            limit = 100
+        limit = max(1, min(limit, 500))
+        runs = await asyncio.to_thread(
+            self.runs_store.list,
+            device=device, result=result, search=search, limit=limit,
+        )
+        return web.json_response({"runs": runs})
+
+    async def _get_run(self, request: web.Request) -> web.Response:
+        if self.runs_store is None:
+            return web.json_response({"error": "not found"}, status=404)
+        try:
+            run_id = int(request.match_info["id"])
+        except (TypeError, ValueError):
+            return web.json_response({"error": "invalid id"}, status=400)
+        run = await asyncio.to_thread(self.runs_store.get, run_id)
+        if run is None:
+            return web.json_response({"error": "not found"}, status=404)
+        return web.json_response(run)
+
+    async def _get_metrics(self, request: web.Request) -> web.Response:
+        if self.runs_store is None:
+            return web.json_response({
+                "requests_24h": 0,
+                "p50_ms": None,
+                "p95_ms": None,
+                "error_rate": 0.0,
+                "per_stage_avg_ms": {"vad": None, "stt": None, "llm": None, "tts": None},
+            })
+        metrics = await asyncio.to_thread(self.runs_store.metrics, now=time.time())
+        return web.json_response(metrics)
+
     async def _spa_index(self, request: web.Request) -> web.Response:
         """Serve index.html for any non-/api GET so client-side routing works."""
         return web.FileResponse(os.path.join(self.static_dir, "index.html"))
@@ -161,6 +207,9 @@ class PanelServer:
             web.get("/api/system", self._get_system),
             web.post("/api/restart", self._post_restart),
             web.get("/api/devices", self._get_devices),
+            web.get("/api/runs", self._get_runs),
+            web.get("/api/runs/{id}", self._get_run),
+            web.get("/api/metrics", self._get_metrics),
         ])
         # Static frontend is optional: only mount it when a built dist exists.
         if self.static_dir and os.path.isdir(self.static_dir):

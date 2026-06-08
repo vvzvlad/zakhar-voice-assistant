@@ -25,6 +25,7 @@ class DeviceClient:
         audio_server,
         core,
         llm_cfg,
+        runs_store=None,
     ):
         self.cfg = cfg
         self.pipeline = Pipeline(
@@ -36,6 +37,7 @@ class DeviceClient:
             audio_server,
             core,
             llm_cfg,
+            runs_store=runs_store,
         )
         self.cli = APIClient(
             cfg.host, core.esphome.port, None, noise_psk=cfg.psk, zeroconf_instance=zc
@@ -113,6 +115,7 @@ class DeviceManager:
         audio_server,
         core,
         llm_cfg,
+        runs_store=None,
     ):
         self.clients = [
             DeviceClient(
@@ -125,6 +128,7 @@ class DeviceManager:
                 audio_server,
                 core,
                 llm_cfg,
+                runs_store=runs_store,
             )
             for cfg in core.devices
         ]

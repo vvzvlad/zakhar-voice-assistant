@@ -1,5 +1,6 @@
 """Unit tests for the SQLite run log (src.runs_store.RunsStore)."""
 
+import asyncio
 import time
 
 from src.runs_store import RunsStore
@@ -145,6 +146,52 @@ def test_metrics_empty(tmp_path):
         "error_rate": 0.0,
         "per_stage_avg_ms": {"vad": None, "stt": None, "llm": None, "tts": None},
     }
+    store.close()
+
+
+def test_concurrent_reads_and_writes_do_not_error(tmp_path):
+    """Reads and writes share one Connection across to_thread worker threads.
+
+    They are all guarded by the store's write lock, so hammering insert() and
+    list()/get()/metrics() concurrently must not raise (no cross-thread sqlite3
+    Connection race) and must leave a consistent row count.
+    """
+    store = _store(tmp_path)
+    now = time.time()
+    n_inserts = 40
+
+    async def main():
+        async def do_insert(i):
+            return await asyncio.to_thread(store.insert, _rec(ts=now + i, stt_text=f"q{i}"))
+
+        async def do_list():
+            return await asyncio.to_thread(store.list)
+
+        async def do_metrics():
+            return await asyncio.to_thread(store.metrics, now=now + n_inserts)
+
+        # Interleave many concurrent inserts with reads on the same store.
+        tasks = []
+        for i in range(n_inserts):
+            tasks.append(do_insert(i))
+            tasks.append(do_list())
+            tasks.append(do_metrics())
+        # Returns results in order; any worker-thread exception propagates here.
+        return await asyncio.gather(*tasks)
+
+    results = asyncio.run(main())
+
+    # New row ids returned by every insert are all distinct (no lost/duplicated
+    # writes under concurrency).
+    insert_ids = [r for r in results if isinstance(r, int)]
+    assert len(insert_ids) == n_inserts
+    assert len(set(insert_ids)) == n_inserts
+
+    # After all inserts settle, the store holds exactly n_inserts rows.
+    final = store.list(limit=n_inserts + 10)
+    assert len(final) == n_inserts
+    m = store.metrics(now=now + n_inserts)
+    assert m["requests_24h"] == n_inserts
     store.close()
 
 

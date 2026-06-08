@@ -35,7 +35,22 @@ class FakeAudioServer:
         return "abc123"
 
 
-def make_pipeline(tmp_path, name="dev", stt_text="распознанный текст", tts_backend=None):
+class FakeRunsStore:
+    """In-memory RunsStore double: records inserted run dicts for assertions.
+
+    Synchronous insert(), so it works as the target of asyncio.to_thread().
+    """
+
+    def __init__(self):
+        self.records = []
+
+    def insert(self, rec):
+        self.records.append(rec)
+        return len(self.records)
+
+
+def make_pipeline(tmp_path, name="dev", stt_text="распознанный текст",
+                  tts_backend=None, runs_store=None):
     audio_server = FakeAudioServer()
     core = CoreConfig(
         audio=AudioConfig(public_base_url=PUBLIC_BASE_URL),
@@ -50,6 +65,7 @@ def make_pipeline(tmp_path, name="dev", stt_text="распознанный те�
         audio_server=audio_server,
         core=core,
         llm_cfg=LlmConfig(),
+        runs_store=runs_store,
     )
     events = []
     pipeline.send_event = lambda et, data: events.append((et, data))
@@ -362,3 +378,113 @@ async def test_history_flows_across_runs(tmp_path, monkeypatch):
         {"role": "user", "content": "первый вопрос"},
         {"role": "assistant", "content": "первый ответ"},
     ]
+
+
+async def test_run_recorded_on_happy_path(tmp_path, monkeypatch):
+    patch_llm(monkeypatch, reply="готово")
+    store = FakeRunsStore()
+    pipeline, _ = make_pipeline(tmp_path, stt_text="включи свет", runs_store=store)
+
+    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_audio(b"\x01\x02" * 100)
+    await pipeline.on_stop(False)
+
+    # Exactly one run recorded (no double-insert across on_audio/on_stop).
+    assert len(store.records) == 1
+    rec = store.records[0]
+    # Stubbed LLM left no tool rounds -> "ok"; full transcript + reply captured.
+    assert rec["result"] == "ok"
+    assert rec["stt_text"] == "включи свет"
+    assert rec["llm_text"] == "готово"
+    # Stage timings present (t_total set in the finally; t_vad from audio length).
+    assert rec["t_total"] >= 0
+    assert rec["t_vad"] > 0
+    assert "t_stt" in rec and "t_llm" in rec and "t_tts" in rec
+    assert rec["audio_bytes"] == len(b"MP3")
+    assert rec["audio_fmt"] == "mp3"
+    assert rec["error_stage"] is None
+
+
+async def test_run_recorded_on_empty_stt(tmp_path, monkeypatch):
+    patch_llm(monkeypatch)
+    store = FakeRunsStore()
+    pipeline, _ = make_pipeline(tmp_path, stt_text="", runs_store=store)
+
+    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_audio(b"\x01\x02" * 100)
+    await pipeline.on_stop(False)
+
+    # Empty STT short-circuits but still records a run with result "empty".
+    assert len(store.records) == 1
+    rec = store.records[0]
+    assert rec["result"] == "empty"
+    assert rec["stt_text"] == ""
+    assert rec["llm_text"] == ""
+    assert rec["t_total"] >= 0
+
+
+async def test_truly_empty_audio_not_recorded(tmp_path, monkeypatch):
+    # No PCM buffered at all -> early return before building a record; nothing logged.
+    patch_llm(monkeypatch)
+    store = FakeRunsStore()
+    pipeline, _ = make_pipeline(tmp_path, runs_store=store)
+
+    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_stop(False)
+
+    assert store.records == []
+
+
+class RaisingTtsBackend:
+    """TTS double that always fails, to exercise the TTS except branch."""
+
+    async def synthesize(self, text, lang="ru"):
+        raise RuntimeError("tts boom")
+
+
+async def test_llm_error_then_tts_fail_keeps_error_stage_llm(tmp_path, monkeypatch):
+    # When the LLM reply is an "Ошибка:" string the run is classified as an
+    # LLM error but still continues into TTS. If TTS then fails, the TTS except
+    # must NOT clobber the already-set LLM root cause.
+    patch_llm(monkeypatch, reply="Ошибка: модель недоступна")
+    store = FakeRunsStore()
+    pipeline, _ = make_pipeline(
+        tmp_path,
+        stt_text="включи свет",
+        tts_backend=RaisingTtsBackend(),
+        runs_store=store,
+    )
+
+    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_audio(b"\x01\x02" * 100)
+    await pipeline.on_stop(False)
+
+    assert len(store.records) == 1
+    rec = store.records[0]
+    assert rec["result"] == "error"
+    # LLM stage/text preserved despite the later TTS failure.
+    assert rec["error_stage"] == "LLM"
+    assert rec["error_text"] == "Ошибка: модель недоступна"
+
+
+async def test_tts_fail_without_prior_error_sets_tts_stage(tmp_path, monkeypatch):
+    # Sanity check the guard's other branch: a TTS failure with no earlier error
+    # still records error_stage="TTS".
+    patch_llm(monkeypatch, reply="готово")
+    store = FakeRunsStore()
+    pipeline, _ = make_pipeline(
+        tmp_path,
+        stt_text="включи свет",
+        tts_backend=RaisingTtsBackend(),
+        runs_store=store,
+    )
+
+    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_audio(b"\x01\x02" * 100)
+    await pipeline.on_stop(False)
+
+    assert len(store.records) == 1
+    rec = store.records[0]
+    assert rec["result"] == "error"
+    assert rec["error_stage"] == "TTS"
+    assert rec["error_text"] == "tts boom"

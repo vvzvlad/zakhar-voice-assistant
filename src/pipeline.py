@@ -52,6 +52,7 @@ class Pipeline:
         audio_server,
         core,
         llm_cfg,
+        runs_store=None,
     ):
         self.name = name
         # Multi-source tool hub: advertises smart-home + built-in tools (e.g. weather)
@@ -63,6 +64,9 @@ class Pipeline:
         self.audio_server = audio_server
         self.core = core
         self.llm_cfg = llm_cfg
+        # Optional observability sink: a RunsStore (or compatible) whose insert()
+        # is offloaded to a thread. None disables run recording.
+        self.runs_store = runs_store
         self.public_base_url = core.audio.public_base_url
         self._buffer = bytearray()
         self._lock = asyncio.Lock()
@@ -217,20 +221,45 @@ class Pipeline:
                 f"{self.name}: 🎙️ captured {len(pcm)} bytes "
                 f"(~{len(pcm) / (SAMPLE_RATE * 2):.1f}s), reason={reason}"
             )
-            try:
-                if not pcm:
-                    logger.info(f"{self.name}: empty audio, ending run")
-                    self._emit(VAET.VOICE_ASSISTANT_RUN_END, {})
-                    return
+            if not pcm:
+                # Truly-empty audio: nothing to transcribe and nothing to record.
+                logger.info(f"{self.name}: empty audio, ending run")
+                self._emit(VAET.VOICE_ASSISTANT_RUN_END, {})
+                return
 
+            # Observability record for this run. Accumulated across all terminal
+            # paths below and inserted exactly once in the finally; the rest of
+            # the timings fill in as stages complete.
+            # t_vad is the captured-utterance duration in ms (the "VAD capture"
+            # segment shown in the UI waterfall), derived from the PCM length —
+            # NOT the CPU time spent running the VAD.
+            # audio_ms is intentionally left None for now: we don't decode the
+            # synthesized mp3 to measure its playback duration yet.
+            record = {
+                "ts": time.time(),
+                "device": self.name,
+                "reason": reason,
+                "result": "empty",
+                "t_vad": int(len(pcm) / (SAMPLE_RATE * 2) * 1000),
+                "t_stt": 0, "t_llm": 0, "t_ruaccent": 0, "t_tts": 0,
+                "stt_text": "", "llm_text": "",
+                "model": None, "tokens": None,
+                "audio_ms": None, "audio_bytes": None, "audio_fmt": None,
+                "error_stage": None, "error_text": None,
+                "rounds": [],
+            }
+            try:
                 stt_t = time.perf_counter()
                 text = await self.stt_backend.transcribe(pcm)
+                record["t_stt"] = int((time.perf_counter() - stt_t) * 1000)
+                record["stt_text"] = text
                 logger.info(
                     f"{self.name}: 📝 STT ({time.perf_counter() - stt_t:.2f}s): "
                     f"{text!r}"
                 )
                 self._emit(VAET.VOICE_ASSISTANT_STT_END, {"text": text})
                 if not text.strip():
+                    # Empty transcription: result stays "empty"; record in finally.
                     logger.info(f"{self.name}: empty transcription, ending run")
                     self._emit(VAET.VOICE_ASSISTANT_RUN_END, {})
                     return
@@ -243,6 +272,7 @@ class Pipeline:
                     max_turns=self.core.context.max_turns,
                     ttl_seconds=self.core.context.ttl_seconds,
                 )
+                trace: dict = {}
                 reply = await llm.call_llm_api(
                     self.llm_backend,
                     self.hub,
@@ -250,7 +280,23 @@ class Pipeline:
                     core=self.core,
                     llm_cfg=self.llm_cfg,
                     history=history,
+                    trace=trace,
                 )
+                record["t_llm"] = int((time.perf_counter() - llm_t) * 1000)
+                record["llm_text"] = reply
+                record["model"] = trace.get("model")
+                record["tokens"] = trace.get("tokens")
+                record["rounds"] = trace.get("rounds") or []
+                # Did the model actually run any tool this round?
+                tool_used = any(r.get("calls") for r in record["rounds"])
+                if reply.startswith("Ошибка:"):
+                    # LLM-layer error (already a human-readable string). Classify it
+                    # but keep current behavior: continue on to the TTS attempt.
+                    record["result"] = "error"
+                    record["error_stage"] = "LLM"
+                    record["error_text"] = reply
+                else:
+                    record["result"] = "tool" if tool_used else "ok"
                 logger.info(
                     f"{self.name}: 💬 LLM reply ({time.perf_counter() - llm_t:.2f}s): "
                     f"{reply!r}"
@@ -280,6 +326,7 @@ class Pipeline:
                 try:
                     tts_t = time.perf_counter()
                     mime, audio = await self.tts_backend.synthesize(reply, "ru")
+                    record["t_tts"] = int((time.perf_counter() - tts_t) * 1000)
                     logger.info(
                         f"{self.name}: 🔊 TTS ({time.perf_counter() - tts_t:.2f}s, "
                         f"{len(audio)} bytes)"
@@ -289,12 +336,23 @@ class Pipeline:
                         "audio/mpeg": "mp3",
                         "audio/flac": "flac",
                     }.get(mime, "mp3")
+                    record["audio_bytes"] = len(audio)
+                    record["audio_fmt"] = ext
                     audio_id = self.audio_server.put(audio, mime)
                     url = f"{self.public_base_url.rstrip('/')}/tts/{audio_id}.{ext}"
                     logger.info(f"{self.name}: ▶ serving {url}")
                     self._emit(VAET.VOICE_ASSISTANT_TTS_END, {"url": url})
                 except Exception as e:
                     # No TTS_END on failure; the run still ends cleanly.
+                    # result="error" unconditionally, but only claim the stage/
+                    # text if nothing earlier set them: when the LLM already
+                    # reported an error (error_stage="LLM") we continued into TTS
+                    # anyway, so a TTS failure here must not overwrite the LLM
+                    # root cause.
+                    record["result"] = "error"
+                    if record["error_stage"] is None:
+                        record["error_stage"] = "TTS"
+                        record["error_text"] = str(e)
                     logger.error(f"TTS failed: {e}")
 
                 logger.info(
@@ -302,12 +360,25 @@ class Pipeline:
                 )
                 self._emit(VAET.VOICE_ASSISTANT_RUN_END, {})
             except Exception as e:
+                record["result"] = "error"
+                record["error_stage"] = "pipeline"
+                record["error_text"] = str(e)
                 logger.exception(f"{self.name}: pipeline run failed: {e}")
                 self._emit(
                     VAET.VOICE_ASSISTANT_ERROR,
                     {"code": "server_error", "message": str(e)},
                 )
                 self._emit(VAET.VOICE_ASSISTANT_RUN_END, {})
+            finally:
+                # Record the run on every non-empty-pcm path (empty-STT return,
+                # success, TTS-fail, exception). A recording failure must never
+                # break the run or swallow RUN_END, so it is fully wrapped.
+                if self.runs_store is not None:
+                    record["t_total"] = int((time.perf_counter() - t0) * 1000)
+                    try:
+                        await asyncio.to_thread(self.runs_store.insert, record)
+                    except Exception as e:
+                        logger.error(f"{self.name}: run record failed: {e}")
 
     async def on_stop(self, abort: bool = False) -> None:
         """Explicit device stop: finalize the run (exactly once)."""
