@@ -82,6 +82,11 @@ class RunsConfig(BaseModel):
     retention_days: int = Field(30, ge=0)
 
 
+class RemindersConfig(BaseModel):
+    # One-shot voice reminders (data/reminders.db). Disable to drop the subsystem.
+    enabled: bool = True
+
+
 class CoreConfig(BaseModel):
     context: ContextConfig = ContextConfig()
     audio: AudioConfig = AudioConfig()
@@ -94,6 +99,7 @@ class CoreConfig(BaseModel):
     prompt: PromptConfig = PromptConfig()
     panel: PanelConfig = PanelConfig()
     runs: RunsConfig = RunsConfig()
+    reminders: RemindersConfig = RemindersConfig()
     devices: list[DeviceConfig] = []
     tts_timeout: int = 30
     log_level: str = "INFO"

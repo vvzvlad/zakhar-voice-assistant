@@ -94,6 +94,17 @@ async def main() -> None:
         cal_client = CalendarClient(core.calendar.url, core.calendar.username,
                                     core.calendar.password, core.calendar.calendar)
         sources.append(BuiltinMcpSource("calendar", build_calendar_server(cal_client)))
+    # Built-in reminders MCP (one-shot voice reminders). The scheduler needs the device
+    # manager to deliver; the manager needs the hub that holds this source — so the
+    # deliver callback is late-bound after the manager is constructed (below).
+    reminders_store = None
+    scheduler = None
+    if core.reminders.enabled:
+        from src.reminders import ReminderScheduler, RemindersStore
+        reminders_store = RemindersStore(os.path.join(core.context.dir, "reminders.db"))
+        scheduler = ReminderScheduler(reminders_store)
+        from src.builtin_mcp.reminders import build_reminders_server
+        sources.append(BuiltinMcpSource("reminders", build_reminders_server(scheduler)))
     hub = ToolHub(sources)
     await hub.start()
 
@@ -102,6 +113,10 @@ async def main() -> None:
         zc, hub, stt_backend, llm_backend, tts_backend, audio_server,
         core, llm_cfg, runs_store=runs_store,
     )
+
+    # Late-bind delivery now that the manager exists (resolves the circular dependency).
+    if scheduler is not None:
+        scheduler.deliver = manager.announce
 
     # Admin panel HTTP API. Serves the built frontend if it has been bundled into
     # frontend/react-export/dist; otherwise runs API-only. Constructed and started
@@ -121,6 +136,8 @@ async def main() -> None:
         )
         await panel.start()
         await manager.start()
+        if scheduler is not None:
+            await scheduler.start()
         # Block until POST /api/restart sets the event (or the task is cancelled).
         # docker `restart: always` brings the process back after the clean exit.
         await restart_event.wait()
@@ -129,6 +146,8 @@ async def main() -> None:
     finally:
         if panel is not None:
             await panel.stop()
+        if scheduler is not None:
+            await scheduler.stop()
         await manager.stop()
         await hub.stop()
         await audio_server.stop()
@@ -136,4 +155,6 @@ async def main() -> None:
         await client_local.aclose()
         if runs_store is not None:
             runs_store.close()
+        if reminders_store is not None:
+            reminders_store.close()
         zc.close()

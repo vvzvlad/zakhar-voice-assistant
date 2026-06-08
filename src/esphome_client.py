@@ -91,6 +91,21 @@ class DeviceClient:
     async def _handle_stop(self, abort):
         await self.pipeline.on_stop(abort)
 
+    async def announce(self, text: str) -> None:
+        """Proactively speak `text` on this speaker via the assist-satellite announce path."""
+        if not self.online:
+            raise RuntimeError(f"{self.cfg.name} is offline")
+        # Synthesize at fire time so the audio-cache TTL never matters (URL is fresh).
+        mime, audio = await self.pipeline.tts_backend.synthesize(text, "ru")
+        audio_id = self.pipeline.audio_server.put(audio, mime)
+        ext = {"audio/wav": "wav", "audio/mpeg": "mp3", "audio/flac": "flac"}.get(mime, "mp3")
+        url = f"{self.pipeline.public_base_url.rstrip('/')}/tts/{audio_id}.{ext}"
+        logger.info(f"{self.cfg.name}: 🔔 announce: {text!r} -> {url}")
+        # Assist-satellite announce ducks any current audio and plays while idle.
+        await self.cli.send_voice_assistant_announcement_await_response(
+            media_id=url, timeout=30.0, text=text,
+        )
+
     async def start(self) -> None:
         await self.reconnect.start()
 
@@ -139,6 +154,19 @@ class DeviceManager:
             {"name": c.cfg.name, "host": c.cfg.host, "online": c.online}
             for c in self.clients
         ]
+
+    async def announce(self, device_name: str | None, text: str) -> None:
+        """Route a reminder to its originating speaker; drop if unavailable."""
+        target = None
+        if device_name is not None:
+            target = next((c for c in self.clients if c.cfg.name == device_name), None)
+        else:
+            # No device recorded (shouldn't happen via the pipeline): use the first online one.
+            target = next((c for c in self.clients if c.online), None)
+        if target is None or not target.online:
+            logger.warning(f"reminder target {device_name!r} unavailable; dropping")
+            return
+        await target.announce(text)
 
     async def start(self) -> None:
         for c in self.clients:

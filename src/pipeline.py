@@ -281,6 +281,7 @@ class Pipeline:
                     llm_cfg=self.llm_cfg,
                     history=history,
                     trace=trace,
+                    device=self.name,
                 )
                 record["t_llm"] = int((time.perf_counter() - llm_t) * 1000)
                 record["llm_text"] = reply
