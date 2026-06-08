@@ -194,7 +194,7 @@ class Reconfigurator:
         if "rebuild_reminders" in actions:
             await self._rebuild_reminders()
         if do_http:
-            await self._rebuild_http()
+            await self._rebuild_http(paths)
 
     async def _rebuild_backends(self, paths) -> None:
         """Rebuild only the affected stage backends and swap them into the runtime.
@@ -345,14 +345,17 @@ class Reconfigurator:
             logger.error(f"tool sources reconfigure failed: {e}")
             self._pending_restart = True
 
-    async def _rebuild_http(self) -> None:
-        """Rebuild the external (proxied) HTTP client and ONLY the things bound to it,
-        then close the old client. Rebuilt: the stage backends whose selected provider
-        reports uses_http_cloud (i.e. the ones whose create() binds to deps.http_cloud)
-        plus the OpenWeatherMap tool source (which also captures http_cloud). Offline/
-        local backends (vosk STT, piper TTS, teratts via http_local) are NOT rebuilt — a
-        proxy change does not affect them, so no model reload happens for them. Proxy
-        changes are rare; an in-flight request on the old client may fail when it is closed."""
+    async def _rebuild_http(self, paths) -> None:
+        """Rebuild the external (proxied) HTTP client, then rebuild the stages bound to it
+        PLUS any stages whose own config changed in this job, then close the old client.
+        Rebuilt stages are the UNION of (a) the cloud stages whose selected provider reports
+        uses_http_cloud — these MUST rebuild because their create() binds to deps.http_cloud,
+        which just changed — and (b) the stages named by `paths` (incl. OFFLINE backends like
+        vosk STT / piper or teratts TTS), so a coalesced patch touching both core.network.*
+        and a selected offline backend does not silently drop that backend's change. The
+        OpenWeatherMap tool source also captures http_cloud, so tools are always rebuilt.
+        Proxy changes are rare; an in-flight request on the old client may fail when it is
+        closed."""
         core = self.rt.core
         old = self.deps.http_cloud
         try:
@@ -362,10 +365,12 @@ class Reconfigurator:
             self._pending_restart = True
             return
         self.deps.http_cloud = new_client
-        # Rebuild only the stages bound to the proxied client; offline models untouched.
+        # Rebuild the cloud stages (their client changed) UNION the stages whose own config
+        # changed in this job (incl. offline backends), so nothing is silently dropped.
         svc = self.rt.svc
-        cats = {c for c in ("stt", "llm", "tts") if svc.provider(c).uses_http_cloud}
-        await self._rebuild_backend_cats(cats)   # only proxied stages; offline models untouched
+        cloud_cats = {c for c in ("stt", "llm", "tts") if svc.provider(c).uses_http_cloud}
+        cats = cloud_cats | backend_categories(paths)
+        await self._rebuild_backend_cats(cats)
         await self._rebuild_tools()              # OpenWeatherMap source also uses http_cloud
         # Close the old client after dependents have been rebuilt off the new one.
         try:

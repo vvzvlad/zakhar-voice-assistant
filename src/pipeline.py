@@ -684,10 +684,30 @@ class Pipeline:
                     except Exception as e:
                         logger.error(f"{self.name}: run record failed: {e}")
                     else:
+                        # Store the finalized utterance audio (the exact PCM sent to
+                        # STT) in a rolling window of the last runs.audio_keep, so it
+                        # can be downloaded/played from the log to diagnose mis-triggers
+                        # (e.g. a wake-word tail reaching STT). Best-effort: a storage
+                        # failure must never break the run or swallow the broadcast.
+                        stored_audio = False
+                        if self.core.runs.store_audio and pcm:
+                            try:
+                                wav = _pcm_to_wav_bytes(pcm)
+                                await asyncio.to_thread(
+                                    self.runs_store.put_audio,
+                                    run_id, wav, self.core.runs.audio_keep,
+                                )
+                                stored_audio = True
+                            except Exception as e:
+                                logger.error(
+                                    f"{self.name}: utterance audio store failed: {e}"
+                                )
                         # Defer the live broadcast until the lock is released so a slow
                         # WebSocket consumer can't backpressure the next run on this speaker.
                         if self.run_events is not None:
-                            pending_run = summary_row(record, run_id)
+                            pending_run = summary_row(
+                                record, run_id, has_audio=stored_audio
+                            )
 
         # Outside the lock: push to live panel subscribers. Fully isolated — a
         # broadcast failure (or a slow client) must never affect the run or the lock.

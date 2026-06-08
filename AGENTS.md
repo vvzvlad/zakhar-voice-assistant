@@ -15,6 +15,9 @@ configured under `core.mcp_servers` in `data/config.json`.
   `config_service.py` (`ConfigService`/`ConfigDoc`) + `core_config.py` (`CoreConfig`).
   Stage providers live under `src/plugins/<stage>/<id>.py`, each with its own pydantic
   `ConfigModel` + `create()`; `src/plugins/base.py` has the `Provider`/`REGISTRY`.
+  `src/reconfig.py` (+ `src/runtime.py`) own how config changes are applied at runtime:
+  `reconfig.action_for` classifies each changed path and the `Reconfigurator` hot-reconfigures
+  the running process (backends/tools/audio/devices/reminders) without a restart.
 - `tests/` — pytest
 - `data/` — runtime state: `config.json`, per-device context files, cached prompt (gitignored, docker volume)
 - `templates/` — committed reference assets seeded into `data/` on first boot (`default_prompt.md`, `default_config.json`)

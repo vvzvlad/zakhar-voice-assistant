@@ -68,10 +68,19 @@ class FakeRunsStore:
 
     def __init__(self):
         self.records = []
+        self.audio_calls = []  # (run_id, wav, keep) per put_audio
+        self.audio = {}        # run_id -> wav
 
     def insert(self, rec):
         self.records.append(rec)
         return len(self.records)
+
+    def put_audio(self, run_id, wav, keep):
+        self.audio_calls.append((run_id, wav, keep))
+        self.audio[run_id] = wav
+
+    def get_audio(self, run_id):
+        return self.audio.get(run_id)
 
 
 class FakeRunEvents:
@@ -565,6 +574,63 @@ async def test_run_recorded_on_happy_path(tmp_path, monkeypatch):
     assert rec["error_stage"] is None
 
 
+async def test_utterance_audio_stored_on_happy_path(tmp_path, monkeypatch):
+    # A normal run stores its finalized utterance audio exactly once: keyed by the
+    # new run_id, as a WAV (RIFF header), with keep == the configured audio_keep.
+    patch_llm(monkeypatch, reply="готово")
+    store = FakeRunsStore()
+    pipeline, _ = make_pipeline(tmp_path, monkeypatch, stt_text="включи свет", runs_store=store)
+
+    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_audio(b"\x01\x02" * 100)
+    await pipeline.on_stop(False)
+
+    assert len(store.audio_calls) == 1
+    run_id, wav, keep = store.audio_calls[0]
+    # The store returns id 1 for the first insert; audio is keyed by that run_id.
+    assert run_id == 1
+    assert wav.startswith(b"RIFF")
+    # Default RunsConfig.audio_keep is 100.
+    assert keep == pipeline.rt.core.runs.audio_keep == 100
+
+
+async def test_utterance_audio_stored_on_no_speech_run(tmp_path, monkeypatch):
+    # A no-speech finalize skips STT but STILL stores the utterance audio (that is
+    # exactly what the operator wants to hear); the run is recorded as empty.
+    patch_llm(monkeypatch)
+    store = FakeRunsStore()
+    pipeline, _ = make_pipeline(tmp_path, monkeypatch, stt_text="   ", runs_store=store)
+    set_small_vad_thresholds(pipeline)
+    # Never any speech: only the no-speech timeout can finalize.
+    pipeline._vad = FakeVad([False])
+
+    await pipeline.on_start("cid", 0, None, None)
+    # no_speech_timeout_ms=200 -> 10 frames; feed 11 to cross it.
+    await pipeline.on_audio(FRAME * 11)
+
+    # Audio stored even though STT was skipped.
+    assert len(store.audio_calls) == 1
+    assert store.audio_calls[0][1].startswith(b"RIFF")
+    # The recorded run is an empty (no_speech) run.
+    assert len(store.records) == 1
+    assert store.records[0]["result"] == "empty"
+
+
+async def test_utterance_audio_not_stored_when_disabled(tmp_path, monkeypatch):
+    # With store_audio disabled, a normal run records but stores NO audio.
+    patch_llm(monkeypatch, reply="готово")
+    store = FakeRunsStore()
+    pipeline, _ = make_pipeline(tmp_path, monkeypatch, stt_text="включи свет", runs_store=store)
+    pipeline.rt.core.runs.store_audio = False
+
+    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_audio(b"\x01\x02" * 100)
+    await pipeline.on_stop(False)
+
+    assert len(store.records) == 1
+    assert store.audio_calls == []
+
+
 async def test_run_broadcast_on_happy_path(tmp_path, monkeypatch):
     # With both a store and a run-events hub, a finalized run is broadcast once,
     # carrying the same summary shape /api/runs returns.
@@ -586,8 +652,10 @@ async def test_run_broadcast_on_happy_path(tmp_path, monkeypatch):
     # The store returns id 1 for the first insert; the summary echoes it.
     assert payload["run"]["id"] == 1
     assert payload["run"]["result"] in ("ok", "tool")
-    # The broadcast run dict is exactly the summary shape (_LIST_COLS).
-    assert set(payload["run"].keys()) == set(_LIST_COLS)
+    # The broadcast run dict is the summary shape (_LIST_COLS) plus the has_audio flag.
+    assert set(payload["run"].keys()) == set(_LIST_COLS) | {"has_audio"}
+    # This happy-path run stored its utterance audio, so the flag is set.
+    assert payload["run"]["has_audio"] == 1
 
 
 async def test_no_broadcast_without_hub(tmp_path, monkeypatch):

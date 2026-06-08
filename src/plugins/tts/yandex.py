@@ -42,7 +42,8 @@ def _default_role(voice: str) -> str:
 
 
 class YandexTtsConfig(BaseModel):
-    api_key: str = Field("", json_schema_extra={"apply": "rebuild"})
+    # apply class is computed centrally (reconfig.action_for) and injected by catalog().
+    api_key: str = ""
     voice: str = Field("zahar", json_schema_extra={"widget": "select", "options": "dynamic"})
     # Role (amplua) is voice-dependent, so its option list is computed from the
     # selected voice (see options()); it is stored as a free string and coerced to

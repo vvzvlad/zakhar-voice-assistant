@@ -31,7 +31,10 @@ automatically — you never need the system Python.
 
 All config lives in a single JSON file, `data/config.json` (created on first run
 from `templates/default_config.json`; `make config` seeds it explicitly). There is
-no `.env` — edit the JSON and restart.
+no `.env`. Most settings apply LIVE (hot) the moment they are saved via the panel/API:
+backends, tool sources, the audio server, devices and reminders are reconfigured in place
+with no process restart. A restart is required only for the panel's own host/port — when a
+change actually needs one, the panel sets `pending_restart` and shows a restart banner.
 
 Shape (see `templates/default_config.json` for the full default):
 

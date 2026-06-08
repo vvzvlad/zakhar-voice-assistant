@@ -3,7 +3,7 @@ import { Ic } from "../components/icons.jsx";
 import {
   Field, PageHeader, FormSaveBar, Select, Stepper, Modal,
 } from "../components/primitives.jsx";
-import SchemaForm from "../components/SchemaForm.jsx";
+import SchemaForm, { schemaNeedsRestart } from "../components/SchemaForm.jsx";
 import { useAppData } from "../appData.jsx";
 import { useStageForm, errorLines } from "../useStageForm.js";
 import { fmtUptime, fmtStarted } from "../format.js";
@@ -32,13 +32,13 @@ function Network() {
   return <div className="z-page">
     <PageHeader title="Network & integrations" crumb="Operations · advanced"
       desc="Outbound routing for cloud APIs and the audio server that feeds speakers." />
-    <Card title="External proxy" foot={<FormSaveBar dirty={net.dirty} saving={net.saving} onSave={net.save} restart errors={errorLines(net.err)} />}>
+    <Card title="External proxy" foot={<FormSaveBar dirty={net.dirty} saving={net.saving} onSave={net.save} restart={schemaNeedsRestart(netSchema)} errors={errorLines(net.err)} />}>
       {netSchema
         ? <SchemaForm schema={netSchema} values={net.draft} onChange={net.onChange} />
         : <Field label="Proxy" hint="SOCKS/HTTP for cloud APIs. Empty = direct."><div className="z-inp mono"><input value={net.draft.external_proxy ?? ""} onChange={(e) => net.onChange("external_proxy", e.target.value)} /></div></Field>}
     </Card>
     <div style={{ height: 16 }} />
-    <Card title="Audio server" sub="serves generated audio to speakers" foot={<FormSaveBar dirty={audio.dirty} saving={audio.saving} onSave={audio.save} restart errors={errorLines(audio.err)} />}>
+    <Card title="Audio server" sub="serves generated audio to speakers" foot={<FormSaveBar dirty={audio.dirty} saving={audio.saving} onSave={audio.save} restart={schemaNeedsRestart(audioSchema)} errors={errorLines(audio.err)} />}>
       {audioSchema
         ? <SchemaForm schema={audioSchema} values={audio.draft} onChange={audio.onChange} />
         : <>

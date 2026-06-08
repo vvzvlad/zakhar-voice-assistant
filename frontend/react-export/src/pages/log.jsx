@@ -5,7 +5,7 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import { Ic } from "../components/icons.jsx";
 import { PageHeader, Waterfall, KV, Loading, ErrorBox } from "../components/primitives.jsx";
-import { getRuns, getRun, openRunsStream } from "../api.js";
+import { getRuns, getRun, openRunsStream, runAudioUrl, downloadRunAudio } from "../api.js";
 import { RESULT_META, STAGE_COLOR, fmtSec, mapRun, totalMs } from "../runsModel.js";
 
 const SC = STAGE_COLOR;
@@ -103,6 +103,14 @@ function Drawer({ r, loading, error, onClose }) {
             <div className="z-f"><div className="z-fl"><b style={{ color: "var(--mut)", fontWeight: 600, fontSize: 11, textTransform: "uppercase", letterSpacing: ".04em" }}>Response (LLM)</b></div>
               <div style={{ fontSize: 14, color: r.llm ? "var(--ink)" : "var(--mut2)", fontStyle: r.llm ? "normal" : "italic" }}>{r.llm || "— no response produced —"}</div></div>
           </div></div>
+
+          {r.has_audio ? <>
+            <div className="z-sl">Utterance audio</div>
+            <div className="z-card"><div style={{ padding: "12px 17px", display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+              <audio controls preload="none" src={runAudioUrl(r.id)} style={{ height: 34, flex: 1, minWidth: 220 }} />
+              <button className="z-btn" onClick={() => downloadRunAudio(r.id)}>Download WAV</button>
+            </div></div>
+          </> : null}
 
           {r.rounds && r.rounds.length > 0 && <>
             <div className="z-sl">LLM rounds & tool calls<div className="ln" /><span style={{ fontFamily: "var(--mono)", fontSize: 10.5, color: "var(--mut2)", textTransform: "none", letterSpacing: 0 }}>{r.model || "—"} · {r.tokens || 0} tok</span></div>

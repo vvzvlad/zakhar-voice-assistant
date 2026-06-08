@@ -152,55 +152,31 @@ def test_reconfigurator_capture_is_live_no_restart_no_job():
     assert reconf.queue.qsize() == 0
 
 
-def test_reconfigurator_rebuild_backends_enqueues_and_no_restart():
-    # rebuild_backends is now applied hot, asynchronously: the change is enqueued for
-    # the drain task and does NOT latch pending_restart.
+@pytest.mark.parametrize(
+    "paths, expected_action",
+    [
+        # rebuild_backends (mixed with a live path that needs no async work).
+        ({"core.context.max_turns", "tts.instances.yandex.voice"}, "rebuild_backends"),
+        # core.network.external_proxy -> rebuild_http (Tier 3b).
+        ({"core.network.external_proxy"}, "rebuild_http"),
+        # core.openweathermap/calendar/mcp_servers -> rebuild_tools (Tier 3b).
+        ({"core.openweathermap.api_key"}, "rebuild_tools"),
+        # core.audio.host -> rebuild_audio.
+        ({"core.audio.host"}, "rebuild_audio"),
+        # core.runs.enabled -> rebuild_runs.
+        ({"core.runs.enabled"}, "rebuild_runs"),
+        # core.devices/core.esphome.port -> rebuild_devices (Tier 3c).
+        ({"core.esphome.port"}, "rebuild_devices"),
+        # core.reminders.* -> rebuild_reminders (Tier 3c).
+        ({"core.reminders.enabled"}, "rebuild_reminders"),
+    ],
+)
+def test_reconfigurator_async_action_enqueues_and_no_restart(paths, expected_action):
+    # Every async rebuild action is applied hot: on_config_change enqueues exactly one
+    # job for the drain task (carrying the changed paths) and does NOT latch
+    # pending_restart. expected_action is the async action these paths trigger.
+    assert expected_action in {action_for(p) for p in paths}
     reconf = _make_reconf(_stub_runtime())
-    paths = {"core.context.max_turns", "tts.instances.yandex.voice"}
-    reconf.on_config_change(paths)
-    assert reconf.queue.qsize() == 1
-    assert reconf.queue.get_nowait() == paths
-    assert reconf.pending_restart() is False
-
-
-def test_reconfigurator_rebuild_http_enqueues_and_no_restart():
-    # core.network.external_proxy -> rebuild_http, now supported hot (Tier 3b): it
-    # enqueues a job for the drain task and does NOT latch pending_restart.
-    reconf = _make_reconf(_stub_runtime())
-    paths = {"core.network.external_proxy"}
-    reconf.on_config_change(paths)
-    assert reconf.queue.qsize() == 1
-    assert reconf.queue.get_nowait() == paths
-    assert reconf.pending_restart() is False
-
-
-def test_reconfigurator_rebuild_tools_enqueues_and_no_restart():
-    # core.openweathermap/calendar/mcp_servers -> rebuild_tools, supported hot (Tier 3b):
-    # it enqueues a job for the drain task and does NOT latch pending_restart.
-    reconf = _make_reconf(_stub_runtime())
-    paths = {"core.openweathermap.api_key"}
-    reconf.on_config_change(paths)
-    assert reconf.queue.qsize() == 1
-    assert reconf.queue.get_nowait() == paths
-    assert reconf.pending_restart() is False
-
-
-def test_reconfigurator_rebuild_audio_enqueues_and_no_restart():
-    # core.audio.host -> rebuild_audio, now supported hot: it enqueues a job for the
-    # drain task and does NOT latch pending_restart.
-    reconf = _make_reconf(_stub_runtime())
-    paths = {"core.audio.host"}
-    reconf.on_config_change(paths)
-    assert reconf.queue.qsize() == 1
-    assert reconf.queue.get_nowait() == paths
-    assert reconf.pending_restart() is False
-
-
-def test_reconfigurator_rebuild_runs_enqueues_and_no_restart():
-    # core.runs.enabled -> rebuild_runs, now supported hot: it enqueues a job for the
-    # drain task and does NOT latch pending_restart.
-    reconf = _make_reconf(_stub_runtime())
-    paths = {"core.runs.enabled"}
     reconf.on_config_change(paths)
     assert reconf.queue.qsize() == 1
     assert reconf.queue.get_nowait() == paths
@@ -789,6 +765,39 @@ async def test_apply_job_rebuild_http_skips_offline_stt(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_apply_job_rebuild_http_also_rebuilds_offline_backend_changed_in_job(monkeypatch):
+    # Coalesced job touching BOTH core.network.* (rebuild_http) AND a SELECTED OFFLINE
+    # backend's own field (stt is offline here, llm/tts cloud). The http rebuild must
+    # rebuild the UNION of the cloud stages (client changed) AND the offline stt (its
+    # config changed) — so the offline change is NOT silently dropped — rebuild tools,
+    # swap the client, close the old one, and leave pending_restart False (nothing lost).
+    monkeypatch.setattr("src.reconfig.build_sources", lambda c, h, s: ["new-src"])
+    new_client = _FakeHttpClient("new")
+    monkeypatch.setattr("src.reconfig.httpx.AsyncClient", lambda **kw: new_client)
+    old_client = _FakeHttpClient("old")
+    svc = _StubSvc(cloud_cats=("llm", "tts"))   # stt offline, llm/tts cloud
+    hub = _FakeHub()
+    rt = _http_runtime(svc, hub)
+    deps = types.SimpleNamespace(http_cloud=old_client, tts_timeout=30)
+    svc.attach(deps)
+    reconf = Reconfigurator(rt, deps, asyncio.Queue())
+
+    await reconf.apply_job(
+        {"core.network.external_proxy", "stt.instances.vosk.model"}
+    )
+
+    # stt (offline, config changed) rebuilt despite NOT being cloud, plus the cloud stages.
+    assert svc.calls == {"stt": 1, "llm": 1, "tts": 1}
+    assert rt.stt_backend == ("backend", "stt", 42)   # offline stt change applied (not dropped)
+    assert rt.llm_backend == ("backend", "llm", 42)
+    assert rt.tts_backend == ("backend", "tts", 42)
+    assert hub.set_calls == [["new-src"]]              # tools rebuilt
+    assert deps.http_cloud is new_client               # client swapped
+    assert old_client.closed is True                   # old client closed
+    assert reconf.pending_restart() is False           # nothing silently lost
+
+
+@pytest.mark.asyncio
 async def test_apply_job_rebuild_http_offline_only_reloads_no_model(monkeypatch):
     # ALL selected providers are offline (uses_http_cloud False): a proxy change rebuilds
     # NO backends (no svc.create calls -> no model reload), but tools are still rebuilt and
@@ -815,30 +824,6 @@ async def test_apply_job_rebuild_http_offline_only_reloads_no_model(monkeypatch)
     assert hub.set_calls == [["new-src"]]  # tools still rebuilt (OpenWeatherMap uses http_cloud)
     assert deps.http_cloud is new_client   # client still swapped
     assert old_client.closed is True       # old client still closed
-    assert reconf.pending_restart() is False
-
-
-# --- on_config_change (Tier 3c: devices/reminders now hot, no restart) -------
-
-def test_reconfigurator_rebuild_devices_enqueues_and_no_restart():
-    # core.devices/core.esphome.port -> rebuild_devices, now supported hot (Tier 3c):
-    # it enqueues a job for the drain task and does NOT latch pending_restart.
-    reconf = _make_reconf(_stub_runtime())
-    paths = {"core.esphome.port"}
-    reconf.on_config_change(paths)
-    assert reconf.queue.qsize() == 1
-    assert reconf.queue.get_nowait() == paths
-    assert reconf.pending_restart() is False
-
-
-def test_reconfigurator_rebuild_reminders_enqueues_and_no_restart():
-    # core.reminders.* -> rebuild_reminders, now supported hot (Tier 3c): it enqueues a
-    # job for the drain task and does NOT latch pending_restart.
-    reconf = _make_reconf(_stub_runtime())
-    paths = {"core.reminders.enabled"}
-    reconf.on_config_change(paths)
-    assert reconf.queue.qsize() == 1
-    assert reconf.queue.get_nowait() == paths
     assert reconf.pending_restart() is False
 
 

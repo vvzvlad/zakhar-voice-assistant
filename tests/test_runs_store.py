@@ -199,8 +199,9 @@ def test_summary_row_shape_matches_list_cols():
     # summary_row builds a list()-shaped dict from an insert record + new id.
     rec = _rec(stt_text="включи свет", llm_text="Готово.", t_total=2000)
     row = summary_row(rec, 7)
-    # Exactly the summary columns, no more, no less.
-    assert set(row.keys()) == set(_LIST_COLS)
+    # The summary columns plus the computed has_audio flag (defaults to 0).
+    assert set(row.keys()) == set(_LIST_COLS) | {"has_audio"}
+    assert row["has_audio"] == 0
     # id comes from the run_id arg; other fields copied from rec.
     assert row["id"] == 7
     assert row["stt_text"] == "включи свет"
@@ -241,4 +242,83 @@ def test_prune_keeps_all_when_retention_zero(tmp_path):
 
     assert store.get(recent) is not None
     assert store.get(ancient) is not None
+    store.close()
+
+
+def test_put_get_audio_round_trip(tmp_path):
+    store = _store(tmp_path)
+    rid = store.insert(_rec())
+    wav = b"RIFF....WAVEfmt fake-pcm-bytes"
+    store.put_audio(rid, wav, keep=100)
+    assert store.get_audio(rid) == wav
+    # A run with no stored audio returns None.
+    assert store.get_audio(999) is None
+    store.close()
+
+
+def test_put_audio_insert_or_replace_updates_bytes(tmp_path):
+    store = _store(tmp_path)
+    rid = store.insert(_rec())
+    store.put_audio(rid, b"first", keep=100)
+    store.put_audio(rid, b"second", keep=100)
+    assert store.get_audio(rid) == b"second"
+    store.close()
+
+
+def test_put_audio_ring_buffer_keeps_newest(tmp_path):
+    store = _store(tmp_path)
+    # Insert several runs and store audio for each; run_id AUTOINCREMENTs so the
+    # newest 3 ids must survive the keep=3 ring buffer, older ones get pruned.
+    rids = []
+    for i in range(6):
+        rid = store.insert(_rec(stt_text=f"q{i}"))
+        rids.append(rid)
+        store.put_audio(rid, f"wav-{rid}".encode(), keep=3)
+
+    survivors = [r for r in rids if store.get_audio(r) is not None]
+    assert survivors == rids[-3:]
+    # Older run_ids no longer carry audio.
+    for r in rids[:-3]:
+        assert store.get_audio(r) is None
+    store.close()
+
+
+def test_list_includes_has_audio(tmp_path):
+    store = _store(tmp_path)
+    now = time.time()
+    with_audio = store.insert(_rec(ts=now, stt_text="with"))
+    without_audio = store.insert(_rec(ts=now - 1, stt_text="without"))
+    store.put_audio(with_audio, b"wav-bytes", keep=100)
+
+    by_id = {r["id"]: r for r in store.list()}
+    assert by_id[with_audio]["has_audio"] == 1
+    assert by_id[without_audio]["has_audio"] == 0
+    store.close()
+
+
+def test_get_includes_has_audio(tmp_path):
+    store = _store(tmp_path)
+    with_audio = store.insert(_rec())
+    without_audio = store.insert(_rec())
+    store.put_audio(with_audio, b"wav-bytes", keep=100)
+
+    assert store.get(with_audio)["has_audio"] == 1
+    assert store.get(without_audio)["has_audio"] == 0
+    store.close()
+
+
+def test_prune_deletes_orphaned_audio(tmp_path):
+    store = _store(tmp_path)
+    now = time.time()
+    keep = store.insert(_rec(ts=now, stt_text="recent"))
+    old = store.insert(_rec(ts=now - 40 * 86400, stt_text="ancient"))
+    store.put_audio(keep, b"recent-wav", keep=100)
+    store.put_audio(old, b"old-wav", keep=100)
+
+    store.prune(now=now, retention_days=30)
+
+    # The old run AND its audio are gone; the recent run's audio survives.
+    assert store.get(old) is None
+    assert store.get_audio(old) is None
+    assert store.get_audio(keep) == b"recent-wav"
     store.close()

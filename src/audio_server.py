@@ -77,7 +77,7 @@ class AudioServer:
         await site.start()
         # When bound to an OS-assigned port (0), record the actual port so rebind()'s
         # no-op check and any port readers see the real value.
-        if self.port == 0 and self._runner is not None:
+        if self.port == 0:
             addrs = self._runner.addresses
             if addrs:
                 self.port = addrs[0][1]

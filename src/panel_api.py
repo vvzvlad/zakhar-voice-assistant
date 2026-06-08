@@ -290,6 +290,24 @@ class PanelServer:
             return web.json_response({"error": "not found"}, status=404)
         return web.json_response(run)
 
+    async def _get_run_audio(self, request: web.Request) -> web.Response:
+        """Serve the stored utterance WAV for one run (inline, playable/downloadable)."""
+        if self.runs_store is None:
+            return web.json_response({"error": "not found"}, status=404)
+        try:
+            run_id = int(request.match_info["id"])
+        except (TypeError, ValueError):
+            return web.json_response({"error": "invalid id"}, status=400)
+        wav = await asyncio.to_thread(self.runs_store.get_audio, run_id)
+        if wav is None:
+            return web.json_response({"error": "not found"}, status=404)
+        filename = f"zakhar_run_{run_id}.wav"
+        return web.Response(
+            body=wav,
+            content_type="audio/wav",
+            headers={"Content-Disposition": f'inline; filename="{filename}"'},
+        )
+
     async def _runs_stream(self, request: web.Request) -> web.WebSocketResponse:
         """WebSocket endpoint streaming each finalized run as {"type":"run","run":{...}}.
 
@@ -343,6 +361,7 @@ class PanelServer:
             web.get("/api/tools", self._get_tools),
             web.get("/api/runs", self._get_runs),
             web.get("/api/runs/stream", self._runs_stream),  # before {id}: literal wins
+            web.get("/api/runs/{id}/audio", self._get_run_audio),
             web.get("/api/runs/{id}", self._get_run),
             web.get("/api/metrics", self._get_metrics),
         ])

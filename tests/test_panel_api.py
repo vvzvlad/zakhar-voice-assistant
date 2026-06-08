@@ -630,6 +630,51 @@ async def test_get_run_by_id_and_404(tmp_path):
         store.close()
 
 
+async def test_get_run_audio_returns_wav_inline(tmp_path):
+    # A run with stored audio is served as audio/wav with an inline disposition and
+    # the exact stored bytes in the body.
+    store = _seed_runs(tmp_path)
+    wav = _wav_bytes()
+    store.put_audio(1, wav, keep=100)
+    client, _svc_, _ev = await _client(tmp_path, runs_store=store)
+    try:
+        resp = await client.get("/api/runs/1/audio")
+        assert resp.status == 200
+        assert resp.headers["Content-Type"] == "audio/wav"
+        assert resp.headers["Content-Disposition"] == \
+            'inline; filename="zakhar_run_1.wav"'
+        body = await resp.read()
+        assert body == wav
+    finally:
+        await client.close()
+        store.close()
+
+
+async def test_get_run_audio_404_when_no_audio_and_400_on_bad_id(tmp_path):
+    # A run without stored audio -> 404; a non-integer id -> 400.
+    store = _seed_runs(tmp_path)
+    client, _svc_, _ev = await _client(tmp_path, runs_store=store)
+    try:
+        missing = await client.get("/api/runs/1/audio")
+        assert missing.status == 404
+
+        bad = await client.get("/api/runs/abc/audio")
+        assert bad.status == 400
+    finally:
+        await client.close()
+        store.close()
+
+
+async def test_get_run_audio_404_without_store(tmp_path):
+    # No runs_store wired -> audio endpoint returns 404.
+    client, _svc_, _ev = await _client(tmp_path)
+    try:
+        resp = await client.get("/api/runs/1/audio")
+        assert resp.status == 404
+    finally:
+        await client.close()
+
+
 async def test_get_metrics(tmp_path):
     store = _seed_runs(tmp_path)
     client, _svc_, _ev = await _client(tmp_path, runs_store=store)

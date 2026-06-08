@@ -99,6 +99,52 @@ def test_catalog_exposes_values_plainly(tmp_path):
     assert "properties" in cat["core"]["schema"]
 
 
+def test_catalog_injects_apply_class_per_field(tmp_path):
+    # catalog() injects a backend-computed `apply` class (reconfig.action_for) into EVERY
+    # field's schema — provider fields (flat) and core fields (nested $defs) alike. This is
+    # the single source of truth for the apply class and doubles as the consistency guard
+    # against action_for. The ONLY value meaning "restart required" is "restart".
+    from src.reconfig import action_for
+
+    cat = _service(tmp_path).catalog()
+
+    # Stage provider (flat) schemas carry per-field apply.
+    llm = next(c for c in cat["categories"] if c["id"] == "llm")
+    openrouter = next(p for p in llm["providers"] if p["id"] == "openrouter")
+    lp = openrouter["schema"]["properties"]
+    assert lp["api_key"]["apply"] == "rebuild_backends"     # NOT "restart"
+    assert lp["max_tool_rounds"]["apply"] == "live"
+    assert lp["reply_empty"]["apply"] == "live"
+    assert lp["timeout"]["apply"] == "rebuild_backends"
+    # Every provider field carries an apply consistent with action_for.
+    for field, node in lp.items():
+        assert node["apply"] == action_for(f"llm.instances.openrouter.{field}")
+
+    tts = next(c for c in cat["categories"] if c["id"] == "tts")
+    yandex = next(p for p in tts["providers"] if p["id"] == "yandex")
+    yp = yandex["schema"]["properties"]
+    assert yp["api_key"]["apply"] == "rebuild_backends"
+    assert yp["voice"]["apply"] == "rebuild_backends"
+    # The widget/options annotations on yandex voice survive (not clobbered by apply).
+    assert yp["voice"]["widget"] == "select"
+    assert yp["voice"]["options"] == "dynamic"
+
+    # Core (nested $defs) schemas carry per-field apply on each sub-model's properties.
+    core_defs = cat["core"]["schema"]["$defs"]
+    assert core_defs["PanelConfig"]["properties"]["port"]["apply"] == "restart"
+    assert core_defs["ContextConfig"]["properties"]["max_turns"]["apply"] == "live"
+    assert core_defs["AudioConfig"]["properties"]["public_base_url"]["apply"] == "live"
+    assert core_defs["AudioConfig"]["properties"]["host"]["apply"] == "rebuild_audio"
+    # Scalar / list core properties are annotated on the property itself.
+    core_props = cat["core"]["schema"]["properties"]
+    assert core_props["tts_timeout"]["apply"] == "rebuild_backends"
+    assert core_props["log_level"]["apply"] == "logging"
+    assert core_props["mcp_servers"]["apply"] == "rebuild_tools"
+    assert core_props["devices"]["apply"] == "rebuild_devices"
+    # "restart" is the ONLY value meaning a real restart is required.
+    assert core_props["log_level"]["apply"] != "restart"
+
+
 def test_options_proxies_provider(tmp_path):
     svc = _service(tmp_path)
     assert "zahar" in svc.options("tts", "yandex", "voice")

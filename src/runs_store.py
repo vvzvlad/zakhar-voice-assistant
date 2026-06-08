@@ -33,6 +33,13 @@ CREATE TABLE IF NOT EXISTS runs (
 
 _CREATE_INDEX = "CREATE INDEX IF NOT EXISTS idx_runs_ts ON runs(ts);"
 
+_CREATE_AUDIO_TABLE = """
+CREATE TABLE IF NOT EXISTS run_audio (
+  run_id INTEGER PRIMARY KEY,
+  wav BLOB NOT NULL
+);
+"""
+
 # Columns persisted on insert, in order. `id` autoincrements; `rounds_json` is
 # derived from rec["rounds"] separately, so it is appended last by insert().
 _INSERT_COLS = [
@@ -60,6 +67,7 @@ class RunsStore:
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute(_CREATE_TABLE)
         self._conn.execute(_CREATE_INDEX)
+        self._conn.execute(_CREATE_AUDIO_TABLE)
         self._conn.commit()
 
     def insert(self, rec: dict) -> int:
@@ -76,6 +84,36 @@ class RunsStore:
             cur = self._conn.execute(sql, values)
             self._conn.commit()
             return cur.lastrowid
+
+    def put_audio(self, run_id: int, wav: bytes, keep: int) -> None:
+        """Store one run's utterance WAV, then prune to the newest `keep` rows.
+
+        run_id is the runs.id AUTOINCREMENT value, so "newest" == highest run_id:
+        the ring buffer keeps only the `keep` highest run_ids. INSERT OR REPLACE so a
+        repeat for the same run_id updates the bytes. `keep` is clamped to >= 0 so a
+        negative value can't disable pruning (SQLite treats LIMIT -1 as "no limit");
+        keep == 0 keeps none.
+        """
+        keep = max(0, keep)
+        with self._lock:
+            self._conn.execute(
+                "INSERT OR REPLACE INTO run_audio (run_id, wav) VALUES (?, ?)",
+                (run_id, sqlite3.Binary(wav)),
+            )
+            self._conn.execute(
+                "DELETE FROM run_audio WHERE run_id NOT IN "
+                "(SELECT run_id FROM run_audio ORDER BY run_id DESC LIMIT ?)",
+                (keep,),
+            )
+            self._conn.commit()
+
+    def get_audio(self, run_id: int) -> bytes | None:
+        """Return the stored WAV bytes for one run, or None when not stored."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT wav FROM run_audio WHERE run_id = ?", (run_id,)
+            ).fetchone()
+        return bytes(row["wav"]) if row is not None else None
 
     def list(self, *, device=None, result=None, search=None, limit=100) -> list[dict]:
         """Recent runs (newest first) as summary dicts, with optional filters.
@@ -106,8 +144,9 @@ class RunsStore:
             params.extend([like, like])
         clause = (" WHERE " + " AND ".join(where)) if where else ""
         sql = (
-            f"SELECT {', '.join(_LIST_COLS)} FROM runs{clause} "
-            "ORDER BY ts DESC LIMIT ?"
+            f"SELECT {', '.join(_LIST_COLS)}, "
+            "EXISTS(SELECT 1 FROM run_audio WHERE run_audio.run_id = runs.id) "
+            f"AS has_audio FROM runs{clause} ORDER BY ts DESC LIMIT ?"
         )
         params.append(limit)
         # Reads share the same Connection as writes and run on to_thread worker
@@ -122,7 +161,10 @@ class RunsStore:
         # Same Connection as writes from a worker thread: hold the write lock.
         with self._lock:
             row = self._conn.execute(
-                "SELECT * FROM runs WHERE id = ?", (run_id,)
+                "SELECT *, "
+                "EXISTS(SELECT 1 FROM run_audio WHERE run_audio.run_id = runs.id) "
+                "AS has_audio FROM runs WHERE id = ?",
+                (run_id,),
             ).fetchone()
         if row is None:
             return None
@@ -177,6 +219,10 @@ class RunsStore:
         cutoff = now - retention_days * _DAY_SECONDS
         with self._lock:
             self._conn.execute("DELETE FROM runs WHERE ts < ?", (cutoff,))
+            # Drop audio whose run row was just deleted so it can't outlive its run.
+            self._conn.execute(
+                "DELETE FROM run_audio WHERE run_id NOT IN (SELECT id FROM runs)"
+            )
             self._conn.commit()
 
     def close(self):
@@ -213,10 +259,13 @@ def _avg(values):
     return sum(nums) / len(nums)
 
 
-def summary_row(rec: dict, run_id: int) -> dict:
+def summary_row(rec: dict, run_id: int, has_audio: bool = False) -> dict:
     """Build a list()-shaped summary dict from an insert record + its new row id.
 
-    Mirrors the columns list() returns (_LIST_COLS), so a run pushed live over the
-    WebSocket carries exactly the same shape the panel's GET /api/runs returns.
+    Mirrors the columns list() returns (_LIST_COLS plus the computed has_audio), so a
+    run pushed live over the WebSocket carries exactly the same shape the panel's
+    GET /api/runs returns.
     """
-    return {col: (run_id if col == "id" else rec.get(col)) for col in _LIST_COLS}
+    row = {col: (run_id if col == "id" else rec.get(col)) for col in _LIST_COLS}
+    row["has_audio"] = 1 if has_audio else 0
+    return row

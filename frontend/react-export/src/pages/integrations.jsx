@@ -3,7 +3,7 @@ import { Ic } from "../components/icons.jsx";
 import {
   Field, PageHeader, FormSaveBar, StatusPill, Pill, Modal, Stepper, Loading, Select,
 } from "../components/primitives.jsx";
-import SchemaForm from "../components/SchemaForm.jsx";
+import SchemaForm, { schemaNeedsRestart } from "../components/SchemaForm.jsx";
 import { useAppData } from "../appData.jsx";
 import { useStageForm, errorLines } from "../useStageForm.js";
 import { deref } from "../schema.js";
@@ -20,7 +20,8 @@ function Card({ title, sub, children, foot, right }) {
 // ── Tool sources (multi-source view of the ToolHub) ───────────────────────
 // Three integration cards driven by CONFIG (so each shows even before it is
 // configured), each enriched with LIVE status/tools from GET /api/tools matched
-// by source id. Sources are built once at boot, so enabling one needs a restart.
+// by source id. Sources are hot-reloaded — rebuilt live on change (rebuild_tools),
+// so enabling one takes effect immediately, no restart needed.
 
 // Read-only chip row that always renders every advertised tool name.
 function ToolChips({ tools }) {
@@ -77,8 +78,8 @@ function SourceCard({ id, name, sub, schema, root, values, buildPatch, configure
         : <div className="z-fh">Schema unavailable.</div>}
       <ToolChips tools={live?.tools} />
     </div>
-    {/* Sources are rebuilt at boot, so any change requires a restart. */}
-    <FormSaveBar dirty={dirty} saving={saving} onSave={save} restart errors={errorLines(err)} />
+    {/* Sources are hot-reloaded — rebuilt live on save (rebuild_tools), so no restart is needed. */}
+    <FormSaveBar dirty={dirty} saving={saving} onSave={save} restart={schemaNeedsRestart(schema)} errors={errorLines(err)} />
   </div>;
 }
 
@@ -175,7 +176,7 @@ export function MCP() {
   const liveOf = (id) => (tools || []).find((s) => s.id === id) || null;
 
   // Wrap the shared patch() so a successful save also refreshes /api/tools (the
-  // source list only really changes after a restart, but this keeps it fresh).
+  // source list is rebuilt live on change, so this picks up the new state).
   const patchAndRefresh = useCallback(async (p) => {
     const r = await patch(p);
     loadTools();
@@ -183,7 +184,7 @@ export function MCP() {
   }, [patch, loadTools]);
 
   // External-servers CRUD: full-array replace via patch({ core: { mcp_servers } }),
-  // mirroring the Devices page. Sources rebuild at boot, so changes need a restart.
+  // mirroring the Devices page. Sources rebuild live on change, so no restart needed.
   const [modal, setModal] = useState(null); // { mode:'add'|'edit', index }
   const [busyErr, setBusyErr] = useState(null);
   const saveList = async (list) => {
@@ -196,7 +197,7 @@ export function MCP() {
   const onDelete = (i) => saveList(servers.filter((_, idx) => idx !== i));
 
   return <div className="z-page">
-    <PageHeader title="Tool sources" desc="Tool sources the model calls: external smart-home MCP servers and built-in weather/calendar. Sources are assembled at startup — a restart is required after any change."
+    <PageHeader title="Tool sources" desc="Tool sources the model calls: external smart-home MCP servers and built-in weather/calendar. Sources are applied live — rebuilt on save, no restart needed."
       actions={<button className="z-btn p" onClick={() => setModal({ mode: "add" })}><Ic n="add" w={14} />Add server</button>} />
     {toolsErr && <div className="z-banner warn" style={{ margin: "0 0 14px" }}>
       <Ic n="restart" w={15} />

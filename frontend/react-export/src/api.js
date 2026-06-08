@@ -116,6 +116,33 @@ export const getRuns = (params = {}) => {
   return request("/api/runs" + (qs ? "?" + qs : ""));
 };
 export const getRun = (id) => request(`/api/runs/${encodeURIComponent(id)}`);
+
+// Absolute URL of a run's stored utterance WAV (for an <audio> src). BASE is "" in
+// prod (same origin) or an absolute base in dev.
+export const runAudioUrl = (id) => `${BASE}/api/runs/${encodeURIComponent(id)}/audio`;
+
+// Fetch a run's stored utterance WAV as a blob and trigger a browser download.
+export async function downloadRunAudio(id) {
+  let resp;
+  try {
+    resp = await fetch(runAudioUrl(id));
+  } catch (e) {
+    throw new ApiError("Failed to reach the server: " + e.message, { status: 0 });
+  }
+  if (!resp.ok) throw new ApiError(`HTTP ${resp.status}`, { status: resp.status });
+  const blob = await resp.blob();
+  const url = URL.createObjectURL(blob);
+  try {
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `zakhar_run_${id}.wav`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
 export const getMetrics = () => request("/api/metrics");
 
 // --- live run stream (WebSocket) -------------------------------------------

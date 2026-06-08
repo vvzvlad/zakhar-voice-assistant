@@ -83,6 +83,10 @@ class RunsConfig(BaseModel):
     # to skip recording entirely; retention_days=0 keeps rows forever.
     enabled: bool = True
     retention_days: int = Field(30, ge=0)
+    # Rolling window of recent utterance audio (the exact PCM sent to STT), kept in
+    # runs.db so operators can download/play it from the log to diagnose mis-triggers.
+    store_audio: bool = True
+    audio_keep: int = Field(100, ge=1)  # how many most-recent utterances keep their audio
 
 
 class RemindersConfig(BaseModel):

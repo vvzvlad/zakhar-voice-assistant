@@ -54,7 +54,9 @@ function SchemaField({ name, node, root, value, onChange, optionsFor }) {
   const r = resolve(node, root);
   const label = node.title || r.title || humanize(name);
   const hint = node.description || r.description;
-  const restart = (node.apply || r.apply) === "rebuild";
+  // `apply` is the backend-computed action class (reconfig.action_for); only "restart"
+  // means a process restart is actually required. Everything else applies live (hot).
+  const restart = (node.apply || r.apply) === "restart";
   const finalHint = restart ? (hint ? hint + " · restart required" : "Restart required") : hint;
 
   const set = (v) => onChange(name, v);
@@ -137,11 +139,12 @@ export default function SchemaForm({ schema, values, onChange, optionsFor, root,
   );
 }
 
-// Does any rendered property carry apply:"rebuild"? Used to flag the SaveBar.
+// Does any rendered property carry apply:"restart"? Used to flag the SaveBar.
+// Only "restart" requires a real process restart; all other action classes apply live.
 export function schemaNeedsRestart(schema, skip = []) {
   if (!schema || !schema.properties) return false;
   const skipSet = new Set(skip);
   return Object.entries(schema.properties).some(
-    ([name, node]) => !skipSet.has(name) && node && node.apply === "rebuild"
+    ([name, node]) => !skipSet.has(name) && node && node.apply === "restart"
   );
 }
