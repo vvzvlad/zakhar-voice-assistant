@@ -12,7 +12,7 @@ from src.tts import (
     yandex_stress_markup,
 )
 
-YANDEX_URL = "https://tts.api.cloud.yandex.net/speech/v1/tts:synthesize"
+YANDEX_URL = "https://tts.api.cloud.yandex.net/tts/v3/utteranceSynthesis"
 
 
 def _make_wav(sample_rate: int = 16000, channels: int = 1, seconds: float = 0.1) -> bytes:
@@ -91,39 +91,48 @@ def test_yandex_stress_markup_orphan_acute_dropped():
 
 def test_yandex_backend_requires_api_key():
     with pytest.raises(ValueError):
-        YandexTtsBackend(None, api_key="", voice="zahar", emotion="neutral",
+        YandexTtsBackend(None, api_key="", voice="zahar", role="neutral",
                          speed=1.0, folder_id="", url="http://x", timeout=5)
 
 
 @respx.mock
 async def test_yandex_synthesize_posts_mp3_and_returns_audio():
+    import base64
+    import json
+
+    audio_bytes = b"\xff\xf3audio"
+    chunk = json.dumps({"result": {"audioChunk": {"data": base64.b64encode(audio_bytes).decode()}}})
     route = respx.post(YANDEX_URL).mock(
-        return_value=httpx.Response(200, content=b"\xff\xf3audio",
-                                    headers={"Content-Type": "audio/mpeg"}))
+        return_value=httpx.Response(200, text=chunk,
+                                    headers={"Content-Type": "application/json"}))
     async with httpx.AsyncClient() as client:
         backend = YandexTtsBackend(client, api_key="k", voice="zahar",
-                                   emotion="neutral", speed=1.0, folder_id="",
+                                   role="neutral", speed=1.0, folder_id="",
                                    url=YANDEX_URL, timeout=10)
         mime, audio = await backend.synthesize("приве́т", "ru")
     assert mime == "audio/mpeg"
-    assert audio == b"\xff\xf3audio"
+    assert audio == audio_bytes
     req = route.calls.last.request
     assert req.headers["Authorization"] == "Api-Key k"
-    body = req.content.decode()
-    assert "voice=zahar" in body
-    assert "lang=ru-RU" in body
-    assert "format=mp3" in body
-    assert "%2B" in body          # the stress "+" (url-encoded), i.e. "прив+ет"
-    assert "folderId" not in body  # omitted when folder_id is empty
+    sent = json.loads(route.calls.last.request.content)
+    assert {"voice": "zahar"} in sent["hints"]
+    assert {"role": "neutral"} in sent["hints"]
+    assert sent["outputAudioSpec"]["containerAudio"]["containerAudioType"] == "MP3"
+    assert "прив+ет" in sent["text"]   # stress markup from "приве́т"
+    assert "x-folder-id" not in req.headers  # omitted when folder_id is empty
 
 
 @respx.mock
 async def test_yandex_synthesize_includes_folder_id_when_set():
-    route = respx.post(YANDEX_URL).mock(return_value=httpx.Response(200, content=b"x",
-                                        headers={"Content-Type": "audio/mpeg"}))
+    import base64
+    import json
+
+    chunk = json.dumps({"result": {"audioChunk": {"data": base64.b64encode(b"x").decode()}}})
+    route = respx.post(YANDEX_URL).mock(return_value=httpx.Response(200, text=chunk,
+                                        headers={"Content-Type": "application/json"}))
     async with httpx.AsyncClient() as client:
         backend = YandexTtsBackend(client, api_key="k", voice="zahar",
-                                   emotion="neutral", speed=1.0, folder_id="fld123",
+                                   role="neutral", speed=1.0, folder_id="fld123",
                                    url=YANDEX_URL, timeout=10)
         await backend.synthesize("тест", "ru")
-    assert "folderId=fld123" in route.calls.last.request.content.decode()
+    assert route.calls.last.request.headers["x-folder-id"] == "fld123"

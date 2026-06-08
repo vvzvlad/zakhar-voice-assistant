@@ -1,7 +1,9 @@
 """Text-to-speech backends (pluggable; TeraTTS HTTP is the default)."""
 
 import asyncio
+import base64
 import io
+import json
 import re
 import wave
 from abc import ABC, abstractmethod
@@ -139,38 +141,72 @@ class PiperTtsBackend(TtsBackend):
         return ("audio/mpeg", mp3_bytes)
 
 
-class YandexTtsBackend(TtsBackend):
-    """Yandex SpeechKit v1 cloud TTS. Requests MP3 directly (audio/mpeg), so no
-    transcoding is needed. Auth uses an API key bound to a service account
-    (`Authorization: Api-Key <key>`); folderId is only needed for user-account (IAM)
-    auth, so it is optional and sent only when configured. Russian stress marks are
-    converted to Yandex's "+vowel" notation via yandex_stress_markup()."""
+def _decode_v3_audio(body: str) -> bytes:
+    """Reassemble audio from a SpeechKit v3 utteranceSynthesis response.
 
-    def __init__(self, client, *, api_key, voice, emotion, speed, folder_id, url, timeout):
+    The REST response is a stream of JSON objects (newline-delimited or
+    concatenated), each shaped like {"result": {"audioChunk": {"data": "<base64>"}}}.
+    Decode and concatenate every audio chunk; an {"error": ...} object raises.
+    Tolerant to a single object, NDJSON, or a JSON array of objects.
+    """
+    chunks = bytearray()
+    decoder = json.JSONDecoder()
+    idx, length = 0, len(body)
+    while idx < length:
+        while idx < length and body[idx] in " \r\n\t":
+            idx += 1
+        if idx >= length:
+            break
+        message, idx = decoder.raw_decode(body, idx)
+        for obj in (message if isinstance(message, list) else [message]):
+            if not isinstance(obj, dict):
+                continue
+            if "error" in obj:
+                raise RuntimeError(f"Yandex TTS v3 error: {obj['error']}")
+            data = (obj.get("result") or {}).get("audioChunk", {}).get("data")
+            if data:
+                chunks.extend(base64.b64decode(data))
+    return bytes(chunks)
+
+
+class YandexTtsBackend(TtsBackend):
+    """Yandex SpeechKit v3 cloud TTS (utteranceSynthesis). The v3 REST endpoint is
+    server-streaming: the response is a stream of JSON objects, each carrying a
+    base64-encoded MP3 chunk; the chunks are decoded and concatenated into a valid
+    MP3 (audio/mpeg), so no transcoding is needed. Auth uses an API key bound to a
+    service account (`Authorization: Api-Key <key>`); the `x-folder-id` header is
+    only needed for user-account (IAM) auth, so it is sent only when folder_id is
+    configured. Russian stress marks are converted to Yandex's "+vowel" notation via
+    yandex_stress_markup()."""
+
+    def __init__(self, client, *, api_key, voice, role, speed, folder_id, url, timeout):
         if not api_key:
             raise ValueError("YANDEX_TTS_API_KEY is required when TTS_BACKEND=yandex")
         self.client = client
         self.api_key = api_key
         self.voice = voice
-        self.emotion = emotion
+        self.role = role
         self.speed = speed
         self.folder_id = folder_id
         self.url = url
         self.timeout = timeout
 
     async def synthesize(self, text: str, lang: str = "ru") -> tuple[str, bytes]:
-        data = {
+        # v3 carries voice/role/speed as "hints"; the role hint is sent only when a
+        # role is configured (voices without an amplua reject an empty role).
+        hints = [{"voice": self.voice}, {"speed": self.speed}]
+        if self.role:
+            hints.insert(1, {"role": self.role})
+        payload = {
             "text": yandex_stress_markup(text),
-            "lang": "ru-RU" if lang == "ru" else lang,
-            "voice": self.voice,
-            "emotion": self.emotion,
-            "speed": str(self.speed),
-            "format": "mp3",  # served straight to the speaker; no WAV->MP3 transcode
+            "hints": hints,
+            "outputAudioSpec": {"containerAudio": {"containerAudioType": "MP3"}},
+            "loudnessNormalizationType": "LUFS",
         }
+        headers = {"Authorization": f"Api-Key {self.api_key}"}
         if self.folder_id:
             # Only for user-account (IAM) auth; a service-account API key infers the folder.
-            data["folderId"] = self.folder_id
-        headers = {"Authorization": f"Api-Key {self.api_key}"}
-        resp = await self.client.post(self.url, headers=headers, data=data, timeout=self.timeout)
+            headers["x-folder-id"] = self.folder_id
+        resp = await self.client.post(self.url, headers=headers, json=payload, timeout=self.timeout)
         resp.raise_for_status()
-        return (resp.headers.get("Content-Type", "audio/mpeg"), resp.content)
+        return ("audio/mpeg", _decode_v3_audio(resp.text))

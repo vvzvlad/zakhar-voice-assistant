@@ -89,7 +89,16 @@ def test_yandex_options_voice_returns_list():
 
 def test_yandex_options_unknown_field_returns_none():
     prov = get_provider("tts", "yandex")
-    assert prov.options("emotion", YandexTtsConfig(), _deps()) is None
+    assert prov.options("nope", YandexTtsConfig(), _deps()) is None
+
+
+def test_yandex_options_role_depends_on_voice():
+    prov = get_provider("tts", "yandex")
+    deps = _deps()
+    zahar_roles = prov.options("role", YandexTtsConfig(voice="zahar"), deps)
+    assert zahar_roles == ["neutral", "good"]   # zahar has no "evil"
+    jane_roles = prov.options("role", YandexTtsConfig(voice="jane"), deps)
+    assert "evil" in jane_roles                 # jane does support "evil"
 
 
 # --- TTS yandex create() returns the backend (no network) --------------------
