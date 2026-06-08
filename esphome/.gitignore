@@ -1,0 +1,4 @@
+# Secrets (Wi-Fi password + API key) must never be committed.
+secrets.yaml
+# ESPHome build cache / downloaded packages.
+.esphome/

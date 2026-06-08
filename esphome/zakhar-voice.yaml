@@ -1,0 +1,57 @@
+# ESPHome config that takes control of a Home Assistant Voice PE (ESP32-S3) and
+# runs the custom "Захар" wake word on-device.
+#
+# The full stock firmware (mic, LED ring, buttons, media player, timers, OTA,
+# improv, etc.) is pulled UNCHANGED from the official Nabu Casa repo as a remote
+# package. We only override three things below: the device name, the Wi-Fi/API
+# credentials, and the micro_wake_word model list (to add "Захар").
+#
+# First flash MUST be over USB-C — the factory firmware's OTA credentials are
+# unknown to us. After the first wired flash, updates can go over the air.
+#
+#   esphome run zakhar-voice.yaml     # pick the USB serial port when asked
+#
+# See README.md in this folder for the full procedure.
+
+packages:
+  # IMPORTANT: this inline package is declared FIRST on purpose. ESPHome appends
+  # a package's list items onto the config that is already present, so declaring
+  # our model here places "Захар" at the FRONT of micro_wake_word.models — and
+  # only the first model is enabled on a fresh flash, so "Захар" becomes the
+  # default active wake word. (Same ordering trick the official
+  # home-assistant-voice.factory.yaml uses for on_client_connected.)
+  zakhar_wake_word:
+    micro_wake_word:
+      models:
+        # Local path to the model already committed in this repo. ESPHome resolves
+        # the manifest's relative "model": "zakhar.tflite" against this file's dir,
+        # so both .json and .tflite are read straight from microWakeWord/v1/model/.
+        # (A remote github:// / raw URL fails here: ESPHome can't resolve the
+        # relative .tflite inside a manifest fetched that way.)
+        - model: ../microWakeWord/v1/model/zakhar.json
+          id: zakhar
+          # Manifest ships 0.9; 95% is the recommended day-to-day value.
+          # Raise to 97% if continuous music ever triggers it (no retrain needed).
+          probability_cutoff: 95%
+
+  # Official Home Assistant Voice PE firmware, pinned to a release tag.
+  # Bump the @ref to update the base firmware later.
+  home-assistant-voice: github://esphome/home-assistant-voice-pe/home-assistant-voice.yaml@26.5.0
+
+# --- Our overrides (deep-merged into the official config) ---
+
+esphome:
+  name: zakhar-voice
+  friendly_name: Zakhar Voice
+
+# Bake Wi-Fi credentials in (the stock config relies on Bluetooth/serial "improv"
+# provisioning; for a headless setup hard-coding the network is more reliable).
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+# Our own API encryption key. The voice-assistant server must use this SAME key
+# in ESPHOME_DEVICES (.env) to connect after we take control.
+api:
+  encryption:
+    key: !secret api_encryption_key
