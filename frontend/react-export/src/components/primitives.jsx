@@ -132,7 +132,7 @@ export function SaveBar({ restart, noTest }) {
 // Live save bar wired to real state: dirty flag, async save, and inline 422 errors.
 export function FormSaveBar({ dirty, saving, onSave, restart, errors = [] }) {
   return <>
-    {errors.length > 0 && <div className="z-banner" style={{ background: "var(--bad-bg)", border: "1px solid #f3c8c8", color: "#b91c1c", margin: "0 17px 0", borderRadius: 8 }}>
+    {errors.length > 0 && <div className="z-banner" style={{ background: "var(--bad-bg)", border: "1px solid #f3c8c8", color: "#b91c1c", margin: "0 17px 14px", borderRadius: 8 }}>
       <Ic n="restart" w={15} />
       <span><b>Not saved.</b> {errors.join(" · ")}</span>
     </div>}
