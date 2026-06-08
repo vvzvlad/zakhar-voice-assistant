@@ -2,10 +2,10 @@
 // drawer (full timeline + transcript + tool calls + audio + metadata) via
 // /api/runs/{id}. Reuses the design-system primitives (Waterfall/Player/KV) and
 // the existing CSS (z-tbl/z-gantt/z-drawer/...).
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import { Ic } from "../components/icons.jsx";
 import { PageHeader, Waterfall, total, Player, KV, Loading, ErrorBox } from "../components/primitives.jsx";
-import { getRuns, getRun } from "../api.js";
+import { getRuns, getRun, openRunsStream } from "../api.js";
 import { RESULT_META, STAGE_COLOR, fmtSec, mapRun } from "../runsModel.js";
 
 const SC = STAGE_COLOR;
@@ -20,6 +20,31 @@ const GSTAGES = [
 // Authoritative total: prefer the backend t_total, fall back to summing r.t.
 function totalMs(r) {
   return r.t_total != null ? r.t_total : total(r.t);
+}
+
+// Client-side mirror of the backend /api/runs filters, for live-prepending pushed
+// runs. device: exact; result: all|errors|ok; search: case-insensitive substring
+// over recognized/response text.
+//
+// Two known, intentional points to keep in sync with the backend (src/runs_store.py list()):
+// 1. The UI's `result` filter domain is only "all" | "errors" | "ok" (the chip cycles
+//    those three). The backend list() also supports an exact-match branch for any other
+//    value, but the UI never sends one, so this client mirror covers exactly the UI's domain.
+// 2. Search here is case-insensitive via toLowerCase(), which lowercases Cyrillic too;
+//    the backend uses SQLite LIKE, which is case-insensitive only for ASCII (Cyrillic is
+//    case-sensitive). For an uppercase-Cyrillic search term a live-pushed row may therefore
+//    appear that a fresh server fetch would not return; the next manual reload/filter-change
+//    re-runs the server query and reconciles. This is a known, accepted minor divergence.
+function matchesFilters(row, { result, search, device }) {
+  if (device.trim() && row.device !== device.trim()) return false;
+  if (result === "errors" && row.result !== "error") return false;
+  if (result === "ok" && !(row.result === "ok" || row.result === "tool")) return false;
+  const s = search.trim().toLowerCase();
+  if (s) {
+    const hay = `${row.stt_text || ""}\n${row.llm_text || ""}`.toLowerCase();
+    if (!hay.includes(s)) return false;
+  }
+  return true;
 }
 
 // Per-stage horizontal Gantt with a "◆ max" marker on the slowest stage and a
@@ -146,6 +171,20 @@ function Log() {
   }, [result, search, device]);
 
   useEffect(() => { load(); }, [load]);
+
+  // Keep the latest filter values in a ref so the single live subscription below
+  // always matches against current filters without re-subscribing per keystroke.
+  const filtersRef = useRef({ result, search, device });
+  useEffect(() => { filtersRef.current = { result, search, device }; }, [result, search, device]);
+
+  useEffect(() => {
+    const stop = openRunsStream((row) => {
+      if (!matchesFilters(row, filtersRef.current)) return;
+      const mapped = mapRun(row);
+      setRuns((prev) => [mapped, ...prev.filter((r) => r.id !== mapped.id)].slice(0, 100));
+    });
+    return stop;
+  }, []);
 
   const openRow = useCallback((id) => {
     setOpenId(id);

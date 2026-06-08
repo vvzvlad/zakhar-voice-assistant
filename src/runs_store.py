@@ -204,3 +204,12 @@ def _avg(values):
     if not nums:
         return None
     return sum(nums) / len(nums)
+
+
+def summary_row(rec: dict, run_id: int) -> dict:
+    """Build a list()-shaped summary dict from an insert record + its new row id.
+
+    Mirrors the columns list() returns (_LIST_COLS), so a run pushed live over the
+    WebSocket carries exactly the same shape the panel's GET /api/runs returns.
+    """
+    return {col: (run_id if col == "id" else rec.get(col)) for col in _LIST_COLS}

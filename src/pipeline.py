@@ -26,6 +26,7 @@ from aioesphomeapi import VoiceAssistantEventType as VAET
 from loguru import logger
 
 from src import context, llm
+from src.runs_store import summary_row
 
 # WebRTC VAD requires mono 16-bit PCM frames of exactly 10/20/30 ms at 16 kHz.
 # We use 20 ms frames = 16000 * 2 * 20/1000 = 640 bytes.
@@ -53,6 +54,7 @@ class Pipeline:
         core,
         llm_cfg,
         runs_store=None,
+        run_events=None,
     ):
         self.name = name
         # Multi-source tool hub: advertises smart-home + built-in tools (e.g. weather)
@@ -67,6 +69,9 @@ class Pipeline:
         # Optional observability sink: a RunsStore (or compatible) whose insert()
         # is offloaded to a thread. None disables run recording.
         self.runs_store = runs_store
+        # Optional live-broadcast hub: a RunEventsHub fanning out finalized runs to
+        # connected panel WebSocket clients. None disables live broadcasting.
+        self.run_events = run_events
         self.public_base_url = core.audio.public_base_url
         self._buffer = bytearray()
         self._lock = asyncio.Lock()
@@ -377,9 +382,19 @@ class Pipeline:
                 if self.runs_store is not None:
                     record["t_total"] = int((time.perf_counter() - t0) * 1000)
                     try:
-                        await asyncio.to_thread(self.runs_store.insert, record)
+                        run_id = await asyncio.to_thread(self.runs_store.insert, record)
                     except Exception as e:
                         logger.error(f"{self.name}: run record failed: {e}")
+                    else:
+                        # Push the freshly recorded run to live panel subscribers.
+                        # Fully isolated: a broadcast failure must never affect the run.
+                        if self.run_events is not None:
+                            try:
+                                await self.run_events.broadcast(
+                                    {"type": "run", "run": summary_row(record, run_id)}
+                                )
+                            except Exception as e:
+                                logger.error(f"{self.name}: run broadcast failed: {e}")
 
     async def on_stop(self, abort: bool = False) -> None:
         """Explicit device stop: finalize the run (exactly once)."""

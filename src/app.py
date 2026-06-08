@@ -18,6 +18,7 @@ from src.esphome_client import DeviceManager
 from src.mcp_client import McpToolHub
 from src.panel_api import PanelServer
 from src.plugins.base import Deps
+from src.run_events import RunEventsHub
 from src.runs_store import RunsStore
 from src.tool_hub import BuiltinMcpSource, HttpMcpSource, ToolHub
 from src.version import __version__
@@ -69,6 +70,10 @@ async def main() -> None:
     if core.runs.enabled:
         runs_store = RunsStore(os.path.join(core.context.dir, "runs.db"))
         runs_store.prune(now=time.time(), retention_days=core.runs.retention_days)
+
+    # Live run stream: a broadcast hub shared by the pipeline (producer) and the
+    # panel WebSocket endpoint (consumers). Cheap; always created.
+    run_events = RunEventsHub()
 
     # Fail loudly: an empty public_base_url yields host-less TTS URLs that speakers
     # silently fail to fetch (the run otherwise logs as successful).
@@ -122,7 +127,7 @@ async def main() -> None:
     zc = zeroconf.Zeroconf()
     manager = DeviceManager(
         zc, hub, stt_backend, llm_backend, tts_backend, audio_server,
-        core, llm_cfg, runs_store=runs_store,
+        core, llm_cfg, runs_store=runs_store, run_events=run_events,
     )
 
     # Late-bind delivery now that the manager exists (resolves the circular dependency).
@@ -144,6 +149,7 @@ async def main() -> None:
             static_dir=static_dir if os.path.isdir(static_dir) else None,
             runs_store=runs_store,
             tool_sources=hub.describe,
+            run_events=run_events,
         )
         await panel.start()
         await manager.start()

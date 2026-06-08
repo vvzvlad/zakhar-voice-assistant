@@ -43,6 +43,10 @@ async def _cors_middleware(request: web.Request, handler):
     """
     if request.method == "OPTIONS":
         return _add_cors(web.Response(status=204))
+    # WebSocket upgrades: the response is already sent by the time the handler
+    # returns, so its headers can't be mutated; CORS also doesn't gate WS. Pass through.
+    if request.headers.get("Upgrade", "").lower() == "websocket":
+        return await handler(request)
     try:
         return _add_cors(await handler(request))
     except web.HTTPException as ex:
@@ -63,11 +67,12 @@ async def _read_json(request: web.Request):
 class PanelServer:
     def __init__(self, svc, host, port, *, version, started_at,
                  restart_event, device_status=None, static_dir=None,
-                 runs_store=None, tool_sources=None):
+                 runs_store=None, tool_sources=None, run_events=None):
         # svc: ConfigService; started_at: float (time.time()); restart_event: asyncio.Event
         # device_status: optional callable -> list[dict]; static_dir: optional path to built frontend
         # runs_store: optional RunsStore for the observability endpoints (None -> empty/zeros)
         # tool_sources: optional zero-arg callable -> list[dict] (ToolHub.describe()), None -> []
+        # run_events: optional RunEventsHub for the live WS run stream (None -> WS closes)
         self.svc = svc
         self.host = host
         self.port = port
@@ -78,6 +83,7 @@ class PanelServer:
         self.static_dir = static_dir
         self.runs_store = runs_store
         self.tool_sources = tool_sources
+        self.run_events = run_events
         self._runner: web.AppRunner | None = None
 
     # --- handlers ------------------------------------------------------------
@@ -186,6 +192,25 @@ class PanelServer:
             return web.json_response({"error": "not found"}, status=404)
         return web.json_response(run)
 
+    async def _runs_stream(self, request: web.Request) -> web.WebSocketResponse:
+        """WebSocket endpoint streaming each finalized run as {"type":"run","run":{...}}.
+
+        heartbeat keeps the link alive and detects dead peers. We don't expect any
+        client messages — we iterate only to drive ping/pong and detect close.
+        """
+        ws = web.WebSocketResponse(heartbeat=30.0)
+        await ws.prepare(request)
+        if self.run_events is None:
+            await ws.close()
+            return ws
+        self.run_events.register(ws)
+        try:
+            async for _msg in ws:
+                pass  # inbound messages are ignored; this loop just keeps the socket live
+        finally:
+            self.run_events.unregister(ws)
+        return ws
+
     async def _get_metrics(self, request: web.Request) -> web.Response:
         if self.runs_store is None:
             return web.json_response({
@@ -217,6 +242,7 @@ class PanelServer:
             web.get("/api/devices", self._get_devices),
             web.get("/api/tools", self._get_tools),
             web.get("/api/runs", self._get_runs),
+            web.get("/api/runs/stream", self._runs_stream),  # before {id}: literal wins
             web.get("/api/runs/{id}", self._get_run),
             web.get("/api/metrics", self._get_metrics),
         ])

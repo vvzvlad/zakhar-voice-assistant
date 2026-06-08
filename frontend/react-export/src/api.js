@@ -73,3 +73,56 @@ export const getRuns = (params = {}) => {
 };
 export const getRun = (id) => request(`/api/runs/${encodeURIComponent(id)}`);
 export const getMetrics = () => request("/api/metrics");
+
+// --- live run stream (WebSocket) -------------------------------------------
+// Opens a WebSocket to /api/runs/stream and invokes onRun(row) for every run the
+// backend pushes (row is the same snake_case shape as a /api/runs list item).
+// Auto-reconnects with capped exponential backoff. Returns a stop() that closes
+// the socket and cancels any pending reconnect.
+export function openRunsStream(onRun) {
+  let ws = null;
+  let stopped = false;
+  let attempt = 0;
+  let timer = null;
+
+  const wsUrl = () => {
+    // BASE is "" in prod (same origin) or an absolute http(s) base in dev.
+    const u = new URL("/api/runs/stream", BASE || window.location.origin);
+    u.protocol = u.protocol === "https:" ? "wss:" : "ws:";
+    return u.toString();
+  };
+
+  const schedule = () => {
+    if (stopped) return;
+    // Backoff on the CURRENT attempt count (fast first retry ~0.5s), then bump it
+    // for the next one. Capped at 30s; onopen resets attempt to 0 on success.
+    const delay = Math.min(500 * 2 ** attempt, 30000);
+    attempt = Math.min(attempt + 1, 6);
+    timer = setTimeout(connect, delay);
+  };
+
+  const connect = () => {
+    if (stopped) return;
+    try {
+      ws = new WebSocket(wsUrl());
+    } catch {
+      schedule();
+      return;
+    }
+    ws.onopen = () => { attempt = 0; };
+    ws.onmessage = (ev) => {
+      let msg;
+      try { msg = JSON.parse(ev.data); } catch { return; }
+      if (msg && msg.type === "run" && msg.run) onRun(msg.run);
+    };
+    ws.onerror = () => { try { ws.close(); } catch { /* ignore */ } };
+    ws.onclose = () => { if (!stopped) schedule(); };
+  };
+
+  connect();
+  return () => {
+    stopped = true;
+    if (timer) clearTimeout(timer);
+    if (ws) { try { ws.close(); } catch { /* ignore */ } }
+  };
+}

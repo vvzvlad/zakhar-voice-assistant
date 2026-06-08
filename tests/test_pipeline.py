@@ -3,6 +3,7 @@ from aioesphomeapi import VoiceAssistantEventType as VAET
 from src.core_config import AudioConfig, ContextConfig, CoreConfig
 from src.pipeline import Pipeline
 from src.plugins.llm.base import LlmConfig
+from src.runs_store import _LIST_COLS
 
 PUBLIC_BASE_URL = "http://10.0.0.10:8200"
 
@@ -49,8 +50,16 @@ class FakeRunsStore:
         return len(self.records)
 
 
+class FakeRunEvents:
+    """Captures broadcast payloads for assertions."""
+    def __init__(self):
+        self.broadcasts = []
+    async def broadcast(self, payload):
+        self.broadcasts.append(payload)
+
+
 def make_pipeline(tmp_path, name="dev", stt_text="распознанный текст",
-                  tts_backend=None, runs_store=None):
+                  tts_backend=None, runs_store=None, run_events=None):
     audio_server = FakeAudioServer()
     core = CoreConfig(
         audio=AudioConfig(public_base_url=PUBLIC_BASE_URL),
@@ -66,6 +75,7 @@ def make_pipeline(tmp_path, name="dev", stt_text="распознанный те�
         core=core,
         llm_cfg=LlmConfig(),
         runs_store=runs_store,
+        run_events=run_events,
     )
     events = []
     pipeline.send_event = lambda et, data: events.append((et, data))
@@ -403,6 +413,44 @@ async def test_run_recorded_on_happy_path(tmp_path, monkeypatch):
     assert rec["audio_bytes"] == len(b"MP3")
     assert rec["audio_fmt"] == "mp3"
     assert rec["error_stage"] is None
+
+
+async def test_run_broadcast_on_happy_path(tmp_path, monkeypatch):
+    # With both a store and a run-events hub, a finalized run is broadcast once,
+    # carrying the same summary shape /api/runs returns.
+    patch_llm(monkeypatch, reply="готово")
+    store = FakeRunsStore()
+    hub = FakeRunEvents()
+    pipeline, _ = make_pipeline(
+        tmp_path, stt_text="включи свет", runs_store=store, run_events=hub,
+    )
+
+    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_audio(b"\x01\x02" * 100)
+    await pipeline.on_stop(False)
+
+    # Exactly one broadcast for the single recorded run.
+    assert len(hub.broadcasts) == 1
+    payload = hub.broadcasts[0]
+    assert payload["type"] == "run"
+    # The store returns id 1 for the first insert; the summary echoes it.
+    assert payload["run"]["id"] == 1
+    assert payload["run"]["result"] in ("ok", "tool")
+    # The broadcast run dict is exactly the summary shape (_LIST_COLS).
+    assert set(payload["run"].keys()) == set(_LIST_COLS)
+
+
+async def test_no_broadcast_without_hub(tmp_path, monkeypatch):
+    # run_events=None must not error and must record the run normally.
+    patch_llm(monkeypatch, reply="готово")
+    store = FakeRunsStore()
+    pipeline, _ = make_pipeline(tmp_path, stt_text="включи свет", runs_store=store)
+
+    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_audio(b"\x01\x02" * 100)
+    await pipeline.on_stop(False)
+
+    assert len(store.records) == 1
 
 
 async def test_run_recorded_on_empty_stt(tmp_path, monkeypatch):

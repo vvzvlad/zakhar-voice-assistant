@@ -8,6 +8,7 @@ tmp config file and drives a fresh PanelServer app.
 import asyncio
 import time
 
+import aiohttp
 import httpx
 import pytest
 
@@ -16,6 +17,7 @@ from aiohttp.test_utils import TestClient, TestServer
 from src.config_service import ConfigService
 from src.panel_api import PanelServer
 from src.plugins.base import Deps
+from src.run_events import RunEventsHub
 from src.runs_store import RunsStore
 
 
@@ -440,5 +442,43 @@ async def test_runs_endpoints_empty_without_store(tmp_path):
 
         missing = await client.get("/api/runs/1")
         assert missing.status == 404
+    finally:
+        await client.close()
+
+
+# --- live run stream (WebSocket) ---------------------------------------------
+
+async def test_runs_stream_broadcasts_to_connected_client(tmp_path):
+    hub = RunEventsHub()
+    client, _svc_, _ev = await _client(tmp_path, run_events=hub)
+    try:
+        ws = await client.ws_connect("/api/runs/stream")
+        # Give the server a moment so the handler registers the socket.
+        for _ in range(50):
+            if hub.count() == 1:
+                break
+            await asyncio.sleep(0.01)
+        assert hub.count() == 1
+
+        payload = {"type": "run", "run": {"id": 7, "device": "kitchen"}}
+        await hub.broadcast(payload)
+        msg = await asyncio.wait_for(ws.receive_json(), 2)
+        assert msg == payload
+
+        await ws.close()
+    finally:
+        await client.close()
+
+
+async def test_runs_stream_without_hub_closes_promptly(tmp_path):
+    # No run_events hub on the server -> the handler closes the socket immediately.
+    client, _svc_, _ev = await _client(tmp_path)
+    try:
+        ws = await client.ws_connect("/api/runs/stream")
+        # The first receive should observe the close from the server side.
+        msg = await asyncio.wait_for(ws.receive(), 2)
+        assert msg.type in (aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.CLOSED,
+                            aiohttp.WSMsgType.CLOSING)
+        await ws.close()
     finally:
         await client.close()

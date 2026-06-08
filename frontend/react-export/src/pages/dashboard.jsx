@@ -7,7 +7,7 @@ import { Ic } from "../components/icons.jsx";
 import { PageHeader, Waterfall, total, Loading } from "../components/primitives.jsx";
 import { useAppData } from "../appData.jsx";
 import { STAGES } from "../stageMeta.js";
-import { getMetrics, getRuns } from "../api.js";
+import { getMetrics, getRuns, openRunsStream } from "../api.js";
 import { RESULT_META, STAGE_COLOR, fmtSec, mapRun } from "../runsModel.js";
 
 const SC = STAGE_COLOR;
@@ -56,6 +56,16 @@ function Dashboard() {
       .catch(() => { if (alive) { setMetrics(null); setRecent([]); } })
       .finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
+  }, []);
+
+  // Live updates: prepend each pushed run (dedupe + cap 5) and refresh KPIs.
+  useEffect(() => {
+    const stop = openRunsStream((row) => {
+      const mapped = mapRun(row);
+      setRecent((prev) => [mapped, ...prev.filter((r) => r.id !== mapped.id)].slice(0, 5));
+      getMetrics().then((m) => setMetrics(m)).catch(() => { /* keep last good */ });
+    });
+    return stop;
   }, []);
 
   const doRestart = async () => {

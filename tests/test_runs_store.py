@@ -3,7 +3,7 @@
 import asyncio
 import time
 
-from src.runs_store import RunsStore
+from src.runs_store import RunsStore, _LIST_COLS, summary_row
 
 
 def _store(tmp_path):
@@ -193,6 +193,28 @@ def test_concurrent_reads_and_writes_do_not_error(tmp_path):
     m = store.metrics(now=now + n_inserts)
     assert m["requests_24h"] == n_inserts
     store.close()
+
+
+def test_summary_row_shape_matches_list_cols():
+    # summary_row builds a list()-shaped dict from an insert record + new id.
+    rec = _rec(stt_text="включи свет", llm_text="Готово.", t_total=2000)
+    row = summary_row(rec, 7)
+    # Exactly the summary columns, no more, no less.
+    assert set(row.keys()) == set(_LIST_COLS)
+    # id comes from the run_id arg; other fields copied from rec.
+    assert row["id"] == 7
+    assert row["stt_text"] == "включи свет"
+    assert row["llm_text"] == "Готово."
+    assert row["t_total"] == 2000
+
+
+def test_summary_row_missing_keys_become_none():
+    # Keys absent from the record default to None (mirrors insert defaults).
+    row = summary_row({"device": "kitchen"}, 3)
+    assert row["id"] == 3
+    assert row["device"] == "kitchen"
+    assert row["stt_text"] is None
+    assert row["t_total"] is None
 
 
 def test_prune_drops_old_rows(tmp_path):

@@ -26,6 +26,7 @@ class DeviceClient:
         core,
         llm_cfg,
         runs_store=None,
+        run_events=None,
     ):
         self.cfg = cfg
         self.pipeline = Pipeline(
@@ -38,6 +39,7 @@ class DeviceClient:
             core,
             llm_cfg,
             runs_store=runs_store,
+            run_events=run_events,
         )
         self.cli = APIClient(
             cfg.host, core.esphome.port, None, noise_psk=cfg.psk, zeroconf_instance=zc
@@ -131,6 +133,7 @@ class DeviceManager:
         core,
         llm_cfg,
         runs_store=None,
+        run_events=None,
     ):
         self.clients = [
             DeviceClient(
@@ -144,6 +147,7 @@ class DeviceManager:
                 core,
                 llm_cfg,
                 runs_store=runs_store,
+                run_events=run_events,
             )
             for cfg in core.devices
         ]
