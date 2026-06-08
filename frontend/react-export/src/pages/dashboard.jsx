@@ -126,7 +126,7 @@ function Dashboard() {
                       <td className="tm">{r.time}</td>
                       <td style={{ fontWeight: 600 }}>{r.device}</td>
                       <td><div className={"z-tx" + (r.stt ? "" : " mut")}>{r.stt || "(silence)"}</div></td>
-                      <td><div className={"z-tx" + (r.llm ? "" : " mut")}>{r.llm || "—"}</div></td>
+                      <td><div className={"z-tx wide" + (r.llm ? "" : " mut")}>{r.llm || "—"}</div></td>
                       <td className="num" style={{ fontWeight: 600 }}>{fmtSec(totalMs(r))}</td>
                       <td><Waterfall r={r} /></td>
                       <td><span className={"z-st " + rm.tone}><span className={"z-dot " + (rm.tone === "good" ? "ok" : rm.tone === "bad" ? "error" : "off")} />{rm.label}</span></td>

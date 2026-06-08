@@ -183,15 +183,20 @@ button{font-family:inherit;}
 .z-tbl .num{font-family:var(--mono);text-align:right;font-variant-numeric:tabular-nums;}
 .z-tx{max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink2);}
 .z-tx.mut{color:var(--mut2);font-style:italic;}
+.z-tx.wide{max-width:360px;}
 .z-reason{font-family:var(--mono);font-size:10.5px;color:var(--mut);}
 .z-tfoot{padding:10px 13px;background:var(--panel2);border-top:1px solid var(--line);color:var(--mut2);font-size:11px;font-family:var(--mono);}
 
 /* ── Waterfall ──────────────────────────────────────────── */
-.z-wf{display:flex;flex-direction:column;gap:3px;width:200px;}
+.z-wf{display:flex;flex-direction:column;gap:3px;width:260px;}
 .z-wfbar{display:flex;height:13px;border-radius:3px;overflow:hidden;background:var(--line2);}
 .z-wfbar span{height:100%;}
 .z-wfax{display:flex;font-family:var(--mono);font-size:8.5px;line-height:1;font-weight:600;}
 .z-wfax span{text-align:center;overflow:hidden;white-space:nowrap;padding:0 1px;}
+/* Last segment is usually the smallest (tts): let its label overflow left and
+   pin to the right edge so the final value is never clipped. Skip when it is the
+   only segment (e.g. the "no speech" empty row), which should stay centered. */
+.z-wfax span:last-child:not(:first-child){overflow:visible;text-align:right;}
 
 /* ── Filters ────────────────────────────────────────────── */
 .z-filters{display:flex;align-items:center;gap:9px;padding:11px 14px;border-bottom:1px solid var(--line);flex-wrap:wrap;}
@@ -264,14 +269,7 @@ button{font-family:inherit;}
 .z-scroll::-webkit-scrollbar,.z-nav::-webkit-scrollbar,.z-drawer-b::-webkit-scrollbar{width:9px;}
 .z-scroll::-webkit-scrollbar-thumb,.z-nav::-webkit-scrollbar-thumb,.z-drawer-b::-webkit-scrollbar-thumb{background:#d8dde5;border-radius:5px;border:2px solid var(--bg);}
 
-/* ── Stage navigator + two-column layout ────────────────── */
-.z-snav{display:flex;align-items:center;gap:0;background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:6px;margin-bottom:18px;box-shadow:var(--sh);overflow:hidden;}
-.z-snav-i{flex:1;display:flex;align-items:center;justify-content:center;gap:7px;padding:8px 6px;border-radius:7px;font-size:12px;font-weight:600;color:var(--mut);cursor:pointer;white-space:nowrap;}
-.z-snav-i:hover{background:var(--panel2);}
-.z-snav-i.on{background:var(--acc-bg);color:var(--acc-ink);}
-.z-snav-i .z-dot{width:6px;height:6px;}
-.z-snav-i.off{color:var(--mut2);}
-.z-snav-sep{flex:0 0 auto;color:#c8cfda;padding:0 1px;}
+/* ── Two-column layout ──────────────────────────────────── */
 .z-cols{display:grid;grid-template-columns:1fr 320px;gap:18px;align-items:start;}
 .z-cols.wide{grid-template-columns:1fr 360px;}
 @media (max-width:1180px){.z-cols,.z-cols.wide{grid-template-columns:1fr;}}
