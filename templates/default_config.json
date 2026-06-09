@@ -16,6 +16,7 @@
     "panel": {"host": "0.0.0.0", "port": 8201},
     "runs": {"enabled": true, "retention_days": 30},
     "reminders": {"enabled": true},
+    "ack": {"enabled": true, "sound_path": ""},
     "devices": [],
     "tts_timeout": 30,
     "log_level": "INFO"

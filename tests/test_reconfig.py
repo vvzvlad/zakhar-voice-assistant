@@ -71,6 +71,8 @@ def test_action_for_representative_paths():
         "core.context.max_turns": "live",
         "core.capture.enabled": "live",      # read per-run via the Runtime read-through
         "core.capture.dir": "live",          # ditto; read per-run via the Runtime read-through
+        "core.ack.enabled": "live",          # read per-run via the Runtime read-through
+        "core.ack.sound_path": "live",       # ditto; read per-run via the Runtime read-through
         "core.vad.aggressiveness": "live",
         "core.audio.public_base_url": "live",
         "core.audio.ttl": "live",
@@ -148,6 +150,16 @@ def test_reconfigurator_capture_is_live_no_restart_no_job():
     # it must NOT latch pending_restart and must NOT enqueue an async rebuild job.
     reconf = _make_reconf(_stub_runtime())
     reconf.on_config_change({"core.capture.enabled"})
+    assert reconf.pending_restart() is False
+    assert reconf.queue.qsize() == 0
+
+
+def test_reconfigurator_ack_is_live_no_restart_no_job():
+    # core.ack.* (enabled / sound_path) is read per-run via the Runtime read-through,
+    # so it applies live: it must NOT latch pending_restart and must NOT enqueue an
+    # async rebuild job.
+    reconf = _make_reconf(_stub_runtime())
+    reconf.on_config_change({"core.ack.enabled", "core.ack.sound_path"})
     assert reconf.pending_restart() is False
     assert reconf.queue.qsize() == 0
 

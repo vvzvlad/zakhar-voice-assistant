@@ -2,6 +2,7 @@ import pytest
 from pydantic import ValidationError
 
 from src.core_config import (
+    AckConfig,
     CalendarConfig,
     CoreConfig,
     McpServerConfig,
@@ -58,6 +59,20 @@ def test_builtin_mcp_prompts_default_to_empty_and_accept_values():
     assert CalendarConfig().prompt == ""
     assert OpenWeatherMapConfig(prompt="x").prompt == "x"
     assert CalendarConfig(prompt="y").prompt == "y"
+
+
+def test_ack_config_defaults():
+    # The end-of-phrase ack chime is ON by default with no sound-file override
+    # (an empty path means the synthesized two-tone chime is used).
+    ack = CoreConfig().ack
+    assert ack.enabled is True
+    assert ack.sound_path == ""
+
+
+def test_ack_config_accepts_overrides():
+    ack = AckConfig(enabled=False, sound_path="data/blyam.wav")
+    assert ack.enabled is False
+    assert ack.sound_path == "data/blyam.wav"
 
 
 def test_builtin_prompt_fields_carry_textarea_widget():

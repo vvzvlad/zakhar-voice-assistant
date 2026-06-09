@@ -31,6 +31,7 @@ from src import config_store, context, llm
 from src.audio_server import tts_url
 from src.runs_store import live_row, summary_row
 from src.text import processing_response
+from src.tts import make_ack_chime_mp3
 
 # WebRTC VAD requires mono 16-bit PCM frames of exactly 10/20/30 ms at 16 kHz.
 # We use 20 ms frames = 16000 * 2 * 20/1000 = 640 bytes.
@@ -215,6 +216,15 @@ class Pipeline:
         # each task removes itself on completion. Fire-and-forget — never awaited by the run.
         self._filler_tasks = set()
 
+        # Background end-of-phrase "ack" chime tasks (the server-side «блям» played the
+        # instant VAD end-points the utterance). Tracked in a set for the same GC reason
+        # as the fillers — fire-and-forget, never awaited by the run so STT isn't delayed.
+        self._ack_tasks = set()
+        # Lazily-built cache of the ack clip: (source_key, mime, audio_bytes). The
+        # generated chime is synthesized once; a configured sound_path is loaded and
+        # re-loaded only when the path changes (the cache key is the resolved source).
+        self._ack_clip: tuple[str, str, bytes] | None = None
+
         # Tail of the chained background tasks that broadcast live (in-progress) run
         # snapshots. Scheduling these off the run coroutine keeps a slow WS client from
         # backpressuring `self._lock`; `_run`'s outer finally awaits this tail (outside
@@ -374,6 +384,16 @@ class Pipeline:
         self._elapsed_ms = 0
         self._finalized = False
         self._audio_logged = False
+        # Best-effort cancel any still-pending ack/filler announce tasks from a prior
+        # run before starting this one. Both are fire-and-forget on the announce
+        # channel and can linger up to the 30 s announce timeout; the ack fires on
+        # every non-empty phrase, so without this they could accumulate across runs
+        # and even outlive a reconnect. Cancelling here bounds their lifetime to ~one
+        # run. We do NOT await them — each task self-removes via its done-callback,
+        # and cancellation of an already-finished task is a no-op. Snapshot to a list
+        # first since the done-callbacks mutate the sets. Fully isolated/defensive.
+        for task in [*self._ack_tasks, *self._filler_tasks]:
+            task.cancel()
         # Consume any armed capture into a per-run flag so a normal wake-word run
         # (armed == False) is completely unaffected.
         #
@@ -583,6 +603,24 @@ class Pipeline:
                     logger.info(f"{self.name}: empty audio, ending run")
                     self._emit(VAET.VOICE_ASSISTANT_RUN_END, {})
                     return
+
+                # End-of-phrase ack ("блям"): we've just finalized the utterance, so play
+                # a short confirmation chime to the speaker NOW as immediate "got it"
+                # feedback, before STT/LLM/TTS run. Fire-and-forget (scheduled, never
+                # awaited) so it never delays STT; tracked in a set so it isn't GC'd
+                # mid-playback. The manual capture-only path bypasses _run entirely, so a
+                # capture never beeps.
+                #
+                # Announce-channel overlap (ack <-> filler): both the ack here and the
+                # early slow-tool "filler" (_deliver_filler) play over the SAME
+                # send_announcement (await_response) path. In the narrow window where a
+                # slow-tool filler fires while the ~300 ms ack announce is still playing,
+                # the two announces may duck/queue against each other on the device. This
+                # is non-fatal — both are isolated, best-effort, and never awaited by the
+                # run — and the FINAL TTS reply uses a SEPARATE VA-event channel
+                # (TTS_START/TTS_END), so only ack<->filler can transiently overlap, never
+                # the real answer.
+                self._schedule_ack()
 
                 # Trim the configured lead-in (wake-word tail / button-press click) off the
                 # start of the captured sample. The trim is applied ONCE here, so every
@@ -903,6 +941,63 @@ class Pipeline:
                 await self.send_announcement(media_id=url, timeout=30.0, text=text)
         except Exception as e:
             logger.error(f"{self.name}: filler announce failed: {e}")
+
+    def _ack_clip_bytes(self) -> tuple[str, bytes]:
+        """Return (mime, audio) for the end-of-phrase ack clip, building/caching once.
+
+        Source resolution (read live off core.ack so it hot-applies): if a configured
+        sound_path exists on disk, load that operator-supplied «блям» (mime inferred
+        from its extension); otherwise synthesize the two-tone chime once. The result is
+        cached keyed by the resolved source, so the file is read / the chime built only
+        once and re-resolved only when sound_path changes.
+        """
+        path = (self.core.ack.sound_path or "").strip()
+        use_file = bool(path) and os.path.isfile(path)
+        source_key = path if use_file else "<generated>"
+        cached = self._ack_clip
+        if cached is not None and cached[0] == source_key:
+            return cached[1], cached[2]
+        if use_file:
+            with open(path, "rb") as f:
+                audio = f.read()
+            ext = os.path.splitext(path)[1].lstrip(".").lower()
+            mime = {"wav": "audio/wav", "flac": "audio/flac"}.get(ext, "audio/mpeg")
+        else:
+            audio = make_ack_chime_mp3()
+            mime = "audio/mpeg"
+        self._ack_clip = (source_key, mime, audio)
+        return mime, audio
+
+    def _schedule_ack(self) -> None:
+        """Schedule the fire-and-forget end-of-phrase ack chime, if enabled.
+
+        Synchronous gate (no await before the decision): enabled toggle + a bound
+        announcement channel. Building/serving the clip and the announce call all run
+        inside the background task so STT is never delayed. Tracked in _ack_tasks so the
+        still-playing announcement isn't garbage-collected; each task removes itself.
+        """
+        if not self.core.ack.enabled or self.send_announcement is None:
+            return
+        task = asyncio.create_task(self._play_ack())
+        self._ack_tasks.add(task)
+        task.add_done_callback(self._ack_tasks.discard)
+
+    async def _play_ack(self) -> None:
+        """Serve the ack clip through the audio cache and play it on the announce path.
+
+        Mirrors _deliver_filler: ducks current audio and plays immediately. Fully
+        isolated — a build/serve/announce failure must NEVER affect or delay the run
+        (which keeps its own final TTS for the real answer).
+        """
+        try:
+            mime, audio = self._ack_clip_bytes()
+            audio_id = self.audio_server.put(audio, mime)
+            _ext, url = tts_url(self.public_base_url, audio_id, mime)
+            logger.info(f"{self.name}: 🔔 end-of-phrase ack -> {url}")
+            if self.send_announcement is not None:
+                await self.send_announcement(media_id=url, timeout=30.0, text="")
+        except Exception as e:
+            logger.error(f"{self.name}: end-of-phrase ack failed: {e}")
 
     async def _finish_capture(self, reason: str) -> None:
         """End a manual capture run: return the buffered PCM as WAV bytes, end the run.

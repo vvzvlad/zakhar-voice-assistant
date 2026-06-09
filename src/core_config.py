@@ -111,6 +111,19 @@ class CaptureConfig(BaseModel):
     dir: str = "data/captures"
 
 
+class AckConfig(BaseModel):
+    # Server-side "end-of-phrase" confirmation chime ("блям"). The wake-word chime was
+    # moved OFF the device (it overlapped the user's command now that the firmware
+    # streams continuously with pre-roll); instead the server plays this short clip to
+    # the speaker the instant VAD end-points the utterance — immediate "got it"
+    # feedback, BEFORE STT/LLM/TTS run. The full spoken reply still plays later.
+    enabled: bool = True
+    # Optional override for the chime audio file (mp3 or wav). When set to an existing
+    # path the operator's exact device «блям» clip is used; when empty (or missing) a
+    # short two-tone sine chime is synthesized once and cached. Read live per run.
+    sound_path: str = ""
+
+
 class CoreConfig(BaseModel):
     context: ContextConfig = ContextConfig()
     audio: AudioConfig = AudioConfig()
@@ -125,6 +138,7 @@ class CoreConfig(BaseModel):
     runs: RunsConfig = RunsConfig()
     reminders: RemindersConfig = RemindersConfig()
     capture: CaptureConfig = CaptureConfig()
+    ack: AckConfig = AckConfig()
     devices: list[DeviceConfig] = []
     tts_timeout: int = 30
     log_level: str = "INFO"

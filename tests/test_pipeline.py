@@ -1,7 +1,7 @@
 import pytest
 from aioesphomeapi import VoiceAssistantEventType as VAET
 
-from src.core_config import AudioConfig, ContextConfig, CoreConfig
+from src.core_config import AckConfig, AudioConfig, ContextConfig, CoreConfig
 from src.pipeline import (
     SAMPLE_RATE,
     CaptureBusyError,
@@ -97,15 +97,19 @@ class FakeRunEvents:
 
 
 def make_pipeline(tmp_path, monkeypatch, name="dev", stt_text="распознанный текст",
-                  tts_backend=None, runs_store=None, run_events=None):
+                  tts_backend=None, runs_store=None, run_events=None, ack=False):
     # The data dir is hardcoded in config_store; the pipeline reads it as a module
     # attribute, so isolate per-test context files by monkeypatching DATA_DIR to
     # tmp_path BEFORE the pipeline (and its _context_path) is built.
     monkeypatch.setattr("src.config_store.DATA_DIR", str(tmp_path))
     audio_server = FakeAudioServer()
+    # The end-of-phrase ack chime is ON by default in CoreConfig, but it shares the
+    # announce channel that the filler tests inspect; default it OFF here so existing
+    # tests see only the announcements they assert on, and let ack tests opt in (ack=True).
     core = CoreConfig(
         audio=AudioConfig(public_base_url=PUBLIC_BASE_URL),
         context=ContextConfig(),
+        ack=AckConfig(enabled=ack),
     )
     rt = Runtime(
         FakeSvc(core, LlmConfig()),
@@ -1778,3 +1782,154 @@ async def test_no_filler_when_content_blank_after_processing(tmp_path, monkeypat
 
     assert announcer.calls == []
     assert store.records[0]["filler_text"] == ""
+
+
+# --- end-of-phrase "ack" chime (server-side «блям» at VAD finalize) ---------------
+
+
+async def _drain_ack_tasks(pipeline):
+    """Await any fire-and-forget end-of-phrase ack tasks so a test can assert on their
+    side effects (the run does NOT await them itself)."""
+    import asyncio
+    if pipeline._ack_tasks:
+        await asyncio.gather(*list(pipeline._ack_tasks))
+
+
+async def test_ack_scheduled_on_phrase_end(tmp_path, monkeypatch):
+    # End-of-phrase ack enabled (default) + a bound announce channel -> the chime is
+    # played once via the announce path with a media_id URL the instant the run starts.
+    patch_llm(monkeypatch, reply="готово")
+    pipeline, _ = make_pipeline(tmp_path, monkeypatch, stt_text="включи свет", ack=True)
+    assert pipeline.core.ack.enabled is True
+    announcer = FakeAnnouncer()
+    pipeline.send_announcement = announcer
+
+    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_audio(b"\x01\x02" * 100)
+    await pipeline.on_stop(False)
+    await _drain_ack_tasks(pipeline)
+
+    assert len(announcer.calls) == 1
+    call = announcer.calls[0]
+    assert call["media_id"].endswith("/tts/abc123.mp3")
+    assert call["media_id"].startswith(PUBLIC_BASE_URL)
+
+
+async def test_ack_not_scheduled_when_disabled(tmp_path, monkeypatch):
+    # ack.enabled = False -> no ack task scheduled, no announcement.
+    patch_llm(monkeypatch, reply="готово")
+    pipeline, _ = make_pipeline(tmp_path, monkeypatch, stt_text="включи свет", ack=True)
+    pipeline.rt.core.ack.enabled = False
+    announcer = FakeAnnouncer()
+    pipeline.send_announcement = announcer
+
+    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_audio(b"\x01\x02" * 100)
+    await pipeline.on_stop(False)
+    await _drain_ack_tasks(pipeline)
+
+    assert pipeline._ack_tasks == set()
+    assert announcer.calls == []
+
+
+async def test_ack_not_scheduled_for_capture_run(tmp_path, monkeypatch):
+    # A manual capture-only run bypasses _run entirely (no STT/LLM/TTS), so it must NOT
+    # beep — even with ack enabled and a bound announce channel.
+    patch_llm(monkeypatch, reply="готово")
+    pipeline, _ = make_pipeline(tmp_path, monkeypatch, ack=True)
+    assert pipeline.core.ack.enabled is True
+    announcer = FakeAnnouncer()
+    pipeline.send_announcement = announcer
+
+    fut = pipeline.arm_capture(1)
+    # A phraseless (manual button) start consumes the arm into a capture-only run.
+    await pipeline.on_start("cid", 0, None, None)
+    assert pipeline._capture_run is True
+    await pipeline.on_audio(b"\x01\x02" * 100)
+    await pipeline.on_stop(False)  # device_stop -> _finish_capture, never _run
+    await _drain_ack_tasks(pipeline)
+
+    assert fut.done()
+    assert pipeline._ack_tasks == set()
+    assert announcer.calls == []
+
+
+async def test_ack_not_scheduled_without_announce_channel(tmp_path, monkeypatch):
+    # No bound announce channel (send_announcement is None) -> the ack is a silent
+    # no-op even when enabled (mirrors the filler's None guard).
+    patch_llm(monkeypatch, reply="готово")
+    pipeline, _ = make_pipeline(tmp_path, monkeypatch, stt_text="включи свет", ack=True)
+    assert pipeline.send_announcement is None
+
+    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_audio(b"\x01\x02" * 100)
+    await pipeline.on_stop(False)
+    await _drain_ack_tasks(pipeline)
+
+    assert pipeline._ack_tasks == set()
+
+
+async def test_ack_uses_configured_sound_file_when_present(tmp_path, monkeypatch):
+    # A configured sound_path that exists on disk is served verbatim (operator's «блям»),
+    # not the generated chime; mime is inferred from the extension.
+    patch_llm(monkeypatch, reply="готово")
+    pipeline, _ = make_pipeline(tmp_path, monkeypatch, stt_text="включи свет", ack=True)
+    audio_server = pipeline.audio_server  # FakeAudioServer records (data, content_type)
+    blyam = tmp_path / "blyam.wav"
+    blyam.write_bytes(b"RIFFblyam-bytes")
+    pipeline.rt.core.ack.sound_path = str(blyam)
+    pipeline.send_announcement = FakeAnnouncer()
+
+    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_audio(b"\x01\x02" * 100)
+    await pipeline.on_stop(False)
+    await _drain_ack_tasks(pipeline)
+
+    # The configured wav bytes were served as audio/wav (not the generated mp3).
+    assert (b"RIFFblyam-bytes", "audio/wav") in audio_server.calls
+
+
+async def test_ack_is_fire_and_forget_does_not_delay_finalize(tmp_path, monkeypatch):
+    # The end-of-phrase ack must be truly fire-and-forget: even if the announce
+    # channel is STUCK (a slow/hung device announce that never returns), the run's
+    # finalize path (on_audio -> _run -> on_stop) must STILL complete without waiting
+    # for the ack. We block send_announcement on an asyncio.Event that is never set;
+    # if the run awaited the ack, the call below would hang forever (and the test would
+    # time out). It returning proves STT/LLM/TTS are never gated on the ack announce.
+    import asyncio
+
+    patch_llm(monkeypatch, reply="готово")
+    pipeline, events = make_pipeline(tmp_path, monkeypatch, stt_text="включи свет", ack=True)
+    assert pipeline.core.ack.enabled is True
+
+    stuck = asyncio.Event()  # never set -> the announce blocks forever
+    announce_calls = []  # kwargs of each ack announce
+
+    async def stuck_announce(**kwargs):
+        announce_calls.append(kwargs)
+        await stuck.wait()  # hang here indefinitely, simulating a stuck announce
+
+    pipeline.send_announcement = stuck_announce
+
+    # The whole finalize path must complete despite the stuck ack. Bound it with a
+    # timeout so a regression (the run awaiting the ack) fails loudly instead of hanging.
+    await asyncio.wait_for(pipeline.on_start("cid", 0, None, None), timeout=5.0)
+    await asyncio.wait_for(pipeline.on_audio(b"\x01\x02" * 100), timeout=5.0)
+    await asyncio.wait_for(pipeline.on_stop(False), timeout=5.0)
+
+    # The run finalized fully (RUN_END emitted, full happy path) without the ack.
+    assert types_of(events) == FULL_SEQUENCE
+    assert pipeline._finalized is True
+
+    # Let the scheduled (still-stuck) ack task reach its blocked announce call so we
+    # can assert it was invoked. It never completes, so we do NOT drain _ack_tasks.
+    await asyncio.sleep(0)
+    assert len(announce_calls) == 1
+    # The ack announce carries empty text (it's a chime, not a spoken line).
+    assert announce_calls[0]["text"] == ""
+
+    # The ack task is still pending (blocked on the unset Event), proving the run did
+    # not await it. Cancel it so the test doesn't leak a pending task.
+    assert pipeline._ack_tasks  # still tracked, not yet done
+    for task in list(pipeline._ack_tasks):
+        task.cancel()

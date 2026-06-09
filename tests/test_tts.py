@@ -11,6 +11,7 @@ from src.tts import (
     YandexTtsBackend,
     _chunk_for_v3,
     _decode_v3_audio,
+    make_ack_chime_mp3,
     split_sentences,
     wav_to_mp3,
     yandex_stress_markup,
@@ -37,6 +38,17 @@ def test_wav_to_mp3_produces_mp3_frame():
     out = wav_to_mp3(wav)
     assert out  # non-empty
     assert out[0] == 0xFF  # MP3 frame sync byte
+
+
+def test_make_ack_chime_mp3_is_deterministic_mp3():
+    # The end-of-phrase ack chime is synthesized once and cached, so it must be
+    # both a valid MP3 (frame sync byte) and byte-for-byte deterministic across
+    # calls (same inputs -> identical bytes -> stable cache key).
+    a = make_ack_chime_mp3()
+    b = make_ack_chime_mp3()
+    assert a  # non-empty
+    assert a[0] == 0xFF  # MP3 frame sync byte
+    assert a == b        # deterministic: identical bytes on every build
 
 
 def test_split_sentences_basic():
