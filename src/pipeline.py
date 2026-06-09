@@ -142,23 +142,53 @@ def _pcm_to_wav_bytes(pcm: bytes) -> bytes:
     return buf.getvalue()
 
 
-def _apply_gain(pcm: bytes, gain: float) -> bytes:
-    """Multiply 16-bit mono PCM samples by ``gain``, clipping to the int16 range.
+def _highpass(pcm: bytes, cutoff_hz: float = 80.0, sample_rate: int = SAMPLE_RATE) -> bytes:
+    """High-pass-filter 16-bit mono PCM via a numpy rFFT (no SciPy).
 
-    A plain linear gain applied to the mic audio in the server pipeline (used to
-    boost the quieter less-processed mic channel). Clipping happens BEFORE the int16
-    cast so loud samples saturate instead of wrapping. ``gain == 1.0`` is a no-op
-    (the same bytes are returned). Empty / odd-length input is handled safely (a
-    trailing odd byte, if any, is preserved unchanged).
+    Removes DC offset and low-frequency rumble (table thumps, HVAC) below ~cutoff_hz
+    that carry no speech and skew normalization / hurt STT. The whole utterance is
+    filtered at once with a smooth raised-cosine transition band (0 below 0.5*cutoff,
+    1 above cutoff), so there is no per-chunk state and no SciPy dependency. Empty /
+    too-short input is returned unchanged; a trailing odd byte is preserved.
     """
-    if gain == 1.0 or not pcm:
+    if not pcm:
         return pcm
     n = len(pcm) - (len(pcm) % 2)  # whole int16 samples only
+    if n < 4:
+        return pcm
+    x = np.frombuffer(pcm[:n], dtype="<i2").astype(np.float32)
+    spec = np.fft.rfft(x)
+    freqs = np.fft.rfftfreq(x.size, d=1.0 / sample_rate)
+    lo = cutoff_hz * 0.5
+    ramp = np.clip((freqs - lo) / (cutoff_hz - lo), 0.0, 1.0)
+    mask = 0.5 - 0.5 * np.cos(np.pi * ramp)  # raised-cosine 0->1 across [lo, cutoff_hz]
+    y = np.fft.irfft(spec * mask, n=x.size)
+    filtered = np.clip(y, -32768, 32767).astype("<i2").tobytes()
+    return filtered + pcm[n:]  # keep any trailing odd byte unchanged
+
+
+def _normalize_peak(pcm: bytes, target_dbfs: float = -3.0, max_gain: float = 30.0) -> bytes:
+    """Peak-normalize 16-bit mono PCM so its loudest sample hits ``target_dbfs``.
+
+    A per-utterance adaptive replacement for a fixed gain: the quiet less-processed
+    mic channel is brought to a consistent level without clipping, while already-loud
+    samples scale down. ``max_gain`` caps the boost so a near-silent clip does not blow
+    up the noise floor. Empty / near-silent input is returned unchanged; a trailing odd
+    byte is preserved.
+    """
+    if not pcm:
+        return pcm
+    n = len(pcm) - (len(pcm) % 2)
     if n == 0:
         return pcm
-    samples = np.frombuffer(pcm[:n], dtype="<i2").astype(np.float32) * gain
-    boosted = np.clip(samples, -32768, 32767).astype("<i2").tobytes()
-    return boosted + pcm[n:]  # keep any trailing odd byte unchanged
+    x = np.frombuffer(pcm[:n], dtype="<i2").astype(np.float32)
+    peak = float(np.max(np.abs(x))) if x.size else 0.0
+    if peak < 1.0:
+        return pcm  # silence — leave untouched
+    target = 32767.0 * (10.0 ** (target_dbfs / 20.0))
+    gain = min(target / peak, max_gain)
+    boosted = np.clip(x * gain, -32768, 32767).astype("<i2").tobytes()
+    return boosted + pcm[n:]
 
 
 def _trim_start_pcm(pcm: bytes, trim_ms: int) -> bytes:
@@ -460,11 +490,12 @@ class Pipeline:
 
         The Voice PE streams two mic channels: channel 0 (`data`) is the more-
         processed XMOS AGC output, channel 1 (`data2`) the less-processed XMOS
-        noise-suppression output (cleaner but quieter). The whole pipeline (capture +
-        VAD + STT) runs on the channel selected by `core.vad.mic_channel`, with a
-        linear input gain from `core.vad.mic_gain` applied first. Both are read live off
-        `self.core` (a property over the runtime config), so panel changes apply on
-        the next utterance — no restart.
+        noise-suppression output (cleaner but quieter). Only the channel is selected
+        HERE, per chunk, by `core.vad.mic_channel` (read live off `self.core`, so panel
+        changes apply on the next utterance — no restart). The optional high-pass +
+        peak-normalization conditioning (`core.vad.mic_highpass` / `mic_normalize`) is
+        applied LATER, once to the WHOLE utterance, in `_run` before STT — never per
+        chunk (per-chunk normalization would destroy dynamics and amplify silence).
 
         The speaker streams continuously and never signals end-of-speech, so we
         detect it here: VAD over the PCM finalizes the utterance once speech is
@@ -481,8 +512,9 @@ class Pipeline:
         # Select the mic channel for the WHOLE pipeline (capture + VAD + STT) from
         # config (0 = processed, 1 = less-processed/quieter). Channel 1 uses the
         # device's second stream when present; if it's missing, fall back to channel 0
-        # and warn once per run. Then apply the configured input gain. Read live off
-        # self.core, so panel changes take effect on the next utterance.
+        # and warn once per run. Read live off self.core, so panel changes take effect
+        # on the next utterance. Any high-pass / normalize conditioning happens later,
+        # once on the whole utterance in _run (never per chunk).
         if self.core.vad.mic_channel == 1:
             if data2:
                 data = data2
@@ -492,7 +524,6 @@ class Pipeline:
                     f"{self.name}: mic_channel=1 but device sent no second channel; "
                     f"using channel 0"
                 )
-        data = _apply_gain(data, self.core.vad.mic_gain)
 
         # Manual capture-only mode: accumulate PCM, run NO VAD/STT/LLM/TTS. End on the
         # device stop (on_stop) or when the server-side deadline (seconds + margin) is
@@ -674,6 +705,17 @@ class Pipeline:
                             f"(~{trim_ms} ms) off sample start"
                         )
                     pcm = trimmed
+
+                # Optional pre-STT conditioning of the FULL utterance (read live off
+                # core.vad, so the toggles hot-apply). High-pass first to strip
+                # DC/rumble, then peak-normalize so the quieter less-processed channel
+                # reaches a consistent level without clipping. Applied ONCE to the whole
+                # sample (never per chunk), so the capture WAV, the stored diagnostic
+                # audio and STT all get the exact audio Whisper sees.
+                if self.core.vad.mic_highpass:
+                    pcm = _highpass(pcm)
+                if self.core.vad.mic_normalize:
+                    pcm = _normalize_peak(pcm)
 
                 # Optional raw audio capture: save the finalized utterance PCM (already
                 # trimmed by core.vad.trim_start_ms above) as a 16 kHz / mono / 16-bit WAV.

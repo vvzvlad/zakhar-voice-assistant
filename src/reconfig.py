@@ -53,7 +53,7 @@ def action_for(path: str) -> str:
     if path == "core.log_level":
         return "logging"
     if path.startswith("core.context") or path.startswith("core.vad"):
-        return "live"          # incl. vad.mic_channel/mic_gain (read per-chunk via the Runtime read-through)
+        return "live"          # incl. vad.mic_channel/mic_normalize/mic_highpass (read via the Runtime read-through)
     if path.startswith("core.capture"):
         return "live"          # capture.enabled/dir are read per-run via the Runtime read-through
     if path.startswith("core.ack"):

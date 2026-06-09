@@ -8,7 +8,8 @@ from src.pipeline import (
     CaptureBusyError,
     CaptureEmptyError,
     Pipeline,
-    _apply_gain,
+    _highpass,
+    _normalize_peak,
     _pcm_to_wav_bytes,
     _trim_start_pcm,
     contains_stt_hallucination,
@@ -1937,32 +1938,60 @@ async def test_ack_is_fire_and_forget_does_not_delay_finalize(tmp_path, monkeypa
         task.cancel()
 
 
-# --- mic channel selection + input gain (core.vad.mic_channel / mic_gain) ---
+# --- mic channel selection + pre-STT conditioning (core.vad.mic_channel / mic_normalize / mic_highpass) ---
 
-def test_apply_gain_doubles_samples():
-    pcm = np.array([1000, -1000, 500], dtype="<i2").tobytes()
-    assert np.frombuffer(_apply_gain(pcm, 2.0), "<i2").tolist() == [2000, -2000, 1000]
-
-
-def test_apply_gain_clips_before_cast_no_wraparound():
-    pcm = np.array([20000, -20000], dtype="<i2").tobytes()
-    # 20000*4 = 80000 must saturate to int16 bounds, NOT wrap to a negative number.
-    assert np.frombuffer(_apply_gain(pcm, 4.0), "<i2").tolist() == [32767, -32768]
+def test_normalize_peak_boosts_quiet_signal_to_target():
+    # A quiet signal (peak 1000) is scaled up so its peak reaches the -3 dBFS target
+    # (32767 * 10**(-3/20) ≈ 23197), within a loose tolerance.
+    pcm = np.array([1000, -1000], dtype="<i2").tobytes()
+    out = np.frombuffer(_normalize_peak(pcm), "<i2")
+    target = 32767.0 * (10.0 ** (-3.0 / 20.0))
+    assert abs(int(np.max(np.abs(out))) - target) < 200
 
 
-def test_apply_gain_unity_is_noop_identity():
-    pcm = b"\x01\x02\x03\x04"
-    assert _apply_gain(pcm, 1.0) is pcm
+def test_normalize_peak_scales_down_loud_signal():
+    # A near-full-scale signal must be scaled DOWN to the target peak, not left alone.
+    pcm = np.array([32000, -32000], dtype="<i2").tobytes()
+    out = np.frombuffer(_normalize_peak(pcm), "<i2")
+    assert int(np.max(np.abs(out))) < 32000
 
 
-def test_apply_gain_empty_safe():
-    assert _apply_gain(b"", 2.0) == b""
+def test_normalize_peak_silence_is_identity():
+    pcm = np.zeros(8, dtype="<i2").tobytes()
+    assert _normalize_peak(pcm) == pcm
 
 
-def test_apply_gain_odd_length_preserves_trailing_byte():
-    pcm = np.array([1000], dtype="<i2").tobytes() + b"\x07"
-    out = _apply_gain(pcm, 2.0)
-    assert out == np.array([2000], dtype="<i2").tobytes() + b"\x07"
+def test_normalize_peak_empty_safe():
+    assert _normalize_peak(b"") == b""
+
+
+def test_normalize_peak_max_gain_caps_boost():
+    # A very quiet signal (peak 10) can't be boosted past input * max_gain (30).
+    pcm = np.array([10, -10], dtype="<i2").tobytes()
+    out = np.frombuffer(_normalize_peak(pcm), "<i2")
+    assert int(np.max(np.abs(out))) <= 10 * 30
+
+
+def test_highpass_drives_dc_to_zero():
+    # A pure DC offset (constant signal) has its mean driven to ~0 after the high-pass.
+    pcm = np.full(2048, 5000, dtype="<i2").tobytes()
+    out = np.frombuffer(_highpass(pcm), "<i2").astype(np.float32)
+    assert abs(float(np.mean(out))) < 500  # much smaller than the 5000 DC offset
+
+
+def test_highpass_preserves_midband_tone():
+    # A 1000 Hz tone (well above the 80 Hz cutoff) keeps most of its energy.
+    t = np.arange(2048) / SAMPLE_RATE
+    sig = (10000 * np.sin(2 * np.pi * 1000 * t)).astype("<i2")
+    pcm = sig.tobytes()
+    rms_before = float(np.sqrt(np.mean(sig.astype(np.float32) ** 2)))
+    out = np.frombuffer(_highpass(pcm), "<i2").astype(np.float32)
+    rms_after = float(np.sqrt(np.mean(out ** 2)))
+    assert rms_after > rms_before * 0.7  # most of the energy survives
+
+
+def test_highpass_empty_safe():
+    assert _highpass(b"") == b""
 
 
 async def test_mic_channel1_uses_second_stream(tmp_path, monkeypatch):
@@ -1986,11 +2015,3 @@ async def test_mic_channel1_falls_back_to_first_when_no_second_stream(tmp_path, 
     await pipeline.on_start("cid", 0, None, None)
     await pipeline.on_audio(b"\x22\x22", None)  # device sent only one channel
     assert bytes(pipeline._buffer) == b"\x22\x22"
-
-
-async def test_mic_gain_applied_to_buffer(tmp_path, monkeypatch):
-    pipeline, _ = make_pipeline(tmp_path, monkeypatch)
-    pipeline.core.vad.mic_gain = 2.0  # live config
-    await pipeline.on_start("cid", 0, None, None)
-    await pipeline.on_audio(np.array([1000], dtype="<i2").tobytes())
-    assert np.frombuffer(bytes(pipeline._buffer), "<i2").tolist() == [2000]

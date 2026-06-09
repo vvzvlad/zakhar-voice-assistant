@@ -84,12 +84,14 @@ def test_builtin_prompt_fields_carry_textarea_widget():
     assert cal["widget"] == "textarea"
 
 
-def test_vad_mic_defaults_are_channel0_unity_gain():
-    # Mic channel/gain live inside VadConfig (the Voice-capture section), not a
-    # separate core.mic section. Defaults: processed channel 0, unity gain.
+def test_vad_mic_defaults_are_channel0_conditioning_off():
+    # Mic channel + conditioning toggles live inside VadConfig (the Voice-capture
+    # section), not a separate core.mic section. Defaults: processed channel 0, both
+    # the peak-normalize and high-pass toggles OFF.
     v = VadConfig()
     assert v.mic_channel == 0
-    assert v.mic_gain == 1.0
+    assert v.mic_normalize is False
+    assert v.mic_highpass is False
 
 
 def test_vad_mic_channel_literal_rejects_out_of_range():
@@ -99,17 +101,15 @@ def test_vad_mic_channel_literal_rejects_out_of_range():
         VadConfig(mic_channel=2)
 
 
-def test_vad_mic_gain_range_validated():
-    # Gain spans 0.1–50.0: values below 1.0 attenuate, above amplify.
-    VadConfig(mic_gain=0.1)   # min
-    VadConfig(mic_gain=0.5)   # below 1.0 is valid (attenuation)
-    VadConfig(mic_gain=50.0)  # max
-    with pytest.raises(ValidationError):
-        VadConfig(mic_gain=0.05)  # below 0.1
-    with pytest.raises(ValidationError):
-        VadConfig(mic_gain=50.1)  # above 50.0
+def test_vad_mic_conditioning_toggles_accept_overrides():
+    # Both conditioning toggles are independent bools that can be turned on.
+    v = VadConfig(mic_normalize=True, mic_highpass=True)
+    assert v.mic_normalize is True
+    assert v.mic_highpass is True
 
 
 def test_core_config_vad_has_mic_fields():
-    assert CoreConfig().vad.mic_channel == 0
-    assert CoreConfig().vad.mic_gain == 1.0
+    vad = CoreConfig().vad
+    assert vad.mic_channel == 0
+    assert vad.mic_normalize is False
+    assert vad.mic_highpass is False

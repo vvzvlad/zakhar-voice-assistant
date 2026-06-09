@@ -37,9 +37,14 @@ class VadConfig(BaseModel):
     # 0 = processed (XMOS AGC output); 1 = less-processed (XMOS noise-suppression
     # output) — cleaner but quieter. Read live, so panel changes apply next utterance.
     mic_channel: Literal[0, 1] = Field(0, json_schema_extra={"widget": "select"})
-    # Linear input gain applied to the selected mic channel's PCM before VAD/STT.
-    # Boosts the quieter less-processed channel; values < 1.0 attenuate. Read live.
-    mic_gain: float = Field(1.0, ge=0.1, le=50.0, json_schema_extra={"widget": "slider"})
+    # Per-utterance loudness normalization before STT: scale the whole sample so its
+    # peak hits a target level. Adapts to the quieter less-processed channel without
+    # clipping (a fixed gain could not). Off by default; read live.
+    mic_normalize: bool = False
+    # High-pass filter (~80 Hz) applied to the whole sample before STT to strip DC
+    # offset / low-frequency rumble (table thumps, HVAC) that hurt recognition.
+    # Off by default; read live.
+    mic_highpass: bool = False
 
 
 class NetworkConfig(BaseModel):
