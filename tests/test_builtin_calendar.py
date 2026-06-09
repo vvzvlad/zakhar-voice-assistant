@@ -1037,6 +1037,56 @@ async def test_get_week_events_tool():
     assert "Room 2" in out
 
 
+async def test_get_week_events_separates_events_with_period():
+    # Events are joined with "\n", but newlines collapse to spaces in the debug
+    # panel / TTS / LLM input. Each event line must therefore end with a period
+    # so adjacent events stay visually separated.
+    client = MagicMock(spec=CalendarClient)
+    client.get_week_events.return_value = [
+        {
+            "uid": "s1",
+            "summary": "ДР Хлои",
+            "start": "2026-06-13",
+            "end": "2026-06-14",
+            "location": "",
+        },
+        {
+            "uid": "s2",
+            "summary": "Оземпик",
+            "start": "2026-06-14T22:00:00+03:00",
+            "end": "2026-06-14T23:00:00+03:00",
+            "location": "",
+        },
+    ]
+    source = BuiltinMcpSource("calendar", build_calendar_server(client))
+    await source.start()
+
+    out = await source.call("get_week_events", {})
+    # First event line is terminated with a period before the separator.
+    assert "весь день." in out
+    # Both events render as their own non-empty line, each ending with a period.
+    lines = out.split("\n")
+    assert len(lines) == 2
+    assert all(line and line.endswith(".") for line in lines)
+
+
+async def test_get_week_events_guard_keeps_existing_terminal_punctuation():
+    # Guard branch: an event whose rendered line already ends with terminal
+    # punctuation must NOT get an extra period appended. An empty `start` makes
+    # _pretty_event_span return "", so the line is just the summary "Купить молоко?",
+    # which already ends with "?".
+    client = MagicMock(spec=CalendarClient)
+    client.get_week_events.return_value = [
+        {"uid": "g1", "summary": "Купить молоко?", "start": "", "end": "", "location": ""}
+    ]
+    source = BuiltinMcpSource("calendar", build_calendar_server(client))
+    await source.start()
+
+    out = await source.call("get_week_events", {})
+    assert out == "Купить молоко?"
+    assert not out.endswith("?.")
+
+
 async def test_get_week_events_tool_empty():
     client = _fake_client()
     client.get_week_events.return_value = []

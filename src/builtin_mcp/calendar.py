@@ -636,6 +636,12 @@ def _format_events(events: list[dict], empty_text: str) -> str:
         line = f"{ev['summary']} — {span}" if span else str(ev.get("summary", ""))
         if ev.get("location"):
             line += f" ({ev['location']})"
+        # Terminate each event with a period so events stay visually separated
+        # even when the joining newline collapses to a space (panel / TTS / LLM
+        # input). Skip if the line already ends with terminal punctuation.
+        line = line.rstrip()
+        if line and line[-1] not in ".!?…":
+            line += "."
         lines.append(line)
     return "\n".join(lines)
 
