@@ -97,6 +97,15 @@ function SchemaField({ name, node, root, value, onChange, optionsFor }) {
         />
       );
     }
+  } else if (widget === "textarea") {
+    control = (
+      <textarea
+        value={value ?? ""}
+        onChange={(e) => set(e.target.value)}
+        spellCheck={false}
+        style={{ width: "100%", minHeight: 90, resize: "vertical", border: "1px solid var(--line)", borderRadius: 8, padding: "10px 12px", fontFamily: "var(--mono)", fontSize: 12, lineHeight: 1.6, color: "var(--ink)", outline: "none", background: "var(--panel2)" }}
+      />
+    );
   } else if (isSecret(name)) {
     control = <KeyInput value={value} onChange={set} />;
   } else {

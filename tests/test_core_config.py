@@ -58,3 +58,12 @@ def test_builtin_mcp_prompts_default_to_empty_and_accept_values():
     assert CalendarConfig().prompt == ""
     assert OpenWeatherMapConfig(prompt="x").prompt == "x"
     assert CalendarConfig(prompt="y").prompt == "y"
+
+
+def test_builtin_prompt_fields_carry_textarea_widget():
+    # The panel renders these prompt fields as a multi-line textarea via the
+    # `widget` schema hint (SchemaForm), not a single-line input.
+    owm = OpenWeatherMapConfig.model_json_schema()["properties"]["prompt"]
+    cal = CalendarConfig.model_json_schema()["properties"]["prompt"]
+    assert owm["widget"] == "textarea"
+    assert cal["widget"] == "textarea"

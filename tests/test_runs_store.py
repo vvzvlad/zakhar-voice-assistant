@@ -55,6 +55,33 @@ def test_insert_and_get_round_trip(tmp_path):
     store.close()
 
 
+def test_insert_and_get_request_round_trip(tmp_path):
+    # A record carrying a `request` debug dict persists and round-trips through get().
+    store = _store(tmp_path)
+    request = {
+        "system_prompt": "You are a helpful assistant.\n[MCP tools]",
+        "context": [{"role": "user", "content": "привет"}, {"role": "assistant", "content": "Здравствуйте."}],
+        "user_text": "включи свет",
+        "tools": [{"type": "function", "function": {"name": "set_light", "description": "Toggle a light"}}],
+    }
+    rid = store.insert(_rec(request=request))
+    got = store.get(rid)
+    assert got["request"] == request
+    assert "request_json" not in got
+    store.close()
+
+
+def test_get_request_is_none_when_absent(tmp_path):
+    # A record WITHOUT a `request` key yields request=None (column defaults to NULL).
+    store = _store(tmp_path)
+    rec = _rec()  # the base record carries no `request`
+    assert "request" not in rec
+    rid = store.insert(rec)
+    got = store.get(rid)
+    assert got["request"] is None
+    store.close()
+
+
 def test_get_missing_returns_none(tmp_path):
     store = _store(tmp_path)
     assert store.get(999) is None
@@ -119,11 +146,14 @@ def test_migration_adds_filler_columns_to_old_db(tmp_path):
     cols = {row["name"] for row in store._conn.execute("PRAGMA table_info(runs)")}
     assert "filler_text" in cols
     assert "t_filler" in cols
+    assert "request_json" in cols
 
-    rid = store.insert(_rec(filler_text="Ну, погуглю…", t_filler=77))
+    rid = store.insert(_rec(filler_text="Ну, погуглю…", t_filler=77,
+                            request={"system_prompt": "p", "context": [], "user_text": "u", "tools": []}))
     got = store.get(rid)
     assert got["filler_text"] == "Ну, погуглю…"
     assert got["t_filler"] == 77
+    assert got["request"]["user_text"] == "u"
     store.close()
 
 

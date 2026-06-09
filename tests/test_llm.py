@@ -329,6 +329,13 @@ async def test_trace_is_populated(tmp_path):
     assert trace["model"] == "m-final"
     assert trace["tokens"] == 42
 
+    # The model input is captured once into trace["request"].
+    req = trace["request"]
+    assert isinstance(req["system_prompt"], str) and req["system_prompt"]
+    assert isinstance(req["context"], list)
+    assert req["user_text"] == "включи свет"
+    assert req["tools"] == [SET_LIGHT_TOOL]
+
     # Two rounds: a tool-call round carrying the executed call, then a final answer.
     assert [r["note"] for r in trace["rounds"]] == ["tool call", "final answer"]
     tool_round = trace["rounds"][0]
@@ -340,6 +347,10 @@ async def test_trace_is_populated(tmp_path):
     final_round = trace["rounds"][1]
     assert final_round["round"] == 2
     assert final_round["calls"] == []
+    # Each round carries the RAW model content (the final spoken reply is
+    # processing_response("Готово."), but the stored content is the raw "Готово.").
+    assert final_round["content"] == "Готово."
+    assert "content" in tool_round
 
 
 async def test_trace_none_is_a_noop(tmp_path):

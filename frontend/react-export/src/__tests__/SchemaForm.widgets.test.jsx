@@ -74,6 +74,17 @@ describe("SchemaField widget selection", () => {
     expect(c.querySelector(".z-stepper")).toBeTruthy();
     expect(c.querySelector(".z-slider")).toBeNull();
   });
+
+  it("renders a textarea for a string field with widget:'textarea'", () => {
+    const onChange = vi.fn();
+    const c = renderField("prompt", { type: "string", widget: "textarea" }, "hello", onChange);
+    const ta = c.querySelector("textarea");
+    expect(ta).toBeTruthy();
+    // It is NOT the generic single-line .z-inp input.
+    expect(c.querySelector(".z-inp input")).toBeNull();
+    fireEvent.change(ta, { target: { value: "world" } });
+    expect(onChange).toHaveBeenCalledWith("prompt", "world");
+  });
 });
 
 describe("SchemaField numeric onChange payload", () => {

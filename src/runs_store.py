@@ -29,7 +29,8 @@ CREATE TABLE IF NOT EXISTS runs (
   t_vad INTEGER, t_stt INTEGER, t_llm INTEGER, t_ruaccent INTEGER, t_tts INTEGER, t_total INTEGER,
   audio_ms INTEGER, audio_bytes INTEGER, audio_fmt TEXT,
   error_stage TEXT, error_text TEXT,
-  rounds_json TEXT
+  rounds_json TEXT,
+  request_json TEXT
 );
 """
 
@@ -82,7 +83,7 @@ class RunsStore:
         and ALTER only what's missing. Column names are fixed literals (not user
         input), so the f-string interpolation is safe. Idempotent."""
         existing = {row["name"] for row in self._conn.execute("PRAGMA table_info(runs)")}
-        for col, decl in (("filler_text", "TEXT"), ("t_filler", "INTEGER")):
+        for col, decl in (("filler_text", "TEXT"), ("t_filler", "INTEGER"), ("request_json", "TEXT")):
             if col not in existing:
                 self._conn.execute(f"ALTER TABLE runs ADD COLUMN {col} {decl}")
         self._conn.commit()
@@ -94,7 +95,8 @@ class RunsStore:
         """
         values = [rec.get(col) for col in _INSERT_COLS]
         values.append(json.dumps(rec.get("rounds") or [], ensure_ascii=False))
-        cols = _INSERT_COLS + ["rounds_json"]
+        values.append(json.dumps(rec.get("request"), ensure_ascii=False))
+        cols = _INSERT_COLS + ["rounds_json", "request_json"]
         placeholders = ", ".join("?" for _ in cols)
         sql = f"INSERT INTO runs ({', '.join(cols)}) VALUES ({placeholders})"
         with self._lock:
@@ -174,7 +176,8 @@ class RunsStore:
         return [dict(r) for r in rows]
 
     def get(self, run_id) -> dict | None:
-        """Full row for one run, with rounds_json parsed back into `rounds`."""
+        """Full row for one run, with rounds_json/request_json parsed back into
+        `rounds`/`request`."""
         # Same Connection as writes from a worker thread: hold the write lock.
         with self._lock:
             row = self._conn.execute(
@@ -191,6 +194,11 @@ class RunsStore:
             rec["rounds"] = json.loads(raw) if raw else []
         except (ValueError, json.JSONDecodeError):
             rec["rounds"] = []
+        raw_req = rec.pop("request_json", None)
+        try:
+            rec["request"] = json.loads(raw_req) if raw_req else None
+        except (ValueError, json.JSONDecodeError):
+            rec["request"] = None
         return rec
 
     def metrics(self, *, now: float) -> dict:

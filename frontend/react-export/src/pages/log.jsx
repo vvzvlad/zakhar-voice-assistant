@@ -100,17 +100,46 @@ function Drawer({ r, loading, error, onClose }) {
             </div></div>
           </> : null}
 
-          {r.rounds && r.rounds.length > 0 && <>
+          {((r.rounds && r.rounds.length > 0) || r.request) && <>
             <div className="z-sl">LLM rounds & tool calls<div className="ln" /><span style={{ fontFamily: "var(--mono)", fontSize: 10.5, color: "var(--mut2)", textTransform: "none", letterSpacing: 0 }}>{r.model || "—"} · {r.tokens || 0} tok</span></div>
-            {r.rounds.map((rd, i) => <div className="z-round" key={i}>
+            {r.request && <div className="z-round">
+              <div className="z-round-h"><span className="rn">IN</span><span style={{ color: "var(--ink2)" }}>Model input — full debug</span></div>
+              <div className="z-tool">
+                <div className="tn"><s>prompt</s> System prompt</div>
+                <div className="z-code">{r.request.system_prompt || "—"}</div>
+              </div>
+              <div className="z-tool">
+                <div className="tn"><s>context</s> Context · {(r.request.context || []).length} msg</div>
+                {(r.request.context && r.request.context.length)
+                  ? r.request.context.map((m, k) => <div className="z-code" style={{ marginTop: 6 }} key={k}><span className="k">{m.role}: </span>{m.content}</div>)
+                  : <div className="z-code" style={{ color: "var(--mut)" }}>— no prior context —</div>}
+              </div>
+              <div className="z-tool">
+                <div className="tn"><s>tools</s> Tools · {(r.request.tools || []).length}</div>
+                {(r.request.tools && r.request.tools.length)
+                  ? r.request.tools.map((t, k) => { const f = (t && t.function) || t || {}; return <div className="z-code" style={{ marginTop: 6 }} key={k}><b>{f.name}</b>{f.description ? ` — ${f.description}` : ""}{f.parameters ? "\n" + JSON.stringify(f.parameters, null, 2) : ""}</div>; })
+                  : <div className="z-code" style={{ color: "var(--mut)" }}>— no tools advertised —</div>}
+              </div>
+              <div className="z-tool">
+                <div className="tn"><s>user</s> User message</div>
+                <div className="z-code">{r.request.user_text || "—"}</div>
+              </div>
+            </div>}
+            {(r.rounds || []).map((rd, i) => <div className="z-round" key={i}>
               <div className="z-round-h"><span className="rn">R{rd.round}</span><span style={{ color: "var(--ink2)" }}>{rd.note}</span><span className="tok">{rd.tokens} tok</span></div>
               {(!rd.calls || rd.calls.length === 0)
-                ? <div className="z-tool" style={{ color: "var(--mut)", fontSize: 12 }}>No tool calls — model produced final text.</div>
-                : rd.calls.map((c, j) => <div className="z-tool" key={j}>
-                  <div className="tn"><s>call</s> {c.name}</div>
-                  <div className="z-code">{JSON.stringify(c.args)}</div>
-                  <div className="z-codeline"><span className="arr">→ result</span><span className="mono" style={{ color: "var(--ink2)" }}>{c.result}</span></div>
-                </div>)}
+                ? <div className="z-tool">
+                    <div className="tn"><s>final</s> Final text</div>
+                    <div className="z-code">{rd.content || "— (empty) —"}</div>
+                  </div>
+                : <>
+                    {rd.content ? <div className="z-tool"><div className="tn"><s>note</s> Assistant text</div><div className="z-code">{rd.content}</div></div> : null}
+                    {rd.calls.map((c, j) => <div className="z-tool" key={j}>
+                      <div className="tn"><s>call</s> {c.name}</div>
+                      <div className="z-code">{JSON.stringify(c.args)}</div>
+                      <div className="z-codeline"><span className="arr">→ result</span><span className="mono" style={{ color: "var(--ink2)" }}>{c.result}</span></div>
+                    </div>)}
+                  </>}
             </div>)}
           </>}
 

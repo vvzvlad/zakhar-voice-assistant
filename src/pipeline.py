@@ -637,6 +637,7 @@ class Pipeline:
                     "audio_ms": None, "audio_bytes": None, "audio_fmt": None,
                     "error_stage": None, "error_text": None,
                     "rounds": [],
+                    "request": None,
                 }
                 try:
                     # VAD found no speech in the whole window — this is silence/noise,
@@ -730,6 +731,7 @@ class Pipeline:
                     record["model"] = trace.get("model")
                     record["tokens"] = trace.get("tokens")
                     record["rounds"] = trace.get("rounds") or []
+                    record["request"] = trace.get("request")
                     # Did the model actually run any tool this round?
                     tool_used = any(r.get("calls") for r in record["rounds"])
                     if reply.startswith("Ошибка:"):

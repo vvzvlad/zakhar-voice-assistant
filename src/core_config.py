@@ -43,7 +43,7 @@ class OpenWeatherMapConfig(BaseModel):
     api_key: str = ""
     city: str = "Moscow"
     # Appended to the system prompt to describe this built-in MCP's tools to the model.
-    prompt: str = ""
+    prompt: str = Field("", json_schema_extra={"widget": "textarea"})
 
 
 class McpServerConfig(BaseModel):
@@ -65,7 +65,7 @@ class CalendarConfig(BaseModel):
     password: str = ""
     calendar: str = ""
     # Appended to the system prompt to describe this built-in MCP's tools to the model.
-    prompt: str = ""
+    prompt: str = Field("", json_schema_extra={"widget": "textarea"})
 
 
 class DeviceConfig(BaseModel):

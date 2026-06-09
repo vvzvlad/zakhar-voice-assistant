@@ -38,8 +38,12 @@ async def call_llm_api(
 
     `trace`, when given, is populated for observability as the loop runs:
     `trace["model"]` (last seen), `trace["tokens"]` (summed total_tokens across rounds)
-    and `trace["rounds"]` (one entry per round with its note/tokens/tool calls). It
-    never changes the return value or any behavior; error paths may leave it partial.
+    and `trace["rounds"]` (one entry per round with its note/tokens/tool calls + the raw
+    `content` the model produced that round). `trace["request"]` is captured once and holds
+    the full model input debug: system_prompt (assembled, already includes MCP + per-tool
+    prompt blocks), context (prior history messages), user_text, and tools (advertised
+    function schemas). It never changes the return value or any behavior; error paths may
+    leave it partial.
 
     `device`, when given, names the speaker this run belongs to. It is published to
     in-process tools via the current_device ContextVar for the whole tool loop (set on
@@ -70,6 +74,13 @@ async def call_llm_api(
             trace.setdefault("model", None)
             trace.setdefault("tokens", None)
             trace.setdefault("rounds", [])
+            # Capture the full model input once for the run-detail debug view.
+            trace["request"] = {
+                "system_prompt": messages[0]["content"],
+                "context": list(history) if history else [],
+                "user_text": text,
+                "tools": list(hub.tools or []),
+            }
 
         last_content = ""
         tool_executed = False
@@ -124,6 +135,7 @@ async def call_llm_api(
                         "round": round_no,
                         "note": "final answer",
                         "tokens": round_tokens,
+                        "content": last_content,
                         "calls": [],
                     })
                 reply = processing_response(last_content)
@@ -170,6 +182,7 @@ async def call_llm_api(
                     "round": round_no,
                     "note": "tool call",
                     "tokens": round_tokens,
+                    "content": last_content,
                     "calls": round_calls,
                 })
             # Loop again so the model can produce its final spoken reply.
