@@ -38,10 +38,17 @@ packages:
         # inherited here), so continuous instrumental music stays ~0 false-accepts.
         - model: ../microWakeWord/v8/model/zakhar.json
           id: zakhar
-          # v8's best device operating point: cutoff 0.80 -> device FRR 4.6%, FAPH 0
-          # with VAD. Raise toward 0.90–0.95 if you ever want fewer no-VAD music hits
-          # (costs a little recall; no retrain needed).
-          probability_cutoff: 80%
+          # FIELD-TUNED (after v8 over-fired in silence/noise at cutoff 0.80):
+          # cutoff 0.80 was set from a device-eval whose FAPH was measured WITH VAD
+          # (=0); it does NOT reflect bare false-positives, so on-device the KWS fired
+          # constantly (VAD masked most: "predicts 'Захар' but VAD doesn't" log spam,
+          # but vocal-music/noise leaks through). v5 felt better largely because it ran
+          # at 0.95. So we run v8 at 0.95 + window 5 (≈ the conservative okay_nabu point).
+          # Tune: lower toward 0.90 if real «захааар» starts getting missed; raise to
+          # 0.97 if it still false-fires. (Real fix = retrain with silence/AGC-floor
+          # negatives + a silence eval mode — see microWakeWord/v9/REALDATA_RUNBOOK.md.)
+          probability_cutoff: 95%
+          sliding_window_size: 5
 
   # Official Home Assistant Voice PE firmware, pinned to a release tag.
   # Bump the @ref to update the base firmware later.
