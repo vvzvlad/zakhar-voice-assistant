@@ -1,0 +1,19 @@
+{
+  "url": "http://10.31.41.62:8001/mcp",
+  "protocol_requested": "2025-03-26",
+  "session_id_present": false,
+  "protocol_negotiated": "2025-03-26",
+  "initialize_raw": "event: message\ndata: {\"result\":{\"protocolVersion\":\"2025-03-26\",\"capabilities\":{\"tools\":{}},\"serverInfo\":{\"name\":\"smarthome\",\"version\":\"2.0.0\"}},\"jsonrpc\":\"2.0\",\"id\":1}",
+  "initialize_content_type": "text/event-stream",
+  "tools_list_raw": "event: message\ndata: {\"result\":{\"tools\":[{\"name\":\"set_light\",\"description\":\"Включить/выключить свет. state=on|off.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"device_id\":{\"type\":\"string\",\"enum\":[\"bright_room_light\",\"low_room_light\",\"table_light\",\"kitchen_light\",\"toilet_light\",\"bathroom_light\",\"corridor_light\"]},\"state\":{\"type\":\"string\",\"enum\":[\"on\",\"off\"]}},\"required\":[\"device_id\",\"state\"]}},{\"name\":\"set_dimmer\",\"description\":\"Яркость ночника 0..100 (0=выкл).\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"device_id\":{\"type\":\"string\",\"enum\":[\"night_light\"]},\"brightness\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":100}},\"required\":[\"device_id\",\"brightness\"]}},{\"name\":\"set_climate\",\"description\":\"Кондиционер: число (\\\"22\\\") или \\\"off\\\".\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"device_id\":{\"type\":\"string\",\"enum\":[\"room_ac\"]},\"temperature\":{\"type\":\"string\"}},\"required\":[\"device_id\",\"temperature\"]}},{\"name\":\"set_switch\",\"description\":\"Вкл/выкл устройство (не свет). state=on|off.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"device_id\":{\"type\":\"string\",\"enum\":[\"monitors\"]},\"state\":{\"type\":\"string\",\"enum\":[\"on\",\"off\"]}},\"required\":[\"device_id\",\"state\"]}},{\"name\":\"set_lock\",\"description\":\"Замок: action=lock|unlock.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"device_id\":{\"type\":\"string\",\"enum\":[\"main_lock\"]},\"action\":{\"type\":\"string\",\"enum\":[\"lock\",\"unlock\"]}},\"required\":[\"device_id\",\"action\"]}},{\"name\":\"set_scene\",\"description\":\"Сцена: night|morning.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"scene\":{\"type\":\"string\",\"enum\":[\"night\",\"morning\"]}},\"required\":[\"scene\"]}}]},\"jsonrpc\":\"2.0\",\"id\":2}",
+  "tools_list_content_type": "text/event-stream",
+  "tools_call_request": {
+    "name": "set_light",
+    "arguments": {
+      "device_id": "table_light",
+      "state": "on"
+    }
+  },
+  "tools_call_raw": "event: message\ndata: {\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"ok\"}]},\"jsonrpc\":\"2.0\",\"id\":3}",
+  "tools_call_content_type": "text/event-stream"
+}

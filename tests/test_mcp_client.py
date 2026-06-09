@@ -1,3 +1,9 @@
+import json
+from pathlib import Path
+
+import httpx
+import respx
+
 import src.mcp_client as mcp_client
 from src.mcp_client import McpToolHub
 
@@ -244,3 +250,112 @@ async def test_ensure_tools_stays_empty_when_reload_still_fails(monkeypatch):
     await hub.ensure_tools()  # must not raise
 
     assert hub.tools == []
+
+
+# ---------------------------------------------------------------------------
+# R-MCP-1: wire-format contract test.
+#
+# The StubSession tests above never exercise the real mcp.ClientSession decoder
+# nor any JSON-RPC/SSE framing: they hand the hub a fake session whose return
+# values are already Python objects. They therefore CANNOT catch SDK-decoder
+# drift or a server-side wire-format change (e.g. `content[].text` renamed to
+# `content[].value`, or `inputSchema` renamed). This test pins the real Node-RED
+# smart-home MCP wire format by replaying a REAL recorded server exchange
+# (tests/fixtures/mcp_smarthome_wire.json) through the project's REAL code path:
+#   McpToolHub.start()/call()  ->  real streamablehttp_client  ->  real
+#   mcp.ClientSession / mcp.types decoder, with only the HTTP transport mocked
+#   by respx (fully offline; no socket to 10.31.41.62 is ever opened).
+#
+# Approach used: respx transport mock (the IMPLEMENTATION PLAN's preferred path).
+# It works because the recorded server is STATELESS (session_id_present == false):
+# the SDK never gets an Mcp-Session-Id, so handle_get_stream() returns immediately
+# (no server->client GET SSE channel to satisfy) and terminate_session() is a
+# no-op (no DELETE). Only the POST request/response pairs need to be served.
+#
+# One SDK quirk handled: mcp.ClientSession assigns its OWN monotonic JSON-RPC
+# request ids starting at 0 and correlates responses by id. The recorded payloads
+# carry the original ids (1, 2, 3). If we replayed them verbatim, ClientSession
+# would never match the response to its pending request and initialize() would
+# hang forever. So the handler rewrites ONLY the JSON-RPC envelope `id` to echo
+# the incoming request's id. The load-bearing wire payload (result.tools[],
+# inputSchema, content[].text, ...) is preserved exactly as recorded.
+
+WIRE_FIXTURE = Path(__file__).parent / "fixtures" / "mcp_smarthome_wire.json"
+
+
+def _sse_data_payload(raw_sse_block: str) -> str:
+    """Extract the JSON string from the `data:` line of a recorded SSE block."""
+    for line in raw_sse_block.splitlines():
+        if line.startswith("data:"):
+            return line[len("data:"):].strip()
+    raise AssertionError("recorded SSE block has no data: line")
+
+
+def _reframe_sse(payload_json: str, request_id) -> bytes:
+    """Re-wrap the recorded JSON payload as a clean SSE event.
+
+    Only the JSON-RPC envelope id is replaced (to match the SDK-chosen request
+    id); every other field is the exact recorded wire payload.
+    """
+    obj = json.loads(payload_json)
+    obj["id"] = request_id  # echo the SDK's request id so ClientSession correlates
+    payload = json.dumps(obj, ensure_ascii=False)
+    return f"event: message\r\ndata: {payload}\r\n\r\n".encode()
+
+
+@respx.mock
+async def test_real_session_decodes_recorded_smarthome_wire():
+    fixture = json.loads(WIRE_FIXTURE.read_text(encoding="utf-8"))
+    url = fixture["url"]
+    # Sanity-pin the recording: stateless server, negotiated protocol.
+    assert fixture["session_id_present"] is False
+    assert fixture["protocol_negotiated"] == "2025-03-26"
+
+    payload_by_method = {
+        "initialize": _sse_data_payload(fixture["initialize_raw"]),
+        "tools/list": _sse_data_payload(fixture["tools_list_raw"]),
+        "tools/call": _sse_data_payload(fixture["tools_call_raw"]),
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        # The SDK may open a server->client GET SSE channel and a DELETE on close;
+        # answer tolerantly so the streamable-http handshake always completes.
+        if request.method == "GET":
+            return httpx.Response(405)  # Method Not Allowed -> no GET stream
+        if request.method == "DELETE":
+            return httpx.Response(200)
+        body = json.loads(request.content)
+        method = body.get("method")
+        if method == "notifications/initialized":
+            return httpx.Response(202)  # notifications get no body
+        payload = payload_by_method.get(method)
+        if payload is None:
+            return httpx.Response(400)
+        return httpx.Response(
+            200,
+            headers={"content-type": fixture[f"{method.split('/')[0]}_content_type"]
+                     if method == "initialize" else "text/event-stream"},
+            content=_reframe_sse(payload, body.get("id")),
+        )
+
+    respx.route(url=url).mock(side_effect=handler)
+
+    # Drive the REAL hub over the REAL streamable_http transport + ClientSession.
+    hub = McpToolHub(url, None, "auto")
+    await hub.start()
+
+    # [tool names] survive the real decoder, in the recorded order.
+    names = [(t.get("function") or t)["name"] for t in hub.tools]
+    assert names == ["set_light", "set_dimmer", "set_climate", "set_switch", "set_lock", "set_scene"]
+
+    # [schema survives the real decoder] for set_light.
+    light = next(t for t in hub.tools if (t.get("function") or t)["name"] == "set_light")
+    fn = light.get("function") or light
+    schema = fn.get("parameters") or fn.get("inputSchema")
+    assert "table_light" in schema["properties"]["device_id"]["enum"]
+    assert schema["required"] == ["device_id", "state"]
+    assert fn["description"]  # non-empty description
+
+    # [call text extraction through real decoder] content[].text == "ok".
+    out = await hub.call("set_light", {"device_id": "table_light", "state": "on"})
+    assert out == "ok"
