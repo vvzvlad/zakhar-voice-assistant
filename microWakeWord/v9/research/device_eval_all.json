@@ -1,0 +1,58 @@
+{
+  "v1": {
+    "frr": 0.346,
+    "recall": 0.654,
+    "faph": 10.0,
+    "faph_vad": 0.0
+  },
+  "v4": {
+    "frr": 0.163,
+    "recall": 0.837,
+    "faph": 10.0,
+    "faph_vad": 0.0
+  },
+  "v5": {
+    "frr": 0.183,
+    "recall": 0.817,
+    "faph": 10.0,
+    "faph_vad": 0.0
+  },
+  "v8": {
+    "frr": 0.059,
+    "recall": 0.941,
+    "faph": 10.0,
+    "faph_vad": 0.0
+  },
+  "v9_multicond": {
+    "frr_0.9": 0.098,
+    "note": "over-aug regression"
+  },
+  "v9_margin": {
+    "frr_0.9": 0.111,
+    "note": "AM-softmax approx regression"
+  },
+  "v9_res": {
+    "frr_0.9": 0.085,
+    "note": "residual+aug, best reverb but regress"
+  },
+  "v9b": {
+    "frr_0.9": 0.098,
+    "note": "residual+SLR28 regression"
+  },
+  "v9r8": {
+    "frr_0.9": 0.137,
+    "note": "residual on v8 data: residuals HURT"
+  },
+  "v9_distill": {
+    "frr_0.9": 0.17,
+    "note": "KD regression at small scale"
+  },
+  "v8_lastweights_control": {
+    "frr_0.9": 0.065,
+    "note": "=best_weights, pipeline sound"
+  },
+  "v9_focal": {
+    "frr_0.9": 0.144,
+    "note": "focal g=2 on v8 data, regression"
+  }
+}

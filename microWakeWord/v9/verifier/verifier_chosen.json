@@ -1,0 +1,9 @@
+{
+  "type": "logreg_on_64d_timepooled_bottleneck",
+  "params": 65,
+  "keep_TP": 1.0,
+  "reject_music_FA": 1.0,
+  "margin": 0.7929273247718811,
+  "N_pos_eval": 53,
+  "N_musicFA_eval": 24
+}
