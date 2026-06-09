@@ -562,16 +562,78 @@ def _parse_event_dt(value: str) -> date | datetime:
     return _parse_dt(text)
 
 
+# Russian weekday names indexed by date.weekday() (Monday == 0). Hardcoded rather
+# than via locale because the runtime image carries no ru_RU locale.
+_RU_WEEKDAYS = (
+    "понедельник", "вторник", "среда", "четверг",
+    "пятница", "суббота", "воскресенье",
+)
+# Russian month names in the genitive case (for "13 июня"), indexed by month - 1.
+_RU_MONTHS_GEN = (
+    "января", "февраля", "марта", "апреля", "мая", "июня",
+    "июля", "августа", "сентября", "октября", "ноября", "декабря",
+)
+
+
+def _ru_date(d) -> str:
+    """Format a date/datetime as 'суббота, 13 июня 2026' (weekday + day + month + year)."""
+    return f"{_RU_WEEKDAYS[d.weekday()]}, {d.day} {_RU_MONTHS_GEN[d.month - 1]} {d.year}"
+
+
+def _pretty_span(start, end) -> str:
+    """Render a parsed (start, end) pair as readable Russian.
+
+    `start` is a date|datetime; `end` is a date|datetime or None (missing). Times are
+    rendered with the datetime's own wall-clock components — NO timezone conversion, so a
+    20:00+03:00 event reads as 20:00 (the time the user actually set).
+    """
+    all_day = isinstance(start, date) and not isinstance(start, datetime)
+    if all_day:
+        # All-day events use an exclusive DTEND, so a single-day event has end == start + 1 day.
+        # Subtract one day to show an inclusive end; collapse single-day spans to just the start.
+        end_is_date = isinstance(end, date) and not isinstance(end, datetime)
+        if end_is_date and (end - start) > timedelta(days=1):
+            inclusive_end = end - timedelta(days=1)
+            return f"{_ru_date(start)} – {_ru_date(inclusive_end)}, весь день"
+        return f"{_ru_date(start)}, весь день"
+    # Timed event.
+    start_hm = start.strftime("%H:%M")
+    if end is None:
+        return f"{_ru_date(start)}, {start_hm}"
+    if isinstance(end, datetime) and end.date() == start.date():
+        # Same calendar day: show the date once, then a compact time range.
+        return f"{_ru_date(start)}, {start_hm}–{end.strftime('%H:%M')}"
+    # Multi-day timed span (or an unexpected date end): spell out both endpoints.
+    end_part = _ru_date(end)
+    if isinstance(end, datetime):
+        end_part += f", {end.strftime('%H:%M')}"
+    return f"{_ru_date(start)}, {start_hm} – {end_part}"
+
+
+def _pretty_event_span(start_str: str, end_str: str) -> str:
+    """Parse ISO start/end strings from an event dict and render them prettily.
+
+    Returns '' when there is no start. Falls back to the raw 'start..end' join if parsing
+    fails, so a malformed value degrades gracefully instead of crashing the tool.
+    """
+    if not start_str:
+        return ""
+    try:
+        start = _parse_event_dt(start_str)
+        end = _parse_event_dt(end_str) if end_str else None
+        return _pretty_span(start, end)
+    except (ValueError, TypeError):
+        return f"{start_str}..{end_str}" if end_str else start_str
+
+
 def _format_events(events: list[dict], empty_text: str) -> str:
     """Render an event list as readable Russian text, one event per line."""
     if not events:
         return empty_text
     lines = []
     for ev in events:
-        span = ev["start"]
-        if ev.get("end"):
-            span = f"{ev['start']}..{ev['end']}"
-        line = f"{ev['summary']} — {span}"
+        span = _pretty_event_span(ev.get("start", ""), ev.get("end", ""))
+        line = f"{ev['summary']} — {span}" if span else str(ev.get("summary", ""))
         if ev.get("location"):
             line += f" ({ev['location']})"
         lines.append(line)
@@ -581,9 +643,7 @@ def _format_events(events: list[dict], empty_text: str) -> str:
 def _format_event_details(ev: dict) -> str:
     """Render a single event dict as a multi-line Russian description."""
     lines = [f"Событие: {ev.get('summary', '')}"]
-    span = ev.get("start", "")
-    if ev.get("end"):
-        span = f"{ev.get('start', '')}..{ev['end']}"
+    span = _pretty_event_span(ev.get("start", ""), ev.get("end", ""))
     if span:
         lines.append(f"Время: {span}")
     if ev.get("location"):

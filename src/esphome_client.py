@@ -68,6 +68,10 @@ class DeviceClient:
         # Bind the pipeline's emitters to this live connection.
         self.pipeline.send_event = self.cli.send_voice_assistant_event
         self.pipeline.send_audio = self.cli.send_voice_assistant_audio
+        # Early-filler announcements (see Pipeline._deliver_filler) use the same
+        # assist-satellite announce path as DeviceClient.announce(): it ducks current
+        # audio and plays while the run is still working. Rebound on every (re)connect.
+        self.pipeline.send_announcement = self.cli.send_voice_assistant_announcement_await_response
 
         self._unsub = self.cli.subscribe_voice_assistant(
             handle_start=self._handle_start,

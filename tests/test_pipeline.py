@@ -10,10 +10,12 @@ from src.pipeline import (
     _pcm_to_wav_bytes,
     _trim_start_pcm,
     contains_stt_hallucination,
+    is_slow_tool,
 )
 from src.plugins.llm.base import LlmConfig
 from src.runs_store import _LIST_COLS
 from src.runtime import Runtime
+from src.text import processing_response
 
 PUBLIC_BASE_URL = "http://10.0.0.10:8200"
 
@@ -1609,3 +1611,170 @@ async def test_capture_maxlen_finalize_ignores_late_chunk(tmp_path, monkeypatch)
     assert types_of(events).count(VAET.VOICE_ASSISTANT_RUN_END) == runend_count
     assert future.result() == result_before
     assert len(pipeline._buffer) == buffer_after_finalize <= cap
+
+
+# --- early "filler" line (slow-tool placeholder via the announce channel) --------
+
+
+def test_is_slow_tool():
+    # Slow (network/think) tools trigger the early filler.
+    assert is_slow_tool("google")
+    assert is_slow_tool("search_events")
+    assert is_slow_tool("get_current_weather")
+    assert is_slow_tool("get_today_events")
+    # Instant smart-home actions do NOT.
+    assert not is_slow_tool("set_light")
+    assert not is_slow_tool("set_scene")
+    assert not is_slow_tool("set_reminder")
+    assert not is_slow_tool("list_reminders")
+
+
+class FakeAnnouncer:
+    """Async recorder for the announcement channel: records the kwargs of each call."""
+
+    def __init__(self):
+        self.calls = []  # records the kwargs dict per announce
+
+    async def __call__(self, **kwargs):
+        self.calls.append(kwargs)
+
+
+def patch_llm_with_filler(monkeypatch, *, tool_names, content, reply="готово", times=1):
+    """Stub call_llm_api with a fake that invokes the passed on_filler callback
+    `times` times (with the same content + tool_names) before returning `reply`.
+
+    Lets a test drive the pipeline's _speak_filler policy through the real _run
+    wiring without a live LLM backend."""
+
+    async def fake(llm_backend, hub, text, **kwargs):
+        on_filler = kwargs.get("on_filler")
+        if on_filler is not None:
+            for _ in range(times):
+                await on_filler(content, tool_names)
+        return reply
+
+    monkeypatch.setattr("src.llm.call_llm_api", fake)
+
+
+async def _drain_filler_tasks(pipeline):
+    """Await any fire-and-forget filler announcement tasks so a test can assert on
+    their side effects (the run does NOT await them itself)."""
+    import asyncio
+    if pipeline._filler_tasks:
+        await asyncio.gather(*list(pipeline._filler_tasks))
+
+
+async def test_filler_announced_for_slow_tool(tmp_path, monkeypatch):
+    # A slow tool round carrying spoken content -> the filler is synthesized and the
+    # announcement channel is awaited with a media_id URL + text; the run record
+    # carries filler_text / t_filler.
+    patch_llm_with_filler(
+        monkeypatch, tool_names=["search_events"], content="Щас гляну…", reply="готово",
+    )
+    store = FakeRunsStore()
+    pipeline, _ = make_pipeline(
+        tmp_path, monkeypatch, stt_text="что у меня в календаре", runs_store=store,
+    )
+    announcer = FakeAnnouncer()
+    pipeline.send_announcement = announcer
+
+    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_audio(b"\x01\x02" * 100)
+    await pipeline.on_stop(False)
+    await _drain_filler_tasks(pipeline)
+
+    # The announcement fired exactly once with a URL media_id and the spoken text.
+    assert len(announcer.calls) == 1
+    call = announcer.calls[0]
+    assert call["media_id"].endswith("/tts/abc123.mp3")
+    assert call["media_id"].startswith(PUBLIC_BASE_URL)
+    assert call["text"] == processing_response("Щас гляну…")
+    # The run record captured the filler.
+    assert len(store.records) == 1
+    rec = store.records[0]
+    assert rec["filler_text"] == processing_response("Щас гляну…")
+    assert rec["t_filler"] is not None and rec["t_filler"] >= 0
+
+
+async def test_no_filler_for_fast_tool(tmp_path, monkeypatch):
+    # A fast smart-home tool (set_light) -> NO announcement, no filler recorded.
+    patch_llm_with_filler(
+        monkeypatch, tool_names=["set_light"], content="Ну изволь, включил.", reply="готово",
+    )
+    store = FakeRunsStore()
+    pipeline, _ = make_pipeline(
+        tmp_path, monkeypatch, stt_text="включи свет", runs_store=store,
+    )
+    announcer = FakeAnnouncer()
+    pipeline.send_announcement = announcer
+
+    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_audio(b"\x01\x02" * 100)
+    await pipeline.on_stop(False)
+    await _drain_filler_tasks(pipeline)
+
+    assert announcer.calls == []
+    assert store.records[0]["filler_text"] == ""
+    assert store.records[0]["t_filler"] is None
+
+
+async def test_filler_dedup_at_most_once_per_run(tmp_path, monkeypatch):
+    # Two callback invocations in one run -> only one announcement (speak-at-most-once).
+    patch_llm_with_filler(
+        monkeypatch, tool_names=["google"], content="Щас погуглю…", reply="готово", times=2,
+    )
+    pipeline, _ = make_pipeline(tmp_path, monkeypatch, stt_text="погугли погоду")
+    announcer = FakeAnnouncer()
+    pipeline.send_announcement = announcer
+
+    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_audio(b"\x01\x02" * 100)
+    await pipeline.on_stop(False)
+    await _drain_filler_tasks(pipeline)
+
+    assert len(announcer.calls) == 1
+
+
+async def test_no_filler_when_send_announcement_none(tmp_path, monkeypatch):
+    # The default make_pipeline leaves send_announcement None: the slow-tool filler
+    # must be a no-op (no error, nothing recorded).
+    patch_llm_with_filler(
+        monkeypatch, tool_names=["search_events"], content="Щас гляну…", reply="готово",
+    )
+    store = FakeRunsStore()
+    pipeline, _ = make_pipeline(
+        tmp_path, monkeypatch, stt_text="что в календаре", runs_store=store,
+    )
+    assert pipeline.send_announcement is None
+
+    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_audio(b"\x01\x02" * 100)
+    await pipeline.on_stop(False)
+    await _drain_filler_tasks(pipeline)
+
+    # No filler scheduled, no record fields set.
+    assert pipeline._filler_tasks == set()
+    assert store.records[0]["filler_text"] == ""
+    assert store.records[0]["t_filler"] is None
+
+
+async def test_no_filler_when_content_blank_after_processing(tmp_path, monkeypatch):
+    # Content that reduces to empty after processing_response (whitespace / stripped
+    # tags) -> no announcement even for a slow tool.
+    patch_llm_with_filler(
+        monkeypatch, tool_names=["search_events"], content="   ", reply="готово",
+    )
+    store = FakeRunsStore()
+    pipeline, _ = make_pipeline(
+        tmp_path, monkeypatch, stt_text="что в календаре", runs_store=store,
+    )
+    announcer = FakeAnnouncer()
+    pipeline.send_announcement = announcer
+
+    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_audio(b"\x01\x02" * 100)
+    await pipeline.on_stop(False)
+    await _drain_filler_tasks(pipeline)
+
+    assert announcer.calls == []
+    assert store.records[0]["filler_text"] == ""

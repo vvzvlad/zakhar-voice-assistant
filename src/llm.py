@@ -25,6 +25,7 @@ async def call_llm_api(
     history: list | None = None,
     trace: dict | None = None,
     device: str | None = None,
+    on_filler=None,
 ) -> str:
     """Drive the LLM backend with the given text and return a plain-text result.
 
@@ -44,6 +45,11 @@ async def call_llm_api(
     in-process tools via the current_device ContextVar for the whole tool loop (set on
     entry, reset on exit) so a tool like set_reminder can target the originating speaker
     without it being an LLM-visible argument.
+
+    `on_filler`, when given, is an optional `async (content: str, tool_names: list[str])
+    -> None` callback invoked for each tool-requesting round that also carries spoken
+    content, so the caller can play an early "filler" line while the (slow) tool + final
+    round run. It never affects the return value or control flow.
 
     Runs an agentic loop: model -> tool_calls -> execute via the hub -> feed results
     back -> final text. On success returns the assistant text. On error returns a
@@ -124,6 +130,21 @@ async def call_llm_api(
                 if reply:
                     return reply
                 return llm_cfg.reply_empty_after_tools if tool_executed else llm_cfg.reply_empty
+
+            # A tool-requesting round may also carry a short spoken "filler" line in its
+            # content (the persona's "I'll go check it" placeholder). Forward it to the
+            # caller so an early reply can be spoken while the (slow) tool + final round
+            # run. Policy (speak-or-not, at-most-once) lives entirely in the callback; we
+            # stay policy-free and just forward content + the tool names. Isolated: a
+            # callback failure must never break the tool loop.
+            if on_filler is not None:
+                filler_text = (message.get("content") or "").strip()
+                if filler_text:
+                    tool_names = [tc["function"]["name"] for tc in tool_calls]
+                    try:
+                        await on_filler(filler_text, tool_names)
+                    except Exception as e:  # noqa: BLE001 - filler is best-effort
+                        logger.warning(f"on_filler callback failed: {e}")
 
             # Execute each requested tool via MCP and feed results back.
             round_calls = []

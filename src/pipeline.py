@@ -30,6 +30,7 @@ from loguru import logger
 from src import config_store, context, llm
 from src.audio_server import tts_url
 from src.runs_store import live_row, summary_row
+from src.text import processing_response
 
 # WebRTC VAD requires mono 16-bit PCM frames of exactly 10/20/30 ms at 16 kHz.
 # We use 20 ms frames = 16000 * 2 * 20/1000 = 640 bytes.
@@ -64,6 +65,19 @@ ARM_TTL = 5.0
 # the run as if nothing was said and drop it.
 STT_HALLUCINATION_MARKERS = ("dimatorzok", "продолжение следует")
 
+# Tool-name substrings (case-insensitive) that mark a "slow" tool — one that hits
+# the network / does a second LLM round and makes the user wait several seconds
+# (web/google search, calendar, weather, wiki). Only these trigger the early
+# spoken "filler"; instant smart-home actions (set_light, set_lock, set_scene,
+# set_reminder, …) are intentionally excluded so the assistant doesn't talk twice
+# for a trivial action. Extend this list to cover new slow tools.
+SLOW_TOOL_MARKERS = (
+    "google", "search", "web", "browse",
+    "weather", "погод",
+    "event", "calendar", "календар",
+    "wiki",
+)
+
 
 def contains_stt_hallucination(text: str) -> bool:
     """Return True if the STT text contains a known Whisper hallucination marker.
@@ -74,6 +88,14 @@ def contains_stt_hallucination(text: str) -> bool:
     """
     folded = text.casefold()
     return any(marker in folded for marker in STT_HALLUCINATION_MARKERS)
+
+
+def is_slow_tool(name: str) -> bool:
+    """Return True if a tool name looks like a slow (network/think) tool — i.e.
+    contains a SLOW_TOOL_MARKERS substring (case-insensitive). Used to decide
+    whether to speak an early filler before the tool runs."""
+    folded = (name or "").casefold()
+    return any(marker in folded for marker in SLOW_TOOL_MARKERS)
 
 
 class CaptureBusyError(Exception):
@@ -186,6 +208,12 @@ class Pipeline:
         # Injected by DeviceClient on connect (bound to the live API client).
         self.send_event = None
         self.send_audio = None
+        self.send_announcement = None
+
+        # Background "filler" announcement tasks (early "I'll go check it" lines). Kept
+        # in a set so a still-playing announcement isn't garbage-collected mid-flight;
+        # each task removes itself on completion. Fire-and-forget — never awaited by the run.
+        self._filler_tasks = set()
 
         # Tail of the chained background tasks that broadcast live (in-progress) run
         # snapshots. Scheduling these off the run coroutine keeps a slow WS client from
@@ -604,6 +632,7 @@ class Pipeline:
                     "t_vad": int(len(pcm) / (SAMPLE_RATE * 2) * 1000),
                     "t_stt": 0, "t_llm": 0, "t_ruaccent": 0, "t_tts": 0,
                     "stt_text": "", "llm_text": "",
+                    "filler_text": "", "t_filler": None,
                     "model": None, "tokens": None,
                     "audio_ms": None, "audio_bytes": None, "audio_fmt": None,
                     "error_stage": None, "error_text": None,
@@ -661,6 +690,30 @@ class Pipeline:
                         ttl_seconds=self.core.context.ttl_seconds,
                     )
                     trace: dict = {}
+
+                    filler_fired = False  # at most one early filler per run
+
+                    async def _speak_filler(text: str, tool_names: list[str]) -> None:
+                        # Policy lives here (llm.py is policy-free): speak at most once per
+                        # run, and only for a SLOW tool (so instant smart-home actions don't
+                        # double-talk). Schedule synthesis+announce as a fire-and-forget task
+                        # so the slow tool is NOT delayed by filler TTS. Synchronous
+                        # gate/dedup first (no await before we decide), then schedule.
+                        nonlocal filler_fired
+                        if filler_fired or self.send_announcement is None:
+                            return
+                        if not any(is_slow_tool(n) for n in tool_names):
+                            return  # fast action: the final reply alone is enough
+                        spoken = processing_response(text)  # same +stress/ё/што post-processing as the final reply
+                        if not spoken:
+                            return
+                        filler_fired = True
+                        record["filler_text"] = spoken
+                        record["t_filler"] = int((time.perf_counter() - t0) * 1000)
+                        task = asyncio.create_task(self._deliver_filler(spoken))
+                        self._filler_tasks.add(task)
+                        task.add_done_callback(self._filler_tasks.discard)
+
                     reply = await llm.call_llm_api(
                         self.llm_backend,
                         self.hub,
@@ -670,6 +723,7 @@ class Pipeline:
                         history=history,
                         trace=trace,
                         device=self.name,
+                        on_filler=_speak_filler,
                     )
                     record["t_llm"] = int((time.perf_counter() - llm_t) * 1000)
                     record["llm_text"] = reply
@@ -817,6 +871,25 @@ class Pipeline:
                     await self.run_events.broadcast({"type": "run", "run": pending_run})
                 except Exception as e:
                     logger.error(f"{self.name}: run broadcast failed: {e}")
+
+    async def _deliver_filler(self, text: str) -> None:
+        """Synthesize an early 'filler' line and play it on the announcement channel.
+
+        The announcement ducks any current audio and plays immediately, so the user
+        hears a short 'I'll go check it' line while the slow tool + final LLM round
+        run, instead of waiting in silence. Fully isolated: a synthesis/announce
+        failure or its playback time must NEVER affect or delay the main run (which
+        keeps its own final TTS_END for the real answer).
+        """
+        try:
+            mime, audio = await self.tts_backend.synthesize(text, "ru")
+            audio_id = self.audio_server.put(audio, mime)
+            _ext, url = tts_url(self.public_base_url, audio_id, mime)
+            logger.info(f"{self.name}: 🗣️ filler announce: {text!r} -> {url}")
+            if self.send_announcement is not None:
+                await self.send_announcement(media_id=url, timeout=30.0, text=text)
+        except Exception as e:
+            logger.error(f"{self.name}: filler announce failed: {e}")
 
     async def _finish_capture(self, reason: str) -> None:
         """End a manual capture run: return the buffered PCM as WAV bytes, end the run.

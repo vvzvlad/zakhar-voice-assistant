@@ -192,10 +192,13 @@ button{font-family:inherit;}
 .z-wfbar{display:flex;height:13px;border-radius:3px;overflow:hidden;background:var(--line2);}
 .z-wfbar span{height:100%;}
 .z-wfax{display:flex;font-family:var(--mono);font-size:8.5px;line-height:1;font-weight:600;}
-.z-wfax span{text-align:center;overflow:hidden;white-space:nowrap;padding:0 1px;}
-/* Last segment is usually the smallest (tts): let its label overflow left and
-   pin to the right edge so the final value is never clipped. Skip when it is the
-   only segment (e.g. the "no speech" empty row), which should stay centered. */
+/* min-width:max-content keeps each label at least as wide as its text, so a
+   number under a narrow segment is never clipped; flex then nudges neighbours
+   apart instead of overlapping. Labels stay roughly under their segment. */
+.z-wfax span{text-align:center;overflow:visible;white-space:nowrap;padding:0 2px;min-width:max-content;}
+/* Last segment is usually the smallest (tts): pin its label to the right edge so
+   it tucks against the bar end. Skip when it is the only segment (e.g. the
+   "no speech" empty row), which should stay centered. */
 .z-wfax span:last-child:not(:first-child){overflow:visible;text-align:right;}
 
 /* ── Filters ────────────────────────────────────────────── */

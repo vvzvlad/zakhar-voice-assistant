@@ -112,6 +112,14 @@ def _tool_call(name, arguments_json):
     }
 
 
+def _tool_call_with_content(name, arguments_json, content):
+    """A tool-call round that ALSO carries non-empty spoken content (the persona's
+    'I'll go check it' filler line next to the tool request)."""
+    resp = _tool_call(name, arguments_json)
+    resp["choices"][0]["message"]["content"] = content
+    return resp
+
+
 def _http_status_error(status_code, json_body=None):
     """Build an httpx.HTTPStatusError carrying a Response with the given status."""
     request = httpx.Request("POST", "https://llm.test/chat")
@@ -359,5 +367,94 @@ async def test_malformed_tool_args_degrade_to_empty_dict(tmp_path):
         _final("Готово."),
     ])
     result = await _call(backend, hub, "включи свет", _core(tmp_path))
+    assert hub.calls == [("set_light", {})]
+    assert result == processing_response("Готово.")
+
+
+async def test_on_filler_called_for_round_with_content_and_tool_calls(tmp_path):
+    # A tool-requesting round that ALSO carries spoken content -> on_filler is invoked
+    # once with (content, [tool_name]); the final reply is still returned correctly.
+    hub = StubHub(tools=[SET_LIGHT_TOOL])
+    backend = FakeLlmBackend([
+        _tool_call_with_content("set_light", "{}", "Щас гляну…"),
+        _final("Готово."),
+    ])
+
+    seen = []  # records (content, tool_names) per callback invocation
+
+    async def recorder(content, tool_names):
+        seen.append((content, tool_names))
+
+    result = await call_llm_api(
+        backend, hub, "включи свет",
+        core=_core(tmp_path), llm_cfg=LlmConfig(max_tool_rounds=MAX_TOOL_ROUNDS),
+        on_filler=recorder,
+    )
+
+    assert seen == [("Щас гляну…", ["set_light"])]
+    assert result == processing_response("Готово.")
+
+
+async def test_on_filler_not_called_without_tool_calls(tmp_path):
+    # A plain final answer (no tool_calls) must NOT invoke on_filler.
+    hub = StubHub(tools=[SET_LIGHT_TOOL])
+    backend = FakeLlmBackend([_final("Привет, мясной мешок.")])
+
+    seen = []
+
+    async def recorder(content, tool_names):
+        seen.append((content, tool_names))
+
+    result = await call_llm_api(
+        backend, hub, "привет",
+        core=_core(tmp_path), llm_cfg=LlmConfig(max_tool_rounds=MAX_TOOL_ROUNDS),
+        on_filler=recorder,
+    )
+
+    assert seen == []
+    assert result == processing_response("Привет, мясной мешок.")
+
+
+async def test_on_filler_not_called_when_content_empty(tmp_path):
+    # A tool-call round with no spoken content (content=None) must NOT invoke on_filler.
+    hub = StubHub(tools=[SET_LIGHT_TOOL])
+    backend = FakeLlmBackend([
+        _tool_call("set_light", "{}"),
+        _final("Готово."),
+    ])
+
+    seen = []
+
+    async def recorder(content, tool_names):
+        seen.append((content, tool_names))
+
+    result = await call_llm_api(
+        backend, hub, "включи свет",
+        core=_core(tmp_path), llm_cfg=LlmConfig(max_tool_rounds=MAX_TOOL_ROUNDS),
+        on_filler=recorder,
+    )
+
+    assert seen == []
+    assert result == processing_response("Готово.")
+
+
+async def test_on_filler_failure_does_not_break_loop(tmp_path):
+    # A callback that raises must be swallowed: the loop still runs the tool and
+    # returns the final reply.
+    hub = StubHub(tools=[SET_LIGHT_TOOL])
+    backend = FakeLlmBackend([
+        _tool_call_with_content("set_light", "{}", "Щас гляну…"),
+        _final("Готово."),
+    ])
+
+    async def boom(content, tool_names):
+        raise RuntimeError("filler boom")
+
+    result = await call_llm_api(
+        backend, hub, "включи свет",
+        core=_core(tmp_path), llm_cfg=LlmConfig(max_tool_rounds=MAX_TOOL_ROUNDS),
+        on_filler=boom,
+    )
+
     assert hub.calls == [("set_light", {})]
     assert result == processing_response("Готово.")

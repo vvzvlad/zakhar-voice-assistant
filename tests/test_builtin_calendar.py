@@ -875,7 +875,67 @@ async def test_get_today_events_formats_text():
 
     out = await source.call("get_today_events", {})
     assert "Standup" in out
-    assert "2026-06-08T10:00:00..2026-06-08T10:30:00" in out
+    assert "понедельник, 8 июня 2026, 10:00–10:30" in out
+
+
+async def test_all_day_single_day_event_collapses():
+    # All-day events carry an exclusive DTEND (2026-06-14 == day after 06-13), so a
+    # single-day all-day event must collapse to just the start date, not span two days.
+    client = MagicMock(spec=CalendarClient)
+    client.get_week_events.return_value = [
+        {
+            "uid": "a1",
+            "summary": "ДР Хлои",
+            "start": "2026-06-13",
+            "end": "2026-06-14",
+            "location": "",
+        }
+    ]
+    source = BuiltinMcpSource("calendar", build_calendar_server(client))
+    await source.start()
+
+    out = await source.call("get_week_events", {})
+    assert "ДР Хлои — суббота, 13 июня 2026, весь день" in out
+
+
+async def test_all_day_multi_day_event_spans():
+    # Exclusive end 06-16 -> inclusive end 06-15: a real multi-day all-day span.
+    client = MagicMock(spec=CalendarClient)
+    client.get_week_events.return_value = [
+        {
+            "uid": "a2",
+            "summary": "Отпуск",
+            "start": "2026-06-13",
+            "end": "2026-06-16",
+            "location": "",
+        }
+    ]
+    source = BuiltinMcpSource("calendar", build_calendar_server(client))
+    await source.start()
+
+    out = await source.call("get_week_events", {})
+    # Both endpoints carry the year (per _ru_date), so the inclusive span reads in full.
+    assert "суббота, 13 июня 2026 – понедельник, 15 июня 2026, весь день" in out
+
+
+async def test_timed_event_no_timezone_conversion():
+    # A tz-aware start (20:00+03:00) must render as 20:00 — the wall-clock time the user
+    # set — with no conversion to UTC or any other zone.
+    client = MagicMock(spec=CalendarClient)
+    client.get_week_events.return_value = [
+        {
+            "uid": "a3",
+            "summary": "Счётчики",
+            "start": "2026-06-15T20:00:00+03:00",
+            "end": "2026-06-15T22:00:00+03:00",
+            "location": "",
+        }
+    ]
+    source = BuiltinMcpSource("calendar", build_calendar_server(client))
+    await source.start()
+
+    out = await source.call("get_week_events", {})
+    assert "понедельник, 15 июня 2026, 20:00–22:00" in out
 
 
 async def test_get_today_events_empty():

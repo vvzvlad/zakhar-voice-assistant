@@ -1,6 +1,7 @@
 """Unit tests for the SQLite run log (src.runs_store.RunsStore)."""
 
 import asyncio
+import sqlite3
 import time
 
 from src.runs_store import RunsStore, _LIST_COLS, live_row, summary_row
@@ -57,6 +58,83 @@ def test_insert_and_get_round_trip(tmp_path):
 def test_get_missing_returns_none(tmp_path):
     store = _store(tmp_path)
     assert store.get(999) is None
+    store.close()
+
+
+def test_fresh_db_has_filler_columns(tmp_path):
+    # A fresh DB must carry the filler columns straight from _CREATE_TABLE.
+    store = _store(tmp_path)
+    cols = {row["name"] for row in store._conn.execute("PRAGMA table_info(runs)")}
+    assert "filler_text" in cols
+    assert "t_filler" in cols
+    store.close()
+
+
+def test_insert_and_get_filler_fields_round_trip(tmp_path):
+    # A record carrying filler_text/t_filler persists and round-trips through get().
+    store = _store(tmp_path)
+    rid = store.insert(_rec(filler_text="Щас гляну…", t_filler=123))
+    got = store.get(rid)
+    assert got["filler_text"] == "Щас гляну…"
+    assert got["t_filler"] == 123
+    store.close()
+
+
+def test_insert_without_filler_keys_defaults_to_null(tmp_path):
+    # A record WITHOUT the filler keys still inserts fine; the columns default to NULL.
+    store = _store(tmp_path)
+    rec = _rec()  # the base record carries neither filler_text nor t_filler
+    assert "filler_text" not in rec and "t_filler" not in rec
+    rid = store.insert(rec)
+    got = store.get(rid)
+    assert got["filler_text"] is None
+    assert got["t_filler"] is None
+    store.close()
+
+
+# The pre-filler schema, used to simulate an old DB that the migration must upgrade.
+_OLD_CREATE_TABLE = """
+CREATE TABLE runs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts REAL, device TEXT, result TEXT, reason TEXT,
+  stt_text TEXT, llm_text TEXT, model TEXT, tokens INTEGER,
+  t_vad INTEGER, t_stt INTEGER, t_llm INTEGER, t_ruaccent INTEGER, t_tts INTEGER, t_total INTEGER,
+  audio_ms INTEGER, audio_bytes INTEGER, audio_fmt TEXT,
+  error_stage TEXT, error_text TEXT, rounds_json TEXT
+);
+"""
+
+
+def test_migration_adds_filler_columns_to_old_db(tmp_path):
+    # Simulate a pre-existing DB created BEFORE the filler columns: create the runs
+    # table with the old schema, then open a RunsStore over it. The migration must
+    # ALTER in the missing columns, and insert/get must round-trip the new fields.
+    path = str(tmp_path / "old.db")
+    conn = sqlite3.connect(path)
+    conn.execute(_OLD_CREATE_TABLE)
+    conn.commit()
+    conn.close()
+
+    store = RunsStore(path)
+    cols = {row["name"] for row in store._conn.execute("PRAGMA table_info(runs)")}
+    assert "filler_text" in cols
+    assert "t_filler" in cols
+
+    rid = store.insert(_rec(filler_text="Ну, погуглю…", t_filler=77))
+    got = store.get(rid)
+    assert got["filler_text"] == "Ну, погуглю…"
+    assert got["t_filler"] == 77
+    store.close()
+
+
+def test_migration_is_idempotent(tmp_path):
+    # Opening a store twice (the second time the columns already exist) must not raise:
+    # _migrate ALTERs only what's missing.
+    path = str(tmp_path / "twice.db")
+    RunsStore(path).close()
+    store = RunsStore(path)  # second open: columns already present
+    cols = {row["name"] for row in store._conn.execute("PRAGMA table_info(runs)")}
+    assert "filler_text" in cols and "t_filler" in cols
     store.close()
 
 

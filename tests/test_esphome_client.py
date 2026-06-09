@@ -497,11 +497,12 @@ async def test_manager_announce_none_with_no_online_client_is_noop():
 # --- DeviceClient._on_connect / _on_disconnect -------------------------------
 
 class _ConnectPipeline:
-    """Fake pipeline whose send_event/send_audio get rebound by _on_connect."""
+    """Fake pipeline whose send_event/send_audio/send_announcement get rebound by _on_connect."""
 
     def __init__(self):
         self.send_event = None
         self.send_audio = None
+        self.send_announcement = None
 
 
 class _ConnectCli:
@@ -529,6 +530,10 @@ class _ConnectCli:
         return None
 
     async def send_voice_assistant_audio(self, *a, **k):
+        return None
+
+    # Bound onto pipeline.send_announcement by _on_connect (early-filler channel).
+    async def send_voice_assistant_announcement_await_response(self, *a, **k):
         return None
 
     def subscribe_voice_assistant(self, *, handle_start, handle_stop, handle_audio):

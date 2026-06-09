@@ -22,8 +22,10 @@ CREATE TABLE IF NOT EXISTS runs (
   reason TEXT,
   stt_text TEXT,
   llm_text TEXT,
+  filler_text TEXT,
   model TEXT,
   tokens INTEGER,
+  t_filler INTEGER,
   t_vad INTEGER, t_stt INTEGER, t_llm INTEGER, t_ruaccent INTEGER, t_tts INTEGER, t_total INTEGER,
   audio_ms INTEGER, audio_bytes INTEGER, audio_fmt TEXT,
   error_stage TEXT, error_text TEXT,
@@ -43,15 +45,17 @@ CREATE TABLE IF NOT EXISTS run_audio (
 # Columns persisted on insert, in order. `id` autoincrements; `rounds_json` is
 # derived from rec["rounds"] separately, so it is appended last by insert().
 _INSERT_COLS = [
-    "ts", "device", "result", "reason", "stt_text", "llm_text", "model", "tokens",
-    "t_vad", "t_stt", "t_llm", "t_ruaccent", "t_tts", "t_total",
+    "ts", "device", "result", "reason", "stt_text", "llm_text", "filler_text",
+    "model", "tokens",
+    "t_vad", "t_stt", "t_llm", "t_ruaccent", "t_tts", "t_filler", "t_total",
     "audio_ms", "audio_bytes", "audio_fmt", "error_stage", "error_text",
 ]
 
 # Summary columns returned by list() (rounds_json is intentionally omitted).
 _LIST_COLS = [
-    "id", "ts", "device", "result", "reason", "stt_text", "llm_text", "tokens",
-    "t_vad", "t_stt", "t_llm", "t_ruaccent", "t_tts", "t_total",
+    "id", "ts", "device", "result", "reason", "stt_text", "llm_text", "filler_text",
+    "tokens",
+    "t_vad", "t_stt", "t_llm", "t_ruaccent", "t_tts", "t_filler", "t_total",
 ]
 
 _DAY_SECONDS = 86400
@@ -68,6 +72,19 @@ class RunsStore:
         self._conn.execute(_CREATE_TABLE)
         self._conn.execute(_CREATE_INDEX)
         self._conn.execute(_CREATE_AUDIO_TABLE)
+        self._conn.commit()
+        self._migrate()
+
+    def _migrate(self) -> None:
+        """Add columns introduced after the initial schema to a pre-existing DB.
+
+        SQLite has no 'ADD COLUMN IF NOT EXISTS', so read the live column set first
+        and ALTER only what's missing. Column names are fixed literals (not user
+        input), so the f-string interpolation is safe. Idempotent."""
+        existing = {row["name"] for row in self._conn.execute("PRAGMA table_info(runs)")}
+        for col, decl in (("filler_text", "TEXT"), ("t_filler", "INTEGER")):
+            if col not in existing:
+                self._conn.execute(f"ALTER TABLE runs ADD COLUMN {col} {decl}")
         self._conn.commit()
 
     def insert(self, rec: dict) -> int:
