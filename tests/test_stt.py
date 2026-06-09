@@ -5,7 +5,13 @@ import httpx
 import pytest
 import respx
 
-from src.stt import GROQ_STT_URL, GroqSttBackend, make_stt_backend, pcm_to_wav
+from src.stt import (
+    GROQ_STT_URL,
+    GroqSttBackend,
+    VoskSttBackend,
+    make_stt_backend,
+    pcm_to_wav,
+)
 
 
 def test_pcm_to_wav_roundtrip():
@@ -101,3 +107,74 @@ async def test_make_stt_backend_unknown_raises():
     async with httpx.AsyncClient(verify=False) as client:
         with pytest.raises(ValueError):
             make_stt_backend("nope", client)
+
+
+class _RecordingModel:
+    """Stub Vosk model that records whether a recognizer was ever built from it."""
+
+    def __init__(self):
+        self.recognizer_requested = False
+
+
+class _StubRecognizer:
+    """Stub KaldiRecognizer returning a preset FinalResult() JSON string."""
+
+    def __init__(self, final_result: str):
+        self._final_result = final_result
+        self.set_words_calls = []
+        self.accepted = None
+
+    def SetWords(self, value):  # noqa: N802 - mirror Vosk API
+        self.set_words_calls.append(value)
+
+    def AcceptWaveform(self, pcm):  # noqa: N802 - mirror Vosk API
+        self.accepted = pcm
+
+    def FinalResult(self):  # noqa: N802 - mirror Vosk API
+        return self._final_result
+
+
+async def test_vosk_empty_pcm_short_circuits_without_recognizer():
+    # Inject a stub model and a recognizer factory that flags if it is ever called.
+    model = _RecordingModel()
+    backend = VoskSttBackend("unused/path", model=model)
+
+    def _fail_factory():
+        model.recognizer_requested = True
+        raise AssertionError("recognizer must not be constructed for empty PCM")
+
+    backend._make_recognizer = _fail_factory
+
+    result = await backend.transcribe(b"")
+
+    assert result == ""
+    # The recognizer/model decode path was never entered for empty input.
+    assert model.recognizer_requested is False
+
+
+async def test_vosk_decode_extracts_and_strips_text():
+    model = _RecordingModel()
+    backend = VoskSttBackend("unused/path", model=model)
+
+    rec = _StubRecognizer('{"text": "  привет  "}')
+    backend._make_recognizer = lambda: rec
+
+    result = await backend.transcribe(b"\x01\x02" * 100)
+
+    # The "text" field is extracted and surrounding whitespace stripped.
+    assert result == "привет"
+    # The decode path actually drove the injected recognizer.
+    assert rec.accepted == b"\x01\x02" * 100
+    assert rec.set_words_calls == [False]
+
+
+async def test_vosk_decode_missing_text_key_returns_empty():
+    model = _RecordingModel()
+    backend = VoskSttBackend("unused/path", model=model)
+
+    backend._make_recognizer = lambda: _StubRecognizer('{"result": []}')
+
+    result = await backend.transcribe(b"\x01\x02" * 100)
+
+    # No "text" key in the recognizer result -> empty transcript.
+    assert result == ""

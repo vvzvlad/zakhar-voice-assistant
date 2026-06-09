@@ -37,6 +37,34 @@ def load_or_create_config() -> dict:
     return doc
 
 
+def warn_legacy_mcp(doc: dict) -> None:
+    """Warn when the deprecated 'core.mcp' key is present in the raw config doc.
+
+    The legacy single-server 'core.mcp' key was replaced by the 'core.mcp_servers'
+    list; it is silently dropped on parse. Surface that once so the drop is visible.
+    """
+    core = doc.get("core")
+    if isinstance(core, dict) and "mcp" in core:
+        logger.warning(
+            "config: legacy 'core.mcp' is ignored — add external servers under "
+            "'core.mcp_servers' (panel: Tool sources)."
+        )
+
+
+def validate_boot_config(core) -> None:
+    """Warn when the parsed config would make speakers play nothing.
+
+    Fail loudly: an empty public_base_url yields host-less TTS URLs that speakers
+    silently fail to fetch (the run otherwise logs as successful).
+    """
+    if not core.audio.public_base_url:
+        logger.warning(
+            f"audio.public_base_url is empty — speakers will receive host-less TTS "
+            f"URLs (e.g. /tts/<id>.mp3) and play nothing. Set core.audio.public_base_url "
+            f"in data/config.json (e.g. http://<this-host>:{core.audio.port})."
+        )
+
+
 async def main() -> None:
     """Build shared dependencies, start all speakers, and run until cancelled."""
     restart_event = asyncio.Event()
@@ -44,13 +72,7 @@ async def main() -> None:
 
     doc = load_or_create_config()
 
-    # The legacy single-server 'core.mcp' key was replaced by the 'core.mcp_servers'
-    # list; it is silently dropped on parse. Surface that once so the drop is visible.
-    if isinstance(doc.get("core"), dict) and "mcp" in doc["core"]:
-        logger.warning(
-            "config: legacy 'core.mcp' is ignored — add external servers under "
-            "'core.mcp_servers' (panel: Tool sources)."
-        )
+    warn_legacy_mcp(doc)
 
     core = ConfigDoc(**doc).core  # parse once to read proxy/timeout for Deps
 
@@ -76,14 +98,7 @@ async def main() -> None:
     # panel WebSocket endpoint (consumers). Cheap; always created.
     run_events = RunEventsHub()
 
-    # Fail loudly: an empty public_base_url yields host-less TTS URLs that speakers
-    # silently fail to fetch (the run otherwise logs as successful).
-    if not core.audio.public_base_url:
-        logger.warning(
-            f"audio.public_base_url is empty — speakers will receive host-less TTS "
-            f"URLs (e.g. /tts/<id>.mp3) and play nothing. Set core.audio.public_base_url "
-            f"in data/config.json (e.g. http://<this-host>:{core.audio.port})."
-        )
+    validate_boot_config(core)
 
     audio_server = AudioServer(core.audio.host, core.audio.port, core.audio.ttl)
     await audio_server.start()

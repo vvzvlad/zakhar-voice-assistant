@@ -4,6 +4,7 @@ import SchemaForm, { schemaNeedsRestart } from "../components/SchemaForm.jsx";
 import { useAppData } from "../appData.jsx";
 import { useStageForm, errorLines } from "../useStageForm.js";
 import { getOptions } from "../api.js";
+import { VAD_PRESETS, matchPreset } from "../vadPresets.js";
 
 function Card({ title, sub, children, foot }) {
   return <div className="z-card">
@@ -64,20 +65,7 @@ export function TTS() {
 }
 
 // ── VAD (core sub-section) ────────────────────────────────────────────────
-// Frontend-only presets that map to silence_ms / min_speech_ms macros. These are
-// NOT a backend field — just a convenience that nudges two real fields together.
-const VAD_PRESETS = {
-  Fast: { silence_ms: 500, min_speech_ms: 150 },
-  Balanced: { silence_ms: 800, min_speech_ms: 200 },
-  Patient: { silence_ms: 1200, min_speech_ms: 300 },
-};
-
-function matchPreset(v) {
-  for (const [name, p] of Object.entries(VAD_PRESETS)) {
-    if (p.silence_ms === v.silence_ms && p.min_speech_ms === v.min_speech_ms) return name;
-  }
-  return null;
-}
+// VAD_PRESETS and matchPreset live in ../vadPresets.js (extracted for unit tests).
 
 export function VAD() {
   const { catalog, patch } = useAppData();

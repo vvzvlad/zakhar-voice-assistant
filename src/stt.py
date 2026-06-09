@@ -95,18 +95,25 @@ class VoskSttBackend(SttBackend):
     blocking C code, so it runs in a worker thread.
     """
 
-    def __init__(self, model_path: str):
-        # Imported lazily so the heavy dependency/model are only required when the
+    def __init__(self, model_path: str, *, model=None):
+        # The model is injectable for testing. When None (production path), it is
+        # loaded lazily so the heavy dependency/model are only required when the
         # Vosk backend is actually selected at runtime (never in tests/CI).
-        from vosk import Model, SetLogLevel
+        if model is None:
+            from vosk import Model, SetLogLevel
 
-        SetLogLevel(-1)
-        self._model = Model(model_path)  # fail fast if the dir is missing
+            SetLogLevel(-1)
+            model = Model(model_path)  # fail fast if the dir is missing
+        self._model = model
 
-    def _decode(self, pcm: bytes) -> str:
+    def _make_recognizer(self):
+        """Build a KaldiRecognizer for the shared model (overridable in tests)."""
         from vosk import KaldiRecognizer
 
-        rec = KaldiRecognizer(self._model, 16000)
+        return KaldiRecognizer(self._model, 16000)
+
+    def _decode(self, pcm: bytes) -> str:
+        rec = self._make_recognizer()
         rec.SetWords(False)
         rec.AcceptWaveform(pcm)
         return json.loads(rec.FinalResult()).get("text", "").strip()

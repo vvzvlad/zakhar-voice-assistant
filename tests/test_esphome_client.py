@@ -341,3 +341,285 @@ async def test_reconfigure_noop_when_unchanged(monkeypatch):
     await mgr.reconfigure()   # config unchanged
     assert mgr.clients == [existing]
     assert existing.started is False and existing.stopped is False  # untouched
+
+
+# --- DeviceManager.statuses --------------------------------------------------
+
+class _StatusClient:
+    """Minimal client exposing the .cfg.name/.cfg.host/.online statuses() reads."""
+
+    def __init__(self, name, host, online):
+        self.cfg = types.SimpleNamespace(name=name, host=host)
+        self.online = online
+
+
+def test_statuses_reports_each_client_in_order():
+    a = _StatusClient("a", "10.0.0.1", online=True)
+    b = _StatusClient("b", "10.0.0.2", online=False)
+    mgr = _manager([a, b])
+    # One dict per client, in client order, carrying name/host/online verbatim.
+    assert mgr.statuses() == [
+        {"name": "a", "host": "10.0.0.1", "online": True},
+        {"name": "b", "host": "10.0.0.2", "online": False},
+    ]
+
+
+def test_statuses_empty_client_list_is_empty():
+    assert _manager([]).statuses() == []
+
+
+# --- DeviceClient.announce ----------------------------------------------------
+
+class _AnnounceTTS:
+    """Fake tts_backend recording synthesize() calls, returning (mime, audio)."""
+
+    def __init__(self, mime="audio/mpeg", audio=b"MP3DATA"):
+        self.calls = []  # (text, lang)
+        self._mime = mime
+        self._audio = audio
+
+    async def synthesize(self, text, lang):
+        self.calls.append((text, lang))
+        return self._mime, self._audio
+
+
+class _AnnounceAudioServer:
+    """Fake audio_server recording put(data, mime) and returning a fixed id."""
+
+    def __init__(self, audio_id="aud-123"):
+        self.calls = []  # (data, mime)
+        self._id = audio_id
+
+    def put(self, data, mime):
+        self.calls.append((data, mime))
+        return self._id
+
+
+class _AnnouncePipeline:
+    """Fake pipeline bundling the announce-path dependencies."""
+
+    def __init__(self, tts, audio_server, base_url):
+        self.tts_backend = tts
+        self.audio_server = audio_server
+        self.public_base_url = base_url
+
+
+class _AnnounceCli:
+    """Fake APIClient recording the announcement call kwargs."""
+
+    def __init__(self):
+        self.announcements = []  # dict of kwargs
+
+    async def send_voice_assistant_announcement_await_response(
+        self, media_id, timeout, text
+    ):
+        self.announcements.append(
+            {"media_id": media_id, "timeout": timeout, "text": text}
+        )
+
+
+def _announce_client(name="dev", *, online=True, mime="audio/mpeg",
+                     audio=b"MP3DATA", audio_id="aud-123",
+                     base_url="http://host:8080"):
+    """Build a DeviceClient via __new__ wired with the announce fakes."""
+    from src.esphome_client import DeviceClient
+    c = DeviceClient.__new__(DeviceClient)
+    c.cfg = _Cfg(name)
+    c.online = online
+    c.cli = _AnnounceCli()
+    c.pipeline = _AnnouncePipeline(
+        _AnnounceTTS(mime=mime, audio=audio),
+        _AnnounceAudioServer(audio_id=audio_id),
+        base_url,
+    )
+    return c
+
+
+async def test_announce_synthesizes_caches_and_plays():
+    c = _announce_client(mime="audio/mpeg", audio=b"MP3DATA",
+                         audio_id="aud-123", base_url="http://host:8080")
+    await c.announce("привет")
+    # Synthesized at the device language with the announce text.
+    assert c.pipeline.tts_backend.calls == [("привет", "ru")]
+    # Cached with the SAME mime the synthesizer returned, and the audio bytes.
+    assert c.pipeline.audio_server.calls == [(b"MP3DATA", "audio/mpeg")]
+    # The announcement plays the tts_url-built URL (mp3 ext for audio/mpeg).
+    assert c.cli.announcements == [{
+        "media_id": "http://host:8080/tts/aud-123.mp3",
+        "timeout": 30.0,
+        "text": "привет",
+    }]
+
+
+async def test_announce_mime_drives_extension_and_put():
+    # A wav mime must flow through to put() and shape the URL extension, proving
+    # the announce path doesn't hardcode mp3.
+    c = _announce_client(mime="audio/wav", audio=b"WAVDATA",
+                         audio_id="aud-9", base_url="http://host:8080/")
+    await c.announce("hi")
+    assert c.pipeline.audio_server.calls == [(b"WAVDATA", "audio/wav")]
+    assert c.cli.announcements[0]["media_id"] == "http://host:8080/tts/aud-9.wav"
+
+
+async def test_announce_offline_raises_without_synthesizing():
+    c = _announce_client(online=False)
+    with pytest.raises(RuntimeError):
+        await c.announce("hi")
+    # The offline guard must short-circuit before any synthesis / playback.
+    assert c.pipeline.tts_backend.calls == []
+    assert c.pipeline.audio_server.calls == []
+    assert c.cli.announcements == []
+
+
+# --- DeviceManager.announce routing ------------------------------------------
+
+class _MgrAnnounceClient:
+    """Fake DeviceClient for DeviceManager.announce routing tests."""
+
+    def __init__(self, name, online=True):
+        self.cfg = _Cfg(name)
+        self.online = online
+        self.announced = []  # text
+
+    async def announce(self, text):
+        self.announced.append(text)
+
+
+async def test_manager_announce_none_with_no_online_client_is_noop():
+    # device_name=None and every client offline -> no client.announce, no raise.
+    a = _MgrAnnounceClient("a", online=False)
+    b = _MgrAnnounceClient("b", online=False)
+    mgr = _manager([a, b])
+    await mgr.announce(None, "hi")  # must not raise
+    assert a.announced == [] and b.announced == []
+
+
+# --- DeviceClient._on_connect / _on_disconnect -------------------------------
+
+class _ConnectPipeline:
+    """Fake pipeline whose send_event/send_audio get rebound by _on_connect."""
+
+    def __init__(self):
+        self.send_event = None
+        self.send_audio = None
+
+
+class _ConnectCli:
+    """Fake APIClient for the _on_connect path.
+
+    device_info_and_list_entities() returns (info, entities, services); set
+    `fail=True` to make it raise so the swallowed-failure branch is exercised.
+    subscribe_voice_assistant() returns a sentinel unsub token.
+    """
+
+    def __init__(self, entities, *, fail=False, unsub="UNSUB"):
+        self._entities = entities
+        self._fail = fail
+        self._unsub = unsub
+        self.subscribed = False
+
+    async def device_info_and_list_entities(self):
+        if self._fail:
+            raise RuntimeError("device_info boom")
+        info = types.SimpleNamespace(name="Zakhar", esphome_version="2024.1")
+        return info, self._entities, []
+
+    # Bound onto pipeline.send_event/send_audio by _on_connect.
+    async def send_voice_assistant_event(self, *a, **k):
+        return None
+
+    async def send_voice_assistant_audio(self, *a, **k):
+        return None
+
+    def subscribe_voice_assistant(self, *, handle_start, handle_stop, handle_audio):
+        self.subscribed = True
+        return self._unsub
+
+
+def _connect_client(name="dev", *, entities=None, fail=False, unsub="UNSUB"):
+    """Build a DeviceClient via __new__ wired for _on_connect/_on_disconnect."""
+    from src.esphome_client import DeviceClient
+    c = DeviceClient.__new__(DeviceClient)
+    c.cfg = _Cfg(name)
+    c.online = False
+    c._unsub = None
+    c._capture_button_key = None
+    c._capture_seconds_key = None
+    c.pipeline = _ConnectPipeline()
+    c.cli = _ConnectCli(entities if entities is not None else [], fail=fail, unsub=unsub)
+    return c
+
+
+async def test_on_connect_wires_subscribes_and_discovers_keys():
+    ents = [
+        _Ent("zakhar_capture_seconds", 22),
+        _Ent("zakhar_capture_sample", 11),
+    ]
+    c = _connect_client(entities=ents, unsub="TOKEN")
+    await c._on_connect()
+    # Emitters rebound to the live connection's send methods.
+    assert c.pipeline.send_event == c.cli.send_voice_assistant_event
+    assert c.pipeline.send_audio == c.cli.send_voice_assistant_audio
+    # Subscribed and the unsub token retained.
+    assert c.cli.subscribed is True
+    assert c._unsub == "TOKEN"
+    # Capture keys discovered from the entity list.
+    assert c._capture_button_key == 11
+    assert c._capture_seconds_key == 22
+    assert c.online is True
+
+
+async def test_on_connect_swallows_device_info_failure_but_subscribes():
+    # A transient device_info failure must NOT leave the speaker unsubscribed/offline.
+    c = _connect_client(fail=True, unsub="TOKEN")
+    await c._on_connect()  # must not raise
+    assert c.cli.subscribed is True
+    assert c._unsub == "TOKEN"
+    assert c.online is True
+    # Discovery never ran (the failing call aborted before it), keys stay None.
+    assert c._capture_button_key is None and c._capture_seconds_key is None
+
+
+async def test_on_disconnect_clears_unsub_and_online():
+    c = _connect_client()
+    c._unsub = "TOKEN"
+    c.online = True
+    await c._on_disconnect(expected=False)
+    assert c._unsub is None
+    assert c.online is False
+
+
+# --- DeviceClient.stop failure isolation -------------------------------------
+
+class _StopReconnect:
+    def __init__(self, fail=False):
+        self.fail = fail
+        self.stopped = False
+
+    async def stop(self):
+        self.stopped = True
+        if self.fail:
+            raise RuntimeError("reconnect.stop boom")
+
+
+class _StopCli:
+    def __init__(self, fail=False):
+        self.fail = fail
+        self.disconnect_calls = []  # force kwarg
+
+    async def disconnect(self, force=False):
+        self.disconnect_calls.append(force)
+        if self.fail:
+            raise RuntimeError("disconnect boom")
+
+
+async def test_stop_swallows_failures_and_still_disconnects():
+    from src.esphome_client import DeviceClient
+    c = DeviceClient.__new__(DeviceClient)
+    c.cfg = _Cfg("dev")
+    c.reconnect = _StopReconnect(fail=True)
+    c.cli = _StopCli(fail=True)
+    await c.stop()  # neither failure may propagate
+    # disconnect(force=True) is attempted even after reconnect.stop raised.
+    assert c.reconnect.stopped is True
+    assert c.cli.disconnect_calls == [True]

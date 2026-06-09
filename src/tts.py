@@ -91,15 +91,25 @@ class PiperTtsBackend(TtsBackend):
     transcoded to MP3 (audio/mpeg) because the speaker firmware can't decode WAV.
     """
 
-    def __init__(self, voice_path: str, sentence_silence: float = 0.4):
-        # Imported lazily so the heavy dependency/model are only required when the
-        # Piper backend is actually selected at runtime (never in tests/CI).
-        from piper import PiperVoice
+    def __init__(self, voice_path: str | None = None, *, sentence_silence: float = 0.4, voice=None):
+        # The loaded voice is injectable so _synth can be exercised in CI without
+        # the heavy model load. Production still passes voice_path and gets the
+        # real PiperVoice.load(...) path; voice is only used by tests/from_voice.
+        if voice is None:
+            # Imported lazily so the heavy dependency/model are only required when
+            # the Piper backend is actually selected at runtime (never in tests/CI).
+            from piper import PiperVoice
 
-        # The config json sits next to the onnx at <path>.json.
-        self._voice = PiperVoice.load(voice_path, voice_path + ".json")
+            # The config json sits next to the onnx at <path>.json.
+            voice = PiperVoice.load(voice_path, voice_path + ".json")
+            logger.info(f"Piper TTS voice loaded: {voice_path}")
+        self._voice = voice
         self._sentence_silence = max(0.0, float(sentence_silence))
-        logger.info(f"Piper TTS voice loaded: {voice_path}")
+
+    @classmethod
+    def from_voice(cls, voice, *, sentence_silence: float = 0.4) -> "PiperTtsBackend":
+        """Build a backend around an already-loaded voice (skips PiperVoice.load)."""
+        return cls(voice=voice, sentence_silence=sentence_silence)
 
     def _synth(self, text: str) -> bytes:
         sentences = split_sentences(text)

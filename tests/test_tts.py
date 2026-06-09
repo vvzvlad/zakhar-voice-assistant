@@ -6,8 +6,10 @@ import pytest
 import respx
 
 from src.tts import (
+    PiperTtsBackend,
     TeraTtsHttpBackend,
     YandexTtsBackend,
+    _decode_v3_audio,
     split_sentences,
     wav_to_mp3,
     yandex_stress_markup,
@@ -172,3 +174,134 @@ async def test_teratts_synthesize_raises_on_non_2xx():
         backend = TeraTtsHttpBackend("http://tera.local", client, timeout=10)
         with pytest.raises(httpx.HTTPStatusError):
             await backend.synthesize("hi", "ru")
+
+
+# --- Piper _synth tests (inject a stub voice; no real model load) -----------
+
+_STUB_RATE = 22050
+_STUB_WIDTH = 2  # 16-bit
+_STUB_CHANNELS = 1
+
+
+class _StubVoice:
+    """Stub PiperVoice. synthesize_wav(sentence, wav_file) writes a tiny WAV
+    whose frame count is taken from a per-sentence map; sentences in `raises`
+    raise to drive the `except Exception: continue` path. Unknown sentences
+    write a default number of frames."""
+
+    def __init__(self, frames_for=None, raises=(), default_frames=10):
+        self.frames_for = frames_for or {}
+        self.raises = set(raises)
+        self.default_frames = default_frames
+
+    def synthesize_wav(self, sentence, wav_file):
+        if sentence in self.raises:
+            raise RuntimeError("unpronounceable")
+        n = self.frames_for.get(sentence, self.default_frames)
+        wav_file.setnchannels(_STUB_CHANNELS)
+        wav_file.setsampwidth(_STUB_WIDTH)
+        wav_file.setframerate(_STUB_RATE)
+        # Non-silent marker bytes so real audio is distinguishable from padding.
+        wav_file.writeframes(b"\x11\x22" * n)
+
+
+def _synth_wav(backend, monkeypatch, text):
+    """Run _synth but capture the raw WAV instead of the MP3 transcode, so the
+    silence padding / frame alignment is observable at the byte level."""
+    monkeypatch.setattr("src.tts.wav_to_mp3", lambda wav_bytes, **kw: wav_bytes)
+    return backend._synth(text)
+
+
+def test_synth_silence_padding_is_whole_frames_and_off_by_value(monkeypatch):
+    # Two short sentences; compare 0.4s vs 0.0s sentence_silence. The only
+    # difference must be exactly one inter-sentence silence gap of
+    # int(framerate*0.4) whole frames.
+    text = "Раз. Два."
+    voice0 = _StubVoice(default_frames=5)
+    voice4 = _StubVoice(default_frames=5)
+    b0 = PiperTtsBackend.from_voice(voice0, sentence_silence=0.0)
+    b4 = PiperTtsBackend.from_voice(voice4, sentence_silence=0.4)
+
+    wav0 = _synth_wav(b0, monkeypatch, text)
+    wav4 = _synth_wav(b4, monkeypatch, text)
+
+    with wave.open(io.BytesIO(wav0), "rb") as r0:
+        rate = r0.getframerate()
+        width, ch = r0.getsampwidth(), r0.getnchannels()
+        data0 = r0.readframes(r0.getnframes())
+    with wave.open(io.BytesIO(wav4), "rb") as r4:
+        data4 = r4.readframes(r4.getnframes())
+
+    frame = width * ch
+    expected_silence_bytes = int(rate * 0.4) * frame
+    assert len(data4) - len(data0) == expected_silence_bytes
+    # The extra bytes are a whole number of frames (no misalignment).
+    assert (len(data4) - len(data0)) % frame == 0
+    # And they are actual silence (all zero), inserted between the two sentences.
+    assert data4[: len(b"\x11\x22" * 5)] == data0[: len(b"\x11\x22" * 5)]
+    silence = data4[len(b"\x11\x22" * 5) : len(b"\x11\x22" * 5) + expected_silence_bytes]
+    assert silence == b"\x00" * expected_silence_bytes
+
+
+def test_synth_all_unpronounceable_returns_valid_silent_clip(monkeypatch):
+    # Every fragment raises -> except/continue path for all, framerate stays None
+    # -> 22050/1/16 fallback fires. Must yield a parseable empty-but-valid WAV.
+    text = "Раз. Два."
+    voice = _StubVoice(raises={"Раз.", "Два."})
+    backend = PiperTtsBackend.from_voice(voice, sentence_silence=0.4)
+
+    wav = _synth_wav(backend, monkeypatch, text)
+    with wave.open(io.BytesIO(wav), "rb") as r:
+        assert r.getframerate() == 22050
+        assert r.getnchannels() == 1
+        assert r.getsampwidth() == 2
+        assert r.getnframes() == 0  # nothing pronounceable -> silent (empty) clip
+
+
+def test_synth_empty_frames_fragment_contributes_no_gap(monkeypatch):
+    # One real sentence + one zero-frame sentence. The empty one must be skipped
+    # before any silence gap is added (the `if not frames: continue` guard), so
+    # the output equals exactly the single real sentence with no padding.
+    text = "Раз. Два."
+    real_frames = 7
+    voice = _StubVoice(frames_for={"Раз.": real_frames, "Два.": 0})
+    backend = PiperTtsBackend.from_voice(voice, sentence_silence=0.4)
+
+    wav = _synth_wav(backend, monkeypatch, text)
+    with wave.open(io.BytesIO(wav), "rb") as r:
+        data = r.readframes(r.getnframes())
+    # Exactly the real sentence's audio, no silence gap appended for the empty one.
+    assert data == b"\x11\x22" * real_frames
+
+
+def test_decode_v3_audio_ndjson_multi_chunk_concatenation():
+    import base64
+    import json
+
+    a, b = b"first-chunk", b"second-chunk"
+    line1 = json.dumps({"result": {"audioChunk": {"data": base64.b64encode(a).decode()}}})
+    line2 = json.dumps({"result": {"audioChunk": {"data": base64.b64encode(b).decode()}}})
+    body = line1 + "\n" + line2
+    assert _decode_v3_audio(body) == a + b
+
+
+def test_decode_v3_audio_error_object_raises_runtimeerror():
+    import json
+
+    body = json.dumps({"error": {"message": "quota"}})
+    with pytest.raises(RuntimeError) as exc:
+        _decode_v3_audio(body)
+    # The payload must surface, not be swallowed into empty audio.
+    assert "quota" in str(exc.value)
+
+
+def test_decode_v3_audio_json_array_of_objects_accepted():
+    import base64
+    import json
+
+    a, b = b"chunkA", b"chunkB"
+    body = json.dumps([
+        {"result": {"audioChunk": {"data": base64.b64encode(a).decode()}}},
+        {"result": {"audioChunk": {"data": base64.b64encode(b).decode()}}},
+    ])
+    assert _decode_v3_audio(body) == a + b
