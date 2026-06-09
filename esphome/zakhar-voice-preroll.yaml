@@ -1,0 +1,158 @@
+# ESPHome config for the HA Voice PE (ESP32-S3) with the custom "Захар" wake word
+# AND the PRE-ROLL voice_assistant fork — say «Захар <команда>» in ONE continuous
+# breath, no waiting for the confirmation beep.
+#
+# This is zakhar-voice.yaml + two additions:
+#   1) external_components: swap in the patched `voice_assistant` (zakhar-preroll/).
+#   2) voice_assistant: preroll_duration — how much audio BEFORE wake detection to
+#      prepend to the stream, so the server receives «Захар …» + the command as one
+#      stream (the «захар» segment is then also available for a server-side verifier).
+#
+# The stock firmware (mic, LED ring, buttons, media player, timers, OTA, improv,
+# etc.) is still pulled UNCHANGED from the official Nabu Casa package; we only
+# override the device name, Wi-Fi/API creds, the micro_wake_word model, and now the
+# voice_assistant component + preroll.
+#
+# First flash MUST be over USB-C (factory OTA creds unknown); then OTA works.
+#   esphome run zakhar-voice-preroll.yaml     # pick the USB serial port when asked
+#
+# AFTER FLASHING: the STT transcript now starts with «захар …» (the wake word is in
+# the streamed audio). The voice-assistant server must STRIP the leading wake phrase
+# before processing the command. Tune `preroll_duration` (1200–2000 ms) on hardware
+# to match v8's detection latency. See zakhar-preroll/README.md.
+#
+# NOTE: the fork is pinned to ESPHome 2026.5.x (same as home-assistant-voice@26.5.0).
+# When you bump ESPHome past 2026.5.x, the fork must be rebased (see its README).
+
+# --- Pre-roll fork: overrides the built-in voice_assistant with the patched copy ---
+external_components:
+  - source:
+      type: local
+      path: zakhar-preroll/components
+    components: [voice_assistant]
+
+packages:
+  # IMPORTANT: this inline package is declared FIRST on purpose. ESPHome appends
+  # a package's list items onto the config that is already present, so declaring
+  # our model here places "Захар" at the FRONT of micro_wake_word.models — and
+  # only the first model is enabled on a fresh flash, so "Захар" becomes the
+  # default active wake word. (Same ordering trick the official
+  # home-assistant-voice.factory.yaml uses for on_client_connected.)
+  zakhar_wake_word:
+    micro_wake_word:
+      models:
+        # Local path to the model already committed in this repo. ESPHome resolves
+        # the manifest's relative "model": "zakhar.tflite" against this file's dir,
+        # so both .json and .tflite are read straight from microWakeWord/v8/model/.
+        # (A remote github:// / raw URL fails here: ESPHome can't resolve the
+        # relative .tflite inside a manifest fetched that way.)
+        #
+        # v8 = current best, validated on a leakage-safe DEVICE eval (audio recorded
+        # through this exact Voice PE): on-device false-reject 18% (v5) -> ~5% (v8).
+        # Trained on clean (STT-filtered) synthetics + real device-tract captures, so
+        # it generalizes to what the mic + XMOS/NS-AGC pipeline actually feeds it. Its
+        # low music false-accept rate relies on the VAD pre-gate — which the stock HA
+        # Voice PE firmware ALREADY enables (`vad:` in its own micro_wake_word block,
+        # inherited here), so continuous instrumental music stays ~0 false-accepts.
+        - model: ../microWakeWord/v8/model/zakhar.json
+          id: zakhar
+          # FIELD-TUNED (after v8 over-fired in silence/noise at cutoff 0.80):
+          # cutoff 0.80 was set from a device-eval whose FAPH was measured WITH VAD
+          # (=0); it does NOT reflect bare false-positives, so on-device the KWS fired
+          # constantly (VAD masked most: "predicts 'Захар' but VAD doesn't" log spam,
+          # but vocal-music/noise leaks through). v5 felt better largely because it ran
+          # at 0.95. So we run v8 at 0.95 + window 5 (≈ the conservative okay_nabu point).
+          # Tune: lower toward 0.90 if real «захааар» starts getting missed; raise to
+          # 0.97 if it still false-fires. (Real fix = retrain with silence/AGC-floor
+          # negatives + a silence eval mode — see microWakeWord/v9/REALDATA_RUNBOOK.md.)
+          probability_cutoff: 95%
+          sliding_window_size: 5
+
+  # Official Home Assistant Voice PE firmware, pinned to a release tag.
+  # Bump the @ref to update the base firmware later.
+  home-assistant-voice: github://esphome/home-assistant-voice-pe/home-assistant-voice.yaml@26.5.0
+
+# --- Our overrides (deep-merged into the official config) ---
+
+esphome:
+  name: zakhar-voice
+  friendly_name: Zakhar Voice
+
+# Pre-roll: prepend this much pre-detection audio to the stream so «Захар <команда>»
+# arrives as one continuous utterance (deep-merged into the package's voice_assistant).
+# Set 0ms to disable. Tune 1200–2000 ms on hardware to v8's detection latency.
+voice_assistant:
+  preroll_duration: 1500ms
+
+# Bake Wi-Fi credentials in (the stock config relies on Bluetooth/serial "improv"
+# provisioning; for a headless setup hard-coding the network is more reliable).
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+# Our own API encryption key. The voice-assistant server must use this SAME key
+# in ESPHOME_DEVICES (.env) to connect after we take control.
+api:
+  encryption:
+    key: !secret api_encryption_key
+
+# --- Manual "record X seconds" capture trigger ---
+#
+# A device-side, self-timed sample capture exposed to our server over the Native
+# API. The server discovers these two template entities by their object_id
+# (`zakhar_capture_seconds`, `zakhar_capture_sample`), sets the duration, then
+# presses the button. The button runs the device's voice_assistant for the chosen
+# number of seconds with silence detection OFF, so the speaker streams mic PCM for
+# the whole window; our server records that audio in capture-only mode (no STT/LLM/
+# TTS). `voice_assistant.start`/`voice_assistant.stop` resolve against the single
+# voice_assistant instance defined by the official home-assistant-voice package
+# (the package's own on_wake_word_detected already calls voice_assistant.start, so
+# the action exists without needing an explicit id).
+#
+# PRE-ROLL CAVEAT: with preroll on, a manual capture session also begins with ~1.5 s
+# of pre-press audio prepended. For idle-room / playback captures that extra lead-in
+# is harmless (silence-trimmed downstream); if you want exact-window captures, the
+# fork exposes set_preroll_enabled(false)/(true) — gate it around start/stop once the
+# stock voice_assistant `id` is confirmed on hardware.
+#
+# IMPORTANT: the Native API transmits each entity's object_id as slugify(name),
+# NOT the YAML `id:` field. The server matches on those slugified object_ids, so
+# the names below MUST slugify to `zakhar_capture_seconds` / `zakhar_capture_sample`
+# (i.e. "Zakhar Capture Seconds" / "Zakhar Capture Sample"). The `zakhar_` prefix
+# also keeps these from clashing with the official package's own entities. The C++
+# `id:` fields stay as-is — they're referenced by `id(...)` in the lambda below.
+number:
+  - platform: template
+    name: "Zakhar Capture Seconds"
+    id: zakhar_capture_seconds
+    optimistic: true
+    min_value: 1
+    max_value: 300
+    step: 1
+    initial_value: 5
+    restore_value: true
+
+button:
+  - platform: template
+    name: "Zakhar Capture Sample"
+    id: zakhar_capture_sample
+    on_press:
+      # Stop micro_wake_word for the whole capture window. Otherwise the official
+      # package's on_wake_word_detected fires the moment the user says the wake
+      # word and calls voice_assistant.start, which aborts this manual session.
+      # Always restart it afterwards so normal on-device wake detection resumes.
+      #
+      # HARDWARE CAVEAT (verify on real hardware): the micro_wake_word.start below
+      # is our explicit wake-word recovery after voice_assistant.stop. The pinned
+      # home-assistant-voice@26.5.0 package ALSO has its own voice_assistant on_end
+      # teardown that may touch micro_wake_word (start/stop mww as part of its state
+      # machine). The two could race or double-toggle mww, so wake-word recovery
+      # after a manual capture MUST be confirmed on a real device against that exact
+      # pinned package version. This is not verifiable from the repo; do not change
+      # the action sequence without testing on hardware.
+      - micro_wake_word.stop:
+      - voice_assistant.start:
+          silence_detection: false
+      - delay: !lambda 'return (int)(id(zakhar_capture_seconds).state * 1000);'
+      - voice_assistant.stop:
+      - micro_wake_word.start:
