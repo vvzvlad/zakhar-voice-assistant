@@ -1,4 +1,10 @@
-from src.core_config import CoreConfig, McpServerConfig, PromptConfig
+from src.core_config import (
+    CalendarConfig,
+    CoreConfig,
+    McpServerConfig,
+    OpenWeatherMapConfig,
+    PromptConfig,
+)
 from src.prompt import build_system_prompt, load_system_prompt
 
 
@@ -49,3 +55,36 @@ def test_build_system_prompt_appends_mcp_server_prompts(tmp_path):
     # nothing, so there is no trailing blank block from it.
     assert "Controls the lights." in out
     assert out.rstrip().endswith("Controls the lights.")
+
+
+def test_build_system_prompt_appends_builtin_weather_and_calendar_prompts(tmp_path):
+    path = tmp_path / "system_prompt.md"
+    path.write_text("BODY <<<<<TDW>>>>>", encoding="utf-8")
+    core = CoreConfig(
+        prompt=PromptConfig(system_prompt_path=str(path)),
+        openweathermap=OpenWeatherMapConfig(prompt="WEATHER-BLOCK"),
+        calendar=CalendarConfig(prompt="CAL-BLOCK"),
+    )
+
+    out = build_system_prompt(core)
+
+    # Both built-in sources' non-empty prompts are appended.
+    assert "WEATHER-BLOCK" in out
+    assert "CAL-BLOCK" in out
+
+
+def test_build_system_prompt_skips_empty_builtin_prompts(tmp_path):
+    path = tmp_path / "system_prompt.md"
+    path.write_text("BODY <<<<<TDW>>>>>", encoding="utf-8")
+    # Weather has a prompt, calendar is empty: the empty one contributes no block, so the
+    # output ends on the weather block with no trailing blank block from the calendar.
+    core = CoreConfig(
+        prompt=PromptConfig(system_prompt_path=str(path)),
+        openweathermap=OpenWeatherMapConfig(prompt="WEATHER-BLOCK"),
+        calendar=CalendarConfig(prompt=""),
+    )
+
+    out = build_system_prompt(core)
+
+    assert "WEATHER-BLOCK" in out
+    assert out.rstrip().endswith("WEATHER-BLOCK")

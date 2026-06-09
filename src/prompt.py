@@ -45,8 +45,10 @@ def save_system_prompt(prompt_path: str, text: str) -> None:
 def build_system_prompt(core: CoreConfig) -> str:
     """Prefix SYSTEM_PROMPT with the current time-of-day and date.
 
-    Weather used to be injected here; it is now an on-demand MCP tool (see
-    src.builtin_mcp.openweathermap), so the prompt no longer makes a network call and is sync.
+    Weather DATA is an on-demand MCP tool (see src.builtin_mcp.openweathermap), so the
+    prompt no longer makes a network call and is sync. What we optionally append here is
+    each tool source's descriptive `prompt` block — external MCP servers plus the built-in
+    weather/calendar sources — same as for external MCP servers.
     """
     now = datetime.now()
     date_time_text = now.strftime("%Y-%m-%d, %H:%M")  # 2025-09-18, 14:05
@@ -57,9 +59,13 @@ def build_system_prompt(core: CoreConfig) -> str:
     system_prompt = load_system_prompt(core.prompt.system_prompt_path)
     system_prompt = system_prompt.replace("<<<<<TDW>>>>>", prefix)
 
-    # Append each external MCP server's non-empty prompt so the model learns what
-    # those servers' tools do (one block per server, blank-line separated).
+    # Append each tool source's non-empty prompt so the model learns what those
+    # tools do (one block per source, blank-line separated): external MCP servers
+    # first, then the built-in weather/calendar sources.
     extra = [s.prompt.strip() for s in core.mcp_servers if s.prompt.strip()]
+    for builtin in (core.openweathermap, core.calendar):
+        if builtin.prompt.strip():
+            extra.append(builtin.prompt.strip())
     if extra:
         system_prompt = system_prompt + "\n\n" + "\n\n".join(extra)
 

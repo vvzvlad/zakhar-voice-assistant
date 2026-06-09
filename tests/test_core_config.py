@@ -1,7 +1,13 @@
 import pytest
 from pydantic import ValidationError
 
-from src.core_config import CoreConfig, McpServerConfig, VadConfig
+from src.core_config import (
+    CalendarConfig,
+    CoreConfig,
+    McpServerConfig,
+    OpenWeatherMapConfig,
+    VadConfig,
+)
 
 
 def test_mcp_servers_accepts_list_of_entries():
@@ -43,3 +49,12 @@ def test_vad_trim_start_ms_defaults_to_200():
 def test_vad_trim_start_ms_rejects_negative():
     with pytest.raises(ValidationError):
         VadConfig(trim_start_ms=-1)
+
+
+def test_builtin_mcp_prompts_default_to_empty_and_accept_values():
+    # Built-in weather/calendar sources expose their own optional prompt block,
+    # empty by default and accepting a provided value (same as McpServerConfig.prompt).
+    assert OpenWeatherMapConfig().prompt == ""
+    assert CalendarConfig().prompt == ""
+    assert OpenWeatherMapConfig(prompt="x").prompt == "x"
+    assert CalendarConfig(prompt="y").prompt == "y"

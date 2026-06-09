@@ -42,6 +42,8 @@ class NetworkConfig(BaseModel):
 class OpenWeatherMapConfig(BaseModel):
     api_key: str = ""
     city: str = "Moscow"
+    # Appended to the system prompt to describe this built-in MCP's tools to the model.
+    prompt: str = ""
 
 
 class McpServerConfig(BaseModel):
@@ -62,6 +64,8 @@ class CalendarConfig(BaseModel):
     username: str = ""
     password: str = ""
     calendar: str = ""
+    # Appended to the system prompt to describe this built-in MCP's tools to the model.
+    prompt: str = ""
 
 
 class DeviceConfig(BaseModel):
