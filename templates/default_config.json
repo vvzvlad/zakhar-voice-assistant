@@ -14,7 +14,6 @@
     "calendar": {"url": "", "username": "", "password": "", "calendar": "", "prompt": ""},
     "esphome": {"port": 6053},
     "prompt": {"system_prompt_path": "data/system_prompt.md"},
-    "panel": {"host": "0.0.0.0", "port": 8201},
     "runs": {"enabled": true, "retention_days": 30},
     "reminders": {"enabled": true},
     "ack": {"enabled": true, "sound_path": ""},

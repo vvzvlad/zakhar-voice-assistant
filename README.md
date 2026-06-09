@@ -30,11 +30,14 @@ automatically — you never need the system Python.
 ## Configuration
 
 All config lives in a single JSON file, `data/config.json` (created on first run
-from `templates/default_config.json`; `make config` seeds it explicitly). There is
-no `.env`. Most settings apply LIVE (hot) the moment they are saved via the panel/API:
-backends, tool sources, the audio server, devices and reminders are reconfigured in place
-with no process restart. A restart is required only for the panel's own host/port — when a
-change actually needs one, the panel sets `pending_restart` and shows a restart banner.
+from `templates/default_config.json`; `make config` seeds it explicitly). The only
+env-configurable values are `PANEL_HOST` / `PANEL_PORT` (see below); everything else
+is in the JSON. ALL JSON settings apply LIVE (hot) the moment they are saved via the
+panel/API: backends, tool sources, the audio server, devices and reminders are
+reconfigured in place — there is no restart concept in the panel. The one thing NOT
+in the JSON config is the admin panel's own bind host/port: those come from the
+`PANEL_HOST` / `PANEL_PORT` environment variables (defaults `0.0.0.0` / `8201`) and
+are applied at process start.
 
 Shape (see `templates/default_config.json` for the full default):
 
@@ -48,7 +51,7 @@ Shape (see `templates/default_config.json` for the full default):
   (host / port / ttl / public_base_url), `vad` thresholds, `network.external_proxy`,
   `openweathermap` (api_key / city), `mcp_servers` (list of `{name, url, token, transport, prompt}`),
   `calendar` (url / username / password / calendar), `esphome.port`, `prompt.system_prompt_path`,
-  `panel` (host / port / allowed_origins), `runs` (enabled / retention_days),
+  `runs` (enabled / retention_days),
   `reminders` (enabled), `devices` (list of `{name, host, psk}`), `tts_timeout`, `log_level`.
 
 API keys are plain string fields in the JSON (this is a trusted-LAN service); `data/` is

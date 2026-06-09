@@ -1,6 +1,6 @@
 import React from "react";
 import { Selector, PageHeader, FormSaveBar, Seg, Field } from "../components/primitives.jsx";
-import SchemaForm, { schemaNeedsRestart } from "../components/SchemaForm.jsx";
+import SchemaForm from "../components/SchemaForm.jsx";
 import { useAppData } from "../appData.jsx";
 import { useStageForm, errorLines } from "../useStageForm.js";
 import { getOptions } from "../api.js";
@@ -34,8 +34,6 @@ function ProviderStage({ cat, title, crumb, desc }) {
     return r.options;
   };
 
-  const restart = schemaNeedsRestart(prov.schema);
-
   return <div className="z-page">
     <PageHeader title={title} crumb={crumb} desc={desc} />
     <Selector
@@ -45,7 +43,7 @@ function ProviderStage({ cat, title, crumb, desc }) {
       onChange={switchProvider}
       caption={prov.label}
     />
-    <Card title={prov.label} foot={<FormSaveBar dirty={dirty} saving={saving} onSave={save} restart={restart} errors={errorLines(err)} />}>
+    <Card title={prov.label} foot={<FormSaveBar dirty={dirty} saving={saving} onSave={save} errors={errorLines(err)} />}>
       <SchemaForm schema={prov.schema} values={draft} onChange={onChange} optionsFor={optionsFor} />
     </Card>
   </div>;
@@ -78,7 +76,6 @@ export function VAD() {
   const { draft, onChange, dirty, saving, err, save } = useStageForm(vadValues, buildPatch, patch);
 
   // Independent form for the server-side end-of-phrase confirmation chime ("блям").
-  // core.ack.* is a LIVE reconfig (no restart), so its SaveBar omits the `restart` prop.
   const ackSchema = coreSchema.$defs ? coreSchema.$defs.AckConfig : null;
   const ackValues = catalog.core.values.ack || {};
   const buildAckPatch = (draft) => ({ core: { ack: draft } });
@@ -88,7 +85,7 @@ export function VAD() {
   } = useStageForm(ackValues, buildAckPatch, patch);
 
   // Mic input: which device mic channel feeds the pipeline + input gain. core.mic.*
-  // is a LIVE reconfig (read per-chunk via the Runtime), so its SaveBar omits `restart`.
+  // is a LIVE reconfig (read per-chunk via the Runtime), applied on the next utterance.
   const micSchema = coreSchema.$defs ? coreSchema.$defs.MicConfig : null;
   const micValues = catalog.core.values.mic || {};
   const buildMicPatch = (draft) => ({ core: { mic: draft } });
@@ -115,7 +112,7 @@ export function VAD() {
       </Field>
     </Card>
     <div style={{ height: 16 }} />
-    <Card title="Advanced parameters" foot={<FormSaveBar dirty={dirty} saving={saving} onSave={save} restart errors={errorLines(err)} />}>
+    <Card title="Advanced parameters" foot={<FormSaveBar dirty={dirty} saving={saving} onSave={save} errors={errorLines(err)} />}>
       <SchemaForm schema={{ ...vadSchema, $defs: coreSchema.$defs }} root={{ ...vadSchema, $defs: coreSchema.$defs }} values={draft} onChange={onChange} />
     </Card>
     {micSchema && <>

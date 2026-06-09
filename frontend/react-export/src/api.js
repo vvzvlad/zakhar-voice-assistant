@@ -54,7 +54,6 @@ export const getOptions = (category, plugin, field) =>
 export const getPrompt = () => request("/api/prompt");
 export const putPrompt = (text) => request("/api/prompt", { method: "PUT", body: { text } });
 export const getSystem = () => request("/api/system");
-export const postRestart = () => request("/api/restart", { method: "POST" });
 export const getDevices = () => request("/api/devices");
 
 // Background capture: the recording runs as a server-side task decoupled from the

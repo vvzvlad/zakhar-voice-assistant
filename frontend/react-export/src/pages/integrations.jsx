@@ -3,7 +3,7 @@ import { Ic } from "../components/icons.jsx";
 import {
   Field, KeyInput, PageHeader, FormSaveBar, StatusPill, Pill, Modal, Stepper, Loading, Select,
 } from "../components/primitives.jsx";
-import SchemaForm, { schemaNeedsRestart } from "../components/SchemaForm.jsx";
+import SchemaForm from "../components/SchemaForm.jsx";
 import { useAppData } from "../appData.jsx";
 import { useStageForm, errorLines } from "../useStageForm.js";
 import { deref } from "../schema.js";
@@ -78,8 +78,8 @@ function SourceCard({ id, name, sub, schema, root, values, buildPatch, configure
         : <div className="z-fh">Schema unavailable.</div>}
       <ToolChips tools={live?.tools} />
     </div>
-    {/* Sources are hot-reloaded — rebuilt live on save (rebuild_tools), so no restart is needed. */}
-    <FormSaveBar dirty={dirty} saving={saving} onSave={save} restart={schemaNeedsRestart(schema)} errors={errorLines(err)} />
+    {/* Sources are hot-reloaded — rebuilt live on save (rebuild_tools). */}
+    <FormSaveBar dirty={dirty} saving={saving} onSave={save} errors={errorLines(err)} />
   </div>;
 }
 

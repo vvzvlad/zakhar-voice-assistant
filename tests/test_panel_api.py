@@ -51,16 +51,14 @@ def _svc(tmp_path):
 
 async def _client(tmp_path, **kw):
     svc = _svc(tmp_path)
-    ev = asyncio.Event()
-    srv = PanelServer(svc, "127.0.0.1", 0, version="9.9", started_at=time.time(),
-                      restart_event=ev, **kw)
+    srv = PanelServer(svc, "127.0.0.1", 0, version="9.9", started_at=time.time(), **kw)
     client = TestClient(TestServer(srv.build_app()))
     await client.start_server()
-    return client, svc, ev
+    return client, svc
 
 
 async def test_get_catalog(tmp_path):
-    client, _svc_, _ev = await _client(tmp_path)
+    client, _svc_ = await _client(tmp_path)
     try:
         resp = await client.get("/api/catalog")
         assert resp.status == 200
@@ -71,7 +69,7 @@ async def test_get_catalog(tmp_path):
 
 
 async def test_get_config(tmp_path):
-    client, _svc_, _ev = await _client(tmp_path)
+    client, _svc_ = await _client(tmp_path)
     try:
         resp = await client.get("/api/config")
         assert resp.status == 200
@@ -82,13 +80,12 @@ async def test_get_config(tmp_path):
 
 
 async def test_patch_config_valid(tmp_path):
-    client, svc, _ev = await _client(tmp_path)
+    client, svc = await _client(tmp_path)
     try:
         resp = await client.patch("/api/config",
                                   json={"core": {"context": {"max_turns": 9}}})
         assert resp.status == 200
-        # GET reflects the applied change. (pending_restart is owned by the
-        # Reconfigurator now; this test wires no reconfigurator, so it stays False.)
+        # GET reflects the applied change.
         got = await (await client.get("/api/config")).json()
         assert got["core"]["context"]["max_turns"] == 9
     finally:
@@ -96,7 +93,7 @@ async def test_patch_config_valid(tmp_path):
 
 
 async def test_patch_config_invalid_returns_422(tmp_path):
-    client, _svc_, _ev = await _client(tmp_path)
+    client, _svc_ = await _client(tmp_path)
     try:
         # vad.aggressiveness has le=3; 9 fails core validation -> ValidationError -> 422.
         resp = await client.patch("/api/config",
@@ -110,7 +107,7 @@ async def test_patch_config_invalid_returns_422(tmp_path):
 
 
 async def test_patch_config_bad_json_returns_400(tmp_path):
-    client, _svc_, _ev = await _client(tmp_path)
+    client, _svc_ = await _client(tmp_path)
     try:
         resp = await client.patch("/api/config", data="not json",
                                   headers={"Content-Type": "application/json"})
@@ -120,7 +117,7 @@ async def test_patch_config_bad_json_returns_400(tmp_path):
 
 
 async def test_patch_config_invalid_leaves_config_unchanged(tmp_path):
-    client, svc, _ev = await _client(tmp_path)
+    client, svc = await _client(tmp_path)
     try:
         # aggressiveness defaults to 2; an invalid patch must NOT persist anything.
         assert svc.document()["core"]["vad"]["aggressiveness"] == 2
@@ -134,7 +131,7 @@ async def test_patch_config_invalid_leaves_config_unchanged(tmp_path):
 
 
 async def test_patch_config_non_object_body_returns_400(tmp_path):
-    client, svc, _ev = await _client(tmp_path)
+    client, svc = await _client(tmp_path)
     try:
         for bad in ([1, 2, 3], "just a string"):
             resp = await client.patch("/api/config", json=bad)
@@ -147,7 +144,7 @@ async def test_patch_config_non_object_body_returns_400(tmp_path):
 
 
 async def test_get_options(tmp_path):
-    client, _svc_, _ev = await _client(tmp_path)
+    client, _svc_ = await _client(tmp_path)
     try:
         resp = await client.get("/api/options",
                                 params={"category": "tts", "plugin": "yandex", "field": "voice"})
@@ -160,7 +157,7 @@ async def test_get_options(tmp_path):
 
 
 async def test_options_unknown_field_returns_empty_list(tmp_path):
-    client, _svc_, _ev = await _client(tmp_path)
+    client, _svc_ = await _client(tmp_path)
     try:
         resp = await client.get("/api/options",
                                 params={"category": "tts", "plugin": "yandex", "field": "nope"})
@@ -171,7 +168,7 @@ async def test_options_unknown_field_returns_empty_list(tmp_path):
 
 
 async def test_options_missing_params_returns_400(tmp_path):
-    client, _svc_, _ev = await _client(tmp_path)
+    client, _svc_ = await _client(tmp_path)
     try:
         resp = await client.get("/api/options")
         assert resp.status == 400
@@ -181,7 +178,7 @@ async def test_options_missing_params_returns_400(tmp_path):
 
 
 async def test_options_unknown_plugin_returns_404(tmp_path):
-    client, _svc_, _ev = await _client(tmp_path)
+    client, _svc_ = await _client(tmp_path)
     try:
         resp = await client.get("/api/options",
                                 params={"category": "tts", "plugin": "nope", "field": "voice"})
@@ -192,7 +189,7 @@ async def test_options_unknown_plugin_returns_404(tmp_path):
 
 
 async def test_prompt_round_trip(tmp_path):
-    client, svc, _ev = await _client(tmp_path)
+    client, svc = await _client(tmp_path)
     try:
         resp = await client.get("/api/prompt")
         assert resp.status == 200
@@ -212,7 +209,7 @@ async def test_prompt_round_trip(tmp_path):
 
 
 async def test_put_prompt_non_object_returns_400(tmp_path):
-    client, svc, _ev = await _client(tmp_path)
+    client, svc = await _client(tmp_path)
     try:
         resp = await client.put("/api/prompt", json="x")
         assert resp.status == 400
@@ -225,7 +222,7 @@ async def test_put_prompt_non_object_returns_400(tmp_path):
 
 
 async def test_put_prompt_missing_text_returns_400(tmp_path):
-    client, _svc_, _ev = await _client(tmp_path)
+    client, _svc_ = await _client(tmp_path)
     try:
         resp = await client.put("/api/prompt", json={})
         assert resp.status == 400
@@ -237,7 +234,7 @@ async def test_put_prompt_missing_text_returns_400(tmp_path):
 
 
 async def test_cors_header_present_on_error_response(tmp_path):
-    client, _svc_, _ev = await _client(tmp_path)
+    client, _svc_ = await _client(tmp_path)
     try:
         # Default config has an empty allowlist, so error responses emit no ACAO
         # header (and never a wildcard) while status codes are unaffected.
@@ -259,14 +256,13 @@ async def test_cors_header_present_on_error_response(tmp_path):
 
 
 async def test_get_system(tmp_path):
-    client, _svc_, _ev = await _client(tmp_path)
+    client, _svc_ = await _client(tmp_path)
     try:
         resp = await client.get("/api/system")
         assert resp.status == 200
         body = await resp.json()
         assert body["version"] == "9.9"
         assert body["running"] is True
-        assert body["pending_restart"] is False
         assert body["log_level"] == "DEBUG"
         assert "started" in body
         assert isinstance(body["uptime_seconds"], int)
@@ -274,32 +270,9 @@ async def test_get_system(tmp_path):
         await client.close()
 
 
-async def test_get_system_pending_restart_true(tmp_path):
-    # A reconfigurator whose flag is set surfaces as pending_restart=True.
-    client, _svc_, _ev = await _client(tmp_path, pending_restart=lambda: True)
-    try:
-        resp = await client.get("/api/system")
-        assert resp.status == 200
-        body = await resp.json()
-        assert body["pending_restart"] is True
-    finally:
-        await client.close()
-
-
-async def test_post_restart(tmp_path):
-    client, _svc_, ev = await _client(tmp_path)
-    try:
-        resp = await client.post("/api/restart")
-        assert resp.status == 202
-        assert (await resp.json()) == {"restarting": True}
-        assert ev.is_set()
-    finally:
-        await client.close()
-
-
 async def test_get_devices(tmp_path):
     devices = [{"name": "x", "host": "y", "online": True}]
-    client, _svc_, _ev = await _client(tmp_path, device_status=lambda: devices)
+    client, _svc_ = await _client(tmp_path, device_status=lambda: devices)
     try:
         resp = await client.get("/api/devices")
         assert resp.status == 200
@@ -309,7 +282,7 @@ async def test_get_devices(tmp_path):
 
 
 async def test_get_devices_default_empty(tmp_path):
-    client, _svc_, _ev = await _client(tmp_path)
+    client, _svc_ = await _client(tmp_path)
     try:
         resp = await client.get("/api/devices")
         assert resp.status == 200
@@ -363,7 +336,7 @@ async def test_capture_start_status_result_lifecycle(tmp_path):
         await release.wait()  # hold the "recording" until the test releases it
         return wav
 
-    client, _svc_, _ev = await _client(tmp_path, device_capture=cap)
+    client, _svc_ = await _client(tmp_path, device_capture=cap)
     try:
         # Start -> 202 with the initial snapshot (state recording).
         started = await client.post("/api/capture", json={"device": "hall", "seconds": 5})
@@ -407,7 +380,7 @@ async def test_capture_result_filename_sanitizes_device(tmp_path):
     async def cap(device, seconds):
         return _wav_bytes()
 
-    client, _svc_, _ev = await _client(tmp_path, device_capture=cap)
+    client, _svc_ = await _client(tmp_path, device_capture=cap)
     try:
         started = await client.post("/api/capture", json={"device": "living room/2", "seconds": 3})
         assert started.status == 202
@@ -432,7 +405,7 @@ async def test_capture_busy_returns_409(tmp_path):
         await release.wait()
         return _wav_bytes()
 
-    client, _svc_, _ev = await _client(tmp_path, device_capture=cap)
+    client, _svc_ = await _client(tmp_path, device_capture=cap)
     try:
         first = await client.post("/api/capture", json={"device": "hall", "seconds": 5})
         assert first.status == 202
@@ -458,7 +431,7 @@ async def test_capture_failure_surfaces_via_status(tmp_path, exc, needle):
     async def cap(device, seconds):
         raise exc
 
-    client, _svc_, _ev = await _client(tmp_path, device_capture=cap)
+    client, _svc_ = await _client(tmp_path, device_capture=cap)
     try:
         started = await client.post("/api/capture", json={"device": "hall", "seconds": 5})
         assert started.status == 202
@@ -482,7 +455,7 @@ async def test_capture_empty_recording_surfaces_as_error(tmp_path):
     async def cap(device, seconds):
         raise CaptureEmptyError("capture produced no audio")
 
-    client, _svc_, _ev = await _client(tmp_path, device_capture=cap)
+    client, _svc_ = await _client(tmp_path, device_capture=cap)
     try:
         started = await client.post("/api/capture", json={"device": "hall", "seconds": 5})
         assert started.status == 202
@@ -498,7 +471,7 @@ async def test_capture_bad_seconds_returns_400(tmp_path):
     async def cap(device, seconds):
         called.append((device, seconds))
 
-    client, _svc_, _ev = await _client(tmp_path, device_capture=cap)
+    client, _svc_ = await _client(tmp_path, device_capture=cap)
     try:
         # Out of range, wrong type, missing device — all 400, capture never called.
         # The accepted range is 1..300, so 301 (and 0/negative) are rejected.
@@ -525,7 +498,7 @@ async def test_capture_max_seconds_boundary(tmp_path):
         calls.append((device, seconds))
         return _wav_bytes()
 
-    client, _svc_, _ev = await _client(tmp_path, device_capture=cap)
+    client, _svc_ = await _client(tmp_path, device_capture=cap)
     try:
         ok = await client.post("/api/capture", json={"device": "hall", "seconds": 300})
         assert ok.status == 202
@@ -541,7 +514,7 @@ async def test_capture_max_seconds_boundary(tmp_path):
 async def test_capture_endpoints_without_manager_return_503(tmp_path):
     # No device_capture wired (e.g. tests / API-only boot) -> every capture endpoint
     # returns 503.
-    client, _svc_, _ev = await _client(tmp_path)
+    client, _svc_ = await _client(tmp_path)
     try:
         assert (await client.post("/api/capture", json={"device": "h", "seconds": 5})).status == 503
         assert (await client.get("/api/capture", params={"device": "h"})).status == 503
@@ -555,7 +528,7 @@ async def test_capture_result_404_when_nothing_recorded(tmp_path):
     async def cap(device, seconds):
         return _wav_bytes()
 
-    client, _svc_, _ev = await _client(tmp_path, device_capture=cap)
+    client, _svc_ = await _client(tmp_path, device_capture=cap)
     try:
         resp = await client.get("/api/capture/result", params={"device": "hall"})
         assert resp.status == 404
@@ -570,7 +543,7 @@ async def test_get_tools(tmp_path):
         "id": "home", "kind": "http", "online": True,
         "tools": [{"name": "light.set", "description": "x"}],
     }]
-    client, _svc_, _ev = await _client(tmp_path, tool_sources=lambda: sources)
+    client, _svc_ = await _client(tmp_path, tool_sources=lambda: sources)
     try:
         resp = await client.get("/api/tools")
         assert resp.status == 200
@@ -581,7 +554,7 @@ async def test_get_tools(tmp_path):
 
 async def test_get_tools_default_empty(tmp_path):
     # No tool_sources -> empty list.
-    client, _svc_, _ev = await _client(tmp_path)
+    client, _svc_ = await _client(tmp_path)
     try:
         resp = await client.get("/api/tools")
         assert resp.status == 200
@@ -591,7 +564,7 @@ async def test_get_tools_default_empty(tmp_path):
 
 
 async def test_cors_preflight(tmp_path):
-    client, _svc_, _ev = await _client(tmp_path)
+    client, _svc_ = await _client(tmp_path)
     try:
         resp = await client.options("/api/config")
         assert resp.status == 204
@@ -602,9 +575,9 @@ async def test_cors_preflight(tmp_path):
 
 async def test_cors_allowlist_is_hardcoded_empty_never_reflects_origin(tmp_path):
     # The CORS allowlist is hardcoded empty in panel_api (_ALLOWED_ORIGINS), so NO
-    # cross-origin request is ever reflected — not even one that used to be allowlisted
-    # via the removed core.panel.allowed_origins knob. Preflight still returns 204.
-    client, _svc_, _ev = await _client(tmp_path)
+    # cross-origin request is ever reflected — it is not a config knob. Preflight
+    # still returns 204.
+    client, _svc_ = await _client(tmp_path)
     try:
         # A cross-origin GET carrying an Origin header gets NO ACAO header reflected.
         resp = await client.get("/api/config", headers={"Origin": "http://localhost:5173"})
@@ -645,7 +618,7 @@ def _seed_runs(tmp_path):
 
 async def test_get_runs_list_and_filters(tmp_path):
     store = _seed_runs(tmp_path)
-    client, _svc_, _ev = await _client(tmp_path, runs_store=store)
+    client, _svc_ = await _client(tmp_path, runs_store=store)
     try:
         resp = await client.get("/api/runs")
         assert resp.status == 200
@@ -672,7 +645,7 @@ async def test_get_runs_list_and_filters(tmp_path):
 
 async def test_get_run_by_id_and_404(tmp_path):
     store = _seed_runs(tmp_path)
-    client, _svc_, _ev = await _client(tmp_path, runs_store=store)
+    client, _svc_ = await _client(tmp_path, runs_store=store)
     try:
         # The first inserted run has id 1; it carries the parsed rounds list.
         resp = await client.get("/api/runs/1")
@@ -695,7 +668,7 @@ async def test_get_run_audio_returns_wav_inline(tmp_path):
     store = _seed_runs(tmp_path)
     wav = _wav_bytes()
     store.put_audio(1, wav, keep=100)
-    client, _svc_, _ev = await _client(tmp_path, runs_store=store)
+    client, _svc_ = await _client(tmp_path, runs_store=store)
     try:
         resp = await client.get("/api/runs/1/audio")
         assert resp.status == 200
@@ -712,7 +685,7 @@ async def test_get_run_audio_returns_wav_inline(tmp_path):
 async def test_get_run_audio_404_when_no_audio_and_400_on_bad_id(tmp_path):
     # A run without stored audio -> 404; a non-integer id -> 400.
     store = _seed_runs(tmp_path)
-    client, _svc_, _ev = await _client(tmp_path, runs_store=store)
+    client, _svc_ = await _client(tmp_path, runs_store=store)
     try:
         missing = await client.get("/api/runs/1/audio")
         assert missing.status == 404
@@ -726,7 +699,7 @@ async def test_get_run_audio_404_when_no_audio_and_400_on_bad_id(tmp_path):
 
 async def test_get_run_audio_404_without_store(tmp_path):
     # No runs_store wired -> audio endpoint returns 404.
-    client, _svc_, _ev = await _client(tmp_path)
+    client, _svc_ = await _client(tmp_path)
     try:
         resp = await client.get("/api/runs/1/audio")
         assert resp.status == 404
@@ -736,7 +709,7 @@ async def test_get_run_audio_404_without_store(tmp_path):
 
 async def test_get_metrics(tmp_path):
     store = _seed_runs(tmp_path)
-    client, _svc_, _ev = await _client(tmp_path, runs_store=store)
+    client, _svc_ = await _client(tmp_path, runs_store=store)
     try:
         resp = await client.get("/api/metrics")
         assert resp.status == 200
@@ -752,7 +725,7 @@ async def test_get_metrics(tmp_path):
 
 async def test_runs_endpoints_empty_without_store(tmp_path):
     # No runs_store -> list returns empty, metrics returns zeros, get id is 404.
-    client, _svc_, _ev = await _client(tmp_path)
+    client, _svc_ = await _client(tmp_path)
     try:
         runs = await (await client.get("/api/runs")).json()
         assert runs == {"runs": []}
@@ -772,7 +745,7 @@ async def test_runs_endpoints_empty_without_store(tmp_path):
 
 async def test_runs_stream_broadcasts_to_connected_client(tmp_path):
     hub = RunEventsHub()
-    client, _svc_, _ev = await _client(tmp_path, run_events=hub)
+    client, _svc_ = await _client(tmp_path, run_events=hub)
     try:
         ws = await client.ws_connect("/api/runs/stream")
         # Give the server a moment so the handler registers the socket.
@@ -794,7 +767,7 @@ async def test_runs_stream_broadcasts_to_connected_client(tmp_path):
 
 async def test_runs_stream_without_hub_closes_promptly(tmp_path):
     # No run_events hub on the server -> the handler closes the socket immediately.
-    client, _svc_, _ev = await _client(tmp_path)
+    client, _svc_ = await _client(tmp_path)
     try:
         ws = await client.ws_connect("/api/runs/stream")
         # The first receive should observe the close from the server side.
@@ -812,7 +785,7 @@ async def test_patch_config_value_error_returns_422_with_empty_detail(tmp_path):
     # apply() raises a *plain* ValueError (not a pydantic ValidationError) when a patch
     # selects an unknown provider — get_provider() raises ValueError("Unknown ..."). That
     # branch returns 422 with detail=[] and an "error" string, and must NOT persist.
-    client, svc, _ev = await _client(tmp_path)
+    client, svc = await _client(tmp_path)
     try:
         before = svc.document()
         # A real patch whose merged doc fails inside apply() with a bare ValueError.
@@ -833,7 +806,7 @@ async def test_patch_config_value_error_via_monkeypatched_apply(tmp_path):
     # Deterministic variant: replace the bound svc.apply with one that raises a bare
     # ValueError, independent of any specific provider. Confirms the handler maps a plain
     # ValueError to 422/detail=[] and leaves the document untouched.
-    client, svc, _ev = await _client(tmp_path)
+    client, svc = await _client(tmp_path)
     try:
         before = svc.document()
 
@@ -865,7 +838,7 @@ async def test_capture_non_object_body_returns_400_without_calling_capture(tmp_p
         called.append((device, seconds))
         return _wav_bytes()
 
-    client, _svc_, _ev = await _client(tmp_path, device_capture=cap)
+    client, _svc_ = await _client(tmp_path, device_capture=cap)
     try:
         resp = await client.post("/api/capture", json=[1, 2])
         assert resp.status == 400
@@ -900,7 +873,7 @@ async def test_get_runs_limit_is_clamped_and_falls_back(tmp_path):
     # Assert the VALUE that reached the store, not merely the status code.
     inner = _seed_runs(tmp_path)
     spy = _LimitSpyStore(inner)
-    client, _svc_, _ev = await _client(tmp_path, runs_store=spy)
+    client, _svc_ = await _client(tmp_path, runs_store=spy)
     try:
         # Non-integer limit -> fallback 100.
         r1 = await client.get("/api/runs", params={"limit": "abc"})
@@ -928,7 +901,7 @@ async def test_get_runs_limit_is_clamped_and_falls_back(tmp_path):
 async def test_get_run_bad_id_returns_400_invalid_id(tmp_path):
     # The plain /api/runs/{id} route (NOT the /audio variant) rejects a non-integer id.
     store = _seed_runs(tmp_path)
-    client, _svc_, _ev = await _client(tmp_path, runs_store=store)
+    client, _svc_ = await _client(tmp_path, runs_store=store)
     try:
         resp = await client.get("/api/runs/abc")
         assert resp.status == 400
@@ -956,7 +929,7 @@ async def test_spa_static_and_catch_all_does_not_swallow_api(tmp_path):
     # assets are served from /assets/, and the (?!api/) negative lookahead must keep
     # /api/* OUT of the SPA index so unknown API paths still 404 (JSON router 404).
     static_dir = _build_static_dir(tmp_path)
-    client, _svc_, _ev = await _client(tmp_path, static_dir=str(static_dir))
+    client, _svc_ = await _client(tmp_path, static_dir=str(static_dir))
     try:
         # (a) Root serves index.html.
         root = await client.get("/")

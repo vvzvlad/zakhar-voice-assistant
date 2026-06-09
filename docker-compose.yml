@@ -9,7 +9,8 @@
 #
 # Config lives in data/config.json INSIDE the named volume (created from
 # templates/default_config.json on first boot). Edit it there to set providers,
-# API keys, devices, etc. There is no .env / environment-based config anymore.
+# API keys, devices, etc. The only environment-tunable values are the admin
+# panel's bind host/port (PANEL_HOST / PANEL_PORT); everything else is in the JSON.
 
 volumes:
   zakhar-voice-assistant:
@@ -24,10 +25,13 @@ services:
     ports:
       # Must match core.audio.port in data/config.json (default 8200).
       - "8200:8200"                          # publish the audio server to the LAN
-      # Admin panel API + UI; must match core.panel.port (default 8201).
+      # Admin panel API + UI; must match PANEL_PORT (default 8201).
       - "8201:8201"
     environment:
-      # All app config is in data/config.json (in the volume), NOT in env vars.
+      # All app config is in data/config.json (in the volume). The only env-tunable
+      # values are the admin panel's bind host/port (applied at process start).
+      # PANEL_HOST: "0.0.0.0"
+      # PANEL_PORT: "8201"
       TZ: Europe/Moscow
     logging:
       driver: "json-file"

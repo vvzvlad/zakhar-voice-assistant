@@ -3,7 +3,7 @@
 Runs in a TRUSTED zone — there is NO authentication. The panel is driven entirely
 by ConfigService, so it carries no provider-specific knowledge: it exposes the
 catalog, the raw config document, generic patch/options endpoints, the system
-prompt file, system/version info, a restart trigger and live device status.
+prompt file, system/version info and live device status.
 
 Start/stop mirror AudioServer (AppRunner + TCPSite). CORS is restricted to the
 hardcoded `_ALLOWED_ORIGINS` allowlist (empty — see below); it never reflects a
@@ -82,10 +82,10 @@ async def _read_json(request: web.Request):
 
 class PanelServer:
     def __init__(self, svc, host, port, *, version, started_at,
-                 restart_event, device_status=None, device_capture=None,
+                 device_status=None, device_capture=None,
                  static_dir=None, runs_store=None, tool_sources=None,
-                 run_events=None, pending_restart=None):
-        # svc: ConfigService; started_at: float (time.time()); restart_event: asyncio.Event
+                 run_events=None):
+        # svc: ConfigService; started_at: float (time.time())
         # device_status: optional callable -> list[dict]; static_dir: optional path to built frontend
         # device_capture: optional async callable (device_name, seconds) -> bytes that records a
         #   manual sample and returns it as WAV bytes (DeviceManager.capture). It is run by a
@@ -95,14 +95,11 @@ class PanelServer:
         # runs_store: optional RunsStore for the observability endpoints (None -> empty/zeros)
         # tool_sources: optional zero-arg callable -> list[dict] (ToolHub.describe()), None -> []
         # run_events: optional RunEventsHub for the live WS run stream (None -> WS closes)
-        # pending_restart: optional zero-arg callable -> bool (the Reconfigurator's flag);
-        #   None -> always reports False (e.g. in tests without a reconfigurator).
         self.svc = svc
         self.host = host
         self.port = port
         self.version = version
         self.started_at = started_at
-        self.restart_event = restart_event
         self.device_status = device_status
         self.device_capture = device_capture
         # Background capture jobs: the recording runs as a server-side task so a
@@ -112,7 +109,6 @@ class PanelServer:
         self.runs_store = runs_store
         self.tool_sources = tool_sources
         self.run_events = run_events
-        self.pending_restart = pending_restart
         self._runner: web.AppRunner | None = None
 
     # --- handlers ------------------------------------------------------------
@@ -175,12 +171,7 @@ class PanelServer:
             "uptime_seconds": int(time.time() - self.started_at),
             "running": True,
             "log_level": self.svc.core.log_level,
-            "pending_restart": bool(self.pending_restart()) if self.pending_restart else False,
         })
-
-    async def _post_restart(self, request: web.Request) -> web.Response:
-        self.restart_event.set()
-        return web.json_response({"restarting": True}, status=202)
 
     async def _get_devices(self, request: web.Request) -> web.Response:
         return web.json_response(self.device_status() if self.device_status else [])
@@ -372,7 +363,6 @@ class PanelServer:
             web.get("/api/prompt", self._get_prompt),
             web.put("/api/prompt", self._put_prompt),
             web.get("/api/system", self._get_system),
-            web.post("/api/restart", self._post_restart),
             web.get("/api/devices", self._get_devices),
             web.post("/api/capture", self._post_capture),
             web.get("/api/capture", self._get_capture_status),

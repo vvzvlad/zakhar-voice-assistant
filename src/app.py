@@ -67,7 +67,6 @@ def validate_boot_config(core) -> None:
 
 async def main() -> None:
     """Build shared dependencies, start all speakers, and run until cancelled."""
-    restart_event = asyncio.Event()
     started_at = time.time()
 
     doc = load_or_create_config()
@@ -143,8 +142,8 @@ async def main() -> None:
     rt.zc = zc
     rt.manager = manager
 
-    # Hot-reload coordinator: classifies each config change and owns the
-    # pending_restart flag. Registered as a ConfigService change callback. Heavy
+    # Hot-reload coordinator: classifies each config change and applies what can be
+    # applied live. Registered as a ConfigService change callback. Heavy
     # rebuilds (e.g. backends) are queued here and drained by run_loop in the main
     # task, off the panel request task. Reuses the SAME deps bag built above.
     reconfig_queue: asyncio.Queue = asyncio.Queue()
@@ -165,17 +164,22 @@ async def main() -> None:
     panel = None
     reconfig_task = None
 
+    # The admin panel's bind host/port are the one setting NOT in the JSON config:
+    # they come from env (applied at process start), since nothing in the config
+    # requires a restart anymore.
+    panel_host = os.environ.get("PANEL_HOST", "0.0.0.0")
+    panel_port = int(os.environ.get("PANEL_PORT", "8201"))
+
     try:
         panel = PanelServer(
-            svc, core.panel.host, core.panel.port,
+            svc, panel_host, panel_port,
             version=__version__, started_at=started_at,
-            restart_event=restart_event, device_status=manager.statuses,
+            device_status=manager.statuses,
             device_capture=manager.capture,
             static_dir=static_dir if os.path.isdir(static_dir) else None,
             runs_store=runs_store,
             tool_sources=hub.describe,
             run_events=run_events,
-            pending_restart=reconf.pending_restart,
         )
         # Back-ref so the Reconfigurator can re-point the panel's runs-store at a
         # hot-swapped store. Set before the reconfig loop can run.
@@ -187,9 +191,9 @@ async def main() -> None:
         # Drain heavy reconfiguration jobs in this (main) task so blocking model
         # loads stay off the panel request task and off the event loop (to_thread).
         reconfig_task = asyncio.create_task(reconf.run_loop())
-        # Block until POST /api/restart sets the event (or the task is cancelled).
-        # docker `restart: always` brings the process back after the clean exit.
-        await restart_event.wait()
+        # There is no in-app restart trigger anymore: block on a never-fired event
+        # so the process runs until cancelled by a signal (SIGINT/SIGTERM).
+        await asyncio.Event().wait()
     except (asyncio.CancelledError, KeyboardInterrupt):
         logger.info("shutting down")
     finally:

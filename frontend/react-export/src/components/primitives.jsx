@@ -174,17 +174,17 @@ export function PageHeader({ title, desc, actions, crumb }) {
     {actions && <div className="z-ph-actions">{actions}</div>}
   </div>;
 }
-export function SaveBar({ restart, noTest }) {
+export function SaveBar({ noTest }) {
   return <div className="z-foot">
     <button className="z-btn p">Save changes</button>
     {!noTest && <button className="z-btn g"><Ic n="test" w={14} />Test connection</button>}
     <span style={{ flex: 1 }} />
-    <span className="z-dirty"><s />Unsaved{restart ? " · restart required" : ""}</span>
+    <span className="z-dirty"><s />Unsaved</span>
   </div>;
 }
 
 // Live save bar wired to real state: dirty flag, async save, and inline 422 errors.
-export function FormSaveBar({ dirty, saving, onSave, restart, errors = [] }) {
+export function FormSaveBar({ dirty, saving, onSave, errors = [] }) {
   return <>
     {errors.length > 0 && <div className="z-banner" style={{ background: "var(--bad-bg)", border: "1px solid #f3c8c8", color: "#b91c1c", margin: "0 17px 14px", borderRadius: 8 }}>
       <Ic n="restart" w={15} />
@@ -193,7 +193,7 @@ export function FormSaveBar({ dirty, saving, onSave, restart, errors = [] }) {
     <div className="z-foot">
       <button className="z-btn p" disabled={!dirty || saving} onClick={onSave}>{saving ? "Saving…" : "Save changes"}</button>
       <span style={{ flex: 1 }} />
-      {dirty && <span className="z-dirty"><s />Unsaved{restart ? " · restart required" : ""}</span>}
+      {dirty && <span className="z-dirty"><s />Unsaved</span>}
     </div>
   </>;
 }

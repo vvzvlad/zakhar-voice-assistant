@@ -79,8 +79,6 @@ def action_for(path: str) -> str:
         return "rebuild_runs"
     if path.startswith("core.devices") or path.startswith("core.esphome"):
         return "rebuild_devices"
-    if path.startswith("core.panel"):
-        return "restart"
     # stage providers
     if path.startswith("stt") or path.startswith("tts"):
         return "rebuild_backends"
@@ -89,14 +87,6 @@ def action_for(path: str) -> str:
         return "live" if leaf in _LLM_LIVE_LEAVES else "rebuild_backends"
     return "restart"
 
-
-# Actions this build can apply without a restart. The only remaining UNSUPPORTED
-# action is "restart" (panel host/port, unknown paths).
-# rebuild_backends/audio/runs/tools/http/devices/reminders are applied hot,
-# asynchronously (see ASYNC_ACTIONS / run_loop).
-SUPPORTED_ACTIONS = {"live", "logging", "rebuild_backends", "rebuild_audio",
-                     "rebuild_runs", "rebuild_tools", "rebuild_http",
-                     "rebuild_devices", "rebuild_reminders"}
 
 # Actions whose work is performed off the panel request task, in the queue-draining
 # task (run_loop -> apply_job), because they may block (model loads, socket re-bind,
@@ -122,24 +112,19 @@ def backend_categories(paths) -> set[str]:
 
 
 class Reconfigurator:
-    """Owns the runtime-side response to config changes and the pending_restart flag."""
+    """Owns the runtime-side response to config changes."""
 
     def __init__(self, runtime, deps, queue):
         self.rt = runtime
         self.deps = deps
         self.queue = queue          # asyncio.Queue drained by run_loop in the main task
-        self._pending_restart = False
-
-    def pending_restart(self) -> bool:
-        return self._pending_restart
 
     def on_config_change(self, paths) -> None:
         """ConfigService.on_change callback (SYNC, runs on the panel request task).
         Live fields are already effective through the Runtime read-through; here we
         (a) reinit logging if the level changed, (b) push live audio.ttl onto the
-        running server, (c) hand heavy/blocking rebuilds to the main-task queue, and
-        (d) decide whether anything still needs a restart. Must stay fast: no blocking
-        work and no model loads happen here."""
+        running server, and (c) hand heavy/blocking rebuilds to the main-task queue.
+        Must stay fast: no blocking work and no model loads happen here."""
         actions = {action_for(p) for p in paths}
         if "logging" in actions:
             setup_logging(self.rt.core.log_level)
@@ -149,12 +134,6 @@ class Reconfigurator:
         # Hand heavy/blocking rebuilds to the main-task queue (drained by run_loop).
         if actions & ASYNC_ACTIONS:
             self.queue.put_nowait(set(paths))
-        # A restart is still required if any change maps to an action this build
-        # cannot apply hot yet. The flag is sticky: it stays set until a real
-        # process restart.
-        self._pending_restart = self._pending_restart or any(
-            a not in SUPPORTED_ACTIONS for a in actions
-        )
 
     async def run_loop(self) -> None:
         """Drain the reconfiguration queue until cancelled, applying jobs in THIS task.
@@ -177,8 +156,8 @@ class Reconfigurator:
         """Apply all hot-reloadable actions implied by `paths`, in this (drain) task.
         Contracts (unchanged): a job carries the FACT paths changed, not a value
         snapshot; config is read at apply time (last-writer-wins). Each subsystem is
-        rebuilt independently; a failure latches pending_restart and is logged, while
-        the others still apply (apply-what-you-can)."""
+        rebuilt independently; a failure is logged, while the others still apply
+        (apply-what-you-can)."""
         actions = {action_for(p) for p in paths}
         # rebuild_http rebuilds the external client AND everything built off it
         # (cloud backends + the OpenWeatherMap tool source). When it is present in a
@@ -203,8 +182,8 @@ class Reconfigurator:
     async def _rebuild_backends(self, paths) -> None:
         """Rebuild only the affected stage backends and swap them into the runtime.
         create() may load a model (vosk/piper), so it is offloaded to a thread to
-        keep the event loop responsive. A failed rebuild keeps the old backend and
-        latches pending_restart so the operator knows the change did not take.
+        keep the event loop responsive. A failed rebuild keeps the old backend so
+        the running stage is unaffected by the change that did not take.
 
         Contracts:
         - A queued job carries the FACT that paths changed, NOT a snapshot of values;
@@ -214,9 +193,8 @@ class Reconfigurator:
           from the drain task, immediately before the dependent stage is rebuilt;
           readers (`provider.create` in the worker thread) see a consistent scalar.
         - Partial-failure policy: each category is rebuilt independently; a failing
-          `create()` keeps that stage's old backend, is logged, and latches
-          pending_restart=True, while the other affected stages are still rebuilt
-          (apply-what-you-can)."""
+          `create()` keeps that stage's old backend and is logged, while the other
+          affected stages are still rebuilt (apply-what-you-can)."""
         await self._rebuild_backend_cats(backend_categories(paths))
 
     async def _rebuild_backend_cats(self, cats) -> None:
@@ -224,7 +202,7 @@ class Reconfigurator:
         them into the runtime. Shared by path-driven rebuilds (_rebuild_backends) and the
         http rebuild (which rebuilds all cloud backends off the new client). Same
         contracts as _rebuild_backends: tts_timeout push-before-create, per-category
-        isolation, pending_restart latch on a failed create()."""
+        isolation, old backend kept on a failed create()."""
         if not cats:
             return
         svc = self.rt.svc
@@ -237,7 +215,6 @@ class Reconfigurator:
                 backend = await asyncio.to_thread(svc.create, cat)
             except Exception as e:
                 logger.error(f"hot-reload of {cat} backend failed: {e}")
-                self._pending_restart = True
                 continue
             setattr(self.rt, f"{cat}_backend", backend)
             logger.info(f"hot-reloaded {cat} backend")
@@ -255,7 +232,6 @@ class Reconfigurator:
                 f"audio re-bind to {core.audio.host}:{core.audio.port} failed: {e}; "
                 f"audio server is now DOWN until a restart"
             )
-            self._pending_restart = True
 
     async def _rebuild_runs(self) -> None:
         """Apply core.runs changes hot: create/close the SQLite runs store and re-point
@@ -289,7 +265,6 @@ class Reconfigurator:
                     logger.info("runs store disabled (hot)")
         except Exception as e:
             logger.error(f"runs reconfigure failed: {e}")
-            self._pending_restart = True
 
     def _set_runs_store(self, store) -> None:
         """Point both the pipelines (via runtime) and the panel at `store`."""
@@ -304,7 +279,6 @@ class Reconfigurator:
             logger.info("device clients reconciled (hot)")
         except Exception as e:
             logger.error(f"device reconfigure failed: {e}")
-            self._pending_restart = True
 
     async def _rebuild_reminders(self) -> None:
         """Enable/disable the reminders subsystem hot: (un)start the scheduler, (de)register
@@ -337,7 +311,6 @@ class Reconfigurator:
             # else: no enable<->disable transition -> nothing to do.
         except Exception as e:
             logger.error(f"reminders reconfigure failed: {e}")
-            self._pending_restart = True
 
     async def _rebuild_tools(self) -> None:
         """Rebuild the tool source set from current config and hot-swap it into the hub."""
@@ -347,7 +320,6 @@ class Reconfigurator:
             logger.info("tool sources rebuilt (hot)")
         except Exception as e:
             logger.error(f"tool sources reconfigure failed: {e}")
-            self._pending_restart = True
 
     async def _rebuild_http(self, paths) -> None:
         """Rebuild the external (proxied) HTTP client, then rebuild the stages bound to it
@@ -366,7 +338,6 @@ class Reconfigurator:
             new_client = httpx.AsyncClient(proxy=(core.network.external_proxy or None), verify=False)
         except Exception as e:
             logger.error(f"building new HTTP client failed: {e}")
-            self._pending_restart = True
             return
         self.deps.http_cloud = new_client
         # Rebuild the cloud stages (their client changed) UNION the stages whose own config

@@ -91,7 +91,6 @@ def test_action_for_representative_paths():
         "core.devices": "rebuild_devices",
         "core.devices.0.host": "rebuild_devices",
         "core.esphome.port": "rebuild_devices",
-        "core.panel.port": "restart",
         "llm.instances.openrouter.temperature": "rebuild_backends",
         "llm.instances.openrouter.reply_empty": "live",
         "llm.instances.openrouter.max_tool_rounds": "live",
@@ -139,28 +138,25 @@ def _make_reconf(rt, *, deps=None):
     return Reconfigurator(rt, deps, asyncio.Queue())
 
 
-def test_reconfigurator_live_only_no_restart():
+def test_reconfigurator_live_only_no_job():
     reconf = _make_reconf(_stub_runtime())
     reconf.on_config_change({"core.context.max_turns", "core.vad.aggressiveness"})
-    assert reconf.pending_restart() is False
-
-
-def test_reconfigurator_capture_is_live_no_restart_no_job():
-    # core.capture.* is read per-run via the Runtime read-through, so it applies live:
-    # it must NOT latch pending_restart and must NOT enqueue an async rebuild job.
-    reconf = _make_reconf(_stub_runtime())
-    reconf.on_config_change({"core.capture.enabled"})
-    assert reconf.pending_restart() is False
     assert reconf.queue.qsize() == 0
 
 
-def test_reconfigurator_ack_is_live_no_restart_no_job():
+def test_reconfigurator_capture_is_live_no_job():
+    # core.capture.* is read per-run via the Runtime read-through, so it applies live:
+    # it must NOT enqueue an async rebuild job.
+    reconf = _make_reconf(_stub_runtime())
+    reconf.on_config_change({"core.capture.enabled"})
+    assert reconf.queue.qsize() == 0
+
+
+def test_reconfigurator_ack_is_live_no_job():
     # core.ack.* (enabled / sound_path) is read per-run via the Runtime read-through,
-    # so it applies live: it must NOT latch pending_restart and must NOT enqueue an
-    # async rebuild job.
+    # so it applies live: it must NOT enqueue an async rebuild job.
     reconf = _make_reconf(_stub_runtime())
     reconf.on_config_change({"core.ack.enabled", "core.ack.sound_path"})
-    assert reconf.pending_restart() is False
     assert reconf.queue.qsize() == 0
 
 
@@ -183,48 +179,34 @@ def test_reconfigurator_ack_is_live_no_restart_no_job():
         ({"core.reminders.enabled"}, "rebuild_reminders"),
     ],
 )
-def test_reconfigurator_async_action_enqueues_and_no_restart(paths, expected_action):
+def test_reconfigurator_async_action_enqueues(paths, expected_action):
     # Every async rebuild action is applied hot: on_config_change enqueues exactly one
-    # job for the drain task (carrying the changed paths) and does NOT latch
-    # pending_restart. expected_action is the async action these paths trigger.
+    # job for the drain task (carrying the changed paths). expected_action is the async
+    # action these paths trigger.
     assert expected_action in {action_for(p) for p in paths}
     reconf = _make_reconf(_stub_runtime())
     reconf.on_config_change(paths)
     assert reconf.queue.qsize() == 1
     assert reconf.queue.get_nowait() == paths
-    assert reconf.pending_restart() is False
-
-
-def test_reconfigurator_pending_restart_is_sticky():
-    # A fresh Reconfigurator starts clean; an unsupported action latches the flag, and
-    # a subsequent live-only change must NOT clear it (sticky until a real restart).
-    reconf = _make_reconf(_stub_runtime())
-    assert reconf.pending_restart() is False
-    reconf.on_config_change({"core.panel.port"})   # -> "restart" (unsupported)
-    assert reconf.pending_restart() is True
-    reconf.on_config_change({"core.vad.aggressiveness"})
-    assert reconf.pending_restart() is True
 
 
 def test_reconfigurator_audio_ttl_applied_live():
     # core.audio.ttl is live: the Reconfigurator pushes the new value onto the
-    # running server (which caches ttl) and no restart is required.
+    # running server (which caches ttl).
     rt = _stub_runtime(audio_ttl=300)
     rt.core.audio.ttl = 900            # simulate the already-applied document
     reconf = _make_reconf(rt)
     reconf.on_config_change({"core.audio.ttl"})
     assert rt.audio_server.ttl == 900
-    assert reconf.pending_restart() is False
 
 
-def test_reconfigurator_log_level_reinits_logging_and_no_restart(monkeypatch):
+def test_reconfigurator_log_level_reinits_logging(monkeypatch):
     calls = []
     monkeypatch.setattr("src.reconfig.setup_logging", lambda level: calls.append(level))
     reconf = _make_reconf(_stub_runtime(log_level="DEBUG"))
     reconf.on_config_change({"core.log_level"})
-    # Logging reinit invoked with the live level; 'logging' is a supported action.
+    # Logging reinit invoked with the live level.
     assert calls == ["DEBUG"]
-    assert reconf.pending_restart() is False
 
 
 # --- apply_job (async backend rebuild) ---------------------------------------
@@ -297,7 +279,6 @@ async def test_apply_job_rebuilds_only_tts_and_pushes_timeout():
     assert rt.stt_backend == "old-stt"     # untouched
     assert rt.llm_backend == "old-llm"     # untouched
     assert deps.tts_timeout == 99          # pushed from core.tts_timeout before rebuild
-    assert reconf.pending_restart() is False
 
 
 @pytest.mark.asyncio
@@ -320,15 +301,13 @@ async def test_apply_job_rebuilds_multiple_categories():
     assert rt.stt_backend == ("backend", "stt", 99)   # swapped to the new sentinel
     assert rt.tts_backend == ("backend", "tts", 99)   # tts rebuilt with pushed timeout
     assert rt.llm_backend == "old-llm"     # untouched
-    assert reconf.pending_restart() is False
 
 
 @pytest.mark.asyncio
-async def test_apply_job_failed_create_keeps_old_backend_and_latches_restart():
+async def test_apply_job_failed_create_keeps_old_backend():
     reconf, rt, _deps = _make_job_reconf(_StubSvc(fail_on="llm"))
     await reconf.apply_job({"llm.selected"})
     assert rt.llm_backend == "old-llm"     # rebuild failed -> old backend kept
-    assert reconf.pending_restart() is True
 
 
 @pytest.mark.asyncio
@@ -338,7 +317,6 @@ async def test_apply_job_partial_failure_rebuilds_what_it_can():
     await reconf.apply_job({"stt.selected", "llm.selected"})
     assert rt.stt_backend == ("backend", "stt", 30)   # rebuilt despite the sibling failure
     assert rt.llm_backend == "old-llm"     # failed -> old backend kept
-    assert reconf.pending_restart() is True
 
 
 # --- run_loop (queue drain task) ---------------------------------------------
@@ -423,7 +401,7 @@ async def test_run_loop_coalesces_bursted_jobs():
 
 class _StubAudioServer:
     """Records rebind(host, port) calls; can be told to raise to exercise the
-    failure path that latches pending_restart."""
+    failure path that is logged and continues."""
 
     def __init__(self, *, fail=False):
         self._fail = fail
@@ -449,17 +427,15 @@ async def test_apply_job_audio_rebinds_to_configured_host_port():
     reconf = Reconfigurator(rt, types.SimpleNamespace(tts_timeout=30), asyncio.Queue())
     await reconf.apply_job({"core.audio.host"})
     assert audio.rebinds == [("127.0.0.1", 9000)]
-    assert reconf.pending_restart() is False
 
 
 @pytest.mark.asyncio
-async def test_apply_job_audio_rebind_failure_latches_restart():
+async def test_apply_job_audio_rebind_failure_is_attempted():
     audio = _StubAudioServer(fail=True)
     rt = _audio_runtime(audio, host="127.0.0.1", port=9000)
     reconf = Reconfigurator(rt, types.SimpleNamespace(tts_timeout=30), asyncio.Queue())
     await reconf.apply_job({"core.audio.port"})
     assert audio.rebinds == [("127.0.0.1", 9000)]   # attempted
-    assert reconf.pending_restart() is True          # failure latched
 
 
 # --- apply_job (Tier 3a: runs store toggle / retention) ----------------------
@@ -522,7 +498,6 @@ async def test_apply_job_runs_enable_creates_store_and_reaches_panel(monkeypatch
     assert len(store.prunes) == 1 and store.prunes[0][1] == 14   # retention pushed
     assert rt.runs_store is store          # pipelines see the new store
     assert panel.runs_store is store       # panel endpoints see the new store too
-    assert reconf.pending_restart() is False
 
 
 @pytest.mark.asyncio
@@ -539,7 +514,6 @@ async def test_apply_job_runs_disable_closes_store_and_clears_panel(monkeypatch)
     assert existing.closed is True
     assert rt.runs_store is None
     assert panel.runs_store is None
-    assert reconf.pending_restart() is False
 
 
 @pytest.mark.asyncio
@@ -559,7 +533,6 @@ async def test_apply_job_runs_retention_change_reprunes_existing(monkeypatch):
     assert existing.closed is False
     assert existing.prunes and existing.prunes[-1][1] == 3
     assert rt.runs_store is existing             # unchanged
-    assert reconf.pending_restart() is False
 
 
 @pytest.mark.asyncio
@@ -572,14 +545,13 @@ async def test_apply_job_runs_enable_without_panel_does_not_crash(monkeypatch):
     await reconf.apply_job({"core.runs.enabled"})
 
     assert rt.runs_store is _FakeRunsStore.instances[0]
-    assert reconf.pending_restart() is False
 
 
 # --- apply_job (Tier 3b: tool sources hot-swap) ------------------------------
 
 class _FakeHub:
     """Records set_sources(sources) calls; can be told to raise to exercise the
-    failure path that latches pending_restart."""
+    failure path that is logged and continues."""
 
     def __init__(self, *, fail=False):
         self._fail = fail
@@ -614,12 +586,11 @@ async def test_apply_job_rebuild_tools_swaps_into_hub(monkeypatch):
 
     assert hub.set_calls == [sentinel]
     assert seen["args"] == (core, "cloud-client", scheduler)
-    assert reconf.pending_restart() is False
 
 
 @pytest.mark.asyncio
-async def test_apply_job_rebuild_tools_failure_latches_restart(monkeypatch):
-    # A failing set_sources() is logged and latches pending_restart (apply-what-you-can).
+async def test_apply_job_rebuild_tools_failure_logs_and_continues(monkeypatch):
+    # A failing set_sources() is logged and the job continues (apply-what-you-can).
     monkeypatch.setattr("src.reconfig.build_sources", lambda c, h, s: ["x"])
     hub = _FakeHub(fail=True)
     rt = types.SimpleNamespace(hub=hub, core=types.SimpleNamespace(), scheduler=None)
@@ -629,7 +600,6 @@ async def test_apply_job_rebuild_tools_failure_latches_restart(monkeypatch):
     await reconf.apply_job({"core.mcp_servers"})
 
     assert hub.set_calls == [["x"]]
-    assert reconf.pending_restart() is True
 
 
 # --- apply_job (Tier 3b: external HTTP client rebuild) -----------------------
@@ -689,13 +659,12 @@ async def test_apply_job_rebuild_http_swaps_client_rebuilds_deps_and_closes_old(
     assert rt.stt_backend == ("backend", "stt", 42)   # tts_timeout pushed before create
     # Tool sources rebuilt against the new client.
     assert hub.set_calls == [["new-src"]]
-    assert reconf.pending_restart() is False
 
 
 @pytest.mark.asyncio
-async def test_apply_job_rebuild_http_build_failure_latches_restart(monkeypatch):
-    # If constructing the new client raises, the old client stays in place, nothing is
-    # rebuilt, and pending_restart latches.
+async def test_apply_job_rebuild_http_build_failure_keeps_old_client(monkeypatch):
+    # If constructing the new client raises, the old client stays in place and nothing
+    # is rebuilt.
     def boom(**kw):
         raise RuntimeError("bad proxy")
 
@@ -715,7 +684,6 @@ async def test_apply_job_rebuild_http_build_failure_latches_restart(monkeypatch)
     assert old_client.closed is False         # never closed
     assert svc.calls == {}                    # no backend rebuild
     assert hub.set_calls == []                # no tools rebuild
-    assert reconf.pending_restart() is True
 
 
 @pytest.mark.asyncio
@@ -744,7 +712,6 @@ async def test_apply_job_http_covers_tools_and_backends_exactly_once(monkeypatch
     assert hub.set_calls == [["new-src"]]
     assert deps.http_cloud is new_client
     assert old_client.closed is True
-    assert reconf.pending_restart() is False
 
 
 @pytest.mark.asyncio
@@ -773,7 +740,6 @@ async def test_apply_job_rebuild_http_skips_offline_stt(monkeypatch):
     assert hub.set_calls == [["new-src"]]              # tools still rebuilt
     assert deps.http_cloud is new_client
     assert old_client.closed is True
-    assert reconf.pending_restart() is False
 
 
 @pytest.mark.asyncio
@@ -782,7 +748,7 @@ async def test_apply_job_rebuild_http_also_rebuilds_offline_backend_changed_in_j
     # backend's own field (stt is offline here, llm/tts cloud). The http rebuild must
     # rebuild the UNION of the cloud stages (client changed) AND the offline stt (its
     # config changed) — so the offline change is NOT silently dropped — rebuild tools,
-    # swap the client, close the old one, and leave pending_restart False (nothing lost).
+    # swap the client, and close the old one (nothing lost).
     monkeypatch.setattr("src.reconfig.build_sources", lambda c, h, s: ["new-src"])
     new_client = _FakeHttpClient("new")
     monkeypatch.setattr("src.reconfig.httpx.AsyncClient", lambda **kw: new_client)
@@ -806,7 +772,6 @@ async def test_apply_job_rebuild_http_also_rebuilds_offline_backend_changed_in_j
     assert hub.set_calls == [["new-src"]]              # tools rebuilt
     assert deps.http_cloud is new_client               # client swapped
     assert old_client.closed is True                   # old client closed
-    assert reconf.pending_restart() is False           # nothing silently lost
 
 
 @pytest.mark.asyncio
@@ -836,7 +801,6 @@ async def test_apply_job_rebuild_http_offline_only_reloads_no_model(monkeypatch)
     assert hub.set_calls == [["new-src"]]  # tools still rebuilt (OpenWeatherMap uses http_cloud)
     assert deps.http_cloud is new_client   # client still swapped
     assert old_client.closed is True       # old client still closed
-    assert reconf.pending_restart() is False
 
 
 # --- apply_job (Tier 3c: device reconcile) -----------------------------------
@@ -861,17 +825,15 @@ async def test_apply_job_rebuild_devices_invokes_manager_reconfigure():
     reconf = Reconfigurator(rt, types.SimpleNamespace(tts_timeout=30), asyncio.Queue())
     await reconf.apply_job({"core.devices"})
     assert mgr.reconfigures == 1
-    assert reconf.pending_restart() is False
 
 
 @pytest.mark.asyncio
-async def test_apply_job_rebuild_devices_failure_latches_restart():
+async def test_apply_job_rebuild_devices_failure_is_attempted():
     mgr = _FakeManager(fail=True)
     rt = types.SimpleNamespace(manager=mgr)
     reconf = Reconfigurator(rt, types.SimpleNamespace(tts_timeout=30), asyncio.Queue())
     await reconf.apply_job({"core.esphome.port"})
     assert mgr.reconfigures == 1
-    assert reconf.pending_restart() is True
 
 
 # --- apply_job (Tier 3c: reminders subsystem hot toggle) ---------------------
@@ -964,7 +926,6 @@ async def test_apply_job_reminders_enable_starts_scheduler_and_rebuilds_tools(mo
     assert rt.reminders_store is store
     assert scheduler.started is True                  # start() awaited
     assert rebuilt == [True]                           # tools rebuilt (source registered)
-    assert reconf.pending_restart() is False
 
 
 @pytest.mark.asyncio
@@ -994,7 +955,6 @@ async def test_apply_job_reminders_disable_stops_scheduler_and_closes_store(monk
     assert rt.scheduler is None
     assert existing_store.closed is True
     assert rt.reminders_store is None
-    assert reconf.pending_restart() is False
 
 
 @pytest.mark.asyncio
@@ -1024,7 +984,6 @@ async def test_apply_job_reminders_noop_when_already_enabled(monkeypatch):
     assert existing_sched.stopped is False
     assert existing_store.closed is False
     assert rebuilt == []                            # no tools rebuild
-    assert reconf.pending_restart() is False
 
 
 async def _async_none():

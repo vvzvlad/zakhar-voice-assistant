@@ -92,11 +92,6 @@ class PromptConfig(BaseModel):
     system_prompt_path: str = "data/system_prompt.md"
 
 
-class PanelConfig(BaseModel):
-    host: str = "0.0.0.0"
-    port: int = 8201
-
-
 class RunsConfig(BaseModel):
     # Observability: persist every pipeline run to SQLite (data/runs.db). Disable
     # to skip recording entirely; retention_days=0 keeps rows forever.

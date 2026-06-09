@@ -33,11 +33,6 @@ export function AppDataProvider({ children }) {
     return () => { alive = false; };
   }, [loadAll]);
 
-  // Refresh just the system block (uptime / pending_restart) without a full reload.
-  const refreshSystem = useCallback(async () => {
-    try { setSystem(await api.getSystem()); } catch { /* keep last good */ }
-  }, []);
-
   // Apply a partial patch, then refresh catalog + config + system so the UI reflects
   // the persisted state. Re-throws so callers (forms) can surface 422 validation.
   const patch = useCallback(async (patchObj) => {
@@ -51,9 +46,7 @@ export function AppDataProvider({ children }) {
 
   const value = {
     catalog, config, system, loading, error,
-    patch, reload: loadAll, refreshSystem,
-    pendingRestart: !!(system && system.pending_restart),
-    restart: api.postRestart,
+    patch, reload: loadAll,
   };
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

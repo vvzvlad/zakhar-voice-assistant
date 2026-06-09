@@ -38,10 +38,6 @@ function SchemaField({ name, node, root, value, onChange, optionsFor }) {
   const r = resolve(node, root);
   const label = node.title || r.title || humanize(name);
   const hint = node.description || r.description;
-  // `apply` is the backend-computed action class (reconfig.action_for); only "restart"
-  // means a process restart is actually required. Everything else applies live (hot).
-  const restart = (node.apply || r.apply) === "restart";
-  const finalHint = restart ? (hint ? hint + " · restart required" : "Restart required") : hint;
 
   const set = (v) => onChange(name, v);
   const enums = enumOf(node, root);
@@ -107,7 +103,7 @@ function SchemaField({ name, node, root, value, onChange, optionsFor }) {
   // them here too — they lay out like the other enum selects, not as a row.
   const row = type === "boolean" || (type === "integer" && !enums && !(r.minimum != null && r.maximum != null && widget === "slider"));
   return (
-    <Field label={label} hint={finalHint} row={row}>
+    <Field label={label} hint={hint} row={row}>
       {control}
     </Field>
   );
@@ -133,15 +129,5 @@ export default function SchemaForm({ schema, values, onChange, optionsFor, root,
         )
       )}
     </>
-  );
-}
-
-// Does any rendered property carry apply:"restart"? Used to flag the SaveBar.
-// Only "restart" requires a real process restart; all other action classes apply live.
-export function schemaNeedsRestart(schema, skip = []) {
-  if (!schema || !schema.properties) return false;
-  const skipSet = new Set(skip);
-  return Object.entries(schema.properties).some(
-    ([name, node]) => !skipSet.has(name) && node && node.apply === "restart"
   );
 }

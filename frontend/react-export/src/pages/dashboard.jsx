@@ -34,8 +34,7 @@ function providerOf(stage, catalog, config) {
 }
 
 function Dashboard() {
-  const { catalog, config, pendingRestart, restart, refreshSystem } = useAppData();
-  const [busy, setBusy] = useState(false);
+  const { catalog, config } = useAppData();
 
   const [metrics, setMetrics] = useState(null);
   const [recent, setRecent] = useState([]);
@@ -65,13 +64,6 @@ function Dashboard() {
     return stop;
   }, []);
 
-  const doRestart = async () => {
-    setBusy(true);
-    try { await restart(); } catch { /* ignore */ }
-    setBusy(false);
-    setTimeout(refreshSystem, 1500);
-  };
-
   const m = metrics || {};
   const stageAvg = m.per_stage_avg_ms || {};
   const kpis = [
@@ -83,12 +75,6 @@ function Dashboard() {
 
   return <div className="z-page">
     <PageHeader title="Pipeline overview" desc="Live voice loop across all stages. Click a stage to configure it." />
-
-    {pendingRestart && <div className="z-banner warn">
-      <Ic n="restart" w={15} />
-      <span><b>Restart required.</b> Some staged changes apply only after the service restarts.</span>
-      <span className="act"><button className="z-btn warn sm" disabled={busy} onClick={doRestart}>{busy ? "Restarting…" : "Restart now"}</button></span>
-    </div>}
 
     <div className="z-kpis">
       {kpis.map((c, i) => <div className="z-kpi" key={i}>

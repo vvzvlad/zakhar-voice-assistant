@@ -7,7 +7,7 @@
 import React from "react";
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen, fireEvent, cleanup } from "@testing-library/react";
-import SchemaForm, { schemaNeedsRestart } from "../components/SchemaForm.jsx";
+import SchemaForm from "../components/SchemaForm.jsx";
 
 afterEach(cleanup);
 
@@ -114,38 +114,5 @@ describe("SchemaField numeric onChange payload", () => {
     fireEvent.change(input, { target: { value: "1.5" } });
     fireEvent.blur(input);
     expect(onChange).toHaveBeenCalledWith("temperature", 1.5);
-  });
-});
-
-describe("schemaNeedsRestart", () => {
-  it("is true when some non-skipped property carries apply:'restart'", () => {
-    const schema = {
-      properties: {
-        a: { type: "string" },
-        b: { type: "integer", apply: "restart" },
-      },
-    };
-    expect(schemaNeedsRestart(schema)).toBe(true);
-  });
-
-  it("is false when no property requires a restart (others apply live)", () => {
-    const schema = {
-      properties: {
-        a: { type: "string", apply: "reconfig" },
-        b: { type: "integer" },
-      },
-    };
-    expect(schemaNeedsRestart(schema)).toBe(false);
-  });
-
-  it("respects the skip list (a skipped restart property does not count)", () => {
-    const schema = { properties: { a: { type: "string", apply: "restart" } } };
-    expect(schemaNeedsRestart(schema, ["a"])).toBe(false);
-  });
-
-  it("is false for a null / empty / property-less schema", () => {
-    expect(schemaNeedsRestart(null)).toBe(false);
-    expect(schemaNeedsRestart({})).toBe(false);
-    expect(schemaNeedsRestart({ properties: {} })).toBe(false);
   });
 });

@@ -131,7 +131,6 @@ def test_catalog_injects_apply_class_per_field(tmp_path):
 
     # Core (nested $defs) schemas carry per-field apply on each sub-model's properties.
     core_defs = cat["core"]["schema"]["$defs"]
-    assert core_defs["PanelConfig"]["properties"]["port"]["apply"] == "restart"
     assert core_defs["ContextConfig"]["properties"]["max_turns"]["apply"] == "live"
     assert core_defs["AudioConfig"]["properties"]["public_base_url"]["apply"] == "live"
     assert core_defs["AudioConfig"]["properties"]["host"]["apply"] == "rebuild_audio"
