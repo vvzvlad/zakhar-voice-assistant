@@ -50,7 +50,6 @@ class YandexTtsConfig(BaseModel):
     # the voice's default by the validator below.
     role: str = Field("neutral", json_schema_extra={"widget": "select", "options": "dynamic"})
     speed: float = Field(1.0, ge=0.1, le=3.0, json_schema_extra={"widget": "slider"})
-    folder_id: str = ""
     url: str = "https://tts.api.cloud.yandex.net/tts/v3/utteranceSynthesis"
 
     @model_validator(mode="after")
@@ -81,7 +80,6 @@ class YandexTtsProvider(Provider):
             voice=cfg.voice,
             role=cfg.role,
             speed=cfg.speed,
-            folder_id=cfg.folder_id,
             url=cfg.url,
             timeout=deps.tts_timeout,
         )

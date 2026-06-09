@@ -292,12 +292,10 @@ class YandexTtsBackend(TtsBackend):
     server-streaming: the response is a stream of JSON objects, each carrying a
     base64-encoded MP3 chunk; the chunks are decoded and concatenated into a valid
     MP3 (audio/mpeg), so no transcoding is needed. Auth uses an API key bound to a
-    service account (`Authorization: Api-Key <key>`); the `x-folder-id` header is
-    only needed for user-account (IAM) auth, so it is sent only when folder_id is
-    configured. Russian stress marks are converted to Yandex's "+vowel" notation via
-    yandex_stress_markup()."""
+    service account (`Authorization: Api-Key <key>`). Russian stress marks are
+    converted to Yandex's "+vowel" notation via yandex_stress_markup()."""
 
-    def __init__(self, client, *, api_key, voice, role, speed, folder_id, url, timeout):
+    def __init__(self, client, *, api_key, voice, role, speed, url, timeout):
         if not api_key:
             raise ValueError("YANDEX_TTS_API_KEY is required when TTS_BACKEND=yandex")
         self.client = client
@@ -305,7 +303,6 @@ class YandexTtsBackend(TtsBackend):
         self.voice = voice
         self.role = role
         self.speed = speed
-        self.folder_id = folder_id
         self.url = url
         self.timeout = timeout
 
@@ -335,9 +332,6 @@ class YandexTtsBackend(TtsBackend):
             "loudnessNormalizationType": "LUFS",
         }
         headers = {"Authorization": f"Api-Key {self.api_key}"}
-        if self.folder_id:
-            # Only for user-account (IAM) auth; a service-account API key infers the folder.
-            headers["x-folder-id"] = self.folder_id
         resp = await self.client.post(self.url, headers=headers, json=payload, timeout=self.timeout)
         try:
             resp.raise_for_status()

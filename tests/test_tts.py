@@ -156,7 +156,7 @@ def test_chunk_for_v3_empty_and_symbol_only():
 def test_yandex_backend_requires_api_key():
     with pytest.raises(ValueError):
         YandexTtsBackend(None, api_key="", voice="zahar", role="neutral",
-                         speed=1.0, folder_id="", url="http://x", timeout=5)
+                         speed=1.0, url="http://x", timeout=5)
 
 
 @respx.mock
@@ -171,7 +171,7 @@ async def test_yandex_synthesize_posts_mp3_and_returns_audio():
                                     headers={"Content-Type": "application/json"}))
     async with httpx.AsyncClient() as client:
         backend = YandexTtsBackend(client, api_key="k", voice="zahar",
-                                   role="neutral", speed=1.0, folder_id="",
+                                   role="neutral", speed=1.0,
                                    url=YANDEX_URL, timeout=10)
         mime, audio = await backend.synthesize("приве́т", "ru")
     assert mime == "audio/mpeg"
@@ -183,23 +183,6 @@ async def test_yandex_synthesize_posts_mp3_and_returns_audio():
     assert {"role": "neutral"} in sent["hints"]
     assert sent["outputAudioSpec"]["containerAudio"]["containerAudioType"] == "MP3"
     assert "прив+ет" in sent["text"]   # stress markup from "приве́т"
-    assert "x-folder-id" not in req.headers  # omitted when folder_id is empty
-
-
-@respx.mock
-async def test_yandex_synthesize_includes_folder_id_when_set():
-    import base64
-    import json
-
-    chunk = json.dumps({"result": {"audioChunk": {"data": base64.b64encode(b"x").decode()}}})
-    route = respx.post(YANDEX_URL).mock(return_value=httpx.Response(200, text=chunk,
-                                        headers={"Content-Type": "application/json"}))
-    async with httpx.AsyncClient() as client:
-        backend = YandexTtsBackend(client, api_key="k", voice="zahar",
-                                   role="neutral", speed=1.0, folder_id="fld123",
-                                   url=YANDEX_URL, timeout=10)
-        await backend.synthesize("тест", "ru")
-    assert route.calls.last.request.headers["x-folder-id"] == "fld123"
 
 
 @respx.mock
@@ -225,7 +208,7 @@ async def test_yandex_synthesize_chunks_long_text_and_concatenates_audio():
     route = respx.post(YANDEX_URL).mock(side_effect=responses)
     async with httpx.AsyncClient() as client:
         backend = YandexTtsBackend(client, api_key="k", voice="zahar",
-                                   role="neutral", speed=1.0, folder_id="",
+                                   role="neutral", speed=1.0,
                                    url=YANDEX_URL, timeout=10)
         mime, audio = await backend.synthesize(_LONG_REPLY, "ru")
 
@@ -246,7 +229,7 @@ async def test_yandex_synthesize_surfaces_error_body():
         return_value=httpx.Response(400, text='{"error":"text is too long"}'))
     async with httpx.AsyncClient() as client:
         backend = YandexTtsBackend(client, api_key="k", voice="zahar",
-                                   role="neutral", speed=1.0, folder_id="",
+                                   role="neutral", speed=1.0,
                                    url=YANDEX_URL, timeout=10)
         with pytest.raises(Exception) as exc:
             await backend.synthesize("привет", "ru")
