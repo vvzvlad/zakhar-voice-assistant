@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from "react";
+import React, { useEffect, useState, useCallback, useRef } from "react";
 import { Ic } from "../components/icons.jsx";
 import {
   Field, PageHeader, FormSaveBar, StatusPill, Pill, Modal, Stepper, Loading, Select,
@@ -7,7 +7,7 @@ import SchemaForm, { schemaNeedsRestart } from "../components/SchemaForm.jsx";
 import { useAppData } from "../appData.jsx";
 import { useStageForm, errorLines } from "../useStageForm.js";
 import { deref } from "../schema.js";
-import { getPrompt, putPrompt, getDevices, getTools, postCapture } from "../api.js";
+import { getPrompt, putPrompt, getDevices, getTools, startCapture, getCaptureStatus, cancelCapture, downloadCaptureResult } from "../api.js";
 
 function Card({ title, sub, children, foot, right }) {
   return <div className="z-card">
@@ -332,26 +332,87 @@ function DeviceModal({ initial, onSave, onClose, title, device, online }) {
   </Modal>;
 }
 
-// "Record X seconds" control shown inside the Edit-speaker modal: sets the
-// duration and POSTs /api/capture. The speaker records that many seconds of mic
-// audio and the WAV is streamed back and downloaded in the browser (no STT/LLM/
-// TTS, nothing kept on the server). Disabled — with a tooltip — while offline.
+// "Record X seconds" control shown inside the Edit-speaker modal. The recording
+// runs as a SERVER-SIDE background task decoupled from this browser session: we
+// only start it, poll its status (for the live countdown), auto-download the WAV
+// when done, or cancel it. Closing the browser no longer cancels the recording
+// (which used to reboot the device). Cancel just discards the result and resets
+// the UI — the device self-times its recording and drains on its own. Disabled —
+// with a tooltip — while offline.
 function CaptureControl({ device, online }) {
   const [seconds, setSeconds] = useState(5);
-  const [busy, setBusy] = useState(false);
+  const [status, setStatus] = useState({ state: "idle" });
   const [err, setErr] = useState(null);
-  const record = async () => {
-    setBusy(true);
+  const [working, setWorking] = useState(false);  // start/cancel button disabling
+  const downloadedRef = useRef(false);            // fire the auto-download once per "done"
+
+  const refresh = useCallback(async () => {
+    try { const s = await getCaptureStatus(device); setStatus(s); return s; }
+    catch { const s = { state: "idle" }; setStatus(s); return s; }
+  }, [device]);
+
+  // Reset and re-sync whenever the device changes (modal reopened on another row).
+  useEffect(() => { downloadedRef.current = false; refresh(); }, [device, refresh]);
+
+  // "recording" and "cancelled" both mean the device is still physically recording.
+  const recording = status.state === "recording" || status.state === "cancelled";
+
+  // Poll once a second only while the device is actively recording.
+  useEffect(() => {
+    if (!recording) return;
+    const id = setInterval(refresh, 1000);
+    return () => clearInterval(id);
+  }, [recording, refresh]);
+
+  // React to terminal states: auto-download a finished WAV (once), surface errors.
+  useEffect(() => {
+    if (status.state === "done" && !downloadedRef.current) {
+      downloadedRef.current = true;
+      (async () => {
+        try { await downloadCaptureResult(device); }
+        catch (e) { setErr(e.message || "download failed"); }
+        finally { await refresh(); }  // result is consumed server-side -> flips to idle
+      })();
+    } else if (status.state === "error") {
+      setErr(status.error || "capture failed");
+    }
+  }, [status.state, status.error, device, refresh]);
+
+  const start = async () => {
     setErr(null);
-    try { await postCapture(device, seconds); }
+    setWorking(true);
+    downloadedRef.current = false;
+    try { setStatus(await startCapture(device, seconds)); }
     catch (e) { setErr(e.message || "failed"); }
-    finally { setBusy(false); }
+    finally { setWorking(false); }
   };
+
+  const cancel = async () => {
+    setErr(null);
+    setWorking(true);
+    try { setStatus(await cancelCapture(device)); }
+    catch (e) { setErr(e.message || "failed"); }
+    finally { setWorking(false); }
+  };
+
+  // Status line text while the device is recording (or draining after a cancel).
+  let recText;
+  if (status.state === "cancelled") recText = `Cancelling… device finishing (${status.remaining}s)`;
+  else if (status.remaining > 0) recText = `Recording… ${status.remaining}s left`;
+  else recText = "Processing…";
+
   return <Field label="Capture sample" hint={`Records ${seconds}s of mic audio and downloads it as a WAV. Used for wake-word training.`}>
     <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-      <Stepper value={seconds} min={1} max={300} onChange={setSeconds} unit="s" />
-      <button className="z-btn p" disabled={!online || busy} title={online ? "" : "Speaker offline"}
-        onClick={record}>{busy ? "Recording…" : "Record sample"}</button>
+      {recording
+        ? <>
+            <span className="z-fh">{recText}</span>
+            <button className="z-btn g" disabled={status.state === "cancelled" || working} onClick={cancel}>Cancel</button>
+          </>
+        : <>
+            <Stepper value={seconds} min={1} max={300} onChange={setSeconds} unit="s" />
+            <button className="z-btn p" disabled={!online || working} title={online ? "" : "Speaker offline"}
+              onClick={start}>{working ? "…" : "Record sample"}</button>
+          </>}
     </div>
     {err && <div className="z-fh" style={{ color: "#b91c1c" }}>{err}</div>}
   </Field>;

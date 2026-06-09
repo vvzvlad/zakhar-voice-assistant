@@ -331,48 +331,88 @@ def _wav_bytes(pcm=b"\x01\x02" * 16):
     return buf.getvalue()
 
 
-async def test_capture_success_returns_wav_download(tmp_path):
-    # On success the route streams the recorded WAV back as an audio/wav attachment
-    # (no JSON 202); the body is a valid WAV and the filename carries device+seconds.
+async def _poll_state(client, device, want, *, tries=200):
+    """Poll GET /api/capture until the state matches `want` (one or many), then return it.
+
+    Yields the event loop between polls so the background capture task can run; uses
+    a bounded iteration count instead of wall-clock delays.
+    """
+    wants = {want} if isinstance(want, str) else set(want)
+    last = None
+    for _ in range(tries):
+        last = await (await client.get("/api/capture", params={"device": device})).json()
+        if last["state"] in wants:
+            return last
+        await asyncio.sleep(0)
+    raise AssertionError(f"state {last and last['state']!r} never reached {wants}")
+
+
+async def test_capture_start_status_result_lifecycle(tmp_path):
+    # The recording runs as a background task: POST /api/capture returns 202
+    # "recording" immediately; status reflects it; once the (event-gated) capture
+    # finishes the result is downloadable as a valid WAV; status then goes idle.
     import io
     import wave
 
     calls = []
     wav = _wav_bytes()
+    release = asyncio.Event()
 
     async def cap(device, seconds):
         calls.append((device, seconds))
+        await release.wait()  # hold the "recording" until the test releases it
         return wav
 
     client, _svc_, _ev = await _client(tmp_path, device_capture=cap)
     try:
-        resp = await client.post("/api/capture", json={"device": "hall", "seconds": 5})
+        # Start -> 202 with the initial snapshot (state recording).
+        started = await client.post("/api/capture", json={"device": "hall", "seconds": 5})
+        assert started.status == 202
+        snap = await started.json()
+        assert snap["state"] == "recording" and snap["device"] == "hall"
+
+        # GET status shows the in-flight recording while the capture is blocked.
+        st = await _poll_state(client, "hall", "recording")
+        assert st["state"] == "recording"
+
+        # Release the recording and poll until it finishes.
+        release.set()
+        await _poll_state(client, "hall", "done")
+
+        # The result downloads as a valid 16k/mono/16-bit WAV with the stamped name.
+        resp = await client.get("/api/capture/result", params={"device": "hall"})
         assert resp.status == 200
         assert resp.headers["Content-Type"] == "audio/wav"
-        # filename carries device+seconds plus a UTC capture timestamp (YYYYMMDD_HHMMSS)
         assert re.fullmatch(
             r'attachment; filename="zakhar_hall_5s_\d{8}_\d{6}\.wav"',
             resp.headers["Content-Disposition"],
         )
         body = await resp.read()
         assert body == wav
-        # The body parses as a valid 16k/mono/16-bit WAV.
         with wave.open(io.BytesIO(body), "rb") as w:
             assert w.getnchannels() == 1 and w.getsampwidth() == 2
             assert w.getframerate() == 16000
         assert calls == [("hall", 5)]
+
+        # The result was consumed; status is now idle.
+        idle = await (await client.get("/api/capture", params={"device": "hall"})).json()
+        assert idle["state"] == "idle"
     finally:
+        release.set()
         await client.close()
 
 
-async def test_capture_filename_sanitizes_device(tmp_path):
+async def test_capture_result_filename_sanitizes_device(tmp_path):
     # A device name with unsafe chars is sanitized in the download filename.
     async def cap(device, seconds):
         return _wav_bytes()
 
     client, _svc_, _ev = await _client(tmp_path, device_capture=cap)
     try:
-        resp = await client.post("/api/capture", json={"device": "living room/2", "seconds": 3})
+        started = await client.post("/api/capture", json={"device": "living room/2", "seconds": 3})
+        assert started.status == 202
+        await _poll_state(client, "living room/2", "done")
+        resp = await client.get("/api/capture/result", params={"device": "living room/2"})
         assert resp.status == 200
         # unsafe chars sanitized; trailing UTC timestamp appended (YYYYMMDD_HHMMSS)
         assert re.fullmatch(
@@ -383,68 +423,60 @@ async def test_capture_filename_sanitizes_device(tmp_path):
         await client.close()
 
 
-async def test_capture_timeout_returns_504(tmp_path):
-    # A capture that times out (device never streamed) -> 504.
-    async def cap(device, seconds):
-        raise TimeoutError("hall capture timed out after 13s")
-
-    client, _svc_, _ev = await _client(tmp_path, device_capture=cap)
-    try:
-        resp = await client.post("/api/capture", json={"device": "hall", "seconds": 5})
-        assert resp.status == 504
-        assert "timed out" in (await resp.json())["error"]
-    finally:
-        await client.close()
-
-
-async def test_capture_unknown_device_returns_404(tmp_path):
-    async def cap(device, seconds):
-        raise LookupError("unknown device 'x'")
-
-    client, _svc_, _ev = await _client(tmp_path, device_capture=cap)
-    try:
-        resp = await client.post("/api/capture", json={"device": "x", "seconds": 5})
-        assert resp.status == 404
-    finally:
-        await client.close()
-
-
-async def test_capture_offline_device_returns_409(tmp_path):
-    async def cap(device, seconds):
-        raise RuntimeError("hall is offline")
-
-    client, _svc_, _ev = await _client(tmp_path, device_capture=cap)
-    try:
-        resp = await client.post("/api/capture", json={"device": "hall", "seconds": 5})
-        assert resp.status == 409
-        body = await resp.json()
-        assert "offline" in body["error"]
-    finally:
-        await client.close()
-
-
 async def test_capture_busy_returns_409(tmp_path):
-    # FIX A: a second concurrent capture on the same device surfaces as
-    # CaptureBusyError -> HTTP 409 with a "in progress" message (distinct from the
-    # generic 500 path).
-    from src.pipeline import CaptureBusyError
+    # While a capture is in flight on a device, a second POST /api/capture for that
+    # same device is rejected with 409 and an "in progress" message.
+    release = asyncio.Event()
 
     async def cap(device, seconds):
-        raise CaptureBusyError("hall capture already in progress")
+        await release.wait()
+        return _wav_bytes()
 
     client, _svc_, _ev = await _client(tmp_path, device_capture=cap)
     try:
-        resp = await client.post("/api/capture", json={"device": "hall", "seconds": 5})
-        assert resp.status == 409
-        assert "in progress" in (await resp.json())["error"]
+        first = await client.post("/api/capture", json={"device": "hall", "seconds": 5})
+        assert first.status == 202
+        await _poll_state(client, "hall", "recording")
+
+        second = await client.post("/api/capture", json={"device": "hall", "seconds": 5})
+        assert second.status == 409
+        assert "in progress" in (await second.json())["error"]
+    finally:
+        release.set()
+        await client.close()
+
+
+@pytest.mark.parametrize("exc, needle", [
+    (RuntimeError("hall is offline"), "offline"),
+    (LookupError("unknown device 'hall'"), "unknown device"),
+    (TimeoutError("hall capture timed out after 13s"), "timed out"),
+])
+async def test_capture_failure_surfaces_via_status(tmp_path, exc, needle):
+    # A capture that raises does NOT fail the start request (still 202) — the error
+    # surfaces on the status endpoint as state "error" with the message, and the
+    # result endpoint returns 404.
+    async def cap(device, seconds):
+        raise exc
+
+    client, _svc_, _ev = await _client(tmp_path, device_capture=cap)
+    try:
+        started = await client.post("/api/capture", json={"device": "hall", "seconds": 5})
+        assert started.status == 202
+
+        st = await _poll_state(client, "hall", "error")
+        assert st["state"] == "error"
+        assert needle in st["error"]
+
+        # No WAV to download for a failed capture.
+        res = await client.get("/api/capture/result", params={"device": "hall"})
+        assert res.status == 404
     finally:
         await client.close()
 
 
-async def test_capture_empty_recording_returns_500(tmp_path):
-    # FIX B: an empty recording is a server-side capture failure (CaptureEmptyError),
-    # so it maps to HTTP 500 — NOT 409, which is reserved for offline/missing-entity/
-    # busy conditions.
+async def test_capture_empty_recording_surfaces_as_error(tmp_path):
+    # An empty recording (CaptureEmptyError) is a capture failure too: it surfaces
+    # via the status endpoint as state "error".
     from src.pipeline import CaptureEmptyError
 
     async def cap(device, seconds):
@@ -452,9 +484,10 @@ async def test_capture_empty_recording_returns_500(tmp_path):
 
     client, _svc_, _ev = await _client(tmp_path, device_capture=cap)
     try:
-        resp = await client.post("/api/capture", json={"device": "hall", "seconds": 5})
-        assert resp.status == 500
-        assert "no audio" in (await resp.json())["error"]
+        started = await client.post("/api/capture", json={"device": "hall", "seconds": 5})
+        assert started.status == 202
+        st = await _poll_state(client, "hall", "error")
+        assert "no audio" in st["error"]
     finally:
         await client.close()
 
@@ -468,7 +501,7 @@ async def test_capture_bad_seconds_returns_400(tmp_path):
     client, _svc_, _ev = await _client(tmp_path, device_capture=cap)
     try:
         # Out of range, wrong type, missing device — all 400, capture never called.
-        # The accepted range is now 1..300, so 301 (and 0/negative) are rejected.
+        # The accepted range is 1..300, so 301 (and 0/negative) are rejected.
         for body in ({"device": "h", "seconds": 0},
                      {"device": "h", "seconds": -1},
                      {"device": "h", "seconds": 301},
@@ -483,32 +516,89 @@ async def test_capture_bad_seconds_returns_400(tmp_path):
         await client.close()
 
 
-async def test_capture_max_seconds_boundary_accepted(tmp_path):
-    # The upper bound is now 300 (CAPTURE_MAX_SECONDS): exactly 300 is accepted and
-    # passed through to the capture callable; 301 is rejected (covered above).
+async def test_capture_max_seconds_boundary(tmp_path):
+    # The upper bound is 300 (CAPTURE_MAX_SECONDS): exactly 300 is accepted (202)
+    # and passed through to the capture callable; 301 is rejected (400).
     calls = []
-    wav = _wav_bytes()
 
     async def cap(device, seconds):
         calls.append((device, seconds))
-        return wav
+        return _wav_bytes()
 
     client, _svc_, _ev = await _client(tmp_path, device_capture=cap)
     try:
-        resp = await client.post("/api/capture", json={"device": "hall", "seconds": 300})
-        assert resp.status == 200
+        ok = await client.post("/api/capture", json={"device": "hall", "seconds": 300})
+        assert ok.status == 202
+        await _poll_state(client, "hall", "done")
         assert calls == [("hall", 300)]
+
+        bad = await client.post("/api/capture", json={"device": "hall", "seconds": 301})
+        assert bad.status == 400
     finally:
         await client.close()
 
 
-async def test_capture_without_manager_returns_503(tmp_path):
-    # No device_capture wired (e.g. tests / API-only boot) -> 503.
+async def test_capture_endpoints_without_manager_return_503(tmp_path):
+    # No device_capture wired (e.g. tests / API-only boot) -> every capture endpoint
+    # returns 503.
     client, _svc_, _ev = await _client(tmp_path)
     try:
-        resp = await client.post("/api/capture", json={"device": "h", "seconds": 5})
-        assert resp.status == 503
+        assert (await client.post("/api/capture", json={"device": "h", "seconds": 5})).status == 503
+        assert (await client.get("/api/capture", params={"device": "h"})).status == 503
+        assert (await client.post("/api/capture/cancel", json={"device": "h"})).status == 503
+        assert (await client.get("/api/capture/result", params={"device": "h"})).status == 503
     finally:
+        await client.close()
+
+
+async def test_capture_result_404_when_nothing_recorded(tmp_path):
+    # No capture has run for the device -> result endpoint returns 404.
+    async def cap(device, seconds):
+        return _wav_bytes()
+
+    client, _svc_, _ev = await _client(tmp_path, device_capture=cap)
+    try:
+        resp = await client.get("/api/capture/result", params={"device": "hall"})
+        assert resp.status == 404
+        assert "no capture result" in (await resp.json())["error"]
+    finally:
+        await client.close()
+
+
+async def test_capture_cancel_discards_result_and_frees_device(tmp_path):
+    # Cancel flags an in-flight capture cancelled (the device self-times and keeps
+    # draining); a new start stays blocked (409) until the task completes, then the
+    # result is discarded and status returns to idle.
+    release = asyncio.Event()
+
+    async def cap(device, seconds):
+        await release.wait()
+        return _wav_bytes()
+
+    client, _svc_, _ev = await _client(tmp_path, device_capture=cap)
+    try:
+        started = await client.post("/api/capture", json={"device": "hall", "seconds": 5})
+        assert started.status == 202
+        await _poll_state(client, "hall", "recording")
+
+        # Cancel -> state "cancelled" while the device is still draining.
+        cancelled = await client.post("/api/capture/cancel", json={"device": "hall"})
+        assert cancelled.status == 200
+        assert (await cancelled.json())["state"] == "cancelled"
+
+        # The device window has not elapsed -> a new start is still blocked.
+        busy = await client.post("/api/capture", json={"device": "hall", "seconds": 5})
+        assert busy.status == 409
+
+        # Let the device finish; the arrived result is discarded and status goes idle.
+        release.set()
+        await _poll_state(client, "hall", "idle")
+
+        # Nothing to download for a cancelled capture.
+        res = await client.get("/api/capture/result", params={"device": "hall"})
+        assert res.status == 404
+    finally:
+        release.set()
         await client.close()
 
 

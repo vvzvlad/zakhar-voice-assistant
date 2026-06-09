@@ -57,23 +57,30 @@ export const getSystem = () => request("/api/system");
 export const postRestart = () => request("/api/restart", { method: "POST" });
 export const getDevices = () => request("/api/devices");
 
-// Record a manual sample (seconds of mic audio -> WAV, no pipeline) and download
-// it in the browser. The backend streams the WAV back as an attachment; we fetch
-// it as a blob and click a temporary <a download> so nothing is kept server-side.
-// On a non-OK response the JSON/text error body is read and thrown as an ApiError.
-export async function postCapture(device, seconds) {
+// Background capture: the recording runs as a server-side task decoupled from the
+// browser request, so closing the browser no longer cancels it (which used to
+// reboot the device). start kicks it off (202 -> initial status), getCaptureStatus
+// polls for the live countdown, cancelCapture releases the device (the device keeps
+// draining on its own), and downloadCaptureResult fetches the finished WAV.
+export const startCapture = (device, seconds) =>
+  request("/api/capture", { method: "POST", body: { device, seconds } });
+export const getCaptureStatus = (device) =>
+  request(`/api/capture?device=${encodeURIComponent(device)}`);
+export const cancelCapture = (device) =>
+  request("/api/capture/cancel", { method: "POST", body: { device } });
+
+// Download the already-recorded WAV held server-side (one-shot; consumed on read)
+// and trigger a browser download. The backend returns the WAV as an attachment; we
+// fetch it as a blob and click a temporary <a download>. On a non-OK response the
+// JSON/text error body is read and thrown as an ApiError, like request() does.
+export async function downloadCaptureResult(device) {
   let resp;
   try {
-    resp = await fetch(BASE + "/api/capture", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ device, seconds }),
-    });
+    resp = await fetch(BASE + "/api/capture/result?device=" + encodeURIComponent(device));
   } catch (e) {
     throw new ApiError("Failed to reach the server: " + e.message, { status: 0 });
   }
   if (!resp.ok) {
-    // Error responses are JSON (or text); surface the message like request() does.
     const text = await resp.text();
     let data = null;
     if (text) { try { data = JSON.parse(text); } catch { data = text; } }
@@ -87,7 +94,7 @@ export async function postCapture(device, seconds) {
   // Prefer the server-provided filename from Content-Disposition; else a default.
   const disp = resp.headers.get("Content-Disposition") || "";
   const m = /filename="?([^"]+)"?/.exec(disp);
-  const filename = (m && m[1]) || `zakhar_${device}_${seconds}s.wav`;
+  const filename = (m && m[1]) || `zakhar_${device}.wav`;
   const url = URL.createObjectURL(blob);
   try {
     const a = document.createElement("a");
