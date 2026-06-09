@@ -39,7 +39,7 @@ class VadConfig(BaseModel):
     mic_channel: Literal[0, 1] = Field(0, json_schema_extra={"widget": "select"})
     # Linear input gain applied to the selected mic channel's PCM before VAD/STT.
     # Boosts the quieter less-processed channel; values < 1.0 attenuate. Read live.
-    mic_gain: float = Field(1.0, ge=0.1, le=20.0, json_schema_extra={"widget": "slider"})
+    mic_gain: float = Field(1.0, ge=0.1, le=50.0, json_schema_extra={"widget": "slider"})
 
 
 class NetworkConfig(BaseModel):

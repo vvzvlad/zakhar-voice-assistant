@@ -100,14 +100,14 @@ def test_vad_mic_channel_literal_rejects_out_of_range():
 
 
 def test_vad_mic_gain_range_validated():
-    # Gain spans 0.1–20.0: values below 1.0 attenuate, above amplify.
+    # Gain spans 0.1–50.0: values below 1.0 attenuate, above amplify.
     VadConfig(mic_gain=0.1)   # min
     VadConfig(mic_gain=0.5)   # below 1.0 is valid (attenuation)
-    VadConfig(mic_gain=20.0)  # max
+    VadConfig(mic_gain=50.0)  # max
     with pytest.raises(ValidationError):
         VadConfig(mic_gain=0.05)  # below 0.1
     with pytest.raises(ValidationError):
-        VadConfig(mic_gain=20.1)  # above 20.0
+        VadConfig(mic_gain=50.1)  # above 50.0
 
 
 def test_core_config_vad_has_mic_fields():
