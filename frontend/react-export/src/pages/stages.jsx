@@ -77,6 +77,16 @@ export function VAD() {
   const buildPatch = (draft) => ({ core: { vad: draft } });
   const { draft, onChange, dirty, saving, err, save } = useStageForm(vadValues, buildPatch, patch);
 
+  // Independent form for the server-side end-of-phrase confirmation chime ("блям").
+  // core.ack.* is a LIVE reconfig (no restart), so its SaveBar omits the `restart` prop.
+  const ackSchema = coreSchema.$defs ? coreSchema.$defs.AckConfig : null;
+  const ackValues = catalog.core.values.ack || {};
+  const buildAckPatch = (draft) => ({ core: { ack: draft } });
+  const {
+    draft: ackDraft, onChange: ackOnChange, dirty: ackDirty,
+    saving: ackSaving, err: ackErr, save: ackSave,
+  } = useStageForm(ackValues, buildAckPatch, patch);
+
   const preset = matchPreset(draft);
   const applyPreset = (name) => {
     const p = VAD_PRESETS[name];
@@ -98,5 +108,12 @@ export function VAD() {
     <Card title="Advanced parameters" foot={<FormSaveBar dirty={dirty} saving={saving} onSave={save} restart errors={errorLines(err)} />}>
       <SchemaForm schema={{ ...vadSchema, $defs: coreSchema.$defs }} root={{ ...vadSchema, $defs: coreSchema.$defs }} values={draft} onChange={onChange} />
     </Card>
+    {ackSchema && <>
+      <div style={{ height: 16 }} />
+      <Card title="End-of-phrase chime" sub="confirmation «блям» played when your phrase ends">
+        <SchemaForm schema={{ ...ackSchema, $defs: coreSchema.$defs }} root={{ ...ackSchema, $defs: coreSchema.$defs }} values={ackDraft} onChange={ackOnChange} />
+        <FormSaveBar dirty={ackDirty} saving={ackSaving} onSave={ackSave} errors={errorLines(ackErr)} />
+      </Card>
+    </>}
   </div>;
 }
