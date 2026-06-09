@@ -12,18 +12,15 @@ field bugs:
     was still "busy" with an in-flight capture.
 
 This module runs the recording as a SERVER-SIDE background asyncio task. The
-browser only starts it (202), polls its status (for the live countdown),
-downloads the result, or cancels it. None of those calls is tied to the
-recording's lifetime, so closing the browser no longer cancels the recording ->
-no device reboot.
+browser only starts it (202), polls its status (for the live countdown), and
+downloads the result. None of those calls is tied to the recording's lifetime,
+so closing the browser no longer cancels the recording -> no device reboot.
 
 IMPORTANT firmware fact: the device self-times the recording entirely in firmware
 (button press -> stop wake word -> voice_assistant.start -> delay(seconds) ->
 voice_assistant.stop -> start wake word). The server CANNOT interrupt the device
-mid-recording. So "cancel" only means: stop waiting for / discard the result and
-reset the UI. The device finishes its physical recording on its own in the
-background; the pipeline drains and emits RUN_END cleanly (no reboot). New
-captures on the same device stay blocked until that physical window has elapsed.
+mid-recording. The device finishes its physical recording on its own in the
+background; the pipeline drains and emits RUN_END cleanly (no reboot).
 """
 
 import asyncio
@@ -55,7 +52,6 @@ class CaptureJob:
         self.error: str | None = None
         self.task: asyncio.Task | None = None
         self.finished_at: float | None = None
-        self.cancel_requested = False
 
     def remaining(self, now: float) -> int:
         """Whole seconds left in the (firmware-timed) recording, clamped at 0."""
@@ -122,15 +118,8 @@ class CaptureJobManager:
             logger.warning(f"capture failed for {job.device!r}: {e}")
             return
         job.finished_at = time.monotonic()
-        if job.cancel_requested:
-            # The operator cancelled while the device kept recording; discard the
-            # now-arrived result. The device drained cleanly on its own (no reboot).
-            job.state = "cancelled"
-            job.wav = None
-            logger.info(f"capture for {job.device!r} finished but was cancelled; discarding result")
-        else:
-            job.state = "done"
-            job.wav = wav
+        job.state = "done"
+        job.wav = wav
 
     # --- public API ----------------------------------------------------------
     def start(self, device: str, seconds: int) -> dict:
@@ -162,27 +151,6 @@ class CaptureJobManager:
             del self._jobs[device]
             return self._idle(device)
         return job.snapshot(now)
-
-    def cancel(self, device: str) -> dict:
-        """Cancel an in-flight capture (discard the eventual result) or clear a job.
-
-        The device self-times its recording and cannot be interrupted, so an active
-        job is only FLAGGED cancelled — it keeps draining and the result is dropped
-        on arrival. A terminal job is simply deleted. Returns the resulting status.
-        """
-        now = time.monotonic()
-        self._evict_stale(now)
-        job = self._jobs.get(device)
-        if job is None:
-            return self._idle(device)
-        if job.task is not None and not job.task.done():
-            job.cancel_requested = True
-            if job.state == "recording":
-                job.state = "cancelled"
-            return job.snapshot(now)
-        # Terminal job: drop it so the device is free again.
-        del self._jobs[device]
-        return self._idle(device)
 
     def take_result(self, device: str):
         """One-shot: pop a completed capture's WAV. Returns (wav, seconds) or None."""

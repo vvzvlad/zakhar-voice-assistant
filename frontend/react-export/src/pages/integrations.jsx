@@ -7,7 +7,7 @@ import SchemaForm, { schemaNeedsRestart } from "../components/SchemaForm.jsx";
 import { useAppData } from "../appData.jsx";
 import { useStageForm, errorLines } from "../useStageForm.js";
 import { deref } from "../schema.js";
-import { getPrompt, putPrompt, getDevices, getTools, startCapture, getCaptureStatus, cancelCapture, downloadCaptureResult } from "../api.js";
+import { getPrompt, putPrompt, getDevices, getTools, startCapture, getCaptureStatus, downloadCaptureResult } from "../api.js";
 
 function Card({ title, sub, children, foot, right }) {
   return <div className="z-card">
@@ -334,16 +334,14 @@ function DeviceModal({ initial, onSave, onClose, title, device, online }) {
 
 // "Record X seconds" control shown inside the Edit-speaker modal. The recording
 // runs as a SERVER-SIDE background task decoupled from this browser session: we
-// only start it, poll its status (for the live countdown), auto-download the WAV
-// when done, or cancel it. Closing the browser no longer cancels the recording
-// (which used to reboot the device). Cancel just discards the result and resets
-// the UI — the device self-times its recording and drains on its own. Disabled —
-// with a tooltip — while offline.
+// only start it, poll its status (for the live countdown), and auto-download the
+// WAV when done. Closing the browser no longer cancels the recording (which used
+// to reboot the device). Disabled — with a tooltip — while offline.
 function CaptureControl({ device, online }) {
   const [seconds, setSeconds] = useState(5);
   const [status, setStatus] = useState({ state: "idle" });
   const [err, setErr] = useState(null);
-  const [working, setWorking] = useState(false);  // start/cancel button disabling
+  const [working, setWorking] = useState(false);  // start button disabling
   const downloadedRef = useRef(false);            // fire the auto-download once per "done"
 
   const refresh = useCallback(async () => {
@@ -354,8 +352,8 @@ function CaptureControl({ device, online }) {
   // Reset and re-sync whenever the device changes (modal reopened on another row).
   useEffect(() => { downloadedRef.current = false; refresh(); }, [device, refresh]);
 
-  // "recording" and "cancelled" both mean the device is still physically recording.
-  const recording = status.state === "recording" || status.state === "cancelled";
+  // The device is physically recording while the state is "recording".
+  const recording = status.state === "recording";
 
   // Poll once a second only while the device is actively recording.
   useEffect(() => {
@@ -387,27 +385,13 @@ function CaptureControl({ device, online }) {
     finally { setWorking(false); }
   };
 
-  const cancel = async () => {
-    setErr(null);
-    setWorking(true);
-    try { setStatus(await cancelCapture(device)); }
-    catch (e) { setErr(e.message || "failed"); }
-    finally { setWorking(false); }
-  };
-
-  // Status line text while the device is recording (or draining after a cancel).
-  let recText;
-  if (status.state === "cancelled") recText = `Cancelling… device finishing (${status.remaining}s)`;
-  else if (status.remaining > 0) recText = `Recording… ${status.remaining}s left`;
-  else recText = "Processing…";
+  // Status line text while the device is recording.
+  const recText = status.remaining > 0 ? `Recording… ${status.remaining}s left` : "Processing…";
 
   return <Field label="Capture sample" hint={`Records ${seconds}s of mic audio and downloads it as a WAV. Used for wake-word training.`}>
     <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
       {recording
-        ? <>
-            <span className="z-fh">{recText}</span>
-            <button className="z-btn g" disabled={status.state === "cancelled" || working} onClick={cancel}>Cancel</button>
-          </>
+        ? <span className="z-fh">{recText}</span>
         : <>
             <Stepper value={seconds} min={1} max={300} onChange={setSeconds} unit="s" />
             <button className="z-btn p" disabled={!online || working} title={online ? "" : "Speaker offline"}

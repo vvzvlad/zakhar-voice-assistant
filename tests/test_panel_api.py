@@ -545,7 +545,6 @@ async def test_capture_endpoints_without_manager_return_503(tmp_path):
     try:
         assert (await client.post("/api/capture", json={"device": "h", "seconds": 5})).status == 503
         assert (await client.get("/api/capture", params={"device": "h"})).status == 503
-        assert (await client.post("/api/capture/cancel", json={"device": "h"})).status == 503
         assert (await client.get("/api/capture/result", params={"device": "h"})).status == 503
     finally:
         await client.close()
@@ -562,43 +561,6 @@ async def test_capture_result_404_when_nothing_recorded(tmp_path):
         assert resp.status == 404
         assert "no capture result" in (await resp.json())["error"]
     finally:
-        await client.close()
-
-
-async def test_capture_cancel_discards_result_and_frees_device(tmp_path):
-    # Cancel flags an in-flight capture cancelled (the device self-times and keeps
-    # draining); a new start stays blocked (409) until the task completes, then the
-    # result is discarded and status returns to idle.
-    release = asyncio.Event()
-
-    async def cap(device, seconds):
-        await release.wait()
-        return _wav_bytes()
-
-    client, _svc_, _ev = await _client(tmp_path, device_capture=cap)
-    try:
-        started = await client.post("/api/capture", json={"device": "hall", "seconds": 5})
-        assert started.status == 202
-        await _poll_state(client, "hall", "recording")
-
-        # Cancel -> state "cancelled" while the device is still draining.
-        cancelled = await client.post("/api/capture/cancel", json={"device": "hall"})
-        assert cancelled.status == 200
-        assert (await cancelled.json())["state"] == "cancelled"
-
-        # The device window has not elapsed -> a new start is still blocked.
-        busy = await client.post("/api/capture", json={"device": "hall", "seconds": 5})
-        assert busy.status == 409
-
-        # Let the device finish; the arrived result is discarded and status goes idle.
-        release.set()
-        await _poll_state(client, "hall", "idle")
-
-        # Nothing to download for a cancelled capture.
-        res = await client.get("/api/capture/result", params={"device": "hall"})
-        assert res.status == 404
-    finally:
-        release.set()
         await client.close()
 
 

@@ -90,7 +90,7 @@ class PanelServer:
         # device_capture: optional async callable (device_name, seconds) -> bytes that records a
         #   manual sample and returns it as WAV bytes (DeviceManager.capture). It is run by a
         #   CaptureJobManager as a background task (so a browser disconnect can't cancel it and
-        #   reboot the device); the capture endpoints poll/download/cancel that job. None -> the
+        #   reboot the device); the capture endpoints poll/download that job. None -> the
         #   manager is not built and every /api/capture* endpoint returns 503.
         # runs_store: optional RunsStore for the observability endpoints (None -> empty/zeros)
         # tool_sources: optional zero-arg callable -> list[dict] (ToolHub.describe()), None -> []
@@ -192,8 +192,8 @@ class PanelServer:
         many seconds of mic audio (no STT/LLM/TTS). The recording runs as a
         SERVER-SIDE background task and is NOT tied to this HTTP request: closing the
         browser no longer cancels it (which used to reboot the device). The browser
-        then polls GET /api/capture for the live countdown, downloads the result via
-        GET /api/capture/result, or releases it via POST /api/capture/cancel.
+        then polls GET /api/capture for the live countdown and downloads the result
+        via GET /api/capture/result.
 
         Status codes:
           - 202 started (returns the initial status snapshot, state "recording")
@@ -243,24 +243,6 @@ class PanelServer:
                 {"error": 'query param "device" is required'}, status=400
             )
         return web.json_response(self._capture_jobs.status(device))
-
-    async def _post_capture_cancel(self, request: web.Request) -> web.Response:
-        """Release a device's capture: discard the result and reset the UI.
-
-        The device self-times its recording and cannot be interrupted, so this only
-        stops waiting for the result — the device drains on its own (no reboot).
-        """
-        if self._capture_jobs is None:
-            return web.json_response({"error": "capture not available"}, status=503)
-        body = await _read_json(request)
-        if not isinstance(body, dict):
-            return web.json_response({"error": "body must be a JSON object"}, status=400)
-        device = body.get("device")
-        if not isinstance(device, str) or not device:
-            return web.json_response(
-                {"error": 'field "device" (string) is required'}, status=400
-            )
-        return web.json_response(self._capture_jobs.cancel(device))
 
     async def _get_capture_result(self, request: web.Request) -> web.Response:
         """Download a completed capture's WAV (one-shot; consumed server-side)."""
@@ -394,7 +376,6 @@ class PanelServer:
             web.get("/api/devices", self._get_devices),
             web.post("/api/capture", self._post_capture),
             web.get("/api/capture", self._get_capture_status),
-            web.post("/api/capture/cancel", self._post_capture_cancel),
             web.get("/api/capture/result", self._get_capture_result),
             web.get("/api/tools", self._get_tools),
             web.get("/api/runs", self._get_runs),

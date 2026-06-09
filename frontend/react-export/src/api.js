@@ -60,14 +60,11 @@ export const getDevices = () => request("/api/devices");
 // Background capture: the recording runs as a server-side task decoupled from the
 // browser request, so closing the browser no longer cancels it (which used to
 // reboot the device). start kicks it off (202 -> initial status), getCaptureStatus
-// polls for the live countdown, cancelCapture releases the device (the device keeps
-// draining on its own), and downloadCaptureResult fetches the finished WAV.
+// polls for the live countdown, and downloadCaptureResult fetches the finished WAV.
 export const startCapture = (device, seconds) =>
   request("/api/capture", { method: "POST", body: { device, seconds } });
 export const getCaptureStatus = (device) =>
   request(`/api/capture?device=${encodeURIComponent(device)}`);
-export const cancelCapture = (device) =>
-  request("/api/capture/cancel", { method: "POST", body: { device } });
 
 // Download the already-recorded WAV held server-side (one-shot; consumed on read)
 // and trigger a browser download. The backend returns the WAV as an attachment; we
