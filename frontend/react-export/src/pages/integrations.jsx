@@ -343,6 +343,7 @@ function CaptureControl({ device, online }) {
   const [running, setRunning] = useState(false);
   const [phase, setPhase] = useState("");     // progress / status line
   const [err, setErr] = useState(null);
+  const [stopping, setStopping] = useState(false); // Stop pressed, waiting for current take to finish
   const cancelRef = useRef(false);            // Stop button -> end batch after current take
 
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -369,6 +370,7 @@ function CaptureControl({ device, online }) {
     setErr(null);
     cancelRef.current = false;
     setRunning(true);
+    setStopping(false);
     let ok = 0;
     try {
       for (let i = 1; i <= count; i++) {
@@ -382,6 +384,7 @@ function CaptureControl({ device, online }) {
       setPhase(`Stopped at ${ok}/${count}`);
     } finally {
       setRunning(false);
+      setStopping(false);
     }
   };
 
@@ -389,8 +392,12 @@ function CaptureControl({ device, online }) {
     <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
       {running
         ? <>
-            <span className="z-fh">{phase || "…"}</span>
-            <button className="z-btn" onClick={() => { cancelRef.current = true; }}>Stop</button>
+            <span className="z-fh">{(phase || "…") + (stopping ? " — will stop after this take" : "")}</span>
+            <button
+              className={stopping ? "z-btn warn" : "z-btn d"}
+              disabled={stopping}
+              onClick={() => { cancelRef.current = true; setStopping(true); }}
+            >{stopping ? "Stopping…" : "Stop"}</button>
           </>
         : <>
             <Stepper value={seconds} min={1} max={300} onChange={setSeconds} unit="s" />
