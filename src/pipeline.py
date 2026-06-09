@@ -23,6 +23,7 @@ import os
 import time
 import wave
 
+import numpy as np
 import webrtcvad
 from aioesphomeapi import VoiceAssistantEventType as VAET
 from loguru import logger
@@ -141,6 +142,25 @@ def _pcm_to_wav_bytes(pcm: bytes) -> bytes:
     return buf.getvalue()
 
 
+def _apply_gain(pcm: bytes, gain: float) -> bytes:
+    """Multiply 16-bit mono PCM samples by ``gain``, clipping to the int16 range.
+
+    A plain linear gain applied to the mic audio in the server pipeline (used to
+    boost the quieter less-processed mic channel). Clipping happens BEFORE the int16
+    cast so loud samples saturate instead of wrapping. ``gain == 1.0`` is a no-op
+    (the same bytes are returned). Empty / odd-length input is handled safely (a
+    trailing odd byte, if any, is preserved unchanged).
+    """
+    if gain == 1.0 or not pcm:
+        return pcm
+    n = len(pcm) - (len(pcm) % 2)  # whole int16 samples only
+    if n == 0:
+        return pcm
+    samples = np.frombuffer(pcm[:n], dtype="<i2").astype(np.float32) * gain
+    boosted = np.clip(samples, -32768, 32767).astype("<i2").tobytes()
+    return boosted + pcm[n:]  # keep any trailing odd byte unchanged
+
+
 def _trim_start_pcm(pcm: bytes, trim_ms: int) -> bytes:
     """Drop the first ``trim_ms`` of 16 kHz / mono / 16-bit PCM from an utterance.
 
@@ -187,6 +207,8 @@ class Pipeline:
         self._finalized = False
         # Logging-only flag: log "receiving audio" once per run, not per chunk.
         self._audio_logged = False
+        # Logging-only flag: warn once per run if mic.channel=1 but no 2nd channel.
+        self._mic_fallback_logged = False
 
         # Manual "record X seconds" capture (see arm_capture). _capture_armed is set
         # BEFORE the device's voice_assistant.start fires; the next on_start consumes
@@ -384,6 +406,7 @@ class Pipeline:
         self._elapsed_ms = 0
         self._finalized = False
         self._audio_logged = False
+        self._mic_fallback_logged = False
         # Best-effort cancel any still-pending ack/filler announce tasks from a prior
         # run before starting this one. Both are fire-and-forget on the announce
         # channel and can linger up to the 30 s announce timeout; the ack fires on
@@ -433,13 +456,15 @@ class Pipeline:
         return 0  # 0 = audio comes in-band over the API connection.
 
     async def on_audio(self, data: bytes, data2=None) -> None:
-        """Accumulate mic PCM and run VAD end-pointing.
+        """Accumulate mic PCM and run VAD end-pointing on the configured channel.
 
-        The Voice PE streams two mic channels: data = ch0 (more-processed, XMOS AGC
-        out), data2 = ch1 (less-processed, NS out). ch0 had poor quality at the phrase
-        tail, so when the second channel is present we run the WHOLE pipeline (VAD +
-        STT + capture) on ch1 to A/B its quality; data2 is None on single-channel
-        firmware -> unchanged behavior (revert by removing the `if data2:` swap below).
+        The Voice PE streams two mic channels: channel 0 (`data`) is the more-
+        processed XMOS AGC output, channel 1 (`data2`) the less-processed XMOS
+        noise-suppression output (cleaner but quieter). The whole pipeline (capture +
+        VAD + STT) runs on the channel selected by `core.mic.channel`, with a linear
+        input gain from `core.mic.gain` applied first. Both are read live off
+        `self.core` (a property over the runtime config), so panel changes apply on
+        the next utterance — no restart.
 
         The speaker streams continuously and never signals end-of-speech, so we
         detect it here: VAD over the PCM finalizes the utterance once speech is
@@ -453,10 +478,21 @@ class Pipeline:
         if self._finalized:
             return  # Ignore late audio for an already-finalized run.
 
-        # ch1 test: prefer the less-processed second mic channel when the device sends
-        # it (data2). Everything below (capture, VAD, STT) then runs on ch1.
-        if data2:
-            data = data2
+        # Select the mic channel for the WHOLE pipeline (capture + VAD + STT) from
+        # config (0 = processed, 1 = less-processed/quieter). Channel 1 uses the
+        # device's second stream when present; if it's missing, fall back to channel 0
+        # and warn once per run. Then apply the configured input gain. Read live off
+        # self.core, so panel changes take effect on the next utterance.
+        if self.core.mic.channel == 1:
+            if data2:
+                data = data2
+            elif not self._mic_fallback_logged:
+                self._mic_fallback_logged = True
+                logger.debug(
+                    f"{self.name}: mic.channel=1 but device sent no second channel; "
+                    f"using channel 0"
+                )
+        data = _apply_gain(data, self.core.mic.gain)
 
         # Manual capture-only mode: accumulate PCM, run NO VAD/STT/LLM/TTS. End on the
         # device stop (on_stop) or when the server-side deadline (seconds + margin) is

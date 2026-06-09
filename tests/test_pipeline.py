@@ -1,3 +1,4 @@
+import numpy as np
 import pytest
 from aioesphomeapi import VoiceAssistantEventType as VAET
 
@@ -7,6 +8,7 @@ from src.pipeline import (
     CaptureBusyError,
     CaptureEmptyError,
     Pipeline,
+    _apply_gain,
     _pcm_to_wav_bytes,
     _trim_start_pcm,
     contains_stt_hallucination,
@@ -1933,3 +1935,62 @@ async def test_ack_is_fire_and_forget_does_not_delay_finalize(tmp_path, monkeypa
     assert pipeline._ack_tasks  # still tracked, not yet done
     for task in list(pipeline._ack_tasks):
         task.cancel()
+
+
+# --- mic channel selection + input gain (core.mic) ---
+
+def test_apply_gain_doubles_samples():
+    pcm = np.array([1000, -1000, 500], dtype="<i2").tobytes()
+    assert np.frombuffer(_apply_gain(pcm, 2.0), "<i2").tolist() == [2000, -2000, 1000]
+
+
+def test_apply_gain_clips_before_cast_no_wraparound():
+    pcm = np.array([20000, -20000], dtype="<i2").tobytes()
+    # 20000*4 = 80000 must saturate to int16 bounds, NOT wrap to a negative number.
+    assert np.frombuffer(_apply_gain(pcm, 4.0), "<i2").tolist() == [32767, -32768]
+
+
+def test_apply_gain_unity_is_noop_identity():
+    pcm = b"\x01\x02\x03\x04"
+    assert _apply_gain(pcm, 1.0) is pcm
+
+
+def test_apply_gain_empty_safe():
+    assert _apply_gain(b"", 2.0) == b""
+
+
+def test_apply_gain_odd_length_preserves_trailing_byte():
+    pcm = np.array([1000], dtype="<i2").tobytes() + b"\x07"
+    out = _apply_gain(pcm, 2.0)
+    assert out == np.array([2000], dtype="<i2").tobytes() + b"\x07"
+
+
+async def test_mic_channel1_uses_second_stream(tmp_path, monkeypatch):
+    pipeline, _ = make_pipeline(tmp_path, monkeypatch)
+    pipeline.core.mic.channel = 1  # live config: take the less-processed channel
+    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_audio(b"\x00\x00", b"\x11\x11")  # ch0 zeros, ch1 = 0x1111
+    assert bytes(pipeline._buffer) == b"\x11\x11"
+
+
+async def test_mic_channel0_uses_first_stream(tmp_path, monkeypatch):
+    pipeline, _ = make_pipeline(tmp_path, monkeypatch)  # default channel 0
+    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_audio(b"\x22\x22", b"\x11\x11")
+    assert bytes(pipeline._buffer) == b"\x22\x22"
+
+
+async def test_mic_channel1_falls_back_to_first_when_no_second_stream(tmp_path, monkeypatch):
+    pipeline, _ = make_pipeline(tmp_path, monkeypatch)
+    pipeline.core.mic.channel = 1
+    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_audio(b"\x22\x22", None)  # device sent only one channel
+    assert bytes(pipeline._buffer) == b"\x22\x22"
+
+
+async def test_mic_gain_applied_to_buffer(tmp_path, monkeypatch):
+    pipeline, _ = make_pipeline(tmp_path, monkeypatch)
+    pipeline.core.mic.gain = 2.0  # live config
+    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_audio(np.array([1000], dtype="<i2").tobytes())
+    assert np.frombuffer(bytes(pipeline._buffer), "<i2").tolist() == [2000]

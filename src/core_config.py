@@ -35,6 +35,16 @@ class VadConfig(BaseModel):
     )
 
 
+class MicConfig(BaseModel):
+    # Which Voice PE mic channel feeds the whole server pipeline (capture + VAD + STT).
+    # 0 = processed (XMOS AGC output); 1 = less-processed (XMOS noise-suppression
+    # output) — cleaner but quieter. Read live, so panel changes apply next utterance.
+    channel: Literal[0, 1] = Field(0, json_schema_extra={"widget": "select"})
+    # Linear input gain applied to the selected channel's PCM before VAD/STT. Boosts
+    # the quieter less-processed channel (and helps the VAD detect speech).
+    gain: float = Field(1.0, ge=1.0, le=8.0, json_schema_extra={"widget": "slider"})
+
+
 class NetworkConfig(BaseModel):
     external_proxy: str = ""
 
@@ -128,6 +138,7 @@ class CoreConfig(BaseModel):
     context: ContextConfig = ContextConfig()
     audio: AudioConfig = AudioConfig()
     vad: VadConfig = VadConfig()
+    mic: MicConfig = MicConfig()
     network: NetworkConfig = NetworkConfig()
     openweathermap: OpenWeatherMapConfig = OpenWeatherMapConfig()
     mcp_servers: list[McpServerConfig] = []

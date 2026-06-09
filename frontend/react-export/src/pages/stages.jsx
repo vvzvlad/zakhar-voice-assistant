@@ -87,6 +87,16 @@ export function VAD() {
     saving: ackSaving, err: ackErr, save: ackSave,
   } = useStageForm(ackValues, buildAckPatch, patch);
 
+  // Mic input: which device mic channel feeds the pipeline + input gain. core.mic.*
+  // is a LIVE reconfig (read per-chunk via the Runtime), so its SaveBar omits `restart`.
+  const micSchema = coreSchema.$defs ? coreSchema.$defs.MicConfig : null;
+  const micValues = catalog.core.values.mic || {};
+  const buildMicPatch = (draft) => ({ core: { mic: draft } });
+  const {
+    draft: micDraft, onChange: micOnChange, dirty: micDirty,
+    saving: micSaving, err: micErr, save: micSave,
+  } = useStageForm(micValues, buildMicPatch, patch);
+
   const preset = matchPreset(draft);
   const applyPreset = (name) => {
     const p = VAD_PRESETS[name];
@@ -108,6 +118,13 @@ export function VAD() {
     <Card title="Advanced parameters" foot={<FormSaveBar dirty={dirty} saving={saving} onSave={save} restart errors={errorLines(err)} />}>
       <SchemaForm schema={{ ...vadSchema, $defs: coreSchema.$defs }} root={{ ...vadSchema, $defs: coreSchema.$defs }} values={draft} onChange={onChange} />
     </Card>
+    {micSchema && <>
+      <div style={{ height: 16 }} />
+      <Card title="Microphone channel & gain" sub="which device mic stream feeds the pipeline · input gain">
+        <SchemaForm schema={{ ...micSchema, $defs: coreSchema.$defs }} root={{ ...micSchema, $defs: coreSchema.$defs }} values={micDraft} onChange={micOnChange} />
+        <FormSaveBar dirty={micDirty} saving={micSaving} onSave={micSave} errors={errorLines(micErr)} />
+      </Card>
+    </>}
     {ackSchema && <>
       <div style={{ height: 16 }} />
       <Card title="End-of-phrase chime" sub="confirmation «блям» played when your phrase ends">

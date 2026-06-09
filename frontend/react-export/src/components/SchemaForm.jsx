@@ -52,7 +52,9 @@ function SchemaField({ name, node, root, value, onChange, optionsFor }) {
   let control;
   if (dynamic && optionsFor) {
     control = <DynamicSelect value={value} onChange={set} load={() => optionsFor(name)} />;
-  } else if (enums && type !== "number" && type !== "integer" && type !== "boolean") {
+  } else if (enums && type !== "boolean") {
+    // Numeric enums (e.g. mic.channel = Literal[0,1]) render as a Seg/Select too,
+    // not a Stepper — an explicit enum always means "pick one of these".
     control = enums.length <= 3
       ? <Seg full options={enums} value={value} onChange={set} />
       : <Select value={value} options={enums} onChange={set} />;
@@ -101,7 +103,9 @@ function SchemaField({ name, node, root, value, onChange, optionsFor }) {
   }
 
   // Boolean / stepper render nicely as a "row" field (label left, control right).
-  const row = type === "boolean" || (type === "integer" && !(r.minimum != null && r.maximum != null && widget === "slider"));
+  // Numeric enums render as a Seg/Select (handled above), not a stepper, so exclude
+  // them here too — they lay out like the other enum selects, not as a row.
+  const row = type === "boolean" || (type === "integer" && !enums && !(r.minimum != null && r.maximum != null && widget === "slider"));
   return (
     <Field label={label} hint={finalHint} row={row}>
       {control}

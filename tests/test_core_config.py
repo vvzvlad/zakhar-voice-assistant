@@ -6,6 +6,7 @@ from src.core_config import (
     CalendarConfig,
     CoreConfig,
     McpServerConfig,
+    MicConfig,
     OpenWeatherMapConfig,
     VadConfig,
 )
@@ -82,3 +83,29 @@ def test_builtin_prompt_fields_carry_textarea_widget():
     cal = CalendarConfig.model_json_schema()["properties"]["prompt"]
     assert owm["widget"] == "textarea"
     assert cal["widget"] == "textarea"
+
+
+def test_mic_defaults_are_channel0_unity_gain():
+    m = MicConfig()
+    assert m.channel == 0
+    assert m.gain == 1.0
+
+
+def test_mic_channel_literal_rejects_out_of_range():
+    MicConfig(channel=0)
+    MicConfig(channel=1)
+    with pytest.raises(ValidationError):
+        MicConfig(channel=2)
+
+
+def test_mic_gain_range_validated():
+    MicConfig(gain=1.0)
+    MicConfig(gain=8.0)
+    with pytest.raises(ValidationError):
+        MicConfig(gain=0.5)  # below 1.0
+    with pytest.raises(ValidationError):
+        MicConfig(gain=8.1)  # above 8.0
+
+
+def test_core_config_has_mic_section():
+    assert CoreConfig().mic == MicConfig()
