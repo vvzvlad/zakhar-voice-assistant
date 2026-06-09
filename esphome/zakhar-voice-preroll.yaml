@@ -80,9 +80,18 @@ esphome:
 
 # Pre-roll: prepend this much pre-detection audio to the stream so «Захар <команда>»
 # arrives as one continuous utterance (deep-merged into the package's voice_assistant).
-# Set 0ms to disable. Tune 1200–2000 ms on hardware to v8's detection latency.
+# Set 0ms to disable.
 voice_assistant:
-  preroll_duration: 1500ms
+  preroll_duration: 2000ms
+
+# Disable the wake-word confirmation chime ("блям"). With pre-roll the user speaks
+# «Захар <команда>» continuously, so the stock chime overlaps and corrupts the
+# command audio. The stock firmware gates that chime on a `wake_sound` switch
+# (default ON); !extend forces it ALWAYS_OFF on every boot (still a HA switch you can
+# flip back on if ever wanted).
+switch:
+  - id: !extend wake_sound
+    restore_mode: ALWAYS_OFF
 
 # Bake Wi-Fi credentials in (the stock config relies on Bluetooth/serial "improv"
 # provisioning; for a headless setup hard-coding the network is more reliable).
