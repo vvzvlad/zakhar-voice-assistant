@@ -332,72 +332,74 @@ function DeviceModal({ initial, onSave, onClose, title, device, online }) {
   </Modal>;
 }
 
-// "Record X seconds" control shown inside the Edit-speaker modal. The recording
-// runs as a SERVER-SIDE background task decoupled from this browser session: we
-// only start it, poll its status (for the live countdown), and auto-download the
-// WAV when done. Closing the browser no longer cancels the recording (which used
-// to reboot the device). Disabled — with a tooltip — while offline.
+// "Record X seconds" control shown inside the Edit-speaker modal. Each recording
+// runs as a SERVER-SIDE background task (start -> poll countdown -> download WAV).
+// With a count > 1 the browser loops that full cycle back-to-back, downloading one
+// WAV per take — so you collect many wake-word samples without re-clicking. A Stop
+// button ends the batch after the current take. Disabled (tooltip) while offline.
 function CaptureControl({ device, online }) {
-  const [seconds, setSeconds] = useState(5);
-  const [status, setStatus] = useState({ state: "idle" });
+  const [seconds, setSeconds] = useState(30);
+  const [count, setCount] = useState(1);      // how many takes to record back-to-back
+  const [running, setRunning] = useState(false);
+  const [phase, setPhase] = useState("");     // progress / status line
   const [err, setErr] = useState(null);
-  const [working, setWorking] = useState(false);  // start button disabling
-  const downloadedRef = useRef(false);            // fire the auto-download once per "done"
+  const cancelRef = useRef(false);            // Stop button -> end batch after current take
 
-  const refresh = useCallback(async () => {
-    try { const s = await getCaptureStatus(device); setStatus(s); return s; }
-    catch { const s = { state: "idle" }; setStatus(s); return s; }
-  }, [device]);
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-  // Reset and re-sync whenever the device changes (modal reopened on another row).
-  useEffect(() => { downloadedRef.current = false; refresh(); }, [device, refresh]);
-
-  // The device is physically recording while the state is "recording".
-  const recording = status.state === "recording";
-
-  // Poll once a second only while the device is actively recording.
-  useEffect(() => {
-    if (!recording) return;
-    const id = setInterval(refresh, 1000);
-    return () => clearInterval(id);
-  }, [recording, refresh]);
-
-  // React to terminal states: auto-download a finished WAV (once), surface errors.
-  useEffect(() => {
-    if (status.state === "done" && !downloadedRef.current) {
-      downloadedRef.current = true;
-      (async () => {
-        try { await downloadCaptureResult(device); }
-        catch (e) { setErr(e.message || "download failed"); }
-        finally { await refresh(); }  // result is consumed server-side -> flips to idle
-      })();
-    } else if (status.state === "error") {
-      setErr(status.error || "capture failed");
+  // One full capture: start the server-side job, poll until terminal, download the WAV.
+  // Returns true if a WAV was downloaded, false if the job ended without a result.
+  async function captureOnce(idx, total) {
+    await startCapture(device, seconds);
+    for (;;) {
+      const s = await getCaptureStatus(device);
+      if (s.state === "recording" || s.state === "cancelled") {
+        setPhase(`Recording ${idx}/${total}… ${s.remaining > 0 ? s.remaining + "s left" : "processing"}`);
+        await sleep(1000);
+        continue;
+      }
+      if (s.state === "done") { await downloadCaptureResult(device); return true; }
+      if (s.state === "error") { throw new Error(s.error || "capture failed"); }
+      return false;  // idle / unknown -> no result for this take
     }
-  }, [status.state, status.error, device, refresh]);
+  }
 
-  const start = async () => {
+  // Run `count` takes sequentially. Stops early on the Stop button or a hard error.
+  const run = async () => {
     setErr(null);
-    setWorking(true);
-    downloadedRef.current = false;
-    try { setStatus(await startCapture(device, seconds)); }
-    catch (e) { setErr(e.message || "failed"); }
-    finally { setWorking(false); }
+    cancelRef.current = false;
+    setRunning(true);
+    let ok = 0;
+    try {
+      for (let i = 1; i <= count; i++) {
+        if (cancelRef.current) break;
+        setPhase(`Recording ${i}/${count}…`);
+        if (await captureOnce(i, count)) ok += 1;
+      }
+      setPhase(cancelRef.current ? `Stopped: ${ok}/${count}` : `Done: ${ok}/${count}`);
+    } catch (e) {
+      setErr(e.message || "failed");
+      setPhase(`Stopped at ${ok}/${count}`);
+    } finally {
+      setRunning(false);
+    }
   };
 
-  // Status line text while the device is recording.
-  const recText = status.remaining > 0 ? `Recording… ${status.remaining}s left` : "Processing…";
-
-  return <Field label="Capture sample" hint={`Records ${seconds}s of mic audio and downloads it as a WAV. Used for wake-word training.`}>
-    <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-      {recording
-        ? <span className="z-fh">{recText}</span>
+  return <Field label="Capture sample" hint={`Records ${seconds}s of mic audio and downloads a WAV per take${count > 1 ? ` (×${count})` : ""}. Used for wake-word training.`}>
+    <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+      {running
+        ? <>
+            <span className="z-fh">{phase || "…"}</span>
+            <button className="z-btn" onClick={() => { cancelRef.current = true; }}>Stop</button>
+          </>
         : <>
             <Stepper value={seconds} min={1} max={300} onChange={setSeconds} unit="s" />
-            <button className="z-btn p" disabled={!online || working} title={online ? "" : "Speaker offline"}
-              onClick={start}>{working ? "…" : "Record sample"}</button>
+            <Stepper value={count} min={1} max={1000} onChange={setCount} unit="takes" />
+            <button className="z-btn p" disabled={!online} title={online ? "" : "Speaker offline"}
+              onClick={run}>{count > 1 ? `Record ×${count}` : "Record sample"}</button>
           </>}
     </div>
+    {!running && phase && <div className="z-fh">{phase}</div>}
     {err && <div className="z-fh" style={{ color: "#b91c1c" }}>{err}</div>}
   </Field>;
 }
