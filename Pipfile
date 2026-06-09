@@ -1,0 +1,22 @@
+[[source]]
+url = "https://pypi.org/simple"
+verify_ssl = true
+name = "pypi"
+
+[packages]
+pydantic-settings = "==2.7.0"
+loguru = "==0.7.2"
+httpx = {extras = ["socks"], version = "==0.28.1"}
+aioesphomeapi = "==45.3.1"
+aiohttp = "==3.11.11"
+webrtcvad-wheels = "==2.0.14"
+vosk = "==0.3.44"
+piper-tts = "==1.4.2"
+lameenc = "==1.8.2"
+mcp = "==1.27.2"
+caldav = "==3.2.1"
+
+[dev-packages]
+
+[requires]
+python_version = "3.11"

@@ -269,3 +269,16 @@ def summary_row(rec: dict, run_id: int, has_audio: bool = False) -> dict:
     row = {col: (run_id if col == "id" else rec.get(col)) for col in _LIST_COLS}
     row["has_audio"] = 1 if has_audio else 0
     return row
+
+
+def live_row(rec: dict) -> dict:
+    """Build an in-progress (live) run row for incremental WS streaming.
+
+    Same summary shape as summary_row but for a run that has NOT been persisted
+    yet: it has no DB id (id stays None) and is flagged `live` so the panel can
+    upsert the same row (keyed by device) as later stages stream in.
+    """
+    row = {col: rec.get(col) for col in _LIST_COLS}  # id absent in rec -> None
+    row["has_audio"] = 0
+    row["live"] = 1
+    return row

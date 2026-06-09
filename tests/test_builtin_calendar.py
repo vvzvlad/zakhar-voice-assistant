@@ -426,6 +426,48 @@ def test_create_event_default_times():
     assert "DTSTART" in ical
 
 
+def test_create_event_all_day_default_end():
+    # A bare date start with no end -> all-day VEVENT: DTSTART/DTEND as VALUE=DATE,
+    # end defaulting to the next day (RFC 5545 DTEND is exclusive).
+    ical, result = _saved_ical({"summary": "Holiday", "start": date(2026, 6, 10)})
+    assert "DTSTART;VALUE=DATE:20260610" in ical
+    assert "DTEND;VALUE=DATE:20260611" in ical
+    assert result["start"] == "2026-06-10"
+    assert result["end"] == "2026-06-11"
+
+
+def test_create_event_all_day_explicit_multiday():
+    ical, _ = _saved_ical(
+        {"summary": "Trip", "start": date(2026, 6, 10), "end": date(2026, 6, 12)}
+    )
+    assert "DTSTART;VALUE=DATE:20260610" in ical
+    assert "DTEND;VALUE=DATE:20260612" in ical
+
+
+def test_create_event_all_day_zero_length_bumped():
+    # end == start would be a zero-length all-day event (rejected by servers); the
+    # client bumps DTEND to the next day.
+    ical, _ = _saved_ical(
+        {"summary": "Day", "start": date(2026, 6, 10), "end": date(2026, 6, 10)}
+    )
+    assert "DTEND;VALUE=DATE:20260611" in ical
+
+
+def test_create_event_all_day_yandex_keeps_date():
+    # All-day events have no time to normalize; the Yandex UTC path must not turn a
+    # date into a datetime (which would emit a timed DTSTART).
+    ical, _ = _saved_ical(
+        {"summary": "Y all-day", "start": date(2026, 6, 10)},
+        url="https://caldav.yandex.ru/",
+    )
+    dtstart = next(l for l in ical.splitlines() if l.startswith("DTSTART"))
+    assert "DTSTART;VALUE=DATE:20260610" in ical
+    # The serialized value (after the ':') must carry no time component: an all-day
+    # date is "20260610", a timed value would be "20260610T000000Z". (The "T" in the
+    # property name "DTSTART" itself is irrelevant.)
+    assert "T" not in dtstart.split(":", 1)[1]
+
+
 def test_create_event_escaping_round_trip():
     # Special chars (; , \\ and newline) must survive create -> parse via icalendar,
     # which handles RFC 5545 escaping itself (no manual escape helper).
@@ -750,6 +792,37 @@ async def test_create_event_returns_uid():
     assert args[1] == datetime(2026, 6, 9, 9, 0)
 
 
+async def test_create_event_tool_all_day_from_date_string():
+    # A date-only string (no time) must reach the client as a `date`, not a midnight
+    # datetime, so the event is created all-day.
+    client = _fake_client()
+    source = BuiltinMcpSource("calendar", build_calendar_server(client))
+    await source.start()
+
+    await source.call("create_event", {"summary": "Vacation", "start": "2026-06-10"})
+    args = client.create_event.call_args.args
+    assert args[1] == date(2026, 6, 10)
+    assert not isinstance(args[1], datetime)
+
+
+async def test_create_event_tool_timed_start_date_end_stays_timed():
+    # Mixed input: a timed start with a date-only end. The end must reach the client
+    # as a datetime (midnight), not a bare date — otherwise a timed DTSTART would pair
+    # with a DTEND;VALUE=DATE, which RFC 5545 forbids.
+    client = _fake_client()
+    source = BuiltinMcpSource("calendar", build_calendar_server(client))
+    await source.start()
+
+    await source.call(
+        "create_event",
+        {"summary": "Mixed", "start": "2026-06-10T09:00:00", "end": "2026-06-12"},
+    )
+    args = client.create_event.call_args.args
+    assert args[1] == datetime(2026, 6, 10, 9, 0)
+    assert args[2] == datetime(2026, 6, 12, 0, 0)
+    assert isinstance(args[2], datetime)
+
+
 async def test_delete_event_tool():
     client = _fake_client()
     source = BuiltinMcpSource("calendar", build_calendar_server(client))
@@ -812,7 +885,8 @@ async def test_get_events_tool_parses_dates():
     assert "Range event" in out
     args = client.get_events.call_args.args
     assert args[0] == datetime(2026, 6, 9)
-    assert args[1] == datetime(2026, 6, 10)
+    # Date-only end is advanced to the next midnight (whole day inclusive).
+    assert args[1] == datetime(2026, 6, 11)
 
 
 async def test_get_events_tool_bad_dates():
@@ -821,6 +895,33 @@ async def test_get_events_tool_bad_dates():
 
     out = await source.call("get_events", {"start": "not-a-date", "end": "also-bad"})
     assert "Не понял даты" in out
+
+
+async def test_get_events_tool_same_day_range_covers_whole_day():
+    # Regression: a single-day query (start == end, date-only) must search the
+    # whole day, not a zero-width [start, end) window that finds nothing.
+    client = _fake_client()
+    source = BuiltinMcpSource("calendar", build_calendar_server(client))
+    await source.start()
+
+    await source.call("get_events", {"start": "2026-06-10", "end": "2026-06-10"})
+    args = client.get_events.call_args.args
+    assert args[0] == datetime(2026, 6, 10)
+    assert args[1] == datetime(2026, 6, 11)
+
+
+async def test_get_events_tool_datetime_end_kept_exact():
+    # An END that carries an explicit time must be used verbatim, not advanced.
+    client = _fake_client()
+    source = BuiltinMcpSource("calendar", build_calendar_server(client))
+    await source.start()
+
+    await source.call(
+        "get_events",
+        {"start": "2026-06-10T08:00:00", "end": "2026-06-10T18:00:00"},
+    )
+    args = client.get_events.call_args.args
+    assert args[1] == datetime(2026, 6, 10, 18, 0, 0)
 
 
 # --- search_events tool ------------------------------------------------------
@@ -850,7 +951,8 @@ async def test_search_events_tool_with_dates():
     )
     args = client.search_events.call_args.args
     assert args[1] == datetime(2026, 6, 1)
-    assert args[2] == datetime(2026, 6, 30)
+    # Date-only end is advanced to the next midnight (whole day inclusive).
+    assert args[2] == datetime(2026, 7, 1)
 
 
 async def test_search_events_tool_empty():

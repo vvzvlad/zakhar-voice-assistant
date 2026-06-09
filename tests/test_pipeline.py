@@ -662,8 +662,9 @@ async def test_utterance_audio_not_stored_when_disabled(tmp_path, monkeypatch):
 
 
 async def test_run_broadcast_on_happy_path(tmp_path, monkeypatch):
-    # With both a store and a run-events hub, a finalized run is broadcast once,
-    # carrying the same summary shape /api/runs returns.
+    # With both a store and a run-events hub, a happy-path run now streams live
+    # partials BEFORE the finalized broadcast. The LAST broadcast is the finalized
+    # summary, carrying the same shape /api/runs returns.
     patch_llm(monkeypatch, reply="готово")
     store = FakeRunsStore()
     hub = FakeRunEvents()
@@ -675,9 +676,9 @@ async def test_run_broadcast_on_happy_path(tmp_path, monkeypatch):
     await pipeline.on_audio(b"\x01\x02" * 100)
     await pipeline.on_stop(False)
 
-    # Exactly one broadcast for the single recorded run.
-    assert len(hub.broadcasts) == 1
-    payload = hub.broadcasts[0]
+    # More than one broadcast: live partials precede the single finalized one.
+    assert len(hub.broadcasts) > 1
+    payload = hub.broadcasts[-1]
     assert payload["type"] == "run"
     # The store returns id 1 for the first insert; the summary echoes it.
     assert payload["run"]["id"] == 1
@@ -686,6 +687,62 @@ async def test_run_broadcast_on_happy_path(tmp_path, monkeypatch):
     assert set(payload["run"].keys()) == set(_LIST_COLS) | {"has_audio"}
     # This happy-path run stored its utterance audio, so the flag is set.
     assert payload["run"]["has_audio"] == 1
+    # The finalized row is NOT a live partial.
+    assert not payload["run"].get("live")
+
+
+async def test_run_streams_live_stage_updates(tmp_path, monkeypatch):
+    # The pipeline streams ordered live partials (STT then LLM) before the
+    # finalized broadcast, so the admin panel fills the row in stage by stage.
+    patch_llm(monkeypatch, reply="готово")
+    store = FakeRunsStore()
+    hub = FakeRunEvents()
+    pipeline, _ = make_pipeline(
+        tmp_path, monkeypatch, stt_text="включи свет", runs_store=store, run_events=hub,
+    )
+
+    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_audio(b"\x01\x02" * 100)
+    await pipeline.on_stop(False)
+
+    assert len(hub.broadcasts) >= 3
+    # First broadcast: the live STT partial — recognized text present, no LLM yet,
+    # no DB id yet.
+    first = hub.broadcasts[0]
+    assert first["run"]["live"]
+    assert first["run"]["id"] is None
+    assert first["run"]["stt_text"] == "включи свет"
+    assert not first["run"].get("llm_text")
+    # Some live partial before the final carries the LLM reply.
+    assert any(
+        b["run"].get("live") and b["run"].get("llm_text") == "готово"
+        for b in hub.broadcasts
+    )
+    # Last broadcast: finalized (real id, not live).
+    assert hub.broadcasts[-1]["run"]["id"] == 1
+    assert not hub.broadcasts[-1]["run"].get("live")
+
+
+async def test_no_live_partial_on_no_speech(tmp_path, monkeypatch):
+    # A no_speech finalization skips STT entirely (returns before the live STT
+    # partial), so it emits NO live partial — only the single finalized empty run.
+    patch_llm(monkeypatch)
+    store = FakeRunsStore()
+    hub = FakeRunEvents()
+    pipeline, _ = make_pipeline(
+        tmp_path, monkeypatch, stt_text="   ", runs_store=store, run_events=hub,
+    )
+    set_small_vad_thresholds(pipeline)
+    # Never any speech: only the no-speech timeout can finalize.
+    pipeline._vad = FakeVad([False])
+
+    await pipeline.on_start("cid", 0, None, None)
+    # no_speech_timeout_ms=200 -> 10 frames; feed 11 to cross it.
+    await pipeline.on_audio(FRAME * 11)
+
+    assert len(hub.broadcasts) == 1
+    assert not hub.broadcasts[0]["run"].get("live")
+    assert hub.broadcasts[0]["run"]["result"] == "empty"
 
 
 async def test_no_broadcast_without_hub(tmp_path, monkeypatch):
@@ -734,11 +791,14 @@ async def test_run_broadcast_on_empty_stt(tmp_path, monkeypatch):
     await pipeline.on_audio(b"\x01\x02" * 100)
     await pipeline.on_stop(False)
 
-    # The empty run is recorded once AND broadcast once to live subscribers.
+    # The empty run is recorded once AND pushed to live subscribers. The empty STT
+    # still emits a live partial, so the FINAL (finalized) broadcast is the last one.
     assert len(store.records) == 1
-    assert len(hub.broadcasts) == 1
-    assert hub.broadcasts[0]["type"] == "run"
-    assert hub.broadcasts[0]["run"]["result"] == "empty"
+    assert len(hub.broadcasts) >= 1
+    payload = hub.broadcasts[-1]
+    assert payload["type"] == "run"
+    assert payload["run"]["result"] == "empty"
+    assert not payload["run"].get("live")
 
 
 async def test_truly_empty_audio_not_recorded(tmp_path, monkeypatch):
@@ -1388,8 +1448,8 @@ class InsertRaisingRunsStore(FakeRunsStore):
 
 async def test_run_record_insert_failure_is_isolated(tmp_path, monkeypatch):
     # If runs_store.insert() raises, the run must still complete the full happy path
-    # (all events incl. RUN_END) and on_stop must not propagate the error. Because the
-    # run_id is never obtained, no broadcast can happen — the hub is left untouched.
+    # (all events incl. RUN_END) and on_stop must not propagate the error. The run_id
+    # is never obtained, so no FINALIZED broadcast happens — only the live partials.
     patch_llm(monkeypatch, reply="готово")
     store = InsertRaisingRunsStore()
     hub = FakeRunEvents()
@@ -1403,8 +1463,10 @@ async def test_run_record_insert_failure_is_isolated(tmp_path, monkeypatch):
 
     # Full happy path still emitted, ending in RUN_END.
     assert types_of(events) == FULL_SEQUENCE
-    # No run_id -> no broadcast: the hub never sees a payload.
-    assert hub.broadcasts == []
+    # Live partials still stream, but with no run_id there is no finalized broadcast:
+    # every payload the hub saw is a live partial (id is None / live flagged).
+    assert all(b["run"].get("live") for b in hub.broadcasts)
+    assert not any(b["run"].get("id") is not None for b in hub.broadcasts)
 
 
 class PutAudioRaisingRunsStore(FakeRunsStore):
@@ -1433,9 +1495,11 @@ async def test_put_audio_failure_is_isolated(tmp_path, monkeypatch):
     assert VAET.VOICE_ASSISTANT_RUN_END in types_of(events)
     # Recorded exactly once despite the audio-store failure.
     assert len(store.records) == 1
-    # Broadcast still fires, but has_audio is falsy (the audio never stored).
-    assert len(hub.broadcasts) == 1
-    assert not hub.broadcasts[0]["run"]["has_audio"]
+    # The finalized broadcast (last one, after the live partials) still fires, but
+    # has_audio is falsy (the audio never stored).
+    payload = hub.broadcasts[-1]
+    assert not payload["run"]["has_audio"]
+    assert not payload["run"].get("live")
 
 
 class BroadcastRaisingRunEvents(FakeRunEvents):
@@ -1463,8 +1527,9 @@ async def test_broadcast_failure_is_isolated(tmp_path, monkeypatch):
 
     assert VAET.VOICE_ASSISTANT_RUN_END in types_of(events)
     assert len(store.records) == 1
-    # The broadcast was attempted (and raised), but did not break the run.
-    assert len(hub.broadcasts) == 1
+    # Broadcasts (live partials + the finalized one) were attempted and each raised,
+    # but none broke the run.
+    assert len(hub.broadcasts) >= 1
 
 
 async def test_raw_capture_to_disk_failure_is_isolated(tmp_path, monkeypatch):

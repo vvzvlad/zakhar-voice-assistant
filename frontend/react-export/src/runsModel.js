@@ -47,8 +47,14 @@ function fmtTime(ts) {
 // unless the detail payload carries them.
 export function mapRun(row) {
   if (!row) return row;
+  // Live (in-progress) rows have no DB id yet; they are upserted by device, so
+  // they are keyed "live:<device>". Finalized rows are keyed by their real id.
+  const live = !!row.live;
+  const key = live ? "live:" + (row.device ?? "") : row.id;
   return {
     ...row,
+    key,
+    live,
     time: fmtTime(row.ts),
     stt: row.stt_text,
     llm: row.llm_text,
@@ -66,4 +72,25 @@ export function mapRun(row) {
       ? { stage: row.error_stage, text: row.error_text }
       : null,
   };
+}
+
+// Status pill meta for a run row: an in-progress (live) row shows "Running";
+// otherwise it maps result -> RESULT_META (falling back to a muted label).
+export function statusMeta(r) {
+  if (r && r.live) return { label: "Running", tone: "muted" };
+  return RESULT_META[r && r.result] || { label: r && r.result, tone: "muted" };
+}
+
+// Apply a streamed run (live partial or finalized) to the current list.
+// Rows are keyed by `mapped.key` (real id when finalized, "live:<device>" while
+// live). A finalized run ALWAYS removes the live row it supersedes (same device),
+// even when the finalized row itself is filtered out, so a live row is never
+// stranded; it is (re)inserted only when `match` is true. A live partial is
+// inserted only when `match` is true. Newest first, capped at `cap`.
+export function applyStreamedRun(prev, mapped, match, cap = 100) {
+  const drop = new Set([mapped.key]);
+  if (!mapped.live && mapped.device != null) drop.add("live:" + mapped.device);
+  const rest = prev.filter((r) => !drop.has(r.key));
+  if (mapped.live) return match ? [mapped, ...rest].slice(0, cap) : prev;
+  return match ? [mapped, ...rest].slice(0, cap) : rest;
 }

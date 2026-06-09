@@ -8,7 +8,7 @@ import { PageHeader, Waterfall, Loading } from "../components/primitives.jsx";
 import { useAppData } from "../appData.jsx";
 import { STAGES } from "../stageMeta.js";
 import { getMetrics, getRuns, openRunsStream } from "../api.js";
-import { RESULT_META, STAGE_COLOR, fmtSec, mapRun, totalMs } from "../runsModel.js";
+import { STAGE_COLOR, fmtSec, mapRun, totalMs, statusMeta, applyStreamedRun } from "../runsModel.js";
 
 const SC = STAGE_COLOR;
 
@@ -59,8 +59,8 @@ function Dashboard() {
   useEffect(() => {
     const stop = openRunsStream((row) => {
       const mapped = mapRun(row);
-      setRecent((prev) => [mapped, ...prev.filter((r) => r.id !== mapped.id)].slice(0, 5));
-      getMetrics().then((m) => setMetrics(m)).catch(() => { /* keep last good */ });
+      setRecent((prev) => applyStreamedRun(prev, mapped, true, 5));
+      if (!mapped.live) getMetrics().then((m) => setMetrics(m)).catch(() => { /* keep last good */ });
     });
     return stop;
   }, []);
@@ -128,12 +128,12 @@ function Dashboard() {
                 <thead><tr><th>Time</th><th>Device</th><th>Recognized</th><th>Response</th><th style={{ textAlign: "right" }}>Σ</th><th>Stage waterfall</th><th>Status</th></tr></thead>
                 <tbody>
                   {recent.map((r) => {
-                    const rm = RESULT_META[r.result] || { label: r.result, tone: "muted" };
-                    return <tr key={r.id} onClick={() => { try { localStorage.setItem("z-openreq", String(r.id)); } catch { /* ignore */ } nav("log"); }}>
+                    const rm = statusMeta(r);
+                    return <tr key={r.key} onClick={() => { if (r.id == null) return; try { localStorage.setItem("z-openreq", String(r.id)); } catch { /* ignore */ } nav("log"); }}>
                       <td className="tm">{r.time}</td>
                       <td style={{ fontWeight: 600 }}>{r.device}</td>
-                      <td><div className={"z-tx" + (r.stt ? "" : " mut")}>{r.stt || "(silence)"}</div></td>
-                      <td><div className={"z-tx wide" + (r.llm ? "" : " mut")}>{r.llm || "—"}</div></td>
+                      <td><div className={"z-tx" + (r.stt ? "" : " mut")}>{r.stt || (r.live ? "…" : "(silence)")}</div></td>
+                      <td><div className={"z-tx wide" + (r.llm ? "" : " mut")}>{r.llm || (r.live ? "…" : "—")}</div></td>
                       <td className="num" style={{ fontWeight: 600 }}>{fmtSec(totalMs(r))}</td>
                       <td><Waterfall r={r} /></td>
                       <td><span className={"z-st " + rm.tone}><span className={"z-dot " + (rm.tone === "good" ? "ok" : rm.tone === "bad" ? "error" : "off")} />{rm.label}</span></td>

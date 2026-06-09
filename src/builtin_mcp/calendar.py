@@ -345,8 +345,8 @@ class CalendarClient:
     def create_event(
         self,
         summary: str,
-        start: datetime | None = None,
-        end: datetime | None = None,
+        start: date | datetime | None = None,
+        end: date | datetime | None = None,
         description: str = "",
         location: str = "",
         priority=None,
@@ -355,21 +355,38 @@ class CalendarClient:
     ) -> dict:
         """Create a single VEVENT on the calendar and return its core fields.
 
-        Optional fields (description, location, priority, reminders, recurrence) are
-        added only when provided, so existing callers that pass just summary/start/end
-        keep working unchanged.
+        A bare `date` start (no time component) produces an all-day event
+        (DTSTART;VALUE=DATE / DTEND;VALUE=DATE); a `datetime` start produces a timed
+        event. Optional fields (description, location, priority, reminders, recurrence)
+        are added only when provided, so existing callers that pass just
+        summary/start/end keep working unchanged.
         """
-        # Default times: start = next full hour, end = start + 1h.
+        # Default start when omitted: next full hour (a timed event).
         if start is None:
             now = datetime.now().astimezone()
             start = now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
-        if end is None:
-            end = start + timedelta(hours=1)
 
-        # Yandex prefers UTC: normalize so DTSTART/DTEND serialize with a trailing `Z`.
-        if self.is_yandex:
-            start = self._to_yandex_utc(start)
-            end = self._to_yandex_utc(end)
+        # A bare `date` start (no time component) means an all-day event: icalendar
+        # serializes a date as DTSTART;VALUE=DATE. datetime is a subclass of date, so
+        # the `not isinstance(..., datetime)` guard is required to tell them apart.
+        all_day = isinstance(start, date) and not isinstance(start, datetime)
+
+        if all_day:
+            # RFC 5545 DTEND is exclusive for all-day events; a single-day event ends
+            # on the next day. Keep DTSTART/DTEND the same value type (date) and ensure
+            # DTEND > DTSTART (a zero-length all-day event is rejected by servers).
+            if isinstance(end, datetime):
+                end = end.date()
+            if end is None or end <= start:
+                end = start + timedelta(days=1)
+        else:
+            if end is None:
+                end = start + timedelta(hours=1)
+            # Yandex prefers UTC so DTSTART/DTEND serialize with a trailing `Z`. All-day
+            # events carry no time, so this only applies to timed events.
+            if self.is_yandex:
+                start = self._to_yandex_utc(start)
+                end = self._to_yandex_utc(end)
 
         uid = uuid.uuid4().hex + "@zakhar"
         cal = ICalendar()
@@ -474,6 +491,40 @@ def _parse_dt(value: str) -> datetime:
         return datetime.strptime(value, "%Y-%m-%d")
 
 
+def _parse_range_end(value: str) -> datetime:
+    """Parse a range END boundary; a bare date covers that whole day.
+
+    CalDAV time-range search uses a half-open [start, end) window, so a date-only
+    END like "2026-06-10" must advance to the next midnight to include events on
+    that day (otherwise start == end yields an empty window and finds nothing). An
+    END that carries an explicit time is used verbatim.
+    """
+    parsed = _parse_dt(value)
+    # Date-only input (no time component) -> exclusive upper bound = next midnight.
+    if "T" not in value and ":" not in value:
+        return parsed + timedelta(days=1)
+    return parsed
+
+
+def _parse_event_dt(value: str) -> date | datetime:
+    """Parse an event boundary, preserving a bare calendar date as a `date`.
+
+    A date-only input ("YYYY-MM-DD", no time component) returns a `date` so
+    create_event can emit an all-day VEVENT (DTSTART;VALUE=DATE). Anything carrying a
+    time returns a `datetime`. Contrast with `_parse_dt`, which always widens to a
+    datetime — used by the range/search tools where a time boundary is required.
+    """
+    text = value.strip()
+    # No time component -> treat as an all-day date. (datetime.fromisoformat would
+    # otherwise widen "2026-06-10" to a midnight datetime.)
+    if "T" not in text and ":" not in text:
+        try:
+            return date.fromisoformat(text)
+        except ValueError:
+            pass
+    return _parse_dt(text)
+
+
 def _format_events(events: list[dict], empty_text: str) -> str:
     """Render an event list as readable Russian text, one event per line."""
     if not events:
@@ -551,7 +602,7 @@ def build_calendar_server(client: CalendarClient) -> FastMCP:
     async def get_events(start: str, end: str) -> str:
         try:
             start_dt = _parse_dt(start)
-            end_dt = _parse_dt(end)
+            end_dt = _parse_range_end(end)
         except ValueError:
             return "Не понял даты: используйте формат ГГГГ-ММ-ДД или ISO дату-время."
         try:
@@ -578,7 +629,7 @@ def build_calendar_server(client: CalendarClient) -> FastMCP:
             if start:
                 start_dt = _parse_dt(start)
             if end:
-                end_dt = _parse_dt(end)
+                end_dt = _parse_range_end(end)
         except ValueError:
             return "Не понял даты: используйте формат ГГГГ-ММ-ДД или ISO дату-время."
         try:
@@ -607,8 +658,9 @@ def build_calendar_server(client: CalendarClient) -> FastMCP:
         description=(
             "Создать событие в календаре. summary — название; start и end — "
             "дата (ГГГГ-ММ-ДД) или ISO дата-время (если не указаны, берётся ближайший "
-            "час и длительность 1 час). Необязательно: description, location, "
-            "priority (0-9), recurrence (правило повторения, напр. WEEKLY или "
+            "час и длительность 1 час). Если start задан только датой (ГГГГ-ММ-ДД, без "
+            "времени), событие создаётся на весь день. Необязательно: description, "
+            "location, priority (0-9), recurrence (правило повторения, напр. WEEKLY или "
             "FREQ=WEEKLY;INTERVAL=2;BYDAY=MO,WE), reminders (список напоминаний "
             "в минутах до начала)."
         ),
@@ -627,8 +679,12 @@ def build_calendar_server(client: CalendarClient) -> FastMCP:
         end_dt = None
         try:
             if start:
-                start_dt = _parse_dt(start)
+                # Date-only start -> a `date`, so the client emits an all-day event.
+                start_dt = _parse_event_dt(start)
             if end:
+                # End stays a datetime: the client coerces it to a date inside the
+                # all-day branch, so a timed start never pairs with a VALUE=DATE end
+                # (mismatched value types are RFC 5545-invalid).
                 end_dt = _parse_dt(end)
         except ValueError:
             return "Не понял даты: используйте формат ГГГГ-ММ-ДД или ISO дату-время."

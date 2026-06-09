@@ -1,6 +1,6 @@
 // Unit tests for the backend-row -> UI-run adapter (src/runsModel.js).
 import { describe, it, expect } from "vitest";
-import { mapRun, totalMs, fmtSec } from "../runsModel.js";
+import { mapRun, totalMs, fmtSec, statusMeta, applyStreamedRun } from "../runsModel.js";
 
 describe("mapRun", () => {
   it("returns null for a null row (pass-through)", () => {
@@ -29,6 +29,73 @@ describe("mapRun", () => {
     expect(mapRun({ id: 1, ts: 0 }).error).toBeNull();
     const withErr = mapRun({ id: 1, ts: 0, error_stage: "stt", error_text: "boom" });
     expect(withErr.error).toEqual({ stage: "stt", text: "boom" });
+  });
+
+  it("keys a finalized row by id and marks it not-live", () => {
+    const out = mapRun({ id: 42, ts: 0 });
+    expect(out.key).toBe(42);
+    expect(out.live).toBe(false);
+  });
+
+  it("keys a live row by device and marks it live (no id)", () => {
+    const out = mapRun({ live: 1, device: "kitchen", ts: 0 });
+    expect(out.key).toBe("live:kitchen");
+    expect(out.live).toBe(true);
+    expect(out.id == null).toBe(true);
+  });
+});
+
+describe("statusMeta", () => {
+  it("returns a Running pill for a live row", () => {
+    expect(statusMeta({ live: true })).toEqual({ label: "Running", tone: "muted" });
+  });
+
+  it("maps a finalized result to its RESULT_META entry", () => {
+    expect(statusMeta({ result: "ok" })).toEqual({ label: "OK", tone: "good" });
+  });
+});
+
+describe("applyStreamedRun", () => {
+  it("prepends a matching live partial, replacing a prior live row for the same device", () => {
+    const prev = [{ key: "live:kitchen", device: "kitchen", stt: "old" }];
+    const next = { key: "live:kitchen", live: true, device: "kitchen", stt: "new" };
+    const out = applyStreamedRun(prev, next, true, 100);
+    expect(out).toEqual([next]);
+  });
+
+  it("finalized (match) drops the superseded live row and dedups same id, then prepends", () => {
+    const prev = [
+      { key: "live:kitchen", device: "kitchen" },
+      { key: 7, id: 7, stt: "stale" },
+      { key: 3, id: 3 },
+    ];
+    const fin = { key: 7, id: 7, live: false, device: "kitchen", stt: "fresh" };
+    const out = applyStreamedRun(prev, fin, true, 100);
+    expect(out).toEqual([fin, { key: 3, id: 3 }]);
+  });
+
+  it("finalized with match=false still removes the superseded live row but does not insert itself", () => {
+    const prev = [
+      { key: "live:kitchen", device: "kitchen" },
+      { key: 3, id: 3 },
+    ];
+    const fin = { key: 9, id: 9, live: false, device: "kitchen" };
+    const out = applyStreamedRun(prev, fin, false, 100);
+    expect(out).toEqual([{ key: 3, id: 3 }]);
+  });
+
+  it("returns the previous list unchanged for a non-matching live partial", () => {
+    const prev = [{ key: 3, id: 3 }];
+    const live = { key: "live:bath", live: true, device: "bath" };
+    const out = applyStreamedRun(prev, live, false, 100);
+    expect(out).toBe(prev);
+  });
+
+  it("respects the cap argument", () => {
+    const prev = [{ key: 1, id: 1 }, { key: 2, id: 2 }, { key: 3, id: 3 }];
+    const fin = { key: 4, id: 4, live: false, device: "x" };
+    const out = applyStreamedRun(prev, fin, true, 2);
+    expect(out).toEqual([fin, { key: 1, id: 1 }]);
   });
 });
 

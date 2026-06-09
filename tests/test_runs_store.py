@@ -3,7 +3,7 @@
 import asyncio
 import time
 
-from src.runs_store import RunsStore, _LIST_COLS, summary_row
+from src.runs_store import RunsStore, _LIST_COLS, live_row, summary_row
 
 
 def _store(tmp_path):
@@ -243,6 +243,18 @@ def test_summary_row_missing_keys_become_none():
     assert row["device"] == "kitchen"
     assert row["stt_text"] is None
     assert row["t_total"] is None
+
+
+def test_live_row_shape_and_flags():
+    # live_row builds an in-progress row: no DB id, flagged live, summary shape.
+    rec = _rec(stt_text="включи свет", llm_text="Готово.", t_total=2000)
+    row = live_row(rec)
+    assert row["id"] is None
+    assert row["live"] == 1
+    assert row["has_audio"] == 0
+    assert set(row.keys()) == set(_LIST_COLS) | {"has_audio", "live"}
+    # Provided fields are echoed through.
+    assert row["stt_text"] == "включи свет"
 
 
 def test_prune_drops_old_rows(tmp_path):

@@ -6,7 +6,7 @@ import React, { useState, useEffect, useCallback, useRef } from "react";
 import { Ic } from "../components/icons.jsx";
 import { PageHeader, Waterfall, KV, Loading, ErrorBox } from "../components/primitives.jsx";
 import { getRuns, getRun, openRunsStream, runAudioUrl, downloadRunAudio } from "../api.js";
-import { RESULT_META, STAGE_COLOR, fmtSec, mapRun, totalMs } from "../runsModel.js";
+import { RESULT_META, STAGE_COLOR, fmtSec, mapRun, totalMs, statusMeta, applyStreamedRun } from "../runsModel.js";
 import { matchesFilters } from "../runsFilters.js";
 
 const SC = STAGE_COLOR;
@@ -156,9 +156,9 @@ function Log() {
 
   useEffect(() => {
     const stop = openRunsStream((row) => {
-      if (!matchesFilters(row, filtersRef.current)) return;
       const mapped = mapRun(row);
-      setRuns((prev) => [mapped, ...prev.filter((r) => r.id !== mapped.id)].slice(0, 100));
+      const match = matchesFilters(row, filtersRef.current);
+      setRuns((prev) => applyStreamedRun(prev, mapped, match, 100));
     });
     return stop;
   }, []);
@@ -210,12 +210,12 @@ function Log() {
                   <thead><tr><th>Time</th><th>Device</th><th>Recognized</th><th>Response</th><th style={{ textAlign: "right" }}>Tok</th><th>Stage waterfall</th><th style={{ textAlign: "right" }}>Σ</th><th>Status</th></tr></thead>
                   <tbody>
                     {runs.map((r) => {
-                      const m = RESULT_META[r.result] || { label: r.result, tone: "muted" };
-                      return <tr key={r.id} className={openId === r.id ? "sel" : ""} onClick={() => openRow(r.id)}>
+                      const m = statusMeta(r);
+                      return <tr key={r.key} className={openId === r.id ? "sel" : ""} onClick={() => { if (r.id != null) openRow(r.id); }}>
                         <td className="tm">{r.time}</td>
                         <td style={{ fontWeight: 600 }}>{r.device}</td>
-                        <td><div className={"z-tx" + (r.stt ? "" : " mut")}>{r.stt || "(silence)"}</div></td>
-                        <td><div className={"z-tx" + (r.llm ? "" : " mut")}>{r.llm || "—"}</div></td>
+                        <td><div className={"z-tx" + (r.stt ? "" : " mut")}>{r.stt || (r.live ? "…" : "(silence)")}</div></td>
+                        <td><div className={"z-tx" + (r.llm ? "" : " mut")}>{r.llm || (r.live ? "…" : "—")}</div></td>
                         <td className="num">{r.tokens || "—"}</td>
                         <td><Waterfall r={r} /></td>
                         <td className="num" style={{ fontWeight: 600 }}>{fmtSec(totalMs(r))}</td>

@@ -29,7 +29,7 @@ from loguru import logger
 
 from src import config_store, context, llm
 from src.audio_server import tts_url
-from src.runs_store import summary_row
+from src.runs_store import live_row, summary_row
 
 # WebRTC VAD requires mono 16-bit PCM frames of exactly 10/20/30 ms at 16 kHz.
 # We use 20 ms frames = 16000 * 2 * 20/1000 = 640 bytes.
@@ -186,6 +186,12 @@ class Pipeline:
         # Injected by DeviceClient on connect (bound to the live API client).
         self.send_event = None
         self.send_audio = None
+
+        # Tail of the chained background tasks that broadcast live (in-progress) run
+        # snapshots. Scheduling these off the run coroutine keeps a slow WS client from
+        # backpressuring `self._lock`; `_run`'s outer finally awaits this tail (outside
+        # the lock) so the finalized broadcast never overtakes a partial. None = idle.
+        self._live_send_tail = None
 
     # Read-through convenience properties: external callers (DeviceClient.announce,
     # tests) and the run logic below all reach config/backends THROUGH the runtime,
@@ -484,6 +490,38 @@ class Pipeline:
         self._buffer.clear()
         return pcm
 
+    def _emit_live(self, record) -> None:
+        """Schedule a best-effort broadcast of the current in-progress run snapshot.
+
+        The snapshot is built SYNCHRONOUSLY here (so a later stage mutating `record`
+        can't alter an already-scheduled message), then sent from a background task
+        chained after this pipeline's previous live send. Scheduling instead of
+        awaiting keeps a slow/stuck WS client from backpressuring the per-device
+        `self._lock` that `_run` holds across the whole run — the same reason the
+        finalized broadcast is deferred outside the lock. Chaining preserves per-stage
+        delivery order; `_run`'s outer `finally` drains the chain (outside the lock)
+        before the finalized broadcast so the final never overtakes a partial.
+        """
+        if self.run_events is None:
+            return
+        row = live_row(record)  # snapshot now; `record` keeps mutating across stages
+        prev = self._live_send_tail
+
+        async def _send():
+            # Preserve order: wait for the previous live send first. `prev` swallows
+            # its own errors, so awaiting it never raises here.
+            if prev is not None:
+                try:
+                    await prev
+                except Exception:  # noqa: BLE001 - defensive; _send never re-raises
+                    pass
+            try:
+                await self.run_events.broadcast({"type": "run", "run": row})
+            except Exception as e:  # noqa: BLE001 - live updates must never break a run
+                logger.debug(f"{self.name}: live run update failed: {e}")
+
+        self._live_send_tail = asyncio.create_task(_send())
+
     async def _run(self, reason, pcm, conversation_id) -> None:
         """Run STT -> LLM -> TTS -> events on the already-claimed audio, once.
 
@@ -604,6 +642,10 @@ class Pipeline:
                         text = ""
                     record["stt_text"] = text
                     self._emit(VAET.VOICE_ASSISTANT_STT_END, {"text": text})
+                    # Live STT partial: surface the recognized text in the panel
+                    # immediately, before the empty-transcription check (fires for
+                    # both empty and non-empty text).
+                    self._emit_live(record)
                     if not text.strip():
                         # Empty transcription: result stays "empty"; record in finally.
                         logger.info(f"{self.name}: empty transcription, ending run")
@@ -648,6 +690,9 @@ class Pipeline:
                         f"{self.name}: 💬 LLM reply ({time.perf_counter() - llm_t:.2f}s): "
                         f"{reply!r}"
                     )
+                    # Live LLM partial: record now carries llm_text, model, tokens,
+                    # rounds, t_llm and the updated result.
+                    self._emit_live(record)
 
                     try:
                         context.append_context(
@@ -749,14 +794,24 @@ class Pipeline:
                                     record, run_id, has_audio=stored_audio
                                 )
         finally:
-            # Outside the lock: push the finalized run to live panel subscribers.
-            # In a `finally` (not merely after the `async with`) so the broadcast
-            # still fires on the early-return paths inside the lock — a no_speech or
-            # empty-transcription run is recorded in the lock's `finally` and sets
-            # `pending_run`, but `return`s before this point, which previously skipped
-            # its live WS update. Kept outside the lock so a slow WebSocket consumer
-            # can't backpressure the next run on this speaker. Fully isolated — a
-            # broadcast failure (or a slow client) must never affect the run or the lock.
+            # Outside the lock: first drain any in-flight live stage broadcasts, then
+            # push the finalized run. The live partials are scheduled as background
+            # tasks (see _emit_live) so a slow WS client can't backpressure the
+            # per-device lock held during the run; draining the chain HERE — outside
+            # the lock — both guarantees the finalized broadcast never overtakes a
+            # partial and keeps a stuck client from delaying the next run on this
+            # speaker. This `finally` (not merely after the `async with`) also ensures
+            # the finalized broadcast still fires on the early-return paths inside the
+            # lock (no_speech / empty-transcription set `pending_run` then `return`).
+            # Fully isolated — a broadcast failure or slow client must never affect the
+            # run or the lock.
+            tail = self._live_send_tail
+            self._live_send_tail = None
+            if tail is not None:
+                try:
+                    await tail
+                except Exception as e:  # noqa: BLE001 - draining must never break the run
+                    logger.debug(f"{self.name}: live run update drain failed: {e}")
             if pending_run is not None:
                 try:
                     await self.run_events.broadcast({"type": "run", "run": pending_run})
