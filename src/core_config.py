@@ -23,15 +23,30 @@ class AudioConfig(BaseModel):
 
 
 class VadConfig(BaseModel):
-    aggressiveness: int = Field(2, ge=0, le=3)
-    silence_ms: int = 800
-    min_speech_ms: int = 200
-    max_utterance_ms: int = 15000
-    no_speech_timeout_ms: int = 8000
+    aggressiveness: int = Field(
+        2, ge=0, le=3,
+        description="WebRTC VAD sensitivity (0–3). Higher classifies borderline audio as non-speech more readily, so the phrase end-points sooner and soft trailing sounds may be cut; lower is more tolerant and waits longer.",
+    )
+    silence_ms: int = Field(
+        800,
+        description="Trailing silence after speech before the utterance is considered finished. Higher tolerates longer mid-phrase pauses but adds the same delay before the reply starts.",
+    )
+    min_speech_ms: int = Field(
+        200,
+        description="Minimum total detected speech for the audio to count as a real utterance; shorter blips are treated as noise and dropped.",
+    )
+    max_utterance_ms: int = Field(
+        15000,
+        description="Hard cap on a single utterance — it is force-finalized once it reaches this length even if no trailing silence was seen.",
+    )
+    no_speech_timeout_ms: int = Field(
+        8000,
+        description="If no speech at all is detected after capture starts, give up and end the run after this long.",
+    )
     trim_start_ms: int = Field(
         200,
         ge=0,
-        description="Drop this many ms off the start of the captured sample before STT (cuts the wake-word tail / button-press click). 0 disables.",
+        description="Drop this many ms off the start of the captured sample before STT (cuts the wake-word tail / button-press click).",
     )
     # Which Voice PE mic channel feeds the whole pipeline (capture + VAD + STT).
     # 0 = processed (XMOS AGC output); 1 = less-processed (XMOS noise-suppression
