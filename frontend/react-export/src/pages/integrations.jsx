@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback, useRef } from "react";
+import React, { useEffect, useLayoutEffect, useState, useCallback, useRef } from "react";
 import { Ic } from "../components/icons.jsx";
 import {
   Field, KeyInput, PageHeader, FormSaveBar, StatusPill, Pill, Modal, Stepper, Loading, Select,
@@ -249,6 +249,26 @@ export function Prompt() {
   };
   useEffect(() => { load(); }, []);
 
+  // Resize the editor textarea to fit its content so the whole prompt is visible
+  // without an inner scrollbar. Reset to "auto" first so scrollHeight reflects the
+  // content height, not the current box; then add the vertical border so border-box
+  // sizing leaves no clipped or overflowing pixels.
+  const taRef = useRef(null);
+  const autoGrow = useCallback(() => {
+    const el = taRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    const border = el.offsetHeight - el.clientHeight; // top+bottom borders (no scrollbar with overflow hidden)
+    el.style.height = `${el.scrollHeight + border}px`;
+  }, []);
+  // Recompute height whenever text changes (initial load and every edit) and on
+  // window resize, since wrapping (and thus height) depends on the textarea width.
+  useLayoutEffect(() => { autoGrow(); }, [text, autoGrow]);
+  useEffect(() => {
+    window.addEventListener("resize", autoGrow);
+    return () => window.removeEventListener("resize", autoGrow);
+  }, [autoGrow]);
+
   const dirty = text != null && text !== loaded;
   const save = async () => {
     setSaving(true); setErr(null);
@@ -287,8 +307,8 @@ export function Prompt() {
       <Card right={<span className="sub" style={{ marginLeft: "auto" }}>{text.length} chars · {path}</span>} title="Editor"
         foot={err ? <div className="z-foot"><span className="z-dirty" style={{ color: "#b91c1c" }}>{errorLines(err).join(" · ")}</span></div> : undefined}>
         <div style={{ padding: "8px 0" }}>
-          <textarea value={text} onChange={(e) => setText(e.target.value)} spellCheck={false}
-            style={{ width: "100%", minHeight: 560, resize: "vertical", border: "1px solid var(--line)", borderRadius: 8, padding: "13px 15px", fontFamily: "var(--mono)", fontSize: 12.5, lineHeight: 1.65, color: "var(--ink)", outline: "none", background: "var(--panel2)" }} />
+          <textarea ref={taRef} value={text} onChange={(e) => setText(e.target.value)} spellCheck={false}
+            style={{ width: "100%", minHeight: 560, resize: "none", overflow: "hidden", boxSizing: "border-box", border: "1px solid var(--line)", borderRadius: 8, padding: "13px 15px", fontFamily: "var(--mono)", fontSize: 12.5, lineHeight: 1.65, color: "var(--ink)", outline: "none", background: "var(--panel2)" }} />
         </div>
       </Card>
       <div className="z-aside">
