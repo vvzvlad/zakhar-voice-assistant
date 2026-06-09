@@ -27,6 +27,66 @@ def yandex_stress_markup(text: str) -> str:
     return text.replace(_ACUTE, "")            # remove any leftover orphan accents
 
 
+# Yandex SpeechKit v3 utteranceSynthesis rejects requests whose text exceeds 250
+# characters (and ~24 s of audio, but 250 chars is the binding limit). Long replies
+# must be split into <=250-char parts, synthesized separately, and concatenated.
+# Source: yandex.cloud/docs/speechkit limits, API v3.
+YANDEX_V3_TEXT_LIMIT = 250
+
+
+def _split_oversized(fragment: str, limit: int) -> list[str]:
+    """Split a single over-limit fragment into <=limit pieces on word boundaries.
+    A single word longer than the limit is hard-sliced (rare; may break a
+    Yandex "+vowel" stress pair, acceptable for such pathological input)."""
+    out: list[str] = []
+    cur = ""
+    for word in fragment.split():
+        if len(word) > limit:
+            if cur:
+                out.append(cur)
+                cur = ""
+            for i in range(0, len(word), limit):
+                out.append(word[i:i + limit])
+            continue
+        candidate = f"{cur} {word}" if cur else word
+        if len(candidate) <= limit:
+            cur = candidate
+        else:
+            out.append(cur)
+            cur = word
+    if cur:
+        out.append(cur)
+    return out
+
+
+def _chunk_for_v3(text: str, limit: int = YANDEX_V3_TEXT_LIMIT) -> list[str]:
+    """Split already-stress-marked text into request chunks, each <=limit chars.
+    Packs whole sentences greedily; an over-limit sentence is split on words.
+    Returns [] for empty / punctuation-only input."""
+    # split_sentences already drops fragments with no word char; inputs with zero
+    # word characters (pure punctuation/emoji) are unvoiceable and rejected by
+    # Yandex with 400, so returning [] for them (empty audio, no request) is correct.
+    sentences = split_sentences(text)
+    chunks: list[str] = []
+    cur = ""
+    for s in sentences:
+        if len(s) > limit:
+            if cur:
+                chunks.append(cur)
+                cur = ""
+            chunks.extend(_split_oversized(s, limit))
+            continue
+        candidate = f"{cur} {s}" if cur else s
+        if len(candidate) <= limit:
+            cur = candidate
+        else:
+            chunks.append(cur)
+            cur = s
+    if cur:
+        chunks.append(cur)
+    return chunks
+
+
 # Sentence-ending punctuation; ellipsis "…" is normalized to "." first because
 # espeak-ng does not treat the "…" character as a pause.
 def split_sentences(text: str) -> list[str]:
@@ -202,13 +262,26 @@ class YandexTtsBackend(TtsBackend):
         self.timeout = timeout
 
     async def synthesize(self, text: str, lang: str = "ru") -> tuple[str, bytes]:
+        # v3 caps each request at YANDEX_V3_TEXT_LIMIT chars; mark stresses once, then
+        # split into bounded chunks, synthesize each, and concatenate the MP3 audio.
+        marked = yandex_stress_markup(text)
+        chunks = _chunk_for_v3(marked, YANDEX_V3_TEXT_LIMIT)
+        # Nothing pronounceable (empty / punctuation-only) -> serve no audio, don't POST.
+        audio = bytearray()
+        for chunk in chunks:
+            audio.extend(await self._synthesize_chunk(chunk))
+        return ("audio/mpeg", bytes(audio))
+
+    async def _synthesize_chunk(self, text: str) -> bytes:
+        # `text` is already stress-marked and within the length limit, so it must NOT
+        # be passed through yandex_stress_markup again (that would corrupt the markup).
         # v3 carries voice/role/speed as "hints"; the role hint is sent only when a
         # role is configured (voices without an amplua reject an empty role).
         hints = [{"voice": self.voice}, {"speed": self.speed}]
         if self.role:
             hints.insert(1, {"role": self.role})
         payload = {
-            "text": yandex_stress_markup(text),
+            "text": text,
             "hints": hints,
             "outputAudioSpec": {"containerAudio": {"containerAudioType": "MP3"}},
             "loudnessNormalizationType": "LUFS",
@@ -218,5 +291,13 @@ class YandexTtsBackend(TtsBackend):
             # Only for user-account (IAM) auth; a service-account API key infers the folder.
             headers["x-folder-id"] = self.folder_id
         resp = await self.client.post(self.url, headers=headers, json=payload, timeout=self.timeout)
-        resp.raise_for_status()
-        return ("audio/mpeg", _decode_v3_audio(resp.text))
+        try:
+            resp.raise_for_status()
+        except httpx.HTTPStatusError as e:
+            # Surface Yandex's diagnostic body (it names the real cause, e.g. text too
+            # long / bad voice / bad role); raise_for_status() alone hides it. Same
+            # philosophy as src/llm.py logging status + body.
+            raise RuntimeError(
+                f"Yandex TTS v3 {resp.status_code}: {resp.text[:500]}"
+            ) from e
+        return _decode_v3_audio(resp.text)

@@ -9,6 +9,7 @@ from src.tts import (
     PiperTtsBackend,
     TeraTtsHttpBackend,
     YandexTtsBackend,
+    _chunk_for_v3,
     _decode_v3_audio,
     split_sentences,
     wav_to_mp3,
@@ -92,6 +93,54 @@ def test_yandex_stress_markup_orphan_acute_dropped():
     assert yandex_stress_markup("ќ") == "к"
 
 
+# --- _chunk_for_v3 (v3 250-char request limit) ------------------------------
+
+# The real 325-char reply that triggered the original 400 Bad Request from
+# Yandex v3 utteranceSynthesis.
+_LONG_REPLY = (
+    "Ишь ты, так вот што записано-то. До конца недели у вас: завтра, в среду, "
+    "с полуночи воду отключат на часок, в четверг Влада в студии в пять часов "
+    "вечера, потом в субботу день рождения Хлои да ещё в десять вечера Оземпик "
+    "какой-то, а в понедельник счётчики снимать надо на казарменном в восемь "
+    "вечера. Вот вся программа, барин."
+)
+
+
+def test_chunk_for_v3_short_text_single_chunk():
+    result = _chunk_for_v3("Привет. Как дела?")
+    assert len(result) == 1
+    assert result[0] == "Привет. Как дела?"
+    assert len(result[0]) <= 250
+
+
+def test_chunk_for_v3_long_text_splits_under_limit():
+    chunks = _chunk_for_v3(_LONG_REPLY)
+    assert len(chunks) >= 2
+    assert all(len(c) <= 250 for c in chunks)
+    joined = " ".join(chunks)
+    for word in ("Хлои", "Оземпик", "счётчики"):
+        assert word in joined
+
+
+def test_chunk_for_v3_oversized_single_sentence_word_split():
+    text = " ".join(["слово"] * 60)  # no terminal punctuation, well over 250
+    chunks = _chunk_for_v3(text)
+    assert len(chunks) > 1
+    assert all(len(c) <= 250 for c in chunks)
+
+
+def test_chunk_for_v3_oversized_single_word_hard_split():
+    text = "я" * 600
+    chunks = _chunk_for_v3(text)
+    assert all(len(c) <= 250 for c in chunks)
+    assert len(chunks) == 3
+
+
+def test_chunk_for_v3_empty_and_symbol_only():
+    assert _chunk_for_v3("") == []
+    assert _chunk_for_v3("...") == []
+
+
 def test_yandex_backend_requires_api_key():
     with pytest.raises(ValueError):
         YandexTtsBackend(None, api_key="", voice="zahar", role="neutral",
@@ -139,6 +188,59 @@ async def test_yandex_synthesize_includes_folder_id_when_set():
                                    url=YANDEX_URL, timeout=10)
         await backend.synthesize("тест", "ru")
     assert route.calls.last.request.headers["x-folder-id"] == "fld123"
+
+
+@respx.mock
+async def test_yandex_synthesize_chunks_long_text_and_concatenates_audio():
+    import base64
+    import json
+
+    # Expected number of chunks for the 325-char reply, measured on the marked text
+    # exactly as synthesize() does, so the assertion tracks the real chunker.
+    num_calls = len(_chunk_for_v3(yandex_stress_markup(_LONG_REPLY)))
+    assert num_calls >= 2  # the long reply must split into multiple requests
+
+    # Distinct audio per call so a wrong concatenation order would fail the test.
+    audios = [b"\xff\xf3chunk-%d" % i for i in range(num_calls)]
+    responses = [
+        httpx.Response(
+            200,
+            text=json.dumps({"result": {"audioChunk": {"data": base64.b64encode(a).decode()}}}),
+            headers={"Content-Type": "application/json"},
+        )
+        for a in audios
+    ]
+    route = respx.post(YANDEX_URL).mock(side_effect=responses)
+    async with httpx.AsyncClient() as client:
+        backend = YandexTtsBackend(client, api_key="k", voice="zahar",
+                                   role="neutral", speed=1.0, folder_id="",
+                                   url=YANDEX_URL, timeout=10)
+        mime, audio = await backend.synthesize(_LONG_REPLY, "ru")
+
+    assert mime == "audio/mpeg"
+    # (a) one POST per chunk.
+    assert route.call_count == num_calls
+    # (b) every request stays within the v3 250-char limit.
+    for call in route.calls:
+        sent_text = json.loads(call.request.content)["text"]
+        assert len(sent_text) <= 250
+    # (c) audio is the per-call audio concatenated IN ORDER.
+    assert audio == b"".join(audios)
+
+
+@respx.mock
+async def test_yandex_synthesize_surfaces_error_body():
+    route = respx.post(YANDEX_URL).mock(
+        return_value=httpx.Response(400, text='{"error":"text is too long"}'))
+    async with httpx.AsyncClient() as client:
+        backend = YandexTtsBackend(client, api_key="k", voice="zahar",
+                                   role="neutral", speed=1.0, folder_id="",
+                                   url=YANDEX_URL, timeout=10)
+        with pytest.raises(Exception) as exc:
+            await backend.synthesize("привет", "ru")
+    assert route.called
+    assert "text is too long" in str(exc.value)
+    assert "400" in str(exc.value)
 
 
 @respx.mock

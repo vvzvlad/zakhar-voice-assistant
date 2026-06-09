@@ -31,6 +31,10 @@ from mcp.server.fastmcp import FastMCP
 # Valid RFC 5545 RRULE frequency keywords. Used to validate the freq of a recurrence.
 _VALID_FREQ = {"SECONDLY", "MINUTELY", "HOURLY", "DAILY", "WEEKLY", "MONTHLY", "YEARLY"}
 
+# All-day events have no start time, so a "minutes before start" reminder is anchored
+# to this hour on the event day (e.g. 9 -> 09:00) instead of midnight.
+ALL_DAY_REMINDER_HOUR = 9
+
 
 def _parse_until(value):
     """Parse an RRULE UNTIL value into a tz-aware datetime (UTC) or a date.
@@ -159,6 +163,18 @@ def _format_rrule(recurrence) -> dict:
         raise ValueError(f"unknown recurrence frequency: {freq_value!r}")
     result["FREQ"] = [freq_value]
     return result
+
+
+def _nonpositive_duration(start: datetime, end: datetime) -> bool:
+    """True when `end` is at or before `start` (a zero/negative-length event).
+
+    Tolerant of a tz-awareness mismatch: if a direct comparison raises (one side
+    tz-aware, the other naive), fall back to comparing the naive wall-clock values.
+    """
+    try:
+        return end <= start
+    except TypeError:
+        return end.replace(tzinfo=None) <= start.replace(tzinfo=None)
 
 
 class CalendarClient:
@@ -380,7 +396,18 @@ class CalendarClient:
             if end is None or end <= start:
                 end = start + timedelta(days=1)
         else:
+            # A bare `date` end on a timed event would mix value types (DTSTART with a
+            # time + DTEND;VALUE=DATE), which RFC 5545 forbids, and the non-positive
+            # check below cannot compare a date against a datetime. Promote it to
+            # midnight of that day, sharing the start's tzinfo, so both ends are timed.
+            if isinstance(end, date) and not isinstance(end, datetime):
+                end = datetime(end.year, end.month, end.day, tzinfo=start.tzinfo)
             if end is None:
+                end = start + timedelta(hours=1)
+            elif _nonpositive_duration(start, end):
+                # A provided end at or before start — e.g. a date-only end widened to
+                # midnight on (or before) the start's day — would yield a zero/negative
+                # length event; fall back to the default 1-hour duration.
                 end = start + timedelta(hours=1)
             # Yandex prefers UTC so DTSTART/DTEND serialize with a trailing `Z`. All-day
             # events carry no time, so this only applies to timed events.
@@ -412,7 +439,7 @@ class CalendarClient:
         if recurrence:
             event.add("rrule", _format_rrule(recurrence))
 
-        for alarm in self._build_alarms(reminders):
+        for alarm in self._build_alarms(reminders, all_day):
             event.add_component(alarm)
 
         cal.add_component(event)
@@ -426,12 +453,18 @@ class CalendarClient:
         }
 
     @staticmethod
-    def _build_alarms(reminders) -> list[Alarm]:
+    def _build_alarms(reminders, all_day: bool = False) -> list[Alarm]:
         """Build VALARM components from a list of reminder specs.
 
         Each item is either an int (minutes before start, ACTION=DISPLAY) or a dict
-        {minutes, action} where action is DISPLAY or AUDIO. The TRIGGER is a negative
-        timedelta (relative to start); DISPLAY alarms carry a DESCRIPTION.
+        {minutes, action} where action is DISPLAY or AUDIO. The TRIGGER is relative to
+        DTSTART; DISPLAY alarms carry a DESCRIPTION.
+
+        For timed events the trigger is N minutes before start (a negative timedelta).
+        For all-day events DTSTART is midnight, so "N minutes before" is anchored to
+        ALL_DAY_REMINDER_HOUR (e.g. 09:00) on the event day instead: the trigger is
+        ALL_DAY_REMINDER_HOUR hours after midnight minus N minutes (so 0 minutes fires
+        at 09:00, 60 at 08:00, 1440 at 09:00 the previous day).
         """
         alarms: list[Alarm] = []
         for item in reminders or []:
@@ -443,9 +476,13 @@ class CalendarClient:
                 action = "DISPLAY"
             if action not in {"DISPLAY", "AUDIO"}:
                 action = "DISPLAY"
+            if all_day:
+                trigger = timedelta(hours=ALL_DAY_REMINDER_HOUR, minutes=-minutes)
+            else:
+                trigger = timedelta(minutes=-minutes)
             alarm = Alarm()
             alarm.add("action", action)
-            alarm.add("trigger", timedelta(minutes=-minutes))
+            alarm.add("trigger", trigger)
             if action == "DISPLAY":
                 # DISPLAY alarms require a DESCRIPTION per RFC 5545.
                 alarm.add("description", "Reminder")

@@ -508,6 +508,119 @@ def test_create_event_yandex_serializes_utc():
     assert dtstart == "DTSTART:20260610T090000Z"
 
 
+def test_create_event_timed_start_date_end_promoted_to_datetime():
+    # Public-method contract: a timed (datetime) start with a bare `date` end must not
+    # crash and must not emit a VALUE=DATE end on a timed event. The date end is
+    # promoted to midnight; here it lands after start, so it is kept as the end.
+    ical, result = _saved_ical(
+        {
+            "summary": "Mixed types",
+            "start": datetime(2026, 6, 10, 9, 0),
+            "end": date(2026, 6, 12),
+        }
+    )
+    assert "DTSTART:20260610T090000" in ical
+    assert "DTEND:20260612T000000" in ical
+    assert "VALUE=DATE" not in ical
+
+
+def test_create_event_timed_start_date_end_before_start_bumped():
+    # A date end that promotes to a midnight at/before start bumps to a 1-hour event.
+    ical, result = _saved_ical(
+        {
+            "summary": "Degenerate",
+            "start": datetime(2026, 6, 12, 9, 0),
+            "end": date(2026, 6, 12),
+        }
+    )
+    start = datetime.fromisoformat(result["start"])
+    end = datetime.fromisoformat(result["end"])
+    assert (end - start) == timedelta(hours=1)
+    assert "VALUE=DATE" not in ical
+
+
+def test_create_event_timed_end_before_start_bumped():
+    # A timed start with an end at or before it (e.g. a date-only end widened to
+    # midnight on the same day) must fall back to a 1-hour event, not a negative one.
+    ical, result = _saved_ical(
+        {
+            "summary": "Bad end",
+            "start": datetime(2026, 6, 12, 9, 0),
+            "end": datetime(2026, 6, 12, 0, 0),
+        }
+    )
+    start = datetime.fromisoformat(result["start"])
+    end = datetime.fromisoformat(result["end"])
+    assert (end - start) == timedelta(hours=1)
+    assert "DTEND:20260612T100000" in ical
+
+
+def test_create_event_timed_end_equals_start_bumped():
+    ical, result = _saved_ical(
+        {
+            "summary": "Zero len",
+            "start": datetime(2026, 6, 12, 9, 0),
+            "end": datetime(2026, 6, 12, 9, 0),
+        }
+    )
+    end = datetime.fromisoformat(result["end"])
+    start = datetime.fromisoformat(result["start"])
+    assert (end - start) == timedelta(hours=1)
+
+
+def test_create_event_timed_end_aware_start_naive_end_bumped():
+    # tz-awareness mismatch (aware start, naive end <= start) must not raise; the
+    # non-positive duration guard falls back to a wall-clock comparison and bumps.
+    ical, result = _saved_ical(
+        {
+            "summary": "Mixed tz",
+            "start": datetime(2026, 6, 12, 9, 0, tzinfo=timezone.utc),
+            "end": datetime(2026, 6, 12, 0, 0),
+        }
+    )
+    end = datetime.fromisoformat(result["end"])
+    start = datetime.fromisoformat(result["start"])
+    assert (end - start) == timedelta(hours=1)
+
+
+def test_create_event_all_day_reminder_anchored_to_morning():
+    # All-day reminders are anchored to 09:00 on the event day: 15 min before fires
+    # at 08:45 (trigger = 9h - 15m relative to midnight DTSTART).
+    ical, _ = _saved_ical(
+        {"summary": "All day", "start": date(2026, 6, 10), "reminders": [15]}
+    )
+    assert "DTSTART;VALUE=DATE:20260610" in ical
+    assert "TRIGGER:PT8H45M" in ical
+
+
+def test_create_event_all_day_reminder_zero_minutes_is_nine_am():
+    ical, _ = _saved_ical(
+        {"summary": "All day", "start": date(2026, 6, 10), "reminders": [0]}
+    )
+    assert "TRIGGER:PT9H" in ical
+
+
+def test_create_event_all_day_reminder_full_day_before():
+    ical, _ = _saved_ical(
+        {"summary": "All day", "start": date(2026, 6, 10), "reminders": [1440]}
+    )
+    # 1440 min (1 day) before 09:00 == 09:00 the previous day == 15h before midnight.
+    assert "TRIGGER:-PT15H" in ical
+
+
+def test_create_event_timed_reminder_unchanged():
+    # Regression: timed events keep "N minutes before start" semantics.
+    ical, _ = _saved_ical(
+        {
+            "summary": "Standup",
+            "start": datetime(2026, 6, 10, 9, 0),
+            "end": datetime(2026, 6, 10, 9, 30),
+            "reminders": [15],
+        }
+    )
+    assert "TRIGGER:-PT15M" in ical
+
+
 # --- get_event_by_uid client tests ------------------------------------------
 
 
