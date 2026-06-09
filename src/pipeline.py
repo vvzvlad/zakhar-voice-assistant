@@ -413,7 +413,13 @@ class Pipeline:
         return 0  # 0 = audio comes in-band over the API connection.
 
     async def on_audio(self, data: bytes, data2=None) -> None:
-        """Accumulate mic PCM and run VAD end-pointing. data2 is ignored.
+        """Accumulate mic PCM and run VAD end-pointing.
+
+        The Voice PE streams two mic channels: data = ch0 (more-processed, XMOS AGC
+        out), data2 = ch1 (less-processed, NS out). ch0 had poor quality at the phrase
+        tail, so when the second channel is present we run the WHOLE pipeline (VAD +
+        STT + capture) on ch1 to A/B its quality; data2 is None on single-channel
+        firmware -> unchanged behavior (revert by removing the `if data2:` swap below).
 
         The speaker streams continuously and never signals end-of-speech, so we
         detect it here: VAD over the PCM finalizes the utterance once speech is
@@ -426,6 +432,11 @@ class Pipeline:
         """
         if self._finalized:
             return  # Ignore late audio for an already-finalized run.
+
+        # ch1 test: prefer the less-processed second mic channel when the device sends
+        # it (data2). Everything below (capture, VAD, STT) then runs on ch1.
+        if data2:
+            data = data2
 
         # Manual capture-only mode: accumulate PCM, run NO VAD/STT/LLM/TTS. End on the
         # device stop (on_stop) or when the server-side deadline (seconds + margin) is
