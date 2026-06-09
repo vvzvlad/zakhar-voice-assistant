@@ -1,0 +1,9 @@
+{
+  "on": "angular s10hn l2norm bottleneck (64-d)",
+  "params": 1281,
+  "keep_TP@0.3": 0.9811320754716981,
+  "reject_ambientMusicFA@0.3": 1.0,
+  "margin": 0.06701013445854187,
+  "N_pos_eval": 53,
+  "N_ambientFA_eval": 8
+}
