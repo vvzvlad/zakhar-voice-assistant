@@ -6,7 +6,6 @@ from src.core_config import (
     CalendarConfig,
     CoreConfig,
     McpServerConfig,
-    MicConfig,
     OpenWeatherMapConfig,
     VadConfig,
 )
@@ -85,27 +84,32 @@ def test_builtin_prompt_fields_carry_textarea_widget():
     assert cal["widget"] == "textarea"
 
 
-def test_mic_defaults_are_channel0_unity_gain():
-    m = MicConfig()
-    assert m.channel == 0
-    assert m.gain == 1.0
+def test_vad_mic_defaults_are_channel0_unity_gain():
+    # Mic channel/gain live inside VadConfig (the Voice-capture section), not a
+    # separate core.mic section. Defaults: processed channel 0, unity gain.
+    v = VadConfig()
+    assert v.mic_channel == 0
+    assert v.mic_gain == 1.0
 
 
-def test_mic_channel_literal_rejects_out_of_range():
-    MicConfig(channel=0)
-    MicConfig(channel=1)
+def test_vad_mic_channel_literal_rejects_out_of_range():
+    VadConfig(mic_channel=0)
+    VadConfig(mic_channel=1)
     with pytest.raises(ValidationError):
-        MicConfig(channel=2)
+        VadConfig(mic_channel=2)
 
 
-def test_mic_gain_range_validated():
-    MicConfig(gain=1.0)
-    MicConfig(gain=8.0)
+def test_vad_mic_gain_range_validated():
+    # Gain spans 0.1–20.0: values below 1.0 attenuate, above amplify.
+    VadConfig(mic_gain=0.1)   # min
+    VadConfig(mic_gain=0.5)   # below 1.0 is valid (attenuation)
+    VadConfig(mic_gain=20.0)  # max
     with pytest.raises(ValidationError):
-        MicConfig(gain=0.5)  # below 1.0
+        VadConfig(mic_gain=0.05)  # below 0.1
     with pytest.raises(ValidationError):
-        MicConfig(gain=8.1)  # above 8.0
+        VadConfig(mic_gain=20.1)  # above 20.0
 
 
-def test_core_config_has_mic_section():
-    assert CoreConfig().mic == MicConfig()
+def test_core_config_vad_has_mic_fields():
+    assert CoreConfig().vad.mic_channel == 0
+    assert CoreConfig().vad.mic_gain == 1.0

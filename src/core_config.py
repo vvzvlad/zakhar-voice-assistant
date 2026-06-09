@@ -33,16 +33,13 @@ class VadConfig(BaseModel):
         ge=0,
         description="Drop this many ms off the start of the captured sample before STT (cuts the wake-word tail / button-press click). 0 disables.",
     )
-
-
-class MicConfig(BaseModel):
-    # Which Voice PE mic channel feeds the whole server pipeline (capture + VAD + STT).
+    # Which Voice PE mic channel feeds the whole pipeline (capture + VAD + STT).
     # 0 = processed (XMOS AGC output); 1 = less-processed (XMOS noise-suppression
     # output) — cleaner but quieter. Read live, so panel changes apply next utterance.
-    channel: Literal[0, 1] = Field(0, json_schema_extra={"widget": "select"})
-    # Linear input gain applied to the selected channel's PCM before VAD/STT. Boosts
-    # the quieter less-processed channel (and helps the VAD detect speech).
-    gain: float = Field(1.0, ge=1.0, le=8.0, json_schema_extra={"widget": "slider"})
+    mic_channel: Literal[0, 1] = Field(0, json_schema_extra={"widget": "select"})
+    # Linear input gain applied to the selected mic channel's PCM before VAD/STT.
+    # Boosts the quieter less-processed channel; values < 1.0 attenuate. Read live.
+    mic_gain: float = Field(1.0, ge=0.1, le=20.0, json_schema_extra={"widget": "slider"})
 
 
 class NetworkConfig(BaseModel):
@@ -133,14 +130,12 @@ class CoreConfig(BaseModel):
     context: ContextConfig = ContextConfig()
     audio: AudioConfig = AudioConfig()
     vad: VadConfig = VadConfig()
-    mic: MicConfig = MicConfig()
     network: NetworkConfig = NetworkConfig()
     openweathermap: OpenWeatherMapConfig = OpenWeatherMapConfig()
     mcp_servers: list[McpServerConfig] = []
     calendar: CalendarConfig = CalendarConfig()
     esphome: EsphomeConfig = EsphomeConfig()
     prompt: PromptConfig = PromptConfig()
-    panel: PanelConfig = PanelConfig()
     runs: RunsConfig = RunsConfig()
     reminders: RemindersConfig = RemindersConfig()
     capture: CaptureConfig = CaptureConfig()

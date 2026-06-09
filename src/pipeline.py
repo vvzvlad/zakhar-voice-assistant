@@ -461,8 +461,8 @@ class Pipeline:
         The Voice PE streams two mic channels: channel 0 (`data`) is the more-
         processed XMOS AGC output, channel 1 (`data2`) the less-processed XMOS
         noise-suppression output (cleaner but quieter). The whole pipeline (capture +
-        VAD + STT) runs on the channel selected by `core.mic.channel`, with a linear
-        input gain from `core.mic.gain` applied first. Both are read live off
+        VAD + STT) runs on the channel selected by `core.vad.mic_channel`, with a
+        linear input gain from `core.vad.mic_gain` applied first. Both are read live off
         `self.core` (a property over the runtime config), so panel changes apply on
         the next utterance — no restart.
 
@@ -483,16 +483,16 @@ class Pipeline:
         # device's second stream when present; if it's missing, fall back to channel 0
         # and warn once per run. Then apply the configured input gain. Read live off
         # self.core, so panel changes take effect on the next utterance.
-        if self.core.mic.channel == 1:
+        if self.core.vad.mic_channel == 1:
             if data2:
                 data = data2
             elif not self._mic_fallback_logged:
                 self._mic_fallback_logged = True
                 logger.debug(
-                    f"{self.name}: mic.channel=1 but device sent no second channel; "
+                    f"{self.name}: mic_channel=1 but device sent no second channel; "
                     f"using channel 0"
                 )
-        data = _apply_gain(data, self.core.mic.gain)
+        data = _apply_gain(data, self.core.vad.mic_gain)
 
         # Manual capture-only mode: accumulate PCM, run NO VAD/STT/LLM/TTS. End on the
         # device stop (on_stop) or when the server-side deadline (seconds + margin) is

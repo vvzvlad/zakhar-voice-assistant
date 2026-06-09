@@ -70,7 +70,12 @@ export function VAD() {
   const coreSchema = catalog.core.schema;
   // vad prop is a $ref to $defs.VadConfig — resolve to the object schema.
   const vadSchema = coreSchema.$defs ? coreSchema.$defs.VadConfig : null;
-  const vadValues = catalog.core.values.vad || {};
+  const rawVad = catalog.core.values.vad || {};
+  // mic_channel / mic_gain live in VadConfig but get their own two-column card below.
+  // Split them out: the Advanced card edits everything EXCEPT the mic fields, the mic
+  // card edits ONLY the mic fields. Both patch core.vad and apply() deep-merges the
+  // partial patch, so the two disjoint subsets never clobber each other.
+  const { mic_channel, mic_gain, ...vadValues } = rawVad;
 
   const buildPatch = (draft) => ({ core: { vad: draft } });
   const { draft, onChange, dirty, saving, err, save } = useStageForm(vadValues, buildPatch, patch);
@@ -84,11 +89,19 @@ export function VAD() {
     saving: ackSaving, err: ackErr, save: ackSave,
   } = useStageForm(ackValues, buildAckPatch, patch);
 
-  // Mic input: which device mic channel feeds the pipeline + input gain. core.mic.*
-  // is a LIVE reconfig (read per-chunk via the Runtime), applied on the next utterance.
-  const micSchema = coreSchema.$defs ? coreSchema.$defs.MicConfig : null;
-  const micValues = catalog.core.values.mic || {};
-  const buildMicPatch = (draft) => ({ core: { mic: draft } });
+  // Mic input card (two columns): which device mic channel feeds the pipeline + input
+  // gain. The fields live in VadConfig (core.vad.mic_channel / mic_gain) — a LIVE
+  // reconfig read per-chunk via the Runtime, applied on the next utterance. Build a
+  // mini-schema with just those two props so they render in their own card.
+  const micSchema = vadSchema && vadSchema.properties ? {
+    type: "object",
+    properties: {
+      mic_channel: vadSchema.properties.mic_channel,
+      mic_gain: vadSchema.properties.mic_gain,
+    },
+  } : null;
+  const micValues = { mic_channel, mic_gain };
+  const buildMicPatch = (draft) => ({ core: { vad: draft } });
   const {
     draft: micDraft, onChange: micOnChange, dirty: micDirty,
     saving: micSaving, err: micErr, save: micSave,
@@ -113,12 +126,14 @@ export function VAD() {
     </Card>
     <div style={{ height: 16 }} />
     <Card title="Advanced parameters" foot={<FormSaveBar dirty={dirty} saving={saving} onSave={save} errors={errorLines(err)} />}>
-      <SchemaForm schema={{ ...vadSchema, $defs: coreSchema.$defs }} root={{ ...vadSchema, $defs: coreSchema.$defs }} values={draft} onChange={onChange} />
+      <SchemaForm schema={{ ...vadSchema, $defs: coreSchema.$defs }} root={{ ...vadSchema, $defs: coreSchema.$defs }} values={draft} onChange={onChange} skip={["mic_channel", "mic_gain"]} />
     </Card>
     {micSchema && <>
       <div style={{ height: 16 }} />
       <Card title="Microphone channel & gain" sub="which device mic stream feeds the pipeline · input gain">
-        <SchemaForm schema={{ ...micSchema, $defs: coreSchema.$defs }} root={{ ...micSchema, $defs: coreSchema.$defs }} values={micDraft} onChange={micOnChange} />
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20, alignItems: "start" }}>
+          <SchemaForm schema={{ ...micSchema, $defs: coreSchema.$defs }} root={{ ...micSchema, $defs: coreSchema.$defs }} values={micDraft} onChange={micOnChange} />
+        </div>
         <FormSaveBar dirty={micDirty} saving={micSaving} onSave={micSave} errors={errorLines(micErr)} />
       </Card>
     </>}

@@ -1937,7 +1937,7 @@ async def test_ack_is_fire_and_forget_does_not_delay_finalize(tmp_path, monkeypa
         task.cancel()
 
 
-# --- mic channel selection + input gain (core.mic) ---
+# --- mic channel selection + input gain (core.vad.mic_channel / mic_gain) ---
 
 def test_apply_gain_doubles_samples():
     pcm = np.array([1000, -1000, 500], dtype="<i2").tobytes()
@@ -1967,7 +1967,7 @@ def test_apply_gain_odd_length_preserves_trailing_byte():
 
 async def test_mic_channel1_uses_second_stream(tmp_path, monkeypatch):
     pipeline, _ = make_pipeline(tmp_path, monkeypatch)
-    pipeline.core.mic.channel = 1  # live config: take the less-processed channel
+    pipeline.core.vad.mic_channel = 1  # live config: take the less-processed channel
     await pipeline.on_start("cid", 0, None, None)
     await pipeline.on_audio(b"\x00\x00", b"\x11\x11")  # ch0 zeros, ch1 = 0x1111
     assert bytes(pipeline._buffer) == b"\x11\x11"
@@ -1982,7 +1982,7 @@ async def test_mic_channel0_uses_first_stream(tmp_path, monkeypatch):
 
 async def test_mic_channel1_falls_back_to_first_when_no_second_stream(tmp_path, monkeypatch):
     pipeline, _ = make_pipeline(tmp_path, monkeypatch)
-    pipeline.core.mic.channel = 1
+    pipeline.core.vad.mic_channel = 1
     await pipeline.on_start("cid", 0, None, None)
     await pipeline.on_audio(b"\x22\x22", None)  # device sent only one channel
     assert bytes(pipeline._buffer) == b"\x22\x22"
@@ -1990,7 +1990,7 @@ async def test_mic_channel1_falls_back_to_first_when_no_second_stream(tmp_path, 
 
 async def test_mic_gain_applied_to_buffer(tmp_path, monkeypatch):
     pipeline, _ = make_pipeline(tmp_path, monkeypatch)
-    pipeline.core.mic.gain = 2.0  # live config
+    pipeline.core.vad.mic_gain = 2.0  # live config
     await pipeline.on_start("cid", 0, None, None)
     await pipeline.on_audio(np.array([1000], dtype="<i2").tobytes())
     assert np.frombuffer(bytes(pipeline._buffer), "<i2").tolist() == [2000]
