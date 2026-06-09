@@ -189,7 +189,7 @@ button{font-family:inherit;}
 
 /* ── Waterfall ──────────────────────────────────────────── */
 .z-wf{display:flex;flex-direction:column;gap:3px;width:260px;}
-.z-wfbar{display:flex;height:13px;border-radius:3px;overflow:hidden;background:var(--line2);}
+.z-wfbar{display:flex;height:13px;border-radius:3px;overflow:hidden;background:var(--line2);position:relative;}
 .z-wfbar span{height:100%;}
 .z-wfax{display:flex;font-family:var(--mono);font-size:8.5px;line-height:1;font-weight:600;}
 /* min-width:max-content keeps each label at least as wide as its text, so a
@@ -292,3 +292,9 @@ button{font-family:inherit;}
 .z-dicttbl tr:last-child td{border-bottom:none;}
 .z-dictdel{color:var(--mut2);cursor:pointer;border:none;background:none;font-size:15px;}
 .z-dictdel:hover{color:var(--bad);}
+
+/* ── Waterfall: early-filler marker ─────────────────────────
+   A thin vertical line on the stage bar marking where the user first heard
+   audio (the early "filler" announcement). Positioned within .z-wfbar
+   (position:relative); the bar's overflow:hidden keeps it clipped inside. */
+.z-wffiller{position:absolute;top:0;bottom:0;width:2px;margin-left:-1px;border-radius:1px;opacity:.95;z-index:1;}

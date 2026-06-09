@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
-import { STAGE_COLOR, STAGE_ORDER } from "../stageMeta.js";
+import { STAGE_COLOR, STAGE_ORDER, FILLER_COLOR } from "../stageMeta.js";
 import { Ic } from "./icons.jsx";
 
 // ── Sparkline ──────────────────────────────────────────
@@ -121,10 +121,27 @@ export function segsFor(r) {
   if (r.result === "error") arr.push({ label: "fail", pct: 24, bg: "repeating-linear-gradient(45deg,#dc2626,#dc2626 3px,#fecaca 3px,#fecaca 6px)", col: "#dc2626" });
   return arr;
 }
+// Left offset (% of the waterfall bar) of the "early filler" marker, or null when
+// no filler fired. The bar spans vad→stt→llm→tts normalized to total(r.t); t_filler
+// is measured from the start of STT (the right edge of the vad segment), so the
+// marker sits at (vad + t_filler) along that same normalized axis. Clamped to [0,100].
+export function fillerMarkerPct(r) {
+  if (!r || r.t_filler == null || !r.filler_text) return null;
+  const t = r.t || {};
+  const tot = total(t);
+  if (!tot) return null;
+  const at = ((t.vad || 0) + r.t_filler) / tot * 100;
+  return Math.max(0, Math.min(100, at));
+}
 export function Waterfall({ r }) {
   const segs = segsFor(r);
+  const fpct = fillerMarkerPct(r);
   return <div className="z-wf">
-    <div className="z-wfbar">{segs.map((s, i) => <span key={i} style={{ width: s.pct + "%", background: s.bg }} />)}</div>
+    <div className="z-wfbar">
+      {segs.map((s, i) => <span key={i} style={{ width: s.pct + "%", background: s.bg }} />)}
+      {fpct != null && <span className="z-wffiller" style={{ left: fpct + "%", background: FILLER_COLOR }}
+        title={`🗣 «${r.filler_text}» — early reply at ${(r.t_filler / 1000).toFixed(2)}s`} />}
+    </div>
     <div className="z-wfax">{segs.map((s, i) => <span key={i} style={{ width: s.pct + "%", color: s.col }}>{s.label}</span>)}</div>
   </div>;
 }

@@ -80,6 +80,14 @@ function Drawer({ r, loading, error, onClose }) {
           <div className="z-card"><div style={{ padding: "4px 17px" }}>
             <div className="z-f"><div className="z-fl"><b style={{ color: "var(--mut)", fontWeight: 600, fontSize: 11, textTransform: "uppercase", letterSpacing: ".04em" }}>Recognized (STT)</b></div>
               <div style={{ fontSize: 14, color: r.stt ? "var(--ink)" : "var(--mut2)", fontStyle: r.stt ? "normal" : "italic" }}>{r.stt || "— silence, no speech detected —"}</div></div>
+            {r.filler_text && (
+              <div className="z-f"><div className="z-fl">
+                <b style={{ color: "var(--mut)", fontWeight: 600, fontSize: 11, textTransform: "uppercase", letterSpacing: ".04em" }}>
+                  Filler (early reply){r.t_filler != null ? ` · ${fmtSec(r.t_filler)}` : ""}
+                </b></div>
+                <div style={{ fontSize: 14, color: "var(--ink)" }}>{r.filler_text}</div>
+              </div>
+            )}
             <div className="z-f"><div className="z-fl"><b style={{ color: "var(--mut)", fontWeight: 600, fontSize: 11, textTransform: "uppercase", letterSpacing: ".04em" }}>Response (LLM)</b></div>
               <div style={{ fontSize: 14, color: r.llm ? "var(--ink)" : "var(--mut2)", fontStyle: r.llm ? "normal" : "italic" }}>{r.llm || "— no response produced —"}</div></div>
           </div></div>
@@ -112,6 +120,7 @@ function Drawer({ r, loading, error, onClose }) {
             <KV k="End reason" v={r.reason || "—"} />
             <KV k="Model" v={r.model || "—"} />
             <KV k="Total tokens" v={r.tokens || "—"} />
+            {r.filler_text && <KV k="Filler spoken at" v={fmtSec(r.t_filler)} />}
             <KV k="Audio" v={r.audio ? `${(r.audio.bytes / 1024).toFixed(0)} kB · ${r.audio.fmt}` : "—"} />
             <KV k="Total duration" v={fmtSec(totalMs(r))} />
           </div></div>

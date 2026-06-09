@@ -8,6 +8,10 @@ export const STAGE_COLOR = {
 };
 export const STAGE_ORDER = ["vad", "stt", "llm", "tts"];
 
+// Accent for the "early filler" marker (an announcement spoken mid-run, not a
+// pipeline stage). Distinct from the STAGE_COLOR palette so it reads as an event.
+export const FILLER_COLOR = "#f59e0b";
+
 // Pipeline stages shown in the dashboard service-map and the stage page sub-nav.
 // `cat` links a stage to a catalog category (vad has none — it's a core section).
 export const STAGES = [

@@ -1,7 +1,7 @@
 // Unit tests for the waterfall segment builder (src/components/primitives.jsx:
 // `segsFor` + `total`). These are pure functions; no DOM is needed.
 import { describe, it, expect } from "vitest";
-import { segsFor, total } from "../components/primitives.jsx";
+import { segsFor, total, fillerMarkerPct } from "../components/primitives.jsx";
 
 describe("total", () => {
   it("returns 0 for an empty timings object", () => {
@@ -50,5 +50,29 @@ describe("segsFor", () => {
   it("does NOT append a fail segment for a non-error result", () => {
     const segs = segsFor({ result: "ok", t: { vad: 100, stt: 0, llm: 0, tts: 0 } });
     expect(segs.some((s) => s.label === "fail")).toBe(false);
+  });
+});
+
+describe("fillerMarkerPct", () => {
+  it("returns null when t_filler is null", () => {
+    expect(fillerMarkerPct({ t: { vad: 1000, stt: 500, llm: 8000, tts: 500 }, t_filler: null, filler_text: "щас гляну" })).toBe(null);
+  });
+
+  it("returns null when filler_text is empty", () => {
+    expect(fillerMarkerPct({ t: { vad: 1000, stt: 500, llm: 8000, tts: 500 }, t_filler: 1500, filler_text: "" })).toBe(null);
+  });
+
+  it("returns null when total(t) is 0", () => {
+    expect(fillerMarkerPct({ t: { vad: 0, stt: 0, llm: 0, tts: 0 }, t_filler: 1500, filler_text: "щас гляну" })).toBe(null);
+  });
+
+  it("computes the marker offset as (vad + t_filler) / total * 100", () => {
+    // (1000 + 1500) / 10000 * 100 = 25
+    expect(fillerMarkerPct({ t: { vad: 1000, stt: 500, llm: 8000, tts: 500 }, t_filler: 1500, filler_text: "щас гляну" })).toBe(25);
+  });
+
+  it("clamps to 100 when the computed value exceeds 100", () => {
+    // (1000 + 20000) / 10000 * 100 = 210 -> clamped to 100
+    expect(fillerMarkerPct({ t: { vad: 1000, stt: 500, llm: 8000, tts: 500 }, t_filler: 20000, filler_text: "щас гляну" })).toBe(100);
   });
 });
