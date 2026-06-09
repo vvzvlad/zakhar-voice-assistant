@@ -12,24 +12,8 @@
 // options:"dynamic"→Select(fetched), slider numbers→Slider, other numbers→Stepper,
 // boolean→Toggle, secret-looking strings→masked key input, else text input.
 import React, { useEffect, useState } from "react";
-import { Field, Seg, Select, Slider, Stepper, Toggle } from "./primitives.jsx";
+import { Field, KeyInput, Seg, Select, Slider, Stepper, Toggle } from "./primitives.jsx";
 import { resolve, enumOf, isSecret, humanize } from "../schema.js";
-
-function KeyInput({ value, onChange }) {
-  const [show, setShow] = useState(false);
-  return (
-    <div className="z-inp mono">
-      <input
-        type={show ? "text" : "password"}
-        value={value ?? ""}
-        onChange={(e) => onChange(e.target.value)}
-      />
-      <button className="z-mini" type="button" onClick={() => setShow((s) => !s)}>
-        {show ? "HIDE" : "SHOW"}
-      </button>
-    </div>
-  );
-}
 
 function DynamicSelect({ value, onChange, load }) {
   const [opts, setOpts] = useState(value != null ? [String(value)] : []);

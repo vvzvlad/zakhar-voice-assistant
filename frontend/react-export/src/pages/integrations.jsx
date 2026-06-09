@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useCallback, useRef } from "react";
 import { Ic } from "../components/icons.jsx";
 import {
-  Field, PageHeader, FormSaveBar, StatusPill, Pill, Modal, Stepper, Loading, Select,
+  Field, KeyInput, PageHeader, FormSaveBar, StatusPill, Pill, Modal, Stepper, Loading, Select,
 } from "../components/primitives.jsx";
 import SchemaForm, { schemaNeedsRestart } from "../components/SchemaForm.jsx";
 import { useAppData } from "../appData.jsx";
@@ -111,7 +111,7 @@ function McpServerModal({ initial, onSave, onClose, title, takenNames }) {
     </Field>
     <Field label="URL"><div className="z-inp mono"><input value={url} placeholder="http://10.0.0.5:8123/mcp_server/sse" onChange={(e) => setUrl(e.target.value)} /></div></Field>
     <Field label="Token" hint="Optional Bearer token.">
-      <div className="z-inp mono"><input type="password" value={token} placeholder="optional…" onChange={(e) => setToken(e.target.value)} /></div>
+      <KeyInput value={token} placeholder="optional…" onChange={setToken} />
     </Field>
     <Field label="Transport" hint="auto detects sse from a URL ending in /sse.">
       <Select value={transport} options={TRANSPORTS} onChange={setTransport} />
@@ -327,7 +327,7 @@ function DeviceModal({ initial, onSave, onClose, title, device, online }) {
       <button className="z-btn p" disabled={!name || !host} onClick={() => onSave({ name, host, psk })}>Save</button></>}>
     <Field label="Name" hint="Unique — also keys the dialog context."><div className="z-inp"><input value={name} placeholder="e.g. hallway" onChange={(e) => setName(e.target.value)} /></div></Field>
     <Field label="Host / IP"><div className="z-inp mono"><input value={host} placeholder="10.0.0.25" onChange={(e) => setHost(e.target.value)} /></div></Field>
-    <Field label="PSK" hint="ESPHome API encryption key."><div className="z-inp mono"><input value={psk} placeholder="base64 key…" onChange={(e) => setPsk(e.target.value)} /></div></Field>
+    <Field label="PSK" hint="ESPHome API encryption key."><KeyInput value={psk} placeholder="base64 key…" onChange={setPsk} /></Field>
     {device && <CaptureControl device={device} online={online} />}
   </Modal>;
 }

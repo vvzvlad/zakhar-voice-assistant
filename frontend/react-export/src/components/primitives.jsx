@@ -21,6 +21,23 @@ export function Field({ label, hint, children, row }) {
     </div>
   </div>;
 }
+// Masked secret input (API keys / tokens / PSK) with a SHOW/HIDE reveal toggle.
+export function KeyInput({ value, onChange, placeholder }) {
+  const [show, setShow] = useState(false);
+  return (
+    <div className="z-inp mono">
+      <input
+        type={show ? "text" : "password"}
+        value={value ?? ""}
+        placeholder={placeholder}
+        onChange={(e) => onChange(e.target.value)}
+      />
+      <button className="z-mini" type="button" onClick={() => setShow((s) => !s)}>
+        {show ? "HIDE" : "SHOW"}
+      </button>
+    </div>
+  );
+}
 export function Seg({ options, value, onChange, full }) {
   return <div className={"z-seg" + (full ? " full" : "")}>
     {options.map((o) => <button key={o} className={o === value ? "on" : ""} onClick={() => onChange && onChange(o)}>{o}</button>)}
