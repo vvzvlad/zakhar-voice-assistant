@@ -51,6 +51,19 @@ function Gantt({ r }) {
   </div>;
 }
 
+// A click-to-expand row: renders only `summary` until toggled open, so heavy
+// blocks (full system prompt, a tool's JSON schema) stay collapsed by default.
+function Collapsible({ summary, children }) {
+  const [open, setOpen] = useState(false);
+  return <>
+    <div className="tn" style={{ cursor: "pointer", userSelect: "none" }} onClick={() => setOpen((o) => !o)}>
+      <span style={{ display: "inline-block", width: 10, flex: "none", color: "var(--mut2)", fontSize: 9, transform: open ? "rotate(90deg)" : "none", transition: "transform .12s" }}>▸</span>
+      {summary}
+    </div>
+    {open && children}
+  </>;
+}
+
 // Right-side drawer with the full run detail. `r` is the mapped detail row.
 function Drawer({ r, loading, error, onClose }) {
   const m = RESULT_META[r && r.result] || { label: r && r.result, tone: "muted" };
@@ -105,8 +118,9 @@ function Drawer({ r, loading, error, onClose }) {
             {r.request && <div className="z-round">
               <div className="z-round-h"><span className="rn">IN</span><span style={{ color: "var(--ink2)" }}>Model input — full debug</span></div>
               <div className="z-tool">
-                <div className="tn"><s>prompt</s> System prompt</div>
-                <div className="z-code">{r.request.system_prompt || "—"}</div>
+                <Collapsible summary={<><s>prompt</s> System prompt</>}>
+                  <div className="z-code" style={{ marginTop: 7 }}>{r.request.system_prompt || "—"}</div>
+                </Collapsible>
               </div>
               <div className="z-tool">
                 <div className="tn"><s>context</s> Context · {(r.request.context || []).length} msg</div>
@@ -117,8 +131,15 @@ function Drawer({ r, loading, error, onClose }) {
               <div className="z-tool">
                 <div className="tn"><s>tools</s> Tools · {(r.request.tools || []).length}</div>
                 {(r.request.tools && r.request.tools.length)
-                  ? r.request.tools.map((t, k) => { const f = (t && t.function) || t || {}; return <div className="z-code" style={{ marginTop: 6 }} key={k}><b>{f.name}</b>{f.description ? ` — ${f.description}` : ""}{f.parameters ? "\n" + JSON.stringify(f.parameters, null, 2) : ""}</div>; })
-                  : <div className="z-code" style={{ color: "var(--mut)" }}>— no tools advertised —</div>}
+                  ? r.request.tools.map((t, k) => {
+                      const f = (t && t.function) || t || {};
+                      return <div style={{ marginTop: 8 }} key={k}>
+                        <Collapsible summary={<span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}><b>{f.name}</b>{f.description ? ` — ${f.description}` : ""}</span>}>
+                          <div className="z-code" style={{ marginTop: 6 }}>{f.parameters ? JSON.stringify(f.parameters, null, 2) : "— no parameters —"}</div>
+                        </Collapsible>
+                      </div>;
+                    })
+                  : <div className="z-code" style={{ color: "var(--mut)", marginTop: 6 }}>— no tools advertised —</div>}
               </div>
               <div className="z-tool">
                 <div className="tn"><s>user</s> User message</div>
