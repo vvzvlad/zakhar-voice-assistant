@@ -210,7 +210,10 @@ button{font-family:inherit;}
 .z-fchip b{color:var(--ink);}
 
 /* ── Drawer ─────────────────────────────────────────────── */
-.z-scrim{position:fixed;inset:0;background:rgba(20,28,40,.34);backdrop-filter:blur(2px);z-index:40;}
+/* No backdrop-filter here: Chromium re-snapshots the backdrop while the drawer
+   body (.z-drawer-b) scrolls, and the blur+dim layer momentarily drops out,
+   flashing the bright table through. A solid translucent dim is flicker-free. */
+.z-scrim{position:fixed;inset:0;background:rgba(20,28,40,.4);z-index:40;}
 .z-drawer{position:fixed;top:0;right:0;bottom:0;width:680px;max-width:94vw;background:var(--bg);z-index:41;box-shadow:-12px 0 40px rgba(16,24,40,.18);display:flex;flex-direction:column;}
 .z-drawer-h{flex:0 0 auto;background:var(--panel);border-bottom:1px solid var(--line);padding:15px 20px;display:flex;align-items:center;gap:12px;}
 .z-drawer-h h2{margin:0;font-size:15px;font-weight:600;}
