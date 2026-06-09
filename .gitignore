@@ -20,3 +20,4 @@ models/
 
 # Generated at Docker build time by the version-stamp step
 src/_version.txt
+Pipfile.lock
