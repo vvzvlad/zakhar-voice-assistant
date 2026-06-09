@@ -8,8 +8,9 @@ The recorded WAV is the device's post-frontend audio (16 kHz mono) and may inclu
 pre-roll/tail silence — the training pipeline trims silence later.
 
 Recording goes through this project's panel API (server must be running: `make run`,
-device online). The endpoint POST {panel}/api/capture {"device","seconds"} records
-`seconds` of mic audio and returns the WAV bytes in the HTTP response.
+device online). Capture is the panel's async job: POST /api/capture starts a
+background recording, GET /api/capture polls its countdown, GET /api/capture/result
+downloads the WAV.
 
 See capture_playback.md (next to this file) for the full why/how.
 
@@ -25,20 +26,22 @@ import math
 import shlex
 import subprocess
 import sys
-import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import wave
 from pathlib import Path
 
 # Defaults are resolved relative to this script's directory, so it works no matter
-# what the current working directory is.
+# what the current working directory is. The sample folders live at the microWakeWord
+# root (two levels up: this script is under microWakeWord/v8/capture_playback/).
 SCRIPT_DIR = Path(__file__).resolve().parent
+DATA_DIR = SCRIPT_DIR.parent.parent
 
 # Native-API-backed capture is clamped to this server-side; mirror it here.
 MAX_SECONDS = 300
-TRANSIENT_STATUSES = (409, 504)  # device busy/offline or never streamed in time -> retry
+TRANSIENT_STATUSES = (409, "timeout")  # device busy / never reached 'done' -> retry
 
 
 def clip_duration_s(path: str) -> float:
@@ -49,56 +52,73 @@ def clip_duration_s(path: str) -> float:
         return frames / float(rate)
 
 
-def post_capture(panel: str, device: str, seconds: int, holder: dict) -> None:
-    """Blocking POST /api/capture; store WAV bytes or (status, body) error in holder.
-
-    Runs in a worker thread so the main thread can play the clip concurrently. The
-    request blocks until the device finishes recording `seconds` and streams it back.
-    """
-    url = panel.rstrip("/") + "/api/capture"
-    body = json.dumps({"device": device, "seconds": seconds}).encode("utf-8")
-    req = urllib.request.Request(
-        url, data=body, method="POST",
-        headers={"Content-Type": "application/json", "Accept": "audio/wav"},
-    )
+def _request(url, payload=None):
+    """HTTP GET (payload=None) or POST-JSON. Returns (status:int|None, body:bytes)."""
+    headers = {"Accept": "*/*"}
+    data = None
+    if payload is not None:
+        data = json.dumps(payload).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+    req = urllib.request.Request(url, data=data, method="POST" if data else "GET", headers=headers)
     try:
-        with urllib.request.urlopen(req, timeout=seconds + 30) as resp:
-            holder["wav"] = resp.read()
-            holder["status"] = resp.status
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return resp.status, resp.read()
     except urllib.error.HTTPError as e:
-        # Non-2xx: capture the status + (JSON) error body for the caller to handle.
-        holder["status"] = e.code
         try:
-            holder["error"] = e.read().decode("utf-8", "replace")
+            return e.code, e.read()
         except Exception:
-            holder["error"] = ""
+            return e.code, b""
     except Exception as e:  # connection refused, timeout, etc.
-        holder["status"] = None
-        holder["error"] = f"{type(e).__name__}: {e}"
+        return None, f"{type(e).__name__}: {e}".encode("utf-8")
 
 
 def record_one(panel, device, clip, seconds, pre_roll, player_argv):
-    """Start the capture, wait pre_roll, play the clip, then collect the recording.
+    """Start an async capture, play the clip during the window, then fetch the recording.
 
-    Returns (wav_bytes_or_None, holder) — holder carries status/error for diagnostics.
+    The panel capture is a server-side background job: POST /api/capture starts it
+    (202), GET /api/capture polls the countdown, GET /api/capture/result downloads
+    the WAV. Returns (wav_bytes_or_None, (status, msg)_or_None).
     """
-    holder: dict = {}
-    t = threading.Thread(target=post_capture, args=(panel, device, seconds, holder))
-    t.start()
-    # Give the device time to arm and actually start recording before playback.
+    base = panel.rstrip("/")
+    dev_q = urllib.parse.urlencode({"device": device})
+    # 1) start the recording (non-blocking)
+    st, body = _request(base + "/api/capture", {"device": device, "seconds": seconds})
+    if st != 202:
+        return None, (st, body.decode("utf-8", "replace")[:200])
+    # 2) play the clip while the device records (after a short arm delay)
     time.sleep(pre_roll)
     subprocess.run([*player_argv, str(clip)], check=False)
-    t.join(timeout=seconds + 35)
-    return holder.get("wav"), holder
+    # 3) poll until the job is terminal
+    deadline = time.monotonic() + seconds + 25
+    while time.monotonic() < deadline:
+        sst, sbody = _request(base + "/api/capture?" + dev_q)
+        if sst != 200:
+            return None, (sst, sbody.decode("utf-8", "replace")[:200])
+        snap = json.loads(sbody.decode("utf-8", "replace"))
+        state = snap.get("state")
+        if state == "done":
+            break
+        if state in ("error", "cancelled"):
+            return None, (state, snap.get("error") or state)
+        if state == "idle":
+            return None, ("idle", "no live capture job")
+        time.sleep(min(max(snap.get("remaining", 1), 1), 2))
+    else:
+        return None, ("timeout", f"no 'done' within {seconds + 25}s")
+    # 4) download the WAV (one-shot, consumed server-side)
+    rst, rbody = _request(base + "/api/capture/result?" + dev_q)
+    if rst == 200 and rbody:
+        return rbody, None
+    return None, (rst, rbody.decode("utf-8", "replace")[:200] if rbody else "empty result")
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="Play clips and re-record them via the Voice PE device.")
-    ap.add_argument("--src", default=str(SCRIPT_DIR / "positive_samples_generated"),
+    ap.add_argument("--src", default=str(DATA_DIR / "positive_samples_generated"),
                     help="folder of source .wav clips to play")
-    ap.add_argument("--out", default=str(SCRIPT_DIR / "positive_samples_recorded"),
+    ap.add_argument("--out", default=str(DATA_DIR / "positive_samples_recorded"),
                     help="folder to write device recordings into")
-    ap.add_argument("--device", default="voice0a332d", help="ESPHome device name")
+    ap.add_argument("--device", default="main_room", help="ESPHome device name")
     ap.add_argument("--panel", default="http://127.0.0.1:8201", help="panel API base URL")
     ap.add_argument("--pre-roll", type=float, default=1.0,
                     help="seconds to wait after starting capture before playback")
@@ -142,7 +162,7 @@ def main() -> int:
 
         attempt = 0
         while True:
-            wav, holder = record_one(args.panel, args.device, clip, seconds, args.pre_roll, player_argv)
+            wav, err = record_one(args.panel, args.device, clip, seconds, args.pre_roll, player_argv)
             if wav:
                 outfile = out / f"{stem}__dev.wav"
                 outfile.write_bytes(wav)
@@ -150,20 +170,19 @@ def main() -> int:
                 ok += 1
                 break
 
-            status = holder.get("status")
-            err = holder.get("error", "")
+            status, msg = err
             if status in (503, None):
                 # 503 = capture not wired; None = no HTTP response at all (panel
                 # unreachable). Either way the whole run is futile -> abort fast.
                 print(f"\nFATAL: panel not usable (status={status}). Is `make run` "
-                      f"running and device '{args.device}' online? Aborting.\n{err}", file=sys.stderr)
+                      f"running and device '{args.device}' online? Aborting.\n{msg}", file=sys.stderr)
                 return 1
             if status in TRANSIENT_STATUSES and attempt < args.retries:
                 attempt += 1
                 print(f"[{i}/{len(clips)}] retry {stem} (status {status}, attempt {attempt}/{args.retries})")
                 time.sleep(1.5)
                 continue
-            print(f"[{i}/{len(clips)}] FAIL {stem}: status={status} {err}")
+            print(f"[{i}/{len(clips)}] FAIL {stem}: status={status} {msg}")
             failed += 1
             break
 
