@@ -1,0 +1,18 @@
+{
+  "type": "micro",
+  "wake_word": "Захар",
+  "author": "vvzvlad",
+  "website": "https://github.com/vvzvlad/zakhar-voice-assistant",
+  "model": "zakhar.tflite",
+  "trained_languages": [
+    "ru"
+  ],
+  "version": 2,
+  "micro": {
+    "probability_cutoff": 0.8,
+    "sliding_window_size": 3,
+    "feature_step_size": 10,
+    "tensor_arena_size": 45000,
+    "minimum_esphome_version": "2024.7.0"
+  }
+}

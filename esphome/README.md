@@ -14,7 +14,7 @@ credentials and the `micro_wake_word` model list are overridden in
 | `secrets.yaml` | Wi-Fi creds + API key (gitignored). **Edit the two Wi-Fi lines.** |
 | `.gitignore` | Keeps `secrets.yaml` and `.esphome/` out of git. |
 
-The model is referenced by a **local path** — `../microWakeWord/v5/model/zakhar.json`
+The model is referenced by a **local path** — `../microWakeWord/v8/model/zakhar.json`
 — so `zakhar.json` and `zakhar.tflite` are read straight from this repo at build
 time (no network, no push needed). A remote `github://` / raw URL does **not**
 work for this model: ESPHome can't resolve the manifest's relative

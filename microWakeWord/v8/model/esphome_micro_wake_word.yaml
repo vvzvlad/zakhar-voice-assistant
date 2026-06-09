@@ -1,0 +1,11 @@
+# ESPHome micro_wake_word — "Захар" v8 (trained WITH real device captures; best on-device)
+# ESP32-S3 + PSRAM (HA Voice PE). ESPHome >= 2024.7. KEEP `vad:` enabled.
+micro_wake_word:
+  vad:                  # VAD pre-gate — required (music/noise -> 0 false-accepts)
+  models:
+    - model: https://YOUR_HOST/zakhar.json
+      # probability_cutoff: 0.80   # override (lower -> fewer misses; FRR<5% on device)
+      # sliding_window_size: 3
+  on_wake_word_detected:
+    - voice_assistant.start:
+        wake_word: !lambda return wake_word;
