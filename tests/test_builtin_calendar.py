@@ -942,3 +942,98 @@ async def test_create_event_tool_bad_dates():
 
     out = await source.call("create_event", {"summary": "X", "start": "garbage"})
     assert "Не понял даты" in out
+
+
+# --- gap #4: _event_dict tolerates a non-numeric PRIORITY ---------------------
+
+
+def test_event_dict_non_numeric_priority_omits_key():
+    # A PRIORITY that round-trips as a non-int (e.g. "HIGH") must be swallowed:
+    # the int() in _event_dict raises ValueError, which is caught, so the "priority"
+    # key is simply absent rather than crashing the mapping. icalendar validates
+    # PRIORITY on .add(), so we parse raw text to get the non-numeric (vBroken) value
+    # a malformed server response would carry.
+    raw = (
+        b"BEGIN:VCALENDAR\r\n"
+        b"VERSION:2.0\r\n"
+        b"PRODID:-//zakhar//test//EN\r\n"
+        b"BEGIN:VEVENT\r\n"
+        b"SUMMARY:Plan\r\n"
+        b"UID:p@zakhar\r\n"
+        b"DTSTART:20260610T090000\r\n"
+        b"DTEND:20260610T100000\r\n"
+        b"PRIORITY:HIGH\r\n"
+        b"END:VEVENT\r\n"
+        b"END:VCALENDAR\r\n"
+    )
+    comp = next(iter(ICalendar.from_ical(raw).walk("VEVENT")))
+    # Sanity: the parsed PRIORITY really is non-numeric (int() would raise).
+    assert str(comp.get("PRIORITY")) == "HIGH"
+
+    result = CalendarClient._event_dict(comp)
+    assert result is not None
+    assert "priority" not in result
+    # The rest of the mapping is intact.
+    assert result["summary"] == "Plan"
+    assert result["uid"] == "p@zakhar"
+
+
+# --- gap #5: _to_yandex_utc naive-datetime branch -----------------------------
+
+
+def test_create_event_yandex_naive_datetime_serializes_utc():
+    # A tz-NAIVE start/end on a Yandex client must be interpreted as local time and
+    # normalized to UTC, so DTSTART/DTEND serialize with a trailing Z. The expected
+    # UTC value is derived from the SAME naive input at runtime (.astimezone()), so the
+    # assertion holds regardless of the CI machine's timezone.
+    naive_start = datetime(2026, 6, 10, 9, 0)
+    naive_end = datetime(2026, 6, 10, 10, 0)
+    ical, _ = _saved_ical(
+        {"summary": "Y-naive", "start": naive_start, "end": naive_end},
+        url="https://caldav.yandex.ru/",
+    )
+    dtstart = next(l for l in ical.splitlines() if l.startswith("DTSTART"))
+    dtend = next(l for l in ical.splitlines() if l.startswith("DTEND"))
+    assert dtstart.endswith("Z")
+    assert dtend.endswith("Z")
+    # Compute the expected compact-UTC string from the same naive inputs at runtime.
+    expected_start = naive_start.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    expected_end = naive_end.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    assert dtstart == f"DTSTART:{expected_start}"
+    assert dtend == f"DTEND:{expected_end}"
+
+
+# --- gap #6: _parse_until malformed / empty (reached via _format_rrule) -------
+
+
+def test_format_rrule_until_empty_raises():
+    # "UNTIL=" yields an empty value: _parse_until must raise ValueError, not pass an
+    # empty string down to icalendar (which would TypeError at serialization).
+    try:
+        _format_rrule("FREQ=DAILY;UNTIL=")
+        assert False, "expected ValueError for empty UNTIL"
+    except ValueError as e:
+        assert "UNTIL" in str(e) or "empty" in str(e).lower()
+
+
+def test_format_rrule_until_garbage_raises():
+    # A non-parseable UNTIL must raise (strptime/fromisoformat fail) rather than
+    # silently producing a bad value.
+    try:
+        _format_rrule("FREQ=DAILY;UNTIL=garbage")
+        assert False, "expected an error for a garbage UNTIL"
+    except (ValueError, TypeError):
+        pass
+
+
+# --- gap #7: _format_rrule malformed part (no '=') ----------------------------
+
+
+def test_format_rrule_malformed_part_raises():
+    # A part without '=' (e.g. "JUNK") is not a KEY=VALUE pair: _format_rrule must
+    # raise ValueError naming the offending part.
+    try:
+        _format_rrule("FREQ=DAILY;JUNK")
+        assert False, "expected ValueError for a malformed RRULE part"
+    except ValueError as e:
+        assert "JUNK" in str(e)

@@ -842,3 +842,182 @@ async def test_runs_stream_without_hub_closes_promptly(tmp_path):
         await ws.close()
     finally:
         await client.close()
+
+
+# --- _patch_config plain-ValueError branch (distinct from ValidationError) ----
+
+async def test_patch_config_value_error_returns_422_with_empty_detail(tmp_path):
+    # apply() raises a *plain* ValueError (not a pydantic ValidationError) when a patch
+    # selects an unknown provider — get_provider() raises ValueError("Unknown ..."). That
+    # branch returns 422 with detail=[] and an "error" string, and must NOT persist.
+    client, svc, _ev = await _client(tmp_path)
+    try:
+        before = svc.document()
+        # A real patch whose merged doc fails inside apply() with a bare ValueError.
+        resp = await client.patch("/api/config", json={"stt": {"selected": "nope"}})
+        assert resp.status == 422
+        body = await resp.json()
+        # The plain-ValueError branch yields detail == [] (no pydantic error list).
+        assert body["detail"] == []
+        assert isinstance(body["error"], str) and body["error"]
+        # Nothing was applied: the in-memory/on-disk document is unchanged.
+        assert svc.document() == before
+        assert svc.document()["stt"]["selected"] == "groq"
+    finally:
+        await client.close()
+
+
+async def test_patch_config_value_error_via_monkeypatched_apply(tmp_path):
+    # Deterministic variant: replace the bound svc.apply with one that raises a bare
+    # ValueError, independent of any specific provider. Confirms the handler maps a plain
+    # ValueError to 422/detail=[] and leaves the document untouched.
+    client, svc, _ev = await _client(tmp_path)
+    try:
+        before = svc.document()
+
+        def _boom(_patch):
+            raise ValueError("bad provider")
+
+        # Monkeypatch the bound method on the real svc instance the server holds.
+        svc.apply = _boom
+
+        resp = await client.patch("/api/config", json={"core": {"context": {"max_turns": 7}}})
+        assert resp.status == 422
+        body = await resp.json()
+        assert body["detail"] == []
+        assert body["error"] == "bad provider"
+        # apply() raised before persisting -> document is unchanged.
+        assert svc.document() == before
+    finally:
+        await client.close()
+
+
+# --- _post_capture non-dict body guard ---------------------------------------
+
+async def test_capture_non_object_body_returns_400_without_calling_capture(tmp_path):
+    # A JSON array body (not an object) is rejected with 400 before the capture
+    # callable is ever invoked.
+    called = []
+
+    async def cap(device, seconds):
+        called.append((device, seconds))
+        return _wav_bytes()
+
+    client, _svc_, _ev = await _client(tmp_path, device_capture=cap)
+    try:
+        resp = await client.post("/api/capture", json=[1, 2])
+        assert resp.status == 400
+        body = await resp.json()
+        assert "object" in body["error"]
+        # The capture coroutine was never awaited.
+        assert called == []
+    finally:
+        await client.close()
+
+
+# --- _get_runs limit clamp + bad-limit fallback ------------------------------
+
+class _LimitSpyStore:
+    """Thin RunsStore wrapper that records the `limit` kwarg passed to .list()."""
+
+    def __init__(self, inner):
+        self._inner = inner
+        self.limits = []
+
+    def list(self, *, device=None, result=None, search=None, limit=100):
+        self.limits.append(limit)
+        return self._inner.list(device=device, result=result, search=search, limit=limit)
+
+    # Delegate anything else the server might touch to the real store.
+    def __getattr__(self, name):
+        return getattr(self._inner, name)
+
+
+async def test_get_runs_limit_is_clamped_and_falls_back(tmp_path):
+    # The handler clamps limit into [1, 500] and falls back to 100 on a non-integer.
+    # Assert the VALUE that reached the store, not merely the status code.
+    inner = _seed_runs(tmp_path)
+    spy = _LimitSpyStore(inner)
+    client, _svc_, _ev = await _client(tmp_path, runs_store=spy)
+    try:
+        # Non-integer limit -> fallback 100.
+        r1 = await client.get("/api/runs", params={"limit": "abc"})
+        assert r1.status == 200
+        assert spy.limits[-1] == 100
+
+        # Below the floor -> clamped up to 1.
+        r2 = await client.get("/api/runs", params={"limit": "0"})
+        assert r2.status == 200
+        assert spy.limits[-1] == 1
+
+        # Above the ceiling -> clamped down to 500.
+        r3 = await client.get("/api/runs", params={"limit": "99999"})
+        assert r3.status == 200
+        assert spy.limits[-1] == 500
+
+        assert spy.limits == [100, 1, 500]
+    finally:
+        await client.close()
+        inner.close()
+
+
+# --- _get_run non-integer id on the plain route ------------------------------
+
+async def test_get_run_bad_id_returns_400_invalid_id(tmp_path):
+    # The plain /api/runs/{id} route (NOT the /audio variant) rejects a non-integer id.
+    store = _seed_runs(tmp_path)
+    client, _svc_, _ev = await _client(tmp_path, runs_store=store)
+    try:
+        resp = await client.get("/api/runs/abc")
+        assert resp.status == 400
+        assert (await resp.json()) == {"error": "invalid id"}
+    finally:
+        await client.close()
+        store.close()
+
+
+# --- SPA static serving + (?!api/) catch-all guard ---------------------------
+
+def _build_static_dir(tmp_path):
+    """Create a minimal built-frontend dir: index.html + assets/<file>."""
+    static_dir = tmp_path / "dist"
+    static_dir.mkdir()
+    (static_dir / "index.html").write_text("<html>SPA INDEX</html>", encoding="utf-8")
+    assets = static_dir / "assets"
+    assets.mkdir()
+    (assets / "app.js").write_text("console.log('asset');", encoding="utf-8")
+    return static_dir
+
+
+async def test_spa_static_and_catch_all_does_not_swallow_api(tmp_path):
+    # With a static_dir wired, the SPA index is served for "/" and deep links, real
+    # assets are served from /assets/, and the (?!api/) negative lookahead must keep
+    # /api/* OUT of the SPA index so unknown API paths still 404 (JSON router 404).
+    static_dir = _build_static_dir(tmp_path)
+    client, _svc_, _ev = await _client(tmp_path, static_dir=str(static_dir))
+    try:
+        # (a) Root serves index.html.
+        root = await client.get("/")
+        assert root.status == 200
+        assert "SPA INDEX" in await root.text()
+
+        # (b) A deep client-side route also serves index.html (client router takes over).
+        deep = await client.get("/settings/x")
+        assert deep.status == 200
+        assert "SPA INDEX" in await deep.text()
+
+        # (c) A real static asset is served from /assets/ (NOT the SPA index).
+        asset = await client.get("/assets/app.js")
+        assert asset.status == 200
+        asset_body = await asset.text()
+        assert "console.log('asset');" in asset_body
+        assert "SPA INDEX" not in asset_body
+
+        # (d) Load-bearing: the negative lookahead must NOT route /api/* into the SPA
+        # index. An unknown API path 404s as JSON, never falling through to index.html.
+        api = await client.get("/api/nope")
+        assert api.status == 404
+        api_body = await api.text()
+        assert "SPA INDEX" not in api_body
+    finally:
+        await client.close()

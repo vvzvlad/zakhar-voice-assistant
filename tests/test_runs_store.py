@@ -136,6 +136,33 @@ def test_metrics_over_window(tmp_path):
     store.close()
 
 
+def test_metrics_all_none_timings_in_nonempty_window(tmp_path):
+    # Rows that errored before any timing was set (t_total + all stage timings None)
+    # still count toward requests_24h, but every percentile/average degrades to None.
+    # This exercises the empty-branch of _percentile (no t_total values) and _avg (no
+    # per-stage values) WITHOUT hitting the requests==0 early return — there ARE rows
+    # in the window, so the None results must come from the empty aggregation branches.
+    store = _store(tmp_path)
+    now = time.time()
+    for i in range(3):
+        store.insert(_rec(
+            ts=now - i, result="error", error_stage="pipeline",
+            t_total=None, t_vad=None, t_stt=None, t_llm=None, t_tts=None,
+        ))
+
+    m = store.metrics(now=now)
+    # There ARE rows in the window: the None results are NOT the empty early-return.
+    assert m["requests_24h"] == 3
+    # No t_total values -> _percentile([]) -> None for both percentiles.
+    assert m["p50_ms"] is None
+    assert m["p95_ms"] is None
+    # No per-stage values -> _avg over all-None -> None for every stage.
+    assert m["per_stage_avg_ms"] == {"vad": None, "stt": None, "llm": None, "tts": None}
+    # All 3 in-window rows are errors.
+    assert m["error_rate"] == 1.0
+    store.close()
+
+
 def test_metrics_empty(tmp_path):
     store = _store(tmp_path)
     m = store.metrics(now=time.time())

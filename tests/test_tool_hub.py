@@ -286,3 +286,176 @@ async def test_describe_kind_for_http_and_builtin_wrappers():
     described = {s["id"]: s for s in hub.describe()}
     assert described["home"]["kind"] == "http"
     assert described["weather"]["kind"] == "builtin"
+
+
+# --- BuiltinMcpSource._normalize: flatten varied FastMCP call_tool shapes -----
+
+
+class _Content:
+    """Stand-in for an mcp.types.TextContent block (only .text is read)."""
+
+    def __init__(self, text):
+        self.text = text
+
+
+class _FakeFastMcpServer:
+    """FastMCP double for BuiltinMcpSource: returns/raises a preset call_tool value.
+
+    `call_result` is what call_tool returns; `raise_on_call` makes it raise instead,
+    so we can drive the error path without touching src/.
+    """
+
+    def __init__(self, *, tools=None, call_result=None, raise_on_call=None):
+        self._tools = tools or []
+        self._call_result = call_result
+        self._raise_on_call = raise_on_call
+        self.calls = []
+
+    async def list_tools(self):
+        return self._tools
+
+    async def call_tool(self, name, args):
+        self.calls.append((name, args))
+        if self._raise_on_call is not None:
+            raise self._raise_on_call
+        return self._call_result
+
+
+def test_builtin_normalize_tuple_shape_joins_content_text():
+    # This SDK shape: (content_list, {"result": ...}). _normalize takes element 0
+    # (the content list) and joins each block's .text with newlines.
+    res = ([_Content("a"), _Content("b")], {"result": "ignored-meta"})
+    assert BuiltinMcpSource._normalize(res) == "a\nb"
+
+
+def test_builtin_normalize_dict_with_result_key():
+    # A bare dict carrying a "result" key stringifies that value.
+    assert BuiltinMcpSource._normalize({"result": "ok"}) == "ok"
+
+
+def test_builtin_normalize_dict_without_result_key_stringifies_whole_dict():
+    # No "result" key -> stringify the whole dict (the .get default is res itself).
+    d = {"status": "done"}
+    assert BuiltinMcpSource._normalize(d) == str(d)
+
+
+def test_builtin_normalize_non_iterable_falls_back_to_str():
+    # A non-iterable, non-tuple, non-dict object hits the TypeError fallback in the
+    # join branch and is stringified.
+    assert BuiltinMcpSource._normalize(123) == "123"
+
+
+async def test_builtin_call_returns_error_string_on_server_failure():
+    # call() must NOT raise: a server error surfaces as text for the model.
+    server = _FakeFastMcpServer(raise_on_call=RuntimeError("boom"))
+    src = BuiltinMcpSource("weather", server)
+    out = await src.call("get_current_weather", {"city": "Moscow"})
+    assert out == "error calling get_current_weather: boom"
+    # The server was actually invoked with the raw name/args.
+    assert server.calls == [("get_current_weather", {"city": "Moscow"})]
+
+
+async def test_builtin_call_happy_path_returns_normalized_text():
+    # Happy path: tuple shape from call_tool is normalized to joined content text.
+    server = _FakeFastMcpServer(
+        call_result=([_Content("sunny"), _Content("25C")], {"result": "meta"})
+    )
+    src = BuiltinMcpSource("weather", server)
+    out = await src.call("get_current_weather", {"city": "Moscow"})
+    assert out == "sunny\n25C"
+    assert server.calls == [("get_current_weather", {"city": "Moscow"})]
+
+
+# --- ToolHub fault isolation: ensure_tools / stop / set_sources --------------
+
+
+class FaultSource(FakeSource):
+    """FakeSource whose ensure()/stop() can be made to raise, to test isolation."""
+
+    def __init__(self, id, tool_names, *, fail_ensure=False, fail_stop=False):
+        super().__init__(id, tool_names)
+        self.fail_ensure = fail_ensure
+        self.fail_stop = fail_stop
+
+    async def ensure(self):
+        if self.fail_ensure:
+            raise RuntimeError("ensure boom")
+        await super().ensure()
+
+    async def stop(self):
+        if self.fail_stop:
+            raise RuntimeError("stop boom")
+        await super().stop()
+
+
+class NoStopSource:
+    """ToolSource double WITHOUT a stop attribute, to exercise the getattr-None skip."""
+
+    def __init__(self, id, tool_names):
+        self.id = id
+        self._tools = [_tool(n) for n in tool_names]
+        self.started = False
+        self.ensured = False
+
+    async def start(self):
+        self.started = True
+
+    async def ensure(self):
+        self.ensured = True
+
+    def raw_tools(self):
+        return self._tools
+
+    async def call(self, raw_name, args):
+        return f"{self.id}:{raw_name}"
+
+
+async def test_ensure_tools_isolates_failing_source():
+    # One source's ensure() raising must NOT stop the others from being refreshed,
+    # and no exception escapes ensure_tools().
+    broken = FaultSource("broken", ["x"], fail_ensure=True)
+    healthy = FakeSource("home", ["set_light"])
+    hub = ToolHub([broken, healthy])
+    await hub.start()
+
+    await hub.ensure_tools()  # must not raise
+
+    # The healthy source was still refreshed despite the sibling raising.
+    assert healthy.ensured is True
+    # The healthy tool stays advertised/routable after the refresh+rebuild.
+    assert "set_light" in [t["function"]["name"] for t in hub.tools]
+
+
+async def test_stop_isolates_failing_source_and_skips_no_stop_source():
+    # Mix a source whose stop() raises, a source with NO stop attribute, and a healthy
+    # one. stop() must not raise and the healthy source is still stopped.
+    broken = FaultSource("broken", ["x"], fail_stop=True)
+    no_stop = NoStopSource("nostop", ["y"])
+    healthy = FakeSource("home", ["set_light"])
+    hub = ToolHub([broken, no_stop, healthy])
+    await hub.start()
+
+    await hub.stop()  # must not raise even though broken.stop() throws and no_stop lacks stop
+
+    # The healthy source was stopped despite the earlier failure and the skipped source.
+    assert healthy.stopped is True
+
+
+async def test_set_sources_isolates_old_source_stop_failure():
+    # Old set mixes a source whose stop() raises with one lacking stop. The swap must
+    # complete (new routes in place) and the surviving old source is still stopped.
+    old_broken = FaultSource("old_broken", ["old_a"], fail_stop=True)
+    old_no_stop = NoStopSource("old_nostop", ["old_b"])
+    old_healthy = FaultSource("old_healthy", ["old_c"])
+    hub = ToolHub([old_broken, old_no_stop, old_healthy])
+    await hub.start()
+
+    new = FakeSource("new", ["fresh"])
+    await hub.set_sources([new])  # must not raise
+
+    # The swap completed: new source advertised/routable, old tools gone.
+    assert [t["function"]["name"] for t in hub.tools] == ["fresh"]
+    assert await hub.call("fresh", {}) == "new:fresh"
+    assert await hub.call("old_a", {}) == "error: unknown tool old_a"
+    # The surviving old source (after the raising one) was still stopped.
+    assert old_healthy.stopped is True

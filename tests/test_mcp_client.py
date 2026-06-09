@@ -194,3 +194,53 @@ async def test_list_tools_converts_server_tools(monkeypatch):
     hub = McpToolHub("http://mcp.test:8201/mcp")
     await hub.start()
     assert hub.tools == [McpToolHub._to_groq_tool(tool)]
+
+
+async def test_start_is_graceful_when_listing_fails(monkeypatch):
+    # A smart-home outage during start() must NOT propagate: start() logs and leaves an
+    # empty tool list so the assistant keeps running.
+    def boom(*a, **k):
+        raise RuntimeError("server down")
+
+    monkeypatch.setattr(mcp_client, "streamablehttp_client", boom)
+    hub = McpToolHub("http://mcp.test:8201/mcp")
+
+    await hub.start()  # must not raise
+
+    assert hub.tools == []
+
+
+async def test_ensure_tools_self_heals_when_server_becomes_reachable(monkeypatch):
+    # Cache is empty (start ran while the server was down). ensure_tools() should reload
+    # and populate _tools once the transport/session start returning a tool.
+    tool = StubTool(
+        "set_light",
+        "Turn a light on or off.",
+        {"type": "object", "properties": {"device_id": {"type": "string"}}},
+    )
+    session = StubSession(tools=[tool])
+
+    monkeypatch.setattr(mcp_client, "streamablehttp_client", lambda url, headers=None: StubTransport(url, headers))
+    monkeypatch.setattr(mcp_client, "ClientSession", lambda read, write: session)
+
+    hub = McpToolHub("http://mcp.test:8201/mcp")
+    assert hub.tools == []  # empty cache precondition
+
+    await hub.ensure_tools()
+
+    assert hub.tools == [McpToolHub._to_groq_tool(tool)]
+
+
+async def test_ensure_tools_stays_empty_when_reload_still_fails(monkeypatch):
+    # The reload itself raising must be swallowed: _tools stays [] and no exception
+    # escapes ensure_tools().
+    def boom(*a, **k):
+        raise RuntimeError("still down")
+
+    monkeypatch.setattr(mcp_client, "streamablehttp_client", boom)
+    hub = McpToolHub("http://mcp.test:8201/mcp")
+    assert hub.tools == []
+
+    await hub.ensure_tools()  # must not raise
+
+    assert hub.tools == []

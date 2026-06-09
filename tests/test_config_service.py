@@ -191,3 +191,43 @@ def test_on_change_does_not_fire_on_failed_apply(tmp_path):
     with pytest.raises(ValidationError):
         svc.apply({"tts": {"instances": {"yandex": {"speed": 9.9}}}})
     assert fired == []
+
+
+def test_apply_deep_merge_preserves_untouched_siblings(tmp_path):
+    # Data-loss regression guard: a partial patch touching ONE nested leaf must not
+    # wipe sibling leaves in other categories or core. Assert both the in-memory state
+    # and the persisted file keep the untouched values verbatim.
+    path = str(tmp_path / "config.json")
+    svc = ConfigService(_doc(), _deps(), path=path)
+    svc.apply({"tts": {"instances": {"yandex": {"voice": "zahar"}}}})
+
+    # The targeted leaf changed.
+    assert svc.get("tts").voice == "zahar"
+    # A sibling in a DIFFERENT category survives in memory.
+    assert svc.get("stt").api_key == "gsk-secret"
+    # A core value survives in memory.
+    assert svc.core.openweathermap.city == "Москва"
+
+    # All three survive on disk too (no silent data loss on persist).
+    saved = config_store.load(path)
+    assert saved["tts"]["instances"]["yandex"]["voice"] == "zahar"
+    assert saved["stt"]["instances"]["groq"]["api_key"] == "gsk-secret"
+    assert saved["core"]["openweathermap"]["city"] == "Москва"
+
+
+def test_provider_returns_selected_provider_object(tmp_path):
+    # provider() must hand back the SELECTED provider singleton (same identity as the
+    # service's own get_provider path) — not a freshly built backend and not a ConfigModel.
+    from src.plugins.base import get_provider
+    from src.plugins.tts.yandex import YandexTtsConfig, YandexTtsProvider
+    from src.tts import YandexTtsBackend
+
+    svc = _service(tmp_path)
+    prov = svc.provider("tts")
+
+    # Exact type and identity: the registry singleton for the selected provider.
+    assert type(prov) is YandexTtsProvider
+    assert prov is get_provider("tts", "yandex")
+    # Not the config model and not a backend instance.
+    assert not isinstance(prov, YandexTtsConfig)
+    assert not isinstance(prov, YandexTtsBackend)

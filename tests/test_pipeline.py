@@ -1330,3 +1330,217 @@ async def test_trim_applies_to_record_and_stored_audio(tmp_path, monkeypatch):
     # The stored diagnostic audio is the WAV built from the trimmed pcm. The first
     # insert returns run_id 1.
     assert store.get_audio(1) == _pcm_to_wav_bytes(_trim_start_pcm(fed, 10))
+
+
+# --- failure isolation: the run must always finalize cleanly ---------------------
+
+
+class RaisingSttBackend:
+    """STT double whose transcribe() always raises, to hit the _run top-level
+    exception handler (the pipeline catch-all around STT->LLM->TTS)."""
+
+    def __init__(self, exc=None):
+        self._exc = exc or RuntimeError("boom")
+
+    async def transcribe(self, pcm):
+        raise self._exc
+
+
+async def test_run_top_level_exception_is_recorded_and_run_ends(tmp_path, monkeypatch):
+    # An unexpected error inside the STT->LLM->TTS block (here: STT raises) is caught
+    # by the pipeline's top-level handler: it emits a VOICE_ASSISTANT_ERROR
+    # (code="server_error", message carrying the error text) AND a RUN_END, and the
+    # run is still recorded once as an error attributed to the "pipeline" stage.
+    patch_llm(monkeypatch)
+    store = FakeRunsStore()
+    pipeline, events = make_pipeline(tmp_path, monkeypatch, stt_text="включи свет", runs_store=store)
+    pipeline.rt.stt_backend = RaisingSttBackend(RuntimeError("boom"))
+
+    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_audio(b"\x01\x02" * 100)
+    await pipeline.on_stop(False)
+
+    types = types_of(events)
+    # The error event is emitted before RUN_END, and RUN_END still fires.
+    assert VAET.VOICE_ASSISTANT_ERROR in types
+    assert VAET.VOICE_ASSISTANT_RUN_END in types
+    assert types.index(VAET.VOICE_ASSISTANT_ERROR) < types.index(VAET.VOICE_ASSISTANT_RUN_END)
+    data = dict(events)
+    assert data[VAET.VOICE_ASSISTANT_ERROR]["code"] == "server_error"
+    assert "boom" in data[VAET.VOICE_ASSISTANT_ERROR]["message"]
+    assert_all_str(events)
+
+    # The run is recorded once as a pipeline-stage error carrying the message.
+    assert len(store.records) == 1
+    rec = store.records[0]
+    assert rec["result"] == "error"
+    assert rec["error_stage"] == "pipeline"
+    assert "boom" in rec["error_text"]
+
+
+class InsertRaisingRunsStore(FakeRunsStore):
+    """RunsStore double whose insert() always raises: a recording failure must
+    never break the run or leak out of on_stop."""
+
+    def insert(self, rec):
+        raise RuntimeError("insert boom")
+
+
+async def test_run_record_insert_failure_is_isolated(tmp_path, monkeypatch):
+    # If runs_store.insert() raises, the run must still complete the full happy path
+    # (all events incl. RUN_END) and on_stop must not propagate the error. Because the
+    # run_id is never obtained, no broadcast can happen — the hub is left untouched.
+    patch_llm(monkeypatch, reply="готово")
+    store = InsertRaisingRunsStore()
+    hub = FakeRunEvents()
+    pipeline, events = make_pipeline(
+        tmp_path, monkeypatch, stt_text="включи свет", runs_store=store, run_events=hub,
+    )
+
+    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_audio(b"\x01\x02" * 100)
+    await pipeline.on_stop(False)  # must not raise
+
+    # Full happy path still emitted, ending in RUN_END.
+    assert types_of(events) == FULL_SEQUENCE
+    # No run_id -> no broadcast: the hub never sees a payload.
+    assert hub.broadcasts == []
+
+
+class PutAudioRaisingRunsStore(FakeRunsStore):
+    """RunsStore double: insert() succeeds, put_audio() raises. A utterance-audio
+    store failure must not break the run or the broadcast."""
+
+    def put_audio(self, run_id, wav, keep):
+        raise RuntimeError("put_audio boom")
+
+
+async def test_put_audio_failure_is_isolated(tmp_path, monkeypatch):
+    # insert() succeeds but put_audio() raises: the run is still recorded exactly
+    # once, RUN_END is emitted, and the broadcast still fires — but with has_audio
+    # falsy because the audio store failed.
+    patch_llm(monkeypatch, reply="готово")
+    store = PutAudioRaisingRunsStore()
+    hub = FakeRunEvents()
+    pipeline, events = make_pipeline(
+        tmp_path, monkeypatch, stt_text="включи свет", runs_store=store, run_events=hub,
+    )
+
+    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_audio(b"\x01\x02" * 100)
+    await pipeline.on_stop(False)  # must not raise
+
+    assert VAET.VOICE_ASSISTANT_RUN_END in types_of(events)
+    # Recorded exactly once despite the audio-store failure.
+    assert len(store.records) == 1
+    # Broadcast still fires, but has_audio is falsy (the audio never stored).
+    assert len(hub.broadcasts) == 1
+    assert not hub.broadcasts[0]["run"]["has_audio"]
+
+
+class BroadcastRaisingRunEvents(FakeRunEvents):
+    """run-events hub whose broadcast() always raises: a slow/failing WS consumer
+    must never affect the run or leak out of on_stop."""
+
+    async def broadcast(self, payload):
+        self.broadcasts.append(payload)
+        raise RuntimeError("broadcast boom")
+
+
+async def test_broadcast_failure_is_isolated(tmp_path, monkeypatch):
+    # A failing broadcast (slow/broken WS consumer) must not break the run: the run is
+    # still recorded exactly once and on_stop returns without raising.
+    patch_llm(monkeypatch, reply="готово")
+    store = FakeRunsStore()
+    hub = BroadcastRaisingRunEvents()
+    pipeline, events = make_pipeline(
+        tmp_path, monkeypatch, stt_text="включи свет", runs_store=store, run_events=hub,
+    )
+
+    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_audio(b"\x01\x02" * 100)
+    await pipeline.on_stop(False)  # must not raise
+
+    assert VAET.VOICE_ASSISTANT_RUN_END in types_of(events)
+    assert len(store.records) == 1
+    # The broadcast was attempted (and raised), but did not break the run.
+    assert len(hub.broadcasts) == 1
+
+
+async def test_raw_capture_to_disk_failure_is_isolated(tmp_path, monkeypatch):
+    # With raw capture enabled, a WAV-write failure must NEVER break the run: the
+    # full STT->LLM->TTS path still completes and RUN_END fires. Force the failure by
+    # making the on-disk WAV writer raise.
+    patch_llm(monkeypatch, reply="готово")
+    pipeline, events = make_pipeline(tmp_path, monkeypatch, name="dev", stt_text="включи свет")
+    pipeline.rt.core.capture.enabled = True
+    pipeline.rt.core.capture.dir = str(tmp_path / "captures")
+
+    def boom(path, pcm):
+        raise OSError("disk write boom")
+
+    monkeypatch.setattr("src.pipeline._write_wav", boom)
+
+    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_audio(b"\x01\x02" * 100)
+    await pipeline.on_stop(False)  # must not raise
+
+    # The capture failure is swallowed; the full assistant pipeline still completes.
+    assert types_of(events) == FULL_SEQUENCE
+
+
+async def test_disarm_capture_cancels_pending_future_and_allows_rearm(tmp_path, monkeypatch):
+    # disarm_capture (the caller-timed-out path) clears the armed flag and fails the
+    # still-pending capture Future with RuntimeError("capture cancelled"), so the
+    # waiting caller gets a clean error and a fresh arm_capture is allowed afterwards.
+    pipeline, _ = make_pipeline(tmp_path, monkeypatch, name="dev")
+    pipeline.rt.core.capture.dir = str(tmp_path / "captures")
+
+    future = pipeline.arm_capture(5)
+    assert pipeline._capture_armed is True
+    assert not future.done()
+
+    pipeline.disarm_capture()
+
+    assert pipeline._capture_armed is False
+    assert future.done()
+    with pytest.raises(RuntimeError, match="capture cancelled"):
+        future.result()
+
+    # A subsequent arm is allowed (the busy-guard sees the prior Future resolved).
+    second = pipeline.arm_capture(3)
+    assert second is not future
+    assert pipeline._capture_armed is True
+
+
+async def test_capture_maxlen_finalize_ignores_late_chunk(tmp_path, monkeypatch):
+    # A ~1 s capture finalizes on the maxlen branch when ONE chunk exceeds the byte
+    # cap; a second chunk arriving after finalize is ignored (no second finalize, the
+    # Future already resolved, the buffer not re-grown past the cap).
+    pipeline, events = make_pipeline(tmp_path, monkeypatch, name="dev")
+    pipeline.rt.core.capture.dir = str(tmp_path / "captures")
+
+    future = pipeline.arm_capture(1)  # ~1 s capture
+    await pipeline.on_start("cid", 0, None, None)
+    assert pipeline._capture_run is True
+    cap = pipeline._capture_cap_bytes()  # (1 + 2) s of PCM
+
+    # One chunk larger than the cap -> finalize on the "maxlen" branch.
+    await pipeline.on_audio(b"\x09\x0a" * cap)  # 2 * cap bytes, well over the cap
+
+    assert pipeline._capture_run is False
+    assert pipeline._finalized is True
+    assert future.done()
+    # The capture truncated the buffer to exactly the cap (maxlen branch).
+    assert len(pipeline._buffer) <= cap
+    buffer_after_finalize = len(pipeline._buffer)
+    runend_count = types_of(events).count(VAET.VOICE_ASSISTANT_RUN_END)
+    result_before = future.result()
+
+    # A SECOND chunk after finalize is ignored: no second finalize, Future unchanged,
+    # the buffer is not re-grown.
+    await pipeline.on_audio(b"\xff\xff" * cap)
+
+    assert types_of(events).count(VAET.VOICE_ASSISTANT_RUN_END) == runend_count
+    assert future.result() == result_before
+    assert len(pipeline._buffer) == buffer_after_finalize <= cap

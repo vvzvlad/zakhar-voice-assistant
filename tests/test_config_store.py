@@ -79,3 +79,26 @@ def test_failed_save_leaves_no_tmp_and_keeps_good_file(tmp_path, monkeypatch):
     # No temp garbage left behind, and the previous good file is intact.
     assert not any(name.endswith(".tmp") for name in os.listdir(tmp_path))
     assert config_store.load(path) == {"v": "good"}
+
+
+def test_save_swallows_directory_fsync_oserror(tmp_path, monkeypatch):
+    # The directory fsync is best-effort: os.open(parent, O_DIRECTORY) can fail on some
+    # platforms. The OSError guard must NOT abort the write — only the directory open is
+    # forced to raise here; the temp-file write path (os.fdopen) is untouched.
+    path = str(tmp_path / "config.json")
+    parent = str(tmp_path)
+    real_open = os.open
+
+    def fake_open(p, *args, **kwargs):
+        # Only the directory fsync open (the parent dir) raises; everything else works.
+        if os.path.abspath(p) == os.path.abspath(parent):
+            raise OSError("cannot open directory for fsync")
+        return real_open(p, *args, **kwargs)
+
+    monkeypatch.setattr(config_store.os, "open", fake_open)
+
+    # Save still succeeds and writes the file correctly despite the directory fsync error.
+    config_store.save({"v": "ok"}, path)
+    assert config_store.load(path) == {"v": "ok"}
+    # And no temp garbage was left behind.
+    assert not any(name.endswith(".tmp") for name in os.listdir(tmp_path))

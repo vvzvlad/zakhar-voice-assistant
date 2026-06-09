@@ -1,3 +1,4 @@
+import builtins
 import json
 import os
 from datetime import datetime
@@ -104,3 +105,44 @@ def test_cyrillic_round_trips_without_ascii_escapes(tmp_path):
     ]
     raw = open(path, encoding="utf-8").read()
     assert "\\u" not in raw  # Cyrillic is not ASCII-escaped in the raw file
+
+
+def test_load_context_open_oserror_returns_empty(tmp_path, monkeypatch):
+    # The file exists and is fresh (passes the exists + not-stale guard), so load_context
+    # proceeds to open it for reading. If that open() raises OSError, load_context must
+    # swallow it and return [] rather than propagating the error.
+    path = str(tmp_path / "context_living.txt")
+    append_context(path, "вопрос", "ответ")
+    # Sanity: the file is present and NOT stale, so we really reach the read-open.
+    assert os.path.exists(path)
+    assert load_context(path) == [
+        {"role": "user", "content": "вопрос"},
+        {"role": "assistant", "content": "ответ"},
+    ]
+
+    real_open = builtins.open
+
+    def boom(file, *args, **kwargs):
+        if str(file) == path:
+            raise OSError("read boom")
+        return real_open(file, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "open", boom)
+    # Does not raise; returns [] on the read OSError.
+    assert load_context(path) == []
+
+
+def test_append_context_write_oserror_does_not_raise(tmp_path, monkeypatch):
+    # A write failure in append_context must be swallowed (logged, never raised): the
+    # pipeline depends on context persistence being best-effort. Force os.makedirs to
+    # raise OSError so the write path fails before the file is opened.
+    path = str(tmp_path / "nested" / "context_living.txt")
+
+    def boom(*args, **kwargs):
+        raise OSError("mkdir boom")
+
+    monkeypatch.setattr("src.context.os.makedirs", boom)
+    # No exception escapes; the helper returns None.
+    assert append_context(path, "вопрос", "ответ") is None
+    # The write never happened, so no file was created.
+    assert not os.path.exists(path)

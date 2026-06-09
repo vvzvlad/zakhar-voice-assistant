@@ -17,7 +17,7 @@ import asyncio
 import time
 from datetime import datetime
 
-from src.builtin_mcp.reminders import build_reminders_server
+from src.builtin_mcp.reminders import _format_due, build_reminders_server
 from src.core_config import CoreConfig, PromptConfig
 from src.llm import call_llm_api
 from src.plugins.llm.base import LlmConfig
@@ -179,6 +179,84 @@ def test_scheduler_cancel_prevents_fire(tmp_path):
 
     asyncio.run(main())
     assert captured == []
+    store.close()
+
+
+async def _wait_until(predicate, timeout=2.0, interval=0.005):
+    """Bounded poll: await until predicate() is truthy or timeout elapses.
+
+    Event-driven where possible; for branches with no deliver callback to signal on
+    (deliver=None drops silently), we poll observable store state on short ticks with a
+    hard upper bound — never a single fixed sleep that assumes timing.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        await asyncio.sleep(interval)
+    return predicate()
+
+
+def test_scheduler_deliver_none_drops_row_without_raising(tmp_path):
+    # reminders.py ~236-240: with no deliver callback, a due reminder is popped from
+    # the store (one-shot loss) and the loop logs+continues without raising. We drive
+    # it with a bounded poll of the store, never a fixed sleep.
+    store = _store(tmp_path)
+
+    async def main():
+        sched = ReminderScheduler(store)
+        sched.deliver = None  # explicit: no delivery callback wired
+        await sched.start()
+        rid = sched.add("молоко", time.time() + 0.05, "kitchen")
+        # Wait (bounded) until the loop pops the due row; one-shot => row gone.
+        # Observe NON-destructively via list_pending so the probe never deletes the row.
+        def ids():
+            return {r["id"] for r in store.list_pending()}
+        assert rid in ids()  # present before its due time
+        popped = await _wait_until(lambda: rid not in ids())
+        await sched.stop()
+        return popped
+
+    popped = asyncio.run(main())
+    # The row was removed by the loop (no deliver callback => silent one-shot loss).
+    assert popped is True
+    assert store.list_pending() == []
+    store.close()
+
+
+def test_scheduler_survives_deliver_exception_and_delivers_next(tmp_path):
+    # reminders.py ~243-250: a deliver that raises on its FIRST call must not kill the
+    # loop. The first reminder is lost (one-shot, already popped), but a later reminder
+    # is still delivered. Synchronization is an asyncio.Event set by the SECOND
+    # successful deliver, bounded by wait_for(timeout=2.0) — no fixed sleeps.
+    store = _store(tmp_path)
+    calls = []
+    second_delivered = asyncio.Event()
+
+    async def flaky_deliver(device, text):
+        calls.append((device, text))
+        if len(calls) == 1:
+            raise RuntimeError("boom on first delivery")
+        second_delivered.set()
+
+    async def main():
+        sched = ReminderScheduler(store)
+        sched.deliver = flaky_deliver
+        await sched.start()
+        sched.add("первое", time.time() + 0.05, "kitchen")
+        sched.add("второе", time.time() + 0.12, "bedroom")
+        await asyncio.wait_for(second_delivered.wait(), timeout=2.0)
+        await sched.stop()
+
+    asyncio.run(main())
+    # Both reminders reached deliver: the first raised, the loop survived, the second
+    # was delivered afterwards.
+    assert len(calls) == 2
+    assert "первое" in calls[0][1]
+    assert calls[1][0] == "bedroom"
+    assert "второе" in calls[1][1]
+    # Both one-shot rows are gone from the store.
+    assert store.list_pending() == []
     store.close()
 
 
@@ -522,3 +600,22 @@ def test_format_reminder_speech_full_phrase_and_lowercased():
 def test_format_reminder_speech_falls_back_when_created_ts_none():
     now = time.time()
     assert _format_reminder_speech("что-то", created_ts=None, now=now) == "что-то"
+
+
+# --- _format_due past-due / due-now ------------------------------------------
+
+
+def test_format_due_past_and_now_omits_suffix():
+    # When the due time is in the past or exactly now, minutes_left <= 0 so the
+    # "(через N мин)" hint must be omitted: the output is the bare local timestamp.
+    now = time.time()
+    past = now - 120
+    bare_past = datetime.fromtimestamp(past).strftime("%Y-%m-%d %H:%M")
+    out_past = _format_due(past, now)
+    assert out_past == bare_past
+    assert "через" not in out_past
+
+    bare_now = datetime.fromtimestamp(now).strftime("%Y-%m-%d %H:%M")
+    out_now = _format_due(now, now)
+    assert out_now == bare_now
+    assert "через" not in out_now
