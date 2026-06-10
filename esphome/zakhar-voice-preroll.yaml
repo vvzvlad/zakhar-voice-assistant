@@ -105,11 +105,48 @@ api:
   encryption:
     key: !secret api_encryption_key
 
+# --- Recording indicator: red blinking LED ring while a manual capture runs ---
+#
+# `capture_active` gates the blink loop; the capture button flips it true on press
+# and false when the window ends. restore_value: no — a reboot mid-capture leaves
+# no stale capture in flight, so the flag must start false.
+globals:
+  - id: capture_active
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+
+# While capture_active, re-assert a solid RED ring every ~300ms so the stock LED
+# ring reads as a camera-style "recording" light. We re-assert on a loop because
+# voice_assistant.start (fired by the capture button) triggers the firmware's own
+# on_listening effect ("Listening For Command") on `voice_assistant_leds`; the
+# re-assert overrides that effect each cycle. (The stock `effect: "Error"` is a
+# fast red pulse, but this explicit loop is more robust against the firmware
+# re-driving the ring.) On exit, turn the ring off so the firmware restores idle.
+script:
+  - id: capture_blink
+    then:
+      - while:
+          condition:
+            lambda: 'return id(capture_active);'
+          then:
+            - light.turn_on:
+                id: voice_assistant_leds
+                red: 100%
+                green: 0%
+                blue: 0%
+                brightness: 80%
+                effect: none
+            - delay: 300ms
+            - light.turn_off: voice_assistant_leds
+            - delay: 300ms
+      - light.turn_off: voice_assistant_leds
+
 # --- Manual "record X seconds" capture trigger ---
 #
 # A device-side, self-timed sample capture exposed to our server over the Native
 # API. The server discovers these two template entities by their object_id
-# (`zakhar_capture_seconds`, `zakhar_capture_sample`), sets the duration, then
+# (`capture_seconds`, `capture_sample`), sets the duration, then
 # presses the button. The button runs the device's voice_assistant for the chosen
 # number of seconds with silence detection OFF, so the speaker streams mic PCM for
 # the whole window; our server records that audio in capture-only mode (no STT/LLM/
@@ -126,14 +163,13 @@ api:
 #
 # IMPORTANT: the Native API transmits each entity's object_id as slugify(name),
 # NOT the YAML `id:` field. The server matches on those slugified object_ids, so
-# the names below MUST slugify to `zakhar_capture_seconds` / `zakhar_capture_sample`
-# (i.e. "Zakhar Capture Seconds" / "Zakhar Capture Sample"). The `zakhar_` prefix
-# also keeps these from clashing with the official package's own entities. The C++
+# the names below MUST slugify to `capture_seconds` / `capture_sample`
+# (i.e. "Capture Seconds" / "Capture Sample"). The C++
 # `id:` fields stay as-is — they're referenced by `id(...)` in the lambda below.
 number:
   - platform: template
-    name: "Zakhar Capture Seconds"
-    id: zakhar_capture_seconds
+    name: "Capture Seconds"
+    id: capture_seconds
     optimistic: true
     min_value: 1
     max_value: 300
@@ -143,8 +179,8 @@ number:
 
 button:
   - platform: template
-    name: "Zakhar Capture Sample"
-    id: zakhar_capture_sample
+    name: "Capture Sample"
+    id: capture_sample
     on_press:
       # Stop micro_wake_word for the whole capture window. Otherwise the official
       # package's on_wake_word_detected fires the moment the user says the wake
@@ -159,9 +195,27 @@ button:
       # after a manual capture MUST be confirmed on a real device against that exact
       # pinned package version. This is not verifiable from the repo; do not change
       # the action sequence without testing on hardware.
+      #
+      # LED CAVEAT (verify on real hardware): the red blink loop below shares the
+      # stock LED ring (`voice_assistant_leds`) with the firmware's own
+      # voice_assistant LED state machine — `voice_assistant.start` triggers the
+      # package's on_listening effect ("Listening For Command"), so capture_blink
+      # re-asserts solid red every cycle to override it. This interaction (and the
+      # final light.turn_off restoring idle) MUST be confirmed against the pinned
+      # home-assistant-voice@26.5.0 package, which re-drives the ring on its own
+      # state transitions.
+      - globals.set:
+          id: capture_active
+          value: 'true'
+      - script.execute: capture_blink
       - micro_wake_word.stop:
       - voice_assistant.start:
           silence_detection: false
-      - delay: !lambda 'return (int)(id(zakhar_capture_seconds).state * 1000);'
+      - delay: !lambda 'return (int)(id(capture_seconds).state * 1000);'
       - voice_assistant.stop:
+      - globals.set:
+          id: capture_active
+          value: 'false'
+      - script.stop: capture_blink
+      - light.turn_off: voice_assistant_leds
       - micro_wake_word.start:

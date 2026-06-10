@@ -65,19 +65,19 @@ voice_assistant:
 
 ### Ручной capture без pre-roll
 
-Кнопка «Zakhar Capture Sample» получит лишние 1.5 с аудио в начале записи.
+Кнопка «Capture Sample» получит лишние 1.5 с аудио в начале записи.
 Если это нежелательно, выключать pre-roll на время capture:
 
 ```yaml
 button:
   - platform: template
-    name: "Zakhar Capture Sample"
+    name: "Capture Sample"
     on_press:
       - micro_wake_word.stop:
       - lambda: id(va).set_preroll_enabled(false);
       - voice_assistant.start:
           silence_detection: false
-      - delay: !lambda 'return (int)(id(zakhar_capture_seconds).state * 1000);'
+      - delay: !lambda 'return (int)(id(capture_seconds).state * 1000);'
       - voice_assistant.stop:
       - lambda: id(va).set_preroll_enabled(true);
       - micro_wake_word.start:

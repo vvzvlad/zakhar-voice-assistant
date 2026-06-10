@@ -21,9 +21,9 @@ CAPTURE_WAIT_MARGIN = 8.0
 # Native API object_ids of the manual-capture template entities. The firmware
 # transmits object_id = slugify(name) over the API (NOT the YAML `id:` field), so
 # these MUST equal slugify(name) from esphome/zakhar-voice.yaml — i.e. the entities
-# named "Zakhar Capture Seconds" / "Zakhar Capture Sample".
-CAPTURE_SECONDS_OBJECT_ID = "zakhar_capture_seconds"
-CAPTURE_SAMPLE_OBJECT_ID = "zakhar_capture_sample"
+# named "Capture Seconds" / "Capture Sample".
+CAPTURE_SECONDS_OBJECT_ID = "capture_seconds"
+CAPTURE_SAMPLE_OBJECT_ID = "capture_sample"
 
 
 class DeviceClient:
@@ -138,7 +138,7 @@ class DeviceClient:
         if self._capture_button_key is None or self._capture_seconds_key is None:
             raise RuntimeError(
                 f"{self.cfg.name} has no manual-capture entities "
-                f"(firmware needs the zakhar_capture_sample/seconds template entities)"
+                f"(firmware needs the capture_sample/seconds template entities)"
             )
         # Defensive clamp to the supported range (the panel API validates 1..MAX, but
         # this guards any other caller). The device-side template number caps at the

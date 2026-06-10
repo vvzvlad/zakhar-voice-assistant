@@ -117,14 +117,14 @@ def _capture_client(name="dev", *, online=True, btn_key=11, sec_key=22,
 
 def test_discover_capture_keys_maps_by_object_id():
     # These object_ids are exactly what the firmware sends over the Native API:
-    # object_id = slugify(name) for the "Zakhar Capture Seconds" / "Zakhar Capture
-    # Sample" entities in esphome/zakhar-voice.yaml (NOT the YAML `id:` field). They
+    # object_id = slugify(name) for the "Capture Seconds" / "Capture Sample"
+    # entities in esphome/zakhar-voice.yaml (NOT the YAML `id:` field). They
     # MUST stay equal to slugify(name) or discovery silently fails on real hardware.
     c = _capture_client(btn_key=None, sec_key=None)
     c._discover_capture_keys([
         _Ent("some_other", 1),
-        _Ent("zakhar_capture_seconds", 22),
-        _Ent("zakhar_capture_sample", 11),
+        _Ent("capture_seconds", 22),
+        _Ent("capture_sample", 11),
     ])
     assert c._capture_button_key == 11
     assert c._capture_seconds_key == 22
@@ -557,8 +557,8 @@ def _connect_client(name="dev", *, entities=None, fail=False, unsub="UNSUB"):
 
 async def test_on_connect_wires_subscribes_and_discovers_keys():
     ents = [
-        _Ent("zakhar_capture_seconds", 22),
-        _Ent("zakhar_capture_sample", 11),
+        _Ent("capture_seconds", 22),
+        _Ent("capture_sample", 11),
     ]
     c = _connect_client(entities=ents, unsub="TOKEN")
     await c._on_connect()
