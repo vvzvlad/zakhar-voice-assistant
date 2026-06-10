@@ -12,7 +12,7 @@
 // options:"dynamic"→Select(fetched), slider numbers→Slider, other numbers→Stepper,
 // boolean→Toggle, secret-looking strings→masked key input, else text input.
 import React, { useEffect, useState } from "react";
-import { Field, KeyInput, Seg, Select, Slider, Stepper, Toggle } from "./primitives.jsx";
+import { Field, KeyInput, ScaleSeg, Seg, Select, Slider, Stepper, Toggle } from "./primitives.jsx";
 import { resolve, enumOf, isSecret, humanize } from "../schema.js";
 
 function DynamicSelect({ value, onChange, load }) {
@@ -48,10 +48,22 @@ function SchemaField({ name, node, root, value, onChange, optionsFor }) {
   const widget = node.widget || r.widget;
   const type = r.type;
   const unit = node.unit || r.unit;
+  const poles = node.poles || r.poles;
+  const choices = node.choices || r.choices;
+  const readout = node.readout || r.readout;
+  // Labeled/scale segment control: explicit `choices` (value+label per segment), or an
+  // enum decorated with `poles` (numeric segments + edge captions). Stores the numeric value.
+  const segOptions = choices || (enums && poles ? enums.map((v) => ({ value: v, label: String(v) })) : null);
 
   let control;
   if (dynamic && optionsFor) {
     control = <DynamicSelect value={value} onChange={set} load={() => optionsFor(name)} />;
+  } else if (segOptions) {
+    control = <ScaleSeg
+      options={segOptions} value={value} onChange={set}
+      poles={poles ? { left: poles[0], right: poles[1] } : undefined}
+      readout={readout}
+    />;
   } else if (enums && type !== "boolean") {
     // Numeric enums (e.g. mic.channel = Literal[0,1]) render as a Seg/Select too,
     // not a Stepper — an explicit enum always means "pick one of these".
@@ -106,7 +118,7 @@ function SchemaField({ name, node, root, value, onChange, optionsFor }) {
   // Boolean / stepper render nicely as a "row" field (label left, control right).
   // Numeric enums render as a Seg/Select (handled above), not a stepper, so exclude
   // them here too — they lay out like the other enum selects, not as a row.
-  const row = type === "boolean" || (type === "integer" && !enums && !(r.minimum != null && r.maximum != null && widget === "slider"));
+  const row = !segOptions && (type === "boolean" || (type === "integer" && !enums && !(r.minimum != null && r.maximum != null && widget === "slider")));
   return (
     <Field label={label} hint={hint} row={row}>
       {control}

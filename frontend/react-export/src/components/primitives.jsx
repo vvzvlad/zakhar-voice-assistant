@@ -43,6 +43,23 @@ export function Seg({ options, value, onChange, full }) {
     {options.map((o) => <button key={o} className={o === value ? "on" : ""} onClick={() => onChange && onChange(o)}>{o}</button>)}
   </div>;
 }
+// Segmented control for a small integer scale. Options may carry custom labels
+// (option.label shown on the button) while the numeric option.value is stored.
+// Optional `poles` renders captions under the first/last segment so the scale is
+// self-describing; optional `readout` shows the current "label · value" below.
+export function ScaleSeg({ options, value, onChange, poles, readout }) {
+  const opts = (options || []).map((o) => (o && typeof o === "object" ? o : { value: o, label: String(o) }));
+  const cur = opts.find((o) => o.value === value);
+  return <div>
+    <div className="z-seg full">
+      {opts.map((o) => <button key={String(o.value)} className={o.value === value ? "on" : ""} onClick={() => onChange && onChange(o.value)}>{o.label}</button>)}
+    </div>
+    {poles && <div style={{ display: "flex", justifyContent: "space-between", marginTop: 5, fontSize: 10.5, color: "var(--mut2)" }}>
+      <span>{poles.left}</span><span style={{ textAlign: "right" }}>{poles.right}</span>
+    </div>}
+    {readout && cur && <div style={{ marginTop: 5, fontSize: 11, color: "var(--mut)", fontFamily: "var(--mono)" }}>{cur.label} · {String(value)}</div>}
+  </div>;
+}
 export function Selector({ label, caption, options, value, onChange }) {
   return <div style={{ marginBottom: 18 }}>
     <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 8, gap: 12 }}>

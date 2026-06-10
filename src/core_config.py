@@ -26,7 +26,21 @@ class VadConfig(BaseModel):
     aggressiveness: int = Field(
         2, ge=0, le=3,
         title="Speech detection strictness",
-        description="WebRTC VAD sensitivity (0–3). Higher classifies borderline audio as non-speech more readily, so the phrase end-points sooner and soft trailing sounds may be cut; lower is more tolerant and waits longer.",
+        # Rendered as a labeled segment control (see SchemaForm.ScaleSeg): each level
+        # gets a word label, the extremes get pole captions, and the numeric value is
+        # shown small for debugging. The "stricter = cuts sooner" explanation lives in
+        # those labels, so the description stays short.
+        json_schema_extra={
+            "choices": [
+                {"value": 0, "label": "Lenient"},
+                {"value": 1, "label": "Balanced"},
+                {"value": 2, "label": "Strict"},
+                {"value": 3, "label": "Strictest"},
+            ],
+            "poles": ["waits longest", "cuts off soonest"],
+            "readout": True,
+        },
+        description="How strictly WebRTC VAD decides that speech has ended.",
     )
     silence_ms: int = Field(
         800,
@@ -54,10 +68,14 @@ class VadConfig(BaseModel):
     )
     wake_gap_ms: int = Field(
         250,
-        description="Silence after the wake word that marks where «Захар» ends and the command may begin. Until the command starts, the wait runs on No Speech Timeout, not Silence; lower detects the command-start sooner.",
+        title="Pause after wake word",
+        json_schema_extra={"unit": "ms"},
+        description="Silence after the wake word that marks where «Захар» ends and the command may begin. Until the command starts, the wait runs on Give up after silence, not End-of-phrase pause; lower detects the command start sooner.",
     )
     wake_max_ms: int = Field(
         1500,
+        title="Maximum wake word length",
+        json_schema_extra={"unit": "ms"},
         description="Safety cap on the wake-word phase: if the first speech run lasts longer than this (a command spoken with no pause after «Захар»), it is treated as the command. Set above the longest drawn-out «захааар».",
     )
     trim_start_ms: int = Field(
@@ -69,15 +87,20 @@ class VadConfig(BaseModel):
     )
     mic_channel: Literal[0, 1] = Field(
         0,
-        json_schema_extra={"widget": "select"},
-        description="Which Voice PE mic stream feeds the whole pipeline (capture, VAD and STT). 0 = processed XMOS AGC output (louder, more aggressively cleaned); 1 = less-processed noise-suppression output (cleaner but quieter). Channel 1 falls back to 0 if the device sends no second stream. Applies on the next utterance.",
+        title="Mic processing level",
+        # Rendered as a segment control with pole captions (see SchemaForm.ScaleSeg).
+        # Lower = more processed / louder; higher = rawer / cleaner.
+        json_schema_extra={"poles": ["more processed / louder", "raw / cleaner"]},
+        description="Selects which mic stream feeds the pipeline. Lower is more processed and louder; higher is rawer and cleaner. Falls back to the most-processed stream if the device does not provide the selected one. Applies on the next utterance.",
     )
     mic_normalize: bool = Field(
         False,
+        title="Volume normalization",
         description="Peak-normalize each captured utterance before STT so its loudest sample reaches a target level (~-3 dBFS). Adapts the quieter less-processed channel to a consistent loudness without clipping; near-silent clips are left untouched. Off by default; applies on the next utterance.",
     )
     mic_highpass: bool = Field(
         False,
+        title="Low-frequency filter",
         description="Apply a ~80 Hz high-pass filter to the whole utterance before STT to strip DC offset and low-frequency rumble (table thumps, HVAC) that hurt recognition. Off by default; applies on the next utterance.",
     )
 
@@ -167,6 +190,7 @@ class AckConfig(BaseModel):
     # value keeps the synthesized chime, which is built once and cached.
     sound_path: str = Field(
         "",
+        title="Chime sound",
         json_schema_extra={"options": "dynamic"},
         description="Chime audio file (mp3 or wav) played on end-of-phrase. Pick a bundled clip to use that exact «блям»; the synthesized default (empty value) plays a short two-tone sine chime. Applies per run.",
     )

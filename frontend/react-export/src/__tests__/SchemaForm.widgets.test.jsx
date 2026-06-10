@@ -132,3 +132,69 @@ describe("SchemaField numeric onChange payload", () => {
     expect(onChange).toHaveBeenCalledWith("temperature", 1.5);
   });
 });
+
+describe("SchemaField ScaleSeg (segment scale) selection", () => {
+  it("renders a labeled ScaleSeg (word labels + poles + readout) for an integer with choices", () => {
+    const onChange = vi.fn();
+    const c = renderField(
+      "aggressiveness",
+      {
+        type: "integer", minimum: 0, maximum: 3,
+        choices: [
+          { value: 0, label: "Lenient" },
+          { value: 1, label: "Balanced" },
+          { value: 2, label: "Strict" },
+          { value: 3, label: "Strictest" },
+        ],
+        poles: ["waits longest", "cuts off soonest"],
+        readout: true,
+      },
+      2, onChange
+    );
+    // Segment buttons carry WORD labels (not numbers) and there is no Stepper.
+    const btns = c.querySelectorAll(".z-seg.full button");
+    expect(btns).toHaveLength(4);
+    expect([...btns].map((b) => b.textContent)).toEqual(["Lenient", "Balanced", "Strict", "Strictest"]);
+    expect(c.querySelector(".z-stepper")).toBeNull();
+    // Pole captions and the "label · value" readout render.
+    expect(screen.getByText("waits longest")).toBeInTheDocument();
+    expect(screen.getByText("cuts off soonest")).toBeInTheDocument();
+    expect(screen.getByText("Strict · 2")).toBeInTheDocument();
+    // Clicking a segment emits the NUMERIC value, not the label string.
+    fireEvent.click(btns[0]);
+    expect(onChange).toHaveBeenCalledWith("aggressiveness", 0);
+  });
+
+  it("renders a numeric ScaleSeg with pole captions for an enum decorated with poles", () => {
+    const onChange = vi.fn();
+    const c = renderField(
+      "mic_channel",
+      { type: "integer", enum: [0, 1], poles: ["more processed / louder", "raw / cleaner"] },
+      0, onChange
+    );
+    const btns = c.querySelectorAll(".z-seg.full button");
+    expect(btns).toHaveLength(2);
+    // Numeric segment labels (the enum values), pole captions present.
+    expect([...btns].map((b) => b.textContent)).toEqual(["0", "1"]);
+    expect(screen.getByText("more processed / louder")).toBeInTheDocument();
+    expect(screen.getByText("raw / cleaner")).toBeInTheDocument();
+    // Emits the numeric enum value on click.
+    fireEvent.click(btns[1]);
+    expect(onChange).toHaveBeenCalledWith("mic_channel", 1);
+  });
+
+  it("ScaleSeg with an undefined value renders the buttons but no readout and does not crash", () => {
+    const c = renderField(
+      "aggressiveness",
+      {
+        type: "integer",
+        choices: [{ value: 0, label: "Lenient" }, { value: 1, label: "Balanced" }],
+        readout: true,
+      },
+      undefined
+    );
+    // Buttons still render; with no current value there is no "·" readout line.
+    expect(c.querySelectorAll(".z-seg.full button")).toHaveLength(2);
+    expect(c.textContent).not.toContain("·");
+  });
+});
