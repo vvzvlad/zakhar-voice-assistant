@@ -136,6 +136,33 @@ number:
     step: 1
     initial_value: 5
     restore_value: true
+  # Runtime wake-word sensitivity knob: lets the user tune the detection
+  # cutoff live from Home Assistant with NO re-flash. Only probability_cutoff
+  # is runtime-adjustable; sliding_window_size is compile-time only in ESPHome.
+  - platform: template
+    name: "Wake Probability Cutoff"
+    id: wake_probability_cutoff
+    optimistic: true
+    restore_value: true
+    initial_value: 80
+    min_value: 50
+    max_value: 100
+    step: 1
+    unit_of_measurement: "%"
+    mode: slider
+    on_value:
+      then:
+        - lambda: |-
+            // micro_wake_word stores the cutoff as a uint8 (probability * 255).
+            // Convert this percentage entity (50..100) to that 0..255 scale and push
+            // it to the model at runtime. Truncate (not round) to match ESPHome's own
+            // codegen, which bakes the static cutoff as int(probability * 255) — this
+            // way the runtime knob behaves identically to re-flashing with the same %.
+            // on_value also fires when restore_value restores the saved value at boot,
+            // so the chosen cutoff survives reboots without a separate on_boot hook.
+            // (sliding_window_size is compile-time only in ESPHome and can't change here.)
+            const float frac = x / 100.0f;
+            id(zakhar)->set_probability_cutoff((uint8_t) (frac * 255.0f));
 
 button:
   - platform: template

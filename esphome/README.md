@@ -63,6 +63,9 @@ flashing it.
   at all, so it was reverted. The `vad:` gate from the stock config stays on and
   already suppresses most silence/music false-accepts. Raise toward `90%` only if
   silence false-fires get annoying.
+- `probability_cutoff` can now be changed live from Home Assistant via the **Wake
+  Probability Cutoff** number (50–100%) with NO re-flash; the chosen value persists
+  across reboots. `sliding_window_size` is compile-time only and still needs a re-flash.
 
 ## Updating the base firmware later
 
