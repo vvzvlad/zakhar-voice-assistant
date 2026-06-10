@@ -1,0 +1,9 @@
+{
+  "keepTP@0.5": 0.96875,
+  "rejectSilFA@0.5": 1.0,
+  "rejectMusFA@0.5": 1.0,
+  "N_sil_eval": 13,
+  "N_mus_eval": 2,
+  "thr": 0.5,
+  "params": 1281
+}
