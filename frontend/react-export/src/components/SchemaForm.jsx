@@ -15,7 +15,7 @@ import React, { useEffect, useState } from "react";
 import { Field, KeyInput, ScaleSeg, Seg, Select, Slider, Stepper, Toggle } from "./primitives.jsx";
 import { resolve, enumOf, isSecret, humanize } from "../schema.js";
 
-function DynamicSelect({ value, onChange, load }) {
+function DynamicSelect({ value, onChange, load, itemAction, itemActionBusy }) {
   const norm = (o) => (o && typeof o === "object" ? o : { value: o, label: String(o) });
   const [opts, setOpts] = useState(value != null ? [norm(value)] : []);
   useEffect(() => {
@@ -33,11 +33,11 @@ function DynamicSelect({ value, onChange, load }) {
     return () => { alive = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  return <Select value={value} options={opts} onChange={onChange} />;
+  return <Select value={value} options={opts} onChange={onChange} itemAction={itemAction} itemActionBusy={itemActionBusy} />;
 }
 
 // One property → one <Field> with the right widget.
-function SchemaField({ name, node, root, value, onChange, optionsFor }) {
+function SchemaField({ name, node, root, value, onChange, optionsFor, itemActionFor, itemActionBusy }) {
   const r = resolve(node, root);
   const label = node.title || r.title || humanize(name);
   const hint = node.description || r.description;
@@ -57,7 +57,8 @@ function SchemaField({ name, node, root, value, onChange, optionsFor }) {
 
   let control;
   if (dynamic && optionsFor) {
-    control = <DynamicSelect value={value} onChange={set} load={() => optionsFor(name)} />;
+    const itemAction = itemActionFor ? itemActionFor(name) : null;
+    control = <DynamicSelect value={value} onChange={set} load={() => optionsFor(name)} itemAction={itemAction || undefined} itemActionBusy={itemActionBusy} />;
   } else if (segOptions) {
     control = <ScaleSeg
       options={segOptions} value={value} onChange={set}
@@ -126,7 +127,7 @@ function SchemaField({ name, node, root, value, onChange, optionsFor }) {
   );
 }
 
-export default function SchemaForm({ schema, values, onChange, optionsFor, root, skip = [] }) {
+export default function SchemaForm({ schema, values, onChange, optionsFor, root, skip = [], itemActionFor, itemActionBusy }) {
   const doc = root || schema;
   const props = (schema && schema.properties) || {};
   const skipSet = new Set(skip);
@@ -142,6 +143,8 @@ export default function SchemaForm({ schema, values, onChange, optionsFor, root,
             value={values ? values[name] : undefined}
             onChange={onChange}
             optionsFor={optionsFor}
+            itemActionFor={itemActionFor}
+            itemActionBusy={itemActionBusy}
           />
         )
       )}

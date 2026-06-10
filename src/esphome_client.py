@@ -11,7 +11,7 @@ from loguru import logger
 
 from src.audio_server import tts_url
 from src.core_config import DeviceConfig
-from src.pipeline import CAPTURE_MAX_SECONDS, Pipeline
+from src.pipeline import CAPTURE_MAX_SECONDS, Pipeline, build_ack_clip
 
 # Extra wall-clock margin on top of the requested capture seconds when waiting for
 # the recorded WAV: covers the press -> voice_assistant.start round-trip plus the
@@ -175,6 +175,21 @@ class DeviceClient:
             media_id=url, timeout=30.0, text=text,
         )
 
+    async def play_media(self, audio: bytes, mime: str) -> None:
+        """Play a ready audio clip on this speaker via the assist-satellite announce path.
+
+        Mirrors announce() but takes pre-built audio bytes instead of synthesizing text —
+        used by the panel's chime preview. Ducks any current audio and plays while idle.
+        """
+        if not self.online:
+            raise RuntimeError(f"{self.cfg.name} is offline")
+        audio_id = self.pipeline.audio_server.put(audio, mime)
+        _ext, url = tts_url(self.pipeline.public_base_url, audio_id, mime)
+        logger.info(f"{self.cfg.name}: 🔔 play media -> {url}")
+        await self.cli.send_voice_assistant_announcement_await_response(
+            media_id=url, timeout=30.0, text="",
+        )
+
     async def start(self) -> None:
         await self.reconnect.start()
 
@@ -238,6 +253,37 @@ class DeviceManager:
         if not target.online:
             raise RuntimeError(f"{device_name} is offline")
         return await target.capture(seconds)
+
+    async def play_chime(self, sound_path: str, device_name: str | None = None) -> dict:
+        """Play the given end-of-phrase chime on the speaker(s) for an operator preview.
+
+        Builds the clip ONCE off the event loop (build_ack_clip does file IO / a WAV
+        transcode), then plays it via the announce path on the named device, or on EVERY
+        online device when device_name is None. Offline targets (and any per-device
+        failure) are reported, never raised. Returns {"played": [names], "offline": [names]}.
+        Raises LookupError for an unknown named device so the API can return 404.
+        """
+        mime, audio = await asyncio.to_thread(build_ack_clip, sound_path)
+        if device_name is not None:
+            target = next((c for c in self.clients if c.cfg.name == device_name), None)
+            if target is None:
+                raise LookupError(f"unknown device {device_name!r}")
+            targets = [target]
+        else:
+            targets = list(self.clients)
+        played: list[str] = []
+        offline: list[str] = []
+        for c in targets:
+            if not c.online:
+                offline.append(c.cfg.name)
+                continue
+            try:
+                await c.play_media(audio, mime)
+                played.append(c.cfg.name)
+            except Exception as e:
+                logger.warning(f"{c.cfg.name}: chime preview failed: {e}")
+                offline.append(c.cfg.name)
+        return {"played": played, "offline": offline}
 
     async def start(self) -> None:
         for c in self.clients:

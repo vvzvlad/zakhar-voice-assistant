@@ -107,7 +107,7 @@ async def _read_json(request: web.Request):
 
 class PanelServer:
     def __init__(self, svc, host, port, *, version, started_at,
-                 device_status=None, device_capture=None,
+                 device_status=None, device_capture=None, device_play=None,
                  static_dir=None, runs_store=None, tool_sources=None,
                  run_events=None):
         # svc: ConfigService; started_at: float (time.time())
@@ -127,6 +127,10 @@ class PanelServer:
         self.started_at = started_at
         self.device_status = device_status
         self.device_capture = device_capture
+        # device_play: optional async callable (sound_path, device_name=None) -> dict that
+        #   plays the preview chime on the speaker(s) (DeviceManager.play_chime). None ->
+        #   the /api/chimes/play endpoint returns 503.
+        self.device_play = device_play
         # Background capture jobs: the recording runs as a server-side task so a
         # browser disconnect no longer cancels it (which used to reboot the device).
         self._capture_jobs = CaptureJobManager(device_capture) if device_capture is not None else None
@@ -176,6 +180,40 @@ class PanelServer:
     async def _get_chimes(self, request: web.Request) -> web.Response:
         """List the bundled end-of-phrase chime files for the ack sound_path selector."""
         return web.json_response({"options": list_chimes()})
+
+    async def _post_play_chime(self, request: web.Request) -> web.Response:
+        """Play the selected end-of-phrase chime on the speaker(s) for an operator preview.
+
+        Body: {"sound_path": "<path or ''>", "device": "<name>"?}. sound_path must be empty
+        (synthesized chime) or one of the bundled clips from GET /api/chimes — any other
+        value is rejected (no arbitrary file read / traversal). Plays on the named device,
+        or on every online speaker when "device" is omitted. Returns
+        {"played": [...], "offline": [...]}.
+
+        Status codes: 200 ok, 400 bad input / unknown sound_path, 404 unknown device,
+        503 device playback not wired (API-only boot).
+        """
+        if self.device_play is None:
+            return web.json_response({"error": "device playback not available"}, status=503)
+        body = await _read_json(request)
+        if not isinstance(body, dict):
+            return web.json_response({"error": "body must be a JSON object"}, status=400)
+        sound_path = body.get("sound_path", "")
+        if not isinstance(sound_path, str):
+            return web.json_response({"error": 'field "sound_path" must be a string'}, status=400)
+        sound_path = sound_path.strip()
+        # Defense-in-depth: only the synthesized default ("") or a known bundled clip may be
+        # played — never an arbitrary path.
+        if sound_path and sound_path not in list_chimes():
+            return web.json_response({"error": "unknown chime sound_path"}, status=400)
+        device = body.get("device")
+        if device is not None and (not isinstance(device, str) or not device):
+            return web.json_response({"error": 'field "device" must be a non-empty string'}, status=400)
+        try:
+            result = await self.device_play(sound_path, device)
+        except LookupError as e:
+            return web.json_response({"error": str(e)}, status=404)
+        return web.json_response(result)
 
     async def _get_prompt(self, request: web.Request) -> web.Response:
         path = self.svc.core.prompt.system_prompt_path
@@ -390,6 +428,7 @@ class PanelServer:
             web.patch("/api/config", self._patch_config),
             web.get("/api/options", self._get_options),
             web.get("/api/chimes", self._get_chimes),
+            web.post("/api/chimes/play", self._post_play_chime),
             web.get("/api/prompt", self._get_prompt),
             web.put("/api/prompt", self._put_prompt),
             web.get("/api/system", self._get_system),

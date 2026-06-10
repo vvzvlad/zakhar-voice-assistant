@@ -1,9 +1,9 @@
-import React from "react";
+import React, { useState } from "react";
 import { Selector, PageHeader, FormSaveBar } from "../components/primitives.jsx";
 import SchemaForm from "../components/SchemaForm.jsx";
 import { useAppData } from "../appData.jsx";
 import { useStageForm, errorLines } from "../useStageForm.js";
-import { getOptions, getChimes } from "../api.js";
+import { getOptions, getChimes, playChime } from "../api.js";
 
 function Card({ title, sub, children, foot }) {
   return <div className="z-card">
@@ -11,6 +11,35 @@ function Card({ title, sub, children, foot }) {
     <div className="z-card-b">{children}</div>
     {foot}
   </div>;
+}
+
+// Shared end-of-phrase chime preview: plays a chime on every online speaker via the
+// same announce path as the real ack. `busy` holds the sound_path currently playing
+// (or null); `msg` is the last error (success is silent). Used by the "Play now" button AND the
+// per-item play buttons in the chime dropdown, so they share one busy flag + status.
+function useChimePreview() {
+  const [busy, setBusy] = useState(null); // sound_path being played, or null
+  const [msg, setMsg] = useState(null);   // { tone: "ok" | "err", text }
+  const play = async (soundPath) => {
+    const sp = soundPath || "";
+    setBusy(sp);
+    setMsg(null);
+    try {
+      const r = await playChime(sp);
+      const played = (r && r.played) || [];
+      const offline = (r && r.offline) || [];
+      // Success is self-evident (the chime plays through the speaker), so show no
+      // confirmation text — only surface a message when nothing actually played.
+      if (played.length === 0) {
+        setMsg({ tone: "err", text: offline.length ? `No online speaker (offline: ${offline.join(", ")})` : "No speakers configured" });
+      }
+    } catch (e) {
+      setMsg({ tone: "err", text: e.message || "Failed to play" });
+    } finally {
+      setBusy(null);
+    }
+  };
+  return { busy, msg, play };
 }
 
 // ── Generic provider stage (STT / LLM / TTS) ──────────────────────────────
@@ -116,6 +145,8 @@ export function VAD() {
     saving: micSaving, err: micErr, save: micSave,
   } = useStageForm(micValues, buildMicPatch, patch);
 
+  const chime = useChimePreview();
+
   if (!vadSchema) return <div className="z-page"><div className="z-card"><div className="z-empty"><b>VAD</b>Schema unavailable.</div></div></div>;
 
   return <div className="z-page">
@@ -136,7 +167,10 @@ export function VAD() {
         </Card>}
         {ackSchema && <Card title="End-of-phrase chime" sub="confirmation played when your phrase ends"
           foot={<FormSaveBar dirty={ackDirty} saving={ackSaving} onSave={ackSave} errors={errorLines(ackErr)} />}>
-          <SchemaForm schema={{ ...ackSchema, $defs: coreSchema.$defs }} root={{ ...ackSchema, $defs: coreSchema.$defs }} values={ackDraft} onChange={ackOnChange} optionsFor={ackOptionsFor} />
+          <SchemaForm schema={{ ...ackSchema, $defs: coreSchema.$defs }} root={{ ...ackSchema, $defs: coreSchema.$defs }} values={ackDraft} onChange={ackOnChange} optionsFor={ackOptionsFor}
+            itemActionFor={(field) => (field === "sound_path" ? chime.play : null)} itemActionBusy={chime.busy} />
+          {/* Per-item play buttons live in the dropdown; only surface preview errors here. */}
+          {chime.msg && <div className="z-fh" style={{ marginTop: 6, ...(chime.msg.tone === "err" ? { color: "#b91c1c" } : {}) }}>{chime.msg.text}</div>}
         </Card>}
       </div>}
     </div>

@@ -247,6 +247,38 @@ def _trim_start_pcm(pcm: bytes, trim_ms: int) -> bytes:
     return pcm[trim_bytes:]
 
 
+def build_ack_clip(sound_path: str, *, name: str = "") -> tuple[str, bytes]:
+    """Build the end-of-phrase ack clip (mime, audio) from a sound_path.
+
+    If sound_path points to an existing file, load it — transcoding a WAV to MP3 (the
+    speaker firmware can't decode WAV; a bad/unreadable WAV falls back to the
+    synthesized chime so playback never goes silent). An empty or missing path yields
+    the synthesized two-tone chime. `name` is only used for log context. Does file IO
+    and (for WAV) a blocking transcode, so callers on the event loop should run it via
+    asyncio.to_thread. No caching here — callers cache as needed.
+    """
+    path = (sound_path or "").strip()
+    use_file = bool(path) and os.path.isfile(path)
+    if use_file:
+        with open(path, "rb") as f:
+            raw = f.read()
+        ext = os.path.splitext(path)[1].lstrip(".").lower()
+        if ext == "wav":
+            try:
+                return "audio/mpeg", wav_to_mp3(raw)
+            except Exception as e:
+                logger.warning(
+                    f"{name}: ack chime transcode failed for {path}: {e}; "
+                    f"using synthesized chime"
+                )
+                return "audio/mpeg", make_ack_chime_mp3()
+        if ext == "flac":
+            return "audio/flac", raw
+        # mp3 (and any other) served verbatim as audio/mpeg
+        return "audio/mpeg", raw
+    return "audio/mpeg", make_ack_chime_mp3()
+
+
 class Pipeline:
     """Drives one voice run for a single speaker."""
 
@@ -1086,14 +1118,11 @@ class Pipeline:
     def _ack_clip_bytes(self) -> tuple[str, bytes]:
         """Return (mime, audio) for the end-of-phrase ack clip, building/caching once.
 
-        Source resolution (read live off core.ack so it hot-applies): if a configured
-        sound_path exists on disk, load that operator-supplied «блям»; otherwise
-        synthesize the two-tone chime once. The speaker firmware cannot decode WAV, so a
-        WAV clip is transcoded to MP3 (like TTS and the synthesized chime) — without this
-        a WAV chime plays nothing on the device. A non-WAV clip is served with its
-        inferred mime (mp3 verbatim). The result is cached keyed by the resolved source,
-        so the file is read / transcoded / the chime built only once and re-resolved only
-        when sound_path changes.
+        Source resolution (read live off core.ack so it hot-applies): a configured
+        sound_path that exists on disk is loaded; otherwise the two-tone chime is
+        synthesized. The result is cached keyed by the resolved source, so the file is
+        read / transcoded / the chime built only once and re-resolved only when
+        sound_path changes. See build_ack_clip for the per-source build details.
         """
         path = (self.core.ack.sound_path or "").strip()
         use_file = bool(path) and os.path.isfile(path)
@@ -1101,31 +1130,7 @@ class Pipeline:
         cached = self._ack_clip
         if cached is not None and cached[0] == source_key:
             return cached[1], cached[2]
-        if use_file:
-            with open(path, "rb") as f:
-                raw = f.read()
-            ext = os.path.splitext(path)[1].lstrip(".").lower()
-            if ext == "wav":
-                # The firmware can't decode WAV: transcode to MP3 like the rest of the
-                # audio path. On a bad/unreadable WAV, fall back to the synthesized chime
-                # so the ack still plays rather than going silent.
-                try:
-                    audio = wav_to_mp3(raw)
-                    mime = "audio/mpeg"
-                except Exception as e:
-                    logger.warning(
-                        f"{self.name}: ack chime transcode failed for {path}: {e}; "
-                        f"using synthesized chime"
-                    )
-                    audio = make_ack_chime_mp3()
-                    mime = "audio/mpeg"
-            else:
-                # mp3 served verbatim (audio/mpeg); any other type keeps its inferred mime.
-                audio = raw
-                mime = {"flac": "audio/flac"}.get(ext, "audio/mpeg")
-        else:
-            audio = make_ack_chime_mp3()
-            mime = "audio/mpeg"
+        mime, audio = build_ack_clip(path, name=self.name)
         self._ack_clip = (source_key, mime, audio)
         return mime, audio
 

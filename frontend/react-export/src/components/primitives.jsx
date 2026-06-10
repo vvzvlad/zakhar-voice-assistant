@@ -121,8 +121,9 @@ export function Stepper({ value, onChange, min = -Infinity, max = Infinity, step
     {unit && <span style={{ fontSize: 11.5, color: "var(--mut)" }}>{unit}</span>}
   </div>;
 }
-export function Select({ value, options, onChange, w }) {
+export function Select({ value, options, onChange, w, itemAction, itemActionBusy }) {
   const [open, setOpen] = useState(false);
+  const [up, setUp] = useState(false); // open upward when the trigger sits near the viewport bottom
   const ref = useRef(null);
   useEffect(() => { const h = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); }; document.addEventListener("pointerdown", h); return () => document.removeEventListener("pointerdown", h); }, []);
   // Options may be plain strings/numbers OR {value, label} objects (label is shown,
@@ -130,13 +131,34 @@ export function Select({ value, options, onChange, w }) {
   // existing behavior (value === label).
   const opts = (options || []).map((o) => (o && typeof o === "object" ? o : { value: o, label: String(o) }));
   const selected = opts.find((o) => o.value === value);
+  // Decide drop direction from the live trigger position: flip up only when there
+  // isn't enough room below AND there's more room above. Menu height is estimated
+  // from the row count, capped at the 240px max-height.
+  const wantUp = () => {
+    const el = ref.current;
+    if (!el) return false;
+    const rect = el.getBoundingClientRect();
+    const spaceBelow = window.innerHeight - rect.bottom;
+    const spaceAbove = rect.top;
+    const est = Math.min(240, opts.length * 34 + 8);
+    return spaceBelow < est + 8 && spaceAbove > spaceBelow;
+  };
+  const toggle = () => setOpen((o) => { const next = !o; if (next) setUp(wantUp()); return next; });
   return <div ref={ref} style={{ position: "relative", width: w || "100%" }}>
     <div className="z-select" role="button" tabIndex={0} aria-haspopup="listbox" aria-expanded={open}
-      onClick={() => setOpen((o) => !o)}
-      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setOpen((o) => !o); } }}>
+      onClick={toggle}
+      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); } }}>
       {selected ? selected.label : value}<svg width="11" height="11" viewBox="0 0 11 11" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><path d="M2 4l3.5 3.5L9 4" /></svg></div>
-    {open && <div role="listbox" style={{ position: "absolute", top: "100%", left: 0, right: 0, marginTop: 4, background: "#fff", border: "1px solid var(--line)", borderRadius: 7, boxShadow: "0 8px 28px rgba(16,24,40,.16)", padding: 4, zIndex: 20, maxHeight: 240, overflowY: "auto" }}>
-      {opts.map((o) => <div key={String(o.value)} role="option" aria-selected={o.value === value} tabIndex={0} onClick={() => { onChange && onChange(o.value); setOpen(false); }} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onChange && onChange(o.value); setOpen(false); } }} style={{ padding: "7px 10px", borderRadius: 5, fontSize: 12.5, fontWeight: o.value === value ? 600 : 400, color: o.value === value ? "var(--acc-ink)" : "var(--ink)", background: o.value === value ? "var(--acc-bg)" : "transparent", cursor: "pointer" }} onMouseEnter={(e) => { if (o.value !== value) e.currentTarget.style.background = "var(--panel2)"; }} onMouseLeave={(e) => { if (o.value !== value) e.currentTarget.style.background = "transparent"; }}>{o.label}</div>)}
+    {open && <div role="listbox" style={{ position: "absolute", left: 0, right: 0, ...(up ? { bottom: "100%", marginBottom: 4 } : { top: "100%", marginTop: 4 }), background: "#fff", border: "1px solid var(--line)", borderRadius: 7, boxShadow: "0 8px 28px rgba(16,24,40,.16)", padding: 4, zIndex: 20, maxHeight: 240, overflowY: "auto" }}>
+      {opts.map((o) => <div key={String(o.value)} role="option" aria-selected={o.value === value} tabIndex={0} onClick={() => { onChange && onChange(o.value); setOpen(false); }} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onChange && onChange(o.value); setOpen(false); } }} style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 10px", borderRadius: 5, fontSize: 12.5, fontWeight: o.value === value ? 600 : 400, color: o.value === value ? "var(--acc-ink)" : "var(--ink)", background: o.value === value ? "var(--acc-bg)" : "transparent", cursor: "pointer" }} onMouseEnter={(e) => { if (o.value !== value) e.currentTarget.style.background = "var(--panel2)"; }} onMouseLeave={(e) => { if (o.value !== value) e.currentTarget.style.background = "transparent"; }}>
+        <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{o.label}</span>
+        {itemAction && <button type="button" className="z-mini" title="Play this chime" disabled={itemActionBusy != null}
+          onClick={(e) => { e.stopPropagation(); itemAction(o.value); }} style={{ flex: "0 0 auto" }}>
+          {itemActionBusy === o.value
+            ? "…"
+            : <svg width="10" height="10" viewBox="0 0 12 12" fill="currentColor" aria-hidden="true"><path d="M2 1l9 5-9 5z" /></svg>}
+        </button>}
+      </div>)}
     </div>}
   </div>;
 }

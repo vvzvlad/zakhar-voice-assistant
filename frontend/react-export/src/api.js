@@ -53,6 +53,14 @@ export const getOptions = (category, plugin, field) =>
   request(`/api/options?category=${encodeURIComponent(category)}&plugin=${encodeURIComponent(plugin)}&field=${encodeURIComponent(field)}`);
 // Bundled end-of-phrase chime files for the ack sound_path selector.
 export const getChimes = () => request("/api/chimes");
+// Play the selected end-of-phrase chime on the speaker(s) for an operator preview.
+// soundPath "" = the synthesized default; device omitted = play on every online speaker.
+// Returns {played: [names], offline: [names]}.
+export const playChime = (soundPath, device) =>
+  request("/api/chimes/play", {
+    method: "POST",
+    body: { sound_path: soundPath ?? "", ...(device ? { device } : {}) },
+  });
 export const getPrompt = () => request("/api/prompt");
 export const putPrompt = (text) => request("/api/prompt", { method: "PUT", body: { text } });
 export const getSystem = () => request("/api/system");
