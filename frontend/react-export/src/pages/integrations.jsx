@@ -196,7 +196,7 @@ export function MCP() {
   const onEdit = (i, s) => saveList(servers.map((x, idx) => (idx === i ? s : x)));
   const onDelete = (i) => saveList(servers.filter((_, idx) => idx !== i));
 
-  return <div className="z-page">
+  return <div className="z-page narrow">
     <PageHeader title="Tool sources" desc="Tool sources the model calls: external smart-home MCP servers and built-in weather/calendar. Sources are applied live — rebuilt on save, no restart needed."
       actions={<button className="z-btn p" onClick={() => setModal({ mode: "add" })}><Ic n="add" w={14} />Add server</button>} />
     {toolsErr && <div className="z-banner warn" style={{ margin: "0 0 14px" }}>
@@ -468,7 +468,7 @@ export function Devices() {
   const buildCommon = (d) => ({ core: { esphome: { port: d.port }, audio: { public_base_url: d.public_base_url } } });
   const { draft, onChange, dirty, saving, err, save } = useStageForm(commonValues, buildCommon, patch);
 
-  return <div className="z-page">
+  return <div className="z-page narrow">
     <PageHeader title="Devices" desc="ESPHome speakers the server connects to. Each name also keys its own dialog context."
       actions={<button className="z-btn p" onClick={() => setModal({ mode: "add" })}><Ic n="add" w={14} />Add speaker</button>} />
     {busyErr && <div className="z-banner warn" style={{ margin: "0 0 12px" }}><Ic n="restart" w={15} /><span>{errorLines(busyErr).join(" · ")}</span></div>}

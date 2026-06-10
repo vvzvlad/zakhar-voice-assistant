@@ -33,7 +33,7 @@ function ProviderStage({ cat, title, crumb, desc }) {
     return r.options;
   };
 
-  return <div className="z-page">
+  return <div className="z-page narrow">
     <PageHeader title={title} crumb={crumb} desc={desc} />
     <Selector
       label="Provider"

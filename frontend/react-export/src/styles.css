@@ -22,6 +22,7 @@ button{font-family:inherit;}
 .z-top{height:50px;flex:0 0 50px;background:var(--panel);border-bottom:1px solid var(--line);display:flex;align-items:center;gap:12px;padding:0 18px;}
 .z-scroll{flex:1;overflow-y:auto;}
 .z-page{padding:20px 24px 40px;max-width:1280px;margin:0 auto;}
+.z-page.narrow{max-width:860px;}   /* compact width for single-column form pages */
 
 /* ── Sidebar ────────────────────────────────────────────── */
 .z-brand{display:flex;align-items:center;gap:10px;padding:15px 16px 14px;border-bottom:1px solid var(--line);}
