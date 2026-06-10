@@ -51,3 +51,7 @@ def setup_logging(level: str) -> None:
     logging.basicConfig(handlers=[InterceptHandler()], level=0, force=True)
     for name in _NOISY_LOGGERS:
         logging.getLogger(name).setLevel(logging.WARNING)
+    # aioesphomeapi logs EVERY streamed audio frame (with the full PCM payload) at
+    # DEBUG, which floods the log when the app runs at DEBUG. Pin it to INFO so the
+    # useful connect/handshake lines stay but the per-frame audio dump is dropped.
+    logging.getLogger("aioesphomeapi").setLevel(logging.INFO)
