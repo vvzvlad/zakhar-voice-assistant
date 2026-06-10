@@ -41,6 +41,7 @@ button{font-family:inherit;}
 .z-navi .dot{margin-left:auto;width:7px;height:7px;border-radius:50%;}
 .z-side-foot{border-top:1px solid var(--line);padding:11px 14px;display:flex;align-items:center;gap:9px;font-size:11px;color:var(--mut);}
 .z-pulse{width:7px;height:7px;border-radius:50%;background:var(--good);box-shadow:0 0 0 3px rgba(22,163,74,.18);flex:0 0 auto;}
+.z-pulse.off{background:var(--bad);box-shadow:0 0 0 3px rgba(220,38,38,.18);}
 
 /* ── Topbar ─────────────────────────────────────────────── */
 .z-env{font-family:var(--mono);font-size:11px;color:var(--mut);border:1px solid var(--line);border-radius:6px;padding:4px 9px;display:flex;align-items:center;gap:6px;}

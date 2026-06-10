@@ -3,11 +3,9 @@ import { NAV } from "../nav.js";
 import { Ic } from "./icons.jsx";
 import { useAppData } from "../appData.jsx";
 import { getDevices } from "../api.js";
-import { fmtUptime } from "../format.js";
 
 export function Sidebar({ active, onNav }) {
-  const { system, config } = useAppData();
-  const version = system?.version || "—";
+  const { config } = useAppData();
   const mcpCount = (config?.core?.mcp_servers || []).length;
   const devCfg = config?.core?.devices || [];
 
@@ -23,7 +21,7 @@ export function Sidebar({ active, onNav }) {
   return <div className="z-side">
     <div className="z-brand">
       <div className="logo">Z</div>
-      <div><b>Zakhar</b><div className="ver">{version}</div></div>
+      <div><b>Zakhar</b></div>
     </div>
     <div className="z-nav">
       {NAV.map((g) => <div key={g.grp}>
@@ -39,6 +37,5 @@ export function Sidebar({ active, onNav }) {
         ))}
       </div>)}
     </div>
-    <div className="z-side-foot"><span className="z-pulse" />Running · {fmtUptime(system?.uptime_seconds)}</div>
   </div>;
 }

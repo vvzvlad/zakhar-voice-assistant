@@ -13,6 +13,7 @@ same-origin and the dev Vite server proxies /api, so neither needs CORS.
 """
 
 import asyncio
+import contextlib
 import os
 import time
 from datetime import datetime, timezone
@@ -111,7 +112,7 @@ class PanelServer:
     def __init__(self, svc, host, port, *, version, started_at,
                  device_status=None, device_capture=None, device_play=None,
                  static_dir=None, runs_store=None, tool_sources=None,
-                 run_events=None):
+                 run_events=None, heartbeat_interval: float = 1.0):
         # svc: ConfigService; started_at: float (time.time())
         # device_status: optional callable -> list[dict]; static_dir: optional path to built frontend
         # device_capture: optional async callable (device_name, seconds) -> bytes that records a
@@ -140,6 +141,9 @@ class PanelServer:
         self.runs_store = runs_store
         self.tool_sources = tool_sources
         self.run_events = run_events
+        # Period (seconds) of the WS system heartbeat used as the panel liveness signal.
+        self.heartbeat_interval = heartbeat_interval
+        self._heartbeat_task = None
         self._runner: web.AppRunner | None = None
 
     # --- handlers ------------------------------------------------------------
@@ -232,23 +236,40 @@ class PanelServer:
         save_system_prompt(path, text)
         return web.json_response({"ok": True})
 
-    async def _get_system(self, request: web.Request) -> web.Response:
+    def _system_snapshot(self) -> dict:
+        # Lightweight system/liveness payload shared by /api/system and the WS
+        # heartbeat. Excludes db_size_bytes (relatively expensive to stat and not
+        # needed on every 1 s heartbeat tick).
         started = datetime.fromtimestamp(self.started_at, tz=timezone.utc).isoformat()
-        # On-disk size of the runs DB (with WAL/SHM sidecars). When the runs store is
-        # open it owns the path; otherwise (recording disabled) stat the canonical
-        # file directly so the indicator still reports any leftover DB on disk.
-        if self.runs_store is not None:
-            db_size_bytes = self.runs_store.db_size_bytes()
-        else:
-            db_size_bytes = db_file_size(os.path.join(config_store.DATA_DIR, "runs.db"))
-        return web.json_response({
+        return {
             "version": self.version,
             "started": started,
             "uptime_seconds": int(time.time() - self.started_at),
             "running": True,
             "log_level": self.svc.core.log_level,
-            "db_size_bytes": db_size_bytes,
-        })
+        }
+
+    async def _get_system(self, request: web.Request) -> web.Response:
+        snap = self._system_snapshot()
+        # On-disk size of the runs DB (with WAL/SHM sidecars). When the runs store is
+        # open it owns the path; otherwise (recording disabled) stat the canonical
+        # file directly so the indicator still reports any leftover DB on disk.
+        if self.runs_store is not None:
+            snap["db_size_bytes"] = self.runs_store.db_size_bytes()
+        else:
+            snap["db_size_bytes"] = db_file_size(os.path.join(config_store.DATA_DIR, "runs.db"))
+        return web.json_response(snap)
+
+    async def _heartbeat_loop(self) -> None:
+        # Push a {"type":"system",...} frame to every live WS client on a fixed
+        # interval. The panel uses these both as a liveness signal (frames stop
+        # when the server dies) and to show a live-updating uptime without polling.
+        while True:
+            await asyncio.sleep(self.heartbeat_interval)
+            try:
+                await self.run_events.broadcast({"type": "system", **self._system_snapshot()})
+            except Exception as e:  # noqa: BLE001 - a transient send error must not kill the heartbeat
+                logger.debug(f"panel heartbeat broadcast failed: {e}")
 
     async def _get_devices(self, request: web.Request) -> web.Response:
         return web.json_response(self.device_status() if self.device_status else [])
@@ -463,6 +484,19 @@ class PanelServer:
                 app.router.add_static("/assets/", assets)
             app.router.add_get("/", self._spa_index)
             app.router.add_get("/{path:(?!api/).*}", self._spa_index)
+
+        if self.run_events is not None:
+            async def _start_heartbeat(_app: web.Application) -> None:
+                self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
+            app.on_startup.append(_start_heartbeat)
+
+            async def _stop_heartbeat(_app: web.Application) -> None:
+                if self._heartbeat_task is not None:
+                    self._heartbeat_task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await self._heartbeat_task
+                    self._heartbeat_task = None
+            app.on_shutdown.append(_stop_heartbeat)
 
         async def _close_ws_clients(_app: web.Application) -> None:
             # Fired by AppRunner.cleanup() BEFORE it waits (up to shutdown_timeout) for

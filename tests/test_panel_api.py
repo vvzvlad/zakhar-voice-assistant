@@ -772,9 +772,30 @@ async def test_runs_stream_broadcasts_to_connected_client(tmp_path):
 
         payload = {"type": "run", "run": {"id": 7, "device": "kitchen"}}
         await hub.broadcast(payload)
-        msg = await asyncio.wait_for(ws.receive_json(), 2)
+        # The stream also carries periodic {"type":"system",...} heartbeats; skip them.
+        while True:
+            msg = await asyncio.wait_for(ws.receive_json(), 2)
+            if msg.get("type") == "run":
+                break
         assert msg == payload
 
+        await ws.close()
+    finally:
+        await client.close()
+
+
+async def test_runs_stream_pushes_system_heartbeat(tmp_path):
+    hub = RunEventsHub()
+    client, _svc_ = await _client(tmp_path, run_events=hub, heartbeat_interval=0.05)
+    try:
+        ws = await client.ws_connect("/api/runs/stream")
+        while True:
+            msg = await asyncio.wait_for(ws.receive_json(), 2)
+            if msg.get("type") == "system":
+                break
+        assert msg["running"] is True
+        assert isinstance(msg["uptime_seconds"], int)
+        assert "db_size_bytes" not in msg  # heartbeat stays lightweight
         await ws.close()
     finally:
         await client.close()

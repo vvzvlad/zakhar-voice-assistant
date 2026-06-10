@@ -81,7 +81,7 @@ function Recordings() {
 
 // ── System (from /api/system; log_level editable) ─────────────────────────
 export function System() {
-  const { system, patch, catalog } = useAppData();
+  const { system, patch, catalog, connected } = useAppData();
   const curLevel = catalog.core.values.log_level || system?.log_level || "INFO";
   const [level, setLevel] = useState(curLevel);
   const [savingLvl, setSavingLvl] = useState(false);
@@ -110,7 +110,9 @@ export function System() {
       <div style={{ padding: "8px 0 6px", display: "flex", gap: 22, flexWrap: "wrap" }}>
         <div>
           <div style={{ fontSize: 10.5, color: "var(--mut)", textTransform: "uppercase", letterSpacing: ".04em", fontWeight: 600 }}>State</div>
-          <div style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 16, fontWeight: 600, marginTop: 3 }}><span className="z-pulse" />{system?.running ? "Running" : "Stopped"}</div>
+          <div style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 16, fontWeight: 600, marginTop: 3 }}>
+            <span className={"z-pulse" + (connected ? "" : " off")} />{connected ? "Running" : "Disconnected"}
+          </div>
         </div>
         {cell("Version", system?.version || "—", true)}
         {cell("Uptime", fmtUptime(system?.uptime_seconds), true)}

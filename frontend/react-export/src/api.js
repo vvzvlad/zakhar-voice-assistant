@@ -158,19 +158,20 @@ export async function downloadRunAudio(id) {
 }
 export const getMetrics = () => request("/api/metrics");
 
-// --- live run stream (WebSocket) -------------------------------------------
-// Opens a WebSocket to /api/runs/stream and invokes onRun(row) for every run the
-// backend pushes (row is the same snake_case shape as a /api/runs list item).
-// Auto-reconnects with capped exponential backoff. Returns a stop() that closes
-// the socket and cancels any pending reconnect.
-export function openRunsStream(onRun) {
+// --- live panel stream (WebSocket) -----------------------------------------
+// Opens a WebSocket to /api/runs/stream and surfaces every parsed message plus
+// the connection state. The backend pushes two frame types: {type:"run",run}
+// for finalized runs and {type:"system",...} heartbeats (~1/s) used for
+// liveness + a live uptime. Auto-reconnects with capped exponential backoff.
+// onStatus(connected:boolean) fires on open (true) and on close/error (false).
+// Returns a stop() that closes the socket and cancels any pending reconnect.
+export function openPanelStream({ onMessage, onStatus } = {}) {
   let ws = null;
   let stopped = false;
   let attempt = 0;
   let timer = null;
 
   const wsUrl = () => {
-    // BASE is "" in prod (same origin) or an absolute http(s) base in dev.
     const u = new URL("/api/runs/stream", BASE || window.location.origin);
     u.protocol = u.protocol === "https:" ? "wss:" : "ws:";
     return u.toString();
@@ -178,8 +179,6 @@ export function openRunsStream(onRun) {
 
   const schedule = () => {
     if (stopped) return;
-    // Backoff on the CURRENT attempt count (fast first retry ~0.5s), then bump it
-    // for the next one. Capped at 30s; onopen resets attempt to 0 on success.
     const delay = Math.min(500 * 2 ** attempt, 30000);
     attempt = Math.min(attempt + 1, 6);
     timer = setTimeout(connect, delay);
@@ -193,14 +192,14 @@ export function openRunsStream(onRun) {
       schedule();
       return;
     }
-    ws.onopen = () => { attempt = 0; };
+    ws.onopen = () => { attempt = 0; if (onStatus) onStatus(true); };
     ws.onmessage = (ev) => {
       let msg;
       try { msg = JSON.parse(ev.data); } catch { return; }
-      if (msg && msg.type === "run" && msg.run) onRun(msg.run);
+      if (onMessage) onMessage(msg);
     };
     ws.onerror = () => { try { ws.close(); } catch { /* ignore */ } };
-    ws.onclose = () => { if (!stopped) schedule(); };
+    ws.onclose = () => { if (onStatus) onStatus(false); if (!stopped) schedule(); };
   };
 
   connect();
@@ -209,4 +208,11 @@ export function openRunsStream(onRun) {
     if (timer) clearTimeout(timer);
     if (ws) { try { ws.close(); } catch { /* ignore */ } }
   };
+}
+
+// Back-compat helper: stream only finalized runs. onRun(row) fires per run frame.
+export function openRunsStream(onRun) {
+  return openPanelStream({
+    onMessage: (msg) => { if (msg && msg.type === "run" && msg.run) onRun(msg.run); },
+  });
 }
