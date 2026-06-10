@@ -32,16 +32,22 @@ packages:
         # REVERTED to v8: v11 (v8 + real silence/music negatives) cut the silence
         # false-fires but its RECALL regressed in the field — it under-detects real
         # «захааар». For day-to-day use, reliable detection matters more than the
-        # silence-FAPH fix, so we run v8 (better recall) at the field-tuned point.
+        # silence-FAPH fix, so we run v8 at its KNOWN-GOOD operating point (below).
         # The v11 recall regression is exactly what the new real-positive recordings
         # are meant to fix; revisit v8->v11(+real positives) after that retrain.
         # VAD pre-gate is inherited from the stock HA Voice PE firmware.
         - model: ../microWakeWord/v8/model/zakhar.json
           id: zakhar
-          # v8 field point: cutoff 0.95 / window 5 (lower toward 0.90 if «захааар»
-          # gets missed; raise toward 0.97 if it false-fires too much).
-          probability_cutoff: 95%
-          sliding_window_size: 5
+          # v8 KNOWN-GOOD operating point: cutoff 0.80 (device FRR 4.6%, FAPH 0 with
+          # VAD) — the point at which v8 actually detects «захааар» reliably (commit
+          # e7ec0dd). The later 0.95 + window-5 tightening (3e152df, to fight silence
+          # false-fires) OVER-suppressed the model: real «захааар» peaks below 0.95, so
+          # it stopped detecting at all. Detection matters more than the silence FAPH,
+          # and the VAD pre-gate already masks most silence false-accepts. Window
+          # override removed -> manifest default (3). Raise toward 0.90 ONLY if silence
+          # false-fires get annoying; the real silence fix is the v11+real-positives
+          # retrain in progress.
+          probability_cutoff: 80%
 
   # Official Home Assistant Voice PE firmware, pinned to a release tag.
   # Bump the @ref to update the base firmware later.

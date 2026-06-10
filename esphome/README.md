@@ -56,9 +56,13 @@ flashing it.
 
 ## Tuning (no retrain needed)
 
-- `probability_cutoff` is set to `95%` in `zakhar-voice.yaml`. If continuous
-  music ever triggers it, raise to `97%`. The `vad:` gate from the stock config
-  stays on and already suppresses most music false-accepts.
+- `probability_cutoff` is set to `80%` in `zakhar-voice.yaml` — v8's known-good
+  operating point (device FRR 4.6%, FAPH 0 with VAD), the point at which «захааар»
+  actually detects reliably. An earlier `95%` + `sliding_window_size: 5` tightening
+  (to fight silence false-fires) over-suppressed the model and it stopped detecting
+  at all, so it was reverted. The `vad:` gate from the stock config stays on and
+  already suppresses most silence/music false-accepts. Raise toward `90%` only if
+  silence false-fires get annoying.
 
 ## Updating the base firmware later
 
