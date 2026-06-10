@@ -32,7 +32,7 @@ from src import config_store, context, llm
 from src.audio_server import tts_url
 from src.runs_store import live_row, summary_row
 from src.text import processing_response
-from src.tts import make_ack_chime_mp3
+from src.tts import make_ack_chime_mp3, wav_to_mp3
 
 # WebRTC VAD requires mono 16-bit PCM frames of exactly 10/20/30 ms at 16 kHz.
 # We use 20 ms frames = 16000 * 2 * 20/1000 = 640 bytes.
@@ -191,6 +191,35 @@ def _normalize_peak(pcm: bytes, target_dbfs: float = -3.0, max_gain: float = 30.
     return boosted + pcm[n:]
 
 
+# Target peak (~-3 dBFS) the VAD makeup gain lifts quiet audio toward, and the floor
+# below which the running utterance peak is treated as "no real signal yet" (so leading
+# pre-roll silence is NOT amplified into false speech).
+_VAD_BOOST_TARGET = 23197.0   # 32767 * 10**(-3/20)
+_VAD_BOOST_FLOOR = 200        # int16 peak; below this the utterance has no real signal
+
+
+def _vad_boost(frame: bytes, peak: int, max_gain: float = 16.0) -> bytes:
+    """Lift a 16-bit mono PCM frame toward _VAD_BOOST_TARGET for the VAD decision only.
+
+    `peak` is the running peak of the WHOLE utterance so far (not this frame), so the
+    gain (target/peak) is the same for every frame once the loud wake word has set the
+    peak — this preserves the speech-vs-silence energy ratio (silence stays detectable)
+    while bringing the quiet less-processed channel into WebRTC VAD's range. Returns the
+    frame unchanged until a real signal has been seen (peak < floor) or when no boost is
+    needed (gain <= 1). Used ONLY for the is_speech() decision — never stored.
+    """
+    if peak < _VAD_BOOST_FLOOR:
+        return frame
+    gain = min(_VAD_BOOST_TARGET / peak, max_gain)
+    if gain <= 1.0:
+        return frame
+    n = len(frame) - (len(frame) % 2)
+    if n == 0:
+        return frame
+    s = np.frombuffer(frame[:n], dtype="<i2").astype(np.float32) * gain
+    return np.clip(s, -32768, 32767).astype("<i2").tobytes()
+
+
 def _trim_start_pcm(pcm: bytes, trim_ms: int) -> bytes:
     """Drop the first ``trim_ms`` of 16 kHz / mono / 16-bit PCM from an utterance.
 
@@ -234,6 +263,9 @@ class Pipeline:
         self._silence_ms = 0
         self._speech_detected = False
         self._elapsed_ms = 0
+        self._wake_ended = False        # the wake word's first speech burst has ended
+        self._command_detected = False  # speech seen after the wake word (the command)
+        self._vad_peak = 0              # running peak of the utterance (for VAD frame boost)
         self._finalized = False
         # Logging-only flag: log "receiving audio" once per run, not per chunk.
         self._audio_logged = False
@@ -434,6 +466,9 @@ class Pipeline:
         self._silence_ms = 0
         self._speech_detected = False
         self._elapsed_ms = 0
+        self._wake_ended = False
+        self._command_detected = False
+        self._vad_peak = 0
         self._finalized = False
         self._audio_logged = False
         self._mic_fallback_logged = False
@@ -563,35 +598,83 @@ class Pipeline:
         # finalize this chunk anyway, and the buffer was truncated, so there's no
         # point feeding (possibly truncated) bytes into the VAD counters.
         self._frame_rem.extend(data)
+        # When mic_normalize is on, track the running peak of the (selected-channel)
+        # utterance so the VAD frame boost below can lift this quiet channel into
+        # WebRTC VAD's range. The buffer/STT path is unaffected (it normalizes per
+        # utterance in _run).
+        if self.core.vad.mic_normalize and data:
+            m = len(data) - (len(data) % 2)
+            if m:
+                self._vad_peak = max(
+                    self._vad_peak,
+                    int(np.abs(np.frombuffer(data[:m], dtype="<i2")).max()),
+                )
         if reason is None:
             while len(self._frame_rem) >= FRAME_BYTES:
                 frame = bytes(self._frame_rem[:FRAME_BYTES])
                 del self._frame_rem[:FRAME_BYTES]
-                speech = self._vad.is_speech(frame, SAMPLE_RATE)
+                vad = self.rt.core.vad
+                # Boost the frame for the speech/silence decision only (not the stored
+                # buffer) so WebRTC VAD can detect the quiet less-processed channel.
+                vframe = _vad_boost(frame, self._vad_peak) if vad.mic_normalize else frame
+                speech = self._vad.is_speech(vframe, SAMPLE_RATE)
                 self._elapsed_ms += FRAME_MS
                 if speech:
                     self._speech_ms += FRAME_MS
                     self._silence_ms = 0
-                    if self._speech_ms >= self.rt.core.vad.min_speech_ms:
+                    if self._speech_ms >= vad.min_speech_ms:
                         self._speech_detected = True
+                    # Speech that resumes after the wake word has ended is the command.
+                    if self._wake_ended:
+                        self._command_detected = True
                 else:
                     # Trailing silence only counts once real speech has been observed.
                     if self._speech_detected:
                         self._silence_ms += FRAME_MS
+                # The wake word "Захар" is the first speech burst. It ends at the first
+                # real pause after it (so the wait for the command runs on
+                # no_speech_timeout, NOT silence_ms). Trade-off: a command glued onto the
+                # wake word with NO pause and a total speech run shorter than wake_max_ms
+                # can't be told apart from a lone "захааар", so it is treated as no
+                # command (raise wake_gap awareness / lower wake_max_ms if this bites).
+                if self._speech_detected and not self._wake_ended:
+                    if self._silence_ms >= vad.wake_gap_ms:
+                        # A real pause ends the wake word; the command (if any) is
+                        # detected on the next speech frame.
+                        self._wake_ended = True
+                    elif self._speech_ms >= vad.wake_max_ms:
+                        # No pause, but the first speech run is already longer than any
+                        # plausible drawn-out "захааар": the command is glued on, so the
+                        # speech still going in THIS frame is already the command.
+                        self._wake_ended = True
+                        self._command_detected = True
 
         # Decide end-of-utterance (reason or None). The HARD_CAP "maxlen" set above
         # takes precedence; otherwise check VAD endpoint, max length, no-speech.
         if reason is None:
             vad = self.rt.core.vad
-            if self._speech_detected and self._silence_ms >= vad.silence_ms:
+            # Endpoint only once the COMMAND (speech after the wake word) has been
+            # spoken and is then followed by silence_ms of trailing silence.
+            if self._command_detected and self._silence_ms >= vad.silence_ms:
                 reason = "endpoint"
             elif self._elapsed_ms >= vad.max_utterance_ms:
                 reason = "maxlen"
+            # No command within the grace: either nothing was said at all, or only the
+            # wake word "Захар". Give the user no_speech_timeout (NOT silence_ms) to
+            # start the command before giving up.
             elif (
-                not self._speech_detected
+                not self._command_detected
                 and self._elapsed_ms >= vad.no_speech_timeout_ms
             ):
                 reason = "no_speech"
+
+        if reason is not None:
+            logger.debug(
+                f"{self.name}: VAD finalize reason={reason} speech_ms={self._speech_ms} "
+                f"silence_ms={self._silence_ms} elapsed_ms={self._elapsed_ms} "
+                f"wake_ended={self._wake_ended} command={self._command_detected} "
+                f"vad_peak={self._vad_peak}"
+            )
 
         # All synchronous state is updated above; claim+run last (the only await).
         # _claim() is synchronous and happens-before any await, so it's atomic
@@ -1024,10 +1107,13 @@ class Pipeline:
         """Return (mime, audio) for the end-of-phrase ack clip, building/caching once.
 
         Source resolution (read live off core.ack so it hot-applies): if a configured
-        sound_path exists on disk, load that operator-supplied «блям» (mime inferred
-        from its extension); otherwise synthesize the two-tone chime once. The result is
-        cached keyed by the resolved source, so the file is read / the chime built only
-        once and re-resolved only when sound_path changes.
+        sound_path exists on disk, load that operator-supplied «блям»; otherwise
+        synthesize the two-tone chime once. The speaker firmware cannot decode WAV, so a
+        WAV clip is transcoded to MP3 (like TTS and the synthesized chime) — without this
+        a WAV chime plays nothing on the device. A non-WAV clip is served with its
+        inferred mime (mp3 verbatim). The result is cached keyed by the resolved source,
+        so the file is read / transcoded / the chime built only once and re-resolved only
+        when sound_path changes.
         """
         path = (self.core.ack.sound_path or "").strip()
         use_file = bool(path) and os.path.isfile(path)
@@ -1037,9 +1123,26 @@ class Pipeline:
             return cached[1], cached[2]
         if use_file:
             with open(path, "rb") as f:
-                audio = f.read()
+                raw = f.read()
             ext = os.path.splitext(path)[1].lstrip(".").lower()
-            mime = {"wav": "audio/wav", "flac": "audio/flac"}.get(ext, "audio/mpeg")
+            if ext == "wav":
+                # The firmware can't decode WAV: transcode to MP3 like the rest of the
+                # audio path. On a bad/unreadable WAV, fall back to the synthesized chime
+                # so the ack still plays rather than going silent.
+                try:
+                    audio = wav_to_mp3(raw)
+                    mime = "audio/mpeg"
+                except Exception as e:
+                    logger.warning(
+                        f"{self.name}: ack chime transcode failed for {path}: {e}; "
+                        f"using synthesized chime"
+                    )
+                    audio = make_ack_chime_mp3()
+                    mime = "audio/mpeg"
+            else:
+                # mp3 served verbatim (audio/mpeg); any other type keeps its inferred mime.
+                audio = raw
+                mime = {"flac": "audio/flac"}.get(ext, "audio/mpeg")
         else:
             audio = make_ack_chime_mp3()
             mime = "audio/mpeg"

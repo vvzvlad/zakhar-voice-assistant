@@ -25,41 +25,61 @@ class AudioConfig(BaseModel):
 class VadConfig(BaseModel):
     aggressiveness: int = Field(
         2, ge=0, le=3,
+        title="Speech detection strictness",
         description="WebRTC VAD sensitivity (0–3). Higher classifies borderline audio as non-speech more readily, so the phrase end-points sooner and soft trailing sounds may be cut; lower is more tolerant and waits longer.",
     )
     silence_ms: int = Field(
         800,
+        title="End-of-phrase pause",
+        json_schema_extra={"unit": "ms"},
         description="Trailing silence after speech before the utterance is considered finished. Higher tolerates longer mid-phrase pauses but adds the same delay before the reply starts.",
     )
     min_speech_ms: int = Field(
         200,
+        title="Minimum utterance length",
+        json_schema_extra={"unit": "ms"},
         description="Minimum total detected speech for the audio to count as a real utterance; shorter blips are treated as noise and dropped.",
     )
     max_utterance_ms: int = Field(
         15000,
+        title="Maximum utterance length",
+        json_schema_extra={"unit": "ms"},
         description="Hard cap on a single utterance — it is force-finalized once it reaches this length even if no trailing silence was seen.",
     )
     no_speech_timeout_ms: int = Field(
         8000,
+        title="Give up after silence",
+        json_schema_extra={"unit": "ms"},
         description="If no speech at all is detected after capture starts, give up and end the run after this long.",
+    )
+    wake_gap_ms: int = Field(
+        250,
+        description="Silence after the wake word that marks where «Захар» ends and the command may begin. Until the command starts, the wait runs on No Speech Timeout, not Silence; lower detects the command-start sooner.",
+    )
+    wake_max_ms: int = Field(
+        1500,
+        description="Safety cap on the wake-word phase: if the first speech run lasts longer than this (a command spoken with no pause after «Захар»), it is treated as the command. Set above the longest drawn-out «захааар».",
     )
     trim_start_ms: int = Field(
         200,
         ge=0,
-        description="Drop this many ms off the start of the captured sample before STT (cuts the wake-word tail / button-press click).",
+        title="Trim from start",
+        json_schema_extra={"unit": "ms"},
+        description="Drop this many ms off the start of the captured sample before STT (cuts the wake-word tail / button-press click). 0 disables.",
     )
-    # Which Voice PE mic channel feeds the whole pipeline (capture + VAD + STT).
-    # 0 = processed (XMOS AGC output); 1 = less-processed (XMOS noise-suppression
-    # output) — cleaner but quieter. Read live, so panel changes apply next utterance.
-    mic_channel: Literal[0, 1] = Field(0, json_schema_extra={"widget": "select"})
-    # Per-utterance loudness normalization before STT: scale the whole sample so its
-    # peak hits a target level. Adapts to the quieter less-processed channel without
-    # clipping (a fixed gain could not). Off by default; read live.
-    mic_normalize: bool = False
-    # High-pass filter (~80 Hz) applied to the whole sample before STT to strip DC
-    # offset / low-frequency rumble (table thumps, HVAC) that hurt recognition.
-    # Off by default; read live.
-    mic_highpass: bool = False
+    mic_channel: Literal[0, 1] = Field(
+        0,
+        json_schema_extra={"widget": "select"},
+        description="Which Voice PE mic stream feeds the whole pipeline (capture, VAD and STT). 0 = processed XMOS AGC output (louder, more aggressively cleaned); 1 = less-processed noise-suppression output (cleaner but quieter). Channel 1 falls back to 0 if the device sends no second stream. Applies on the next utterance.",
+    )
+    mic_normalize: bool = Field(
+        False,
+        description="Peak-normalize each captured utterance before STT so its loudest sample reaches a target level (~-3 dBFS). Adapts the quieter less-processed channel to a consistent loudness without clipping; near-silent clips are left untouched. Off by default; applies on the next utterance.",
+    )
+    mic_highpass: bool = Field(
+        False,
+        description="Apply a ~80 Hz high-pass filter to the whole utterance before STT to strip DC offset and low-frequency rumble (table thumps, HVAC) that hurt recognition. Off by default; applies on the next utterance.",
+    )
 
 
 class NetworkConfig(BaseModel):

@@ -12,6 +12,7 @@ from src.pipeline import (
     _normalize_peak,
     _pcm_to_wav_bytes,
     _trim_start_pcm,
+    _vad_boost,
     contains_stt_hallucination,
     is_slow_tool,
 )
@@ -160,6 +161,8 @@ def set_small_vad_thresholds(pipeline):
     vad.silence_ms = 100           # 5 frames of trailing silence to end
     vad.max_utterance_ms = 400     # 20 frames hard cap
     vad.no_speech_timeout_ms = 200  # 10 frames with no speech -> finalize
+    vad.wake_gap_ms = 40           # 2 frames of silence ends the wake word
+    vad.wake_max_ms = 200          # 10 frames hard cap on the wake phase
 
 
 def patch_llm(monkeypatch, reply="ответ"):
@@ -273,6 +276,78 @@ def test_contains_stt_hallucination():
     assert not contains_stt_hallucination("включи свет")
 
 
+# --- _vad_boost (VAD-only makeup gain for the quiet less-processed channel) ----
+
+def test_vad_boost_lifts_quiet_frame_toward_target():
+    # A frame whose own samples are small, with a representative running utterance
+    # peak (~3000), is scaled by min(target/peak, max_gain) so quiet speech reaches
+    # WebRTC VAD's range. With target ~23197 and peak 3000 the gain is ~7.7 (< cap 16).
+    from src.pipeline import _VAD_BOOST_TARGET
+    peak = 3000
+    gain = min(_VAD_BOOST_TARGET / peak, 16.0)
+    samples = np.array([100, -200, 300, -50] * 80, dtype="<i2")  # 320 samples = 640 B
+    frame = samples.tobytes()
+    out = _vad_boost(frame, peak)
+    out_samples = np.frombuffer(out, dtype="<i2")
+    expected = np.clip(samples.astype(np.float32) * gain, -32768, 32767).astype("<i2")
+    assert np.array_equal(out_samples, expected)
+    # Sanity: the frame really was amplified (gain > 1).
+    assert gain > 1.0
+    assert np.max(np.abs(out_samples)) > np.max(np.abs(samples))
+
+
+def test_vad_boost_below_floor_is_identity():
+    # peak below _VAD_BOOST_FLOOR -> no real signal yet -> frame returned unchanged.
+    frame = (np.array([10, -20, 30, -40] * 80, dtype="<i2")).tobytes()
+    assert _vad_boost(frame, 100) == frame
+
+
+def test_vad_boost_caps_at_max_gain():
+    # A peak just above the floor would give a huge target/peak ratio (~77); the
+    # max_gain cap (16) must clamp it.
+    from src.pipeline import _VAD_BOOST_TARGET
+    peak = 300
+    assert _VAD_BOOST_TARGET / peak > 16.0  # uncapped ratio really does exceed the cap
+    samples = np.array([50, -60, 70, -80] * 80, dtype="<i2")
+    frame = samples.tobytes()
+    out = np.frombuffer(_vad_boost(frame, peak), dtype="<i2")
+    expected = np.clip(samples.astype(np.float32) * 16.0, -32768, 32767).astype("<i2")
+    assert np.array_equal(out, expected)
+
+
+def test_vad_boost_handles_empty_and_odd_length():
+    # Empty frame -> unchanged. Odd-length (a stray trailing byte) -> still safe; the
+    # whole-sample prefix is boosted and no exception is raised.
+    assert _vad_boost(b"", 3000) == b""
+    odd = (np.array([100, -200], dtype="<i2")).tobytes() + b"\x07"  # 5 bytes
+    out = _vad_boost(odd, 3000)
+    assert isinstance(out, bytes)
+    # A single-byte frame has no whole int16 sample -> returned unchanged.
+    assert _vad_boost(b"\x01", 3000) == b"\x01"
+
+
+async def test_vad_peak_tracked_when_normalize_on(tmp_path, monkeypatch):
+    # With mic_normalize on, on_audio tracks the running utterance peak so the VAD
+    # frame boost can lift the quiet channel. FakeVad ignores frame content, so this
+    # only checks the peak bookkeeping.
+    pipeline, _ = make_pipeline(tmp_path, monkeypatch)
+    pipeline._vad = FakeVad([False])
+    pipeline.core.vad.mic_normalize = True
+    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_audio(np.full(320, 8000, "<i2").tobytes())
+    assert pipeline._vad_peak >= 8000
+
+
+async def test_vad_peak_not_tracked_when_normalize_off(tmp_path, monkeypatch):
+    # With mic_normalize off, the running peak stays 0 (no boost path engaged).
+    pipeline, _ = make_pipeline(tmp_path, monkeypatch)
+    pipeline._vad = FakeVad([False])
+    assert pipeline.core.vad.mic_normalize is False
+    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_audio(np.full(320, 8000, "<i2").tobytes())
+    assert pipeline._vad_peak == 0
+
+
 async def test_stt_hallucination_discarded(tmp_path, monkeypatch):
     # A Whisper hallucination ("DimaTorzok" subtitle-credit artifact) is blanked,
     # so the run ends like an empty transcription: no INTENT/TTS, STT_END empty.
@@ -350,12 +425,13 @@ async def test_vad_endpoint_finalize(tmp_path, monkeypatch):
     patch_llm(monkeypatch, reply="готово")
     pipeline, events = make_pipeline(tmp_path, monkeypatch, stt_text="включи свет")
     set_small_vad_thresholds(pipeline)
-    # 3 speech frames (>= 40 ms min) then 6 silence frames (>= 100 ms) -> endpoint.
-    pipeline._vad = FakeVad([True, True, True, False, False, False, False, False, False])
+    # WAKE (2 speech) -> gap (2 silence >= wake_gap 40) -> COMMAND (2 speech)
+    # -> trailing silence (5 >= silence_ms 100) -> endpoint.
+    pipeline._vad = FakeVad([True, True, False, False, True, True, False, False, False, False, False])
 
     await pipeline.on_start("cid", 0, None, None)
-    # 9 frames in one chunk so all are processed in a single on_audio call.
-    await pipeline.on_audio(FRAME * 9)
+    # 11 frames in one chunk so all are processed in a single on_audio call.
+    await pipeline.on_audio(FRAME * 11)
 
     assert types_of(events) == FULL_SEQUENCE
     assert pipeline._finalized is True
@@ -425,6 +501,84 @@ async def test_vad_no_speech_finalize(tmp_path, monkeypatch):
     data = dict(events)
     assert data[VAET.VOICE_ASSISTANT_STT_END] == {"text": ""}
     assert_all_str(events)
+
+
+async def test_vad_waits_for_command_after_wake(tmp_path, monkeypatch):
+    # After the wake word, a silence longer than silence_ms but shorter than
+    # no_speech_timeout must NOT finalize (old behavior would have end-pointed at
+    # silence_ms). Only after no_speech_timeout, with no command, does it finalize.
+    patch_llm(monkeypatch)
+    pipeline, events = make_pipeline(tmp_path, monkeypatch, stt_text="   ")
+    set_small_vad_thresholds(pipeline)
+    pipeline._vad = FakeVad([True, True] + [False] * 30)  # wake, then only silence
+
+    await pipeline.on_start("cid", 0, None, None)
+    # 2 speech + 5 silence = 7 frames (140 ms): silence_ms=100 would have ended the
+    # OLD pipeline, but there is no command yet -> must stay open.
+    await pipeline.on_audio(FRAME * 7)
+    assert pipeline._finalized is False
+
+    # Cross no_speech_timeout_ms=200 (>=10 frames total) -> finalize as no_speech.
+    await pipeline.on_audio(FRAME * 6)  # total 13 frames = 260 ms
+    assert pipeline._finalized is True
+
+
+async def test_vad_glued_command_endpoints_via_wake_cap(tmp_path, monkeypatch):
+    # No pause after "Захар": the first speech run exceeds wake_max_ms, so it is
+    # treated as the command and end-points normally on trailing silence.
+    patch_llm(monkeypatch, reply="готово")
+    pipeline, events = make_pipeline(tmp_path, monkeypatch, stt_text="включи свет")
+    set_small_vad_thresholds(pipeline)
+    # 12 speech frames (> wake_max 200 = 10 frames) then 5 silence (>= silence_ms 100).
+    pipeline._vad = FakeVad([True] * 12 + [False] * 5)
+
+    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_audio(FRAME * 17)
+    assert pipeline._finalized is True
+    assert types_of(events) == FULL_SEQUENCE
+
+
+async def test_vad_glued_command_endpoints_exactly_at_wake_cap(tmp_path, monkeypatch):
+    # Boundary guard for the off-by-one fix: a glued speech run of EXACTLY wake_max_ms
+    # (no pause) must still be treated as the command and end-point — the command flag
+    # is set on the very frame the cap is reached, not one frame later.
+    patch_llm(monkeypatch, reply="готово")
+    pipeline, events = make_pipeline(tmp_path, monkeypatch, stt_text="включи свет")
+    set_small_vad_thresholds(pipeline)
+    # Exactly 10 speech frames (== wake_max 200) then 5 silence (>= silence_ms 100).
+    pipeline._vad = FakeVad([True] * 10 + [False] * 5)
+
+    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_audio(FRAME * 15)
+    assert pipeline._finalized is True
+    assert types_of(events) == FULL_SEQUENCE
+
+
+async def test_vad_short_glued_command_without_pause_is_dropped(tmp_path, monkeypatch):
+    # Documented trade-off of the WAKE -> pause -> COMMAND model: a command glued onto
+    # the wake word with NO pause and a total speech run SHORTER than wake_max_ms is
+    # indistinguishable from a lone drawn-out "захааар", so it is treated as no command
+    # (no_speech, STT skipped). Users are expected to pause after the wake word.
+    patch_llm(monkeypatch)
+    pipeline, events = make_pipeline(tmp_path, monkeypatch, stt_text="включи свет")
+    set_small_vad_thresholds(pipeline)
+    stt_calls = []
+    orig_transcribe = pipeline.stt_backend.transcribe
+
+    async def spy_transcribe(pcm):
+        stt_calls.append(pcm)
+        return await orig_transcribe(pcm)
+
+    pipeline.stt_backend.transcribe = spy_transcribe
+    # 5 speech frames (< wake_max 200 = 10 frames, no pause) then long silence.
+    pipeline._vad = FakeVad([True] * 5 + [False] * 30)
+
+    await pipeline.on_start("cid", 0, None, None)
+    # 13 frames = 260 ms: past no_speech_timeout_ms (200) but below max_utterance_ms
+    # (400), so the run finalizes as no_speech (not maxlen).
+    await pipeline.on_audio(FRAME * 13)
+    assert pipeline._finalized is True
+    assert stt_calls == []  # treated as no_speech -> STT skipped
 
 
 async def test_no_speech_run_is_recorded_as_empty(tmp_path, monkeypatch):
@@ -1873,13 +2027,21 @@ async def test_ack_not_scheduled_without_announce_channel(tmp_path, monkeypatch)
 
 
 async def test_ack_uses_configured_sound_file_when_present(tmp_path, monkeypatch):
-    # A configured sound_path that exists on disk is served verbatim (operator's «блям»),
-    # not the generated chime; mime is inferred from the extension.
+    # A configured WAV sound_path that exists on disk is the operator's «блям», but the
+    # speaker firmware can't decode WAV, so it must be transcoded to MP3 (not served
+    # verbatim as audio/wav). Assert the served clip is a firmware-decodable MP3.
+    import wave
+
     patch_llm(monkeypatch, reply="готово")
     pipeline, _ = make_pipeline(tmp_path, monkeypatch, stt_text="включи свет", ack=True)
     audio_server = pipeline.audio_server  # FakeAudioServer records (data, content_type)
     blyam = tmp_path / "blyam.wav"
-    blyam.write_bytes(b"RIFFblyam-bytes")
+    with wave.open(str(blyam), "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)  # 16-bit PCM
+        wf.setframerate(8000)
+        wf.writeframes(b"\x00\x00" * 256)  # a few frames of silence
+    raw_wav_bytes = blyam.read_bytes()
     pipeline.rt.core.ack.sound_path = str(blyam)
     pipeline.send_announcement = FakeAnnouncer()
 
@@ -1888,8 +2050,18 @@ async def test_ack_uses_configured_sound_file_when_present(tmp_path, monkeypatch
     await pipeline.on_stop(False)
     await _drain_ack_tasks(pipeline)
 
-    # The configured wav bytes were served as audio/wav (not the generated mp3).
-    assert (b"RIFFblyam-bytes", "audio/wav") in audio_server.calls
+    # No clip was served verbatim as audio/wav (the firmware can't decode WAV).
+    assert not [c for c in audio_server.calls if c[1] == "audio/wav"], (
+        f"WAV must not be served verbatim, got {audio_server.calls}"
+    )
+    # The ack chime is a transcoded, firmware-decodable MP3 (starts with the 0xFF frame
+    # sync). The TTS reply is also served as audio/mpeg but carries the fake b"MP3"
+    # payload, so select the real MP3 ack by its frame sync rather than by serve order.
+    mpeg = [c[0] for c in audio_server.calls if c[1] == "audio/mpeg"]
+    assert mpeg, f"expected a transcoded audio/mpeg ack, got {audio_server.calls}"
+    ack_mp3 = [b for b in mpeg if b[:1] == b"\xff"]  # MP3 frame sync -> firmware-decodable
+    assert ack_mp3, f"no firmware-decodable MP3 ack served, got {audio_server.calls}"
+    assert ack_mp3[0] != raw_wav_bytes        # genuinely transcoded, not served verbatim
 
 
 async def test_ack_is_fire_and_forget_does_not_delay_finalize(tmp_path, monkeypatch):
