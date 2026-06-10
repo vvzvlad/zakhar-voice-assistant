@@ -66,18 +66,6 @@ class VadConfig(BaseModel):
         json_schema_extra={"unit": "ms"},
         description="If no speech at all is detected after capture starts, give up and end the run after this long.",
     )
-    wake_gap_ms: int = Field(
-        250,
-        title="Pause after wake word",
-        json_schema_extra={"unit": "ms"},
-        description="Silence after the wake word that marks where «Захар» ends and the command may begin. Until the command starts, the wait runs on Give up after silence, not End-of-phrase pause; lower detects the command start sooner.",
-    )
-    wake_max_ms: int = Field(
-        1500,
-        title="Maximum wake word length",
-        json_schema_extra={"unit": "ms"},
-        description="Safety cap on the wake-word phase: if the first speech run lasts longer than this (a command spoken with no pause after «Захар»), it is treated as the command. Set above the longest drawn-out «захааар».",
-    )
     trim_start_ms: int = Field(
         200,
         ge=0,

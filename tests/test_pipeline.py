@@ -161,8 +161,6 @@ def set_small_vad_thresholds(pipeline):
     vad.silence_ms = 100           # 5 frames of trailing silence to end
     vad.max_utterance_ms = 400     # 20 frames hard cap
     vad.no_speech_timeout_ms = 200  # 10 frames with no speech -> finalize
-    vad.wake_gap_ms = 40           # 2 frames of silence ends the wake word
-    vad.wake_max_ms = 200          # 10 frames hard cap on the wake phase
 
 
 def patch_llm(monkeypatch, reply="ответ"):
@@ -281,10 +279,11 @@ def test_contains_stt_hallucination():
 def test_vad_boost_lifts_quiet_frame_toward_target():
     # A frame whose own samples are small, with a representative running utterance
     # peak (~3000), is scaled by min(target/peak, max_gain) so quiet speech reaches
-    # WebRTC VAD's range. With target ~23197 and peak 3000 the gain is ~7.7 (< cap 16).
+    # WebRTC VAD's range. With target ~23197 and peak 3000 the gain is ~7.7 (well below
+    # the max_gain cap, so the cap is irrelevant here).
     from src.pipeline import _VAD_BOOST_TARGET
     peak = 3000
-    gain = min(_VAD_BOOST_TARGET / peak, 16.0)
+    gain = _VAD_BOOST_TARGET / peak
     samples = np.array([100, -200, 300, -50] * 80, dtype="<i2")  # 320 samples = 640 B
     frame = samples.tobytes()
     out = _vad_boost(frame, peak)
@@ -297,21 +296,21 @@ def test_vad_boost_lifts_quiet_frame_toward_target():
 
 
 def test_vad_boost_below_floor_is_identity():
-    # peak below _VAD_BOOST_FLOOR -> no real signal yet -> frame returned unchanged.
+    # peak below _VAD_BOOST_FLOOR (30) -> treated as pre-roll silence -> frame unchanged.
     frame = (np.array([10, -20, 30, -40] * 80, dtype="<i2")).tobytes()
-    assert _vad_boost(frame, 100) == frame
+    assert _vad_boost(frame, 20) == frame
 
 
 def test_vad_boost_caps_at_max_gain():
-    # A peak just above the floor would give a huge target/peak ratio (~77); the
-    # max_gain cap (16) must clamp it.
+    # A peak just above the floor gives a target/peak ratio above the max_gain cap
+    # (128); the cap must clamp it. peak=40 -> target/40 ≈ 145 > 128, so the gain is 128.
     from src.pipeline import _VAD_BOOST_TARGET
-    peak = 300
-    assert _VAD_BOOST_TARGET / peak > 16.0  # uncapped ratio really does exceed the cap
-    samples = np.array([50, -60, 70, -80] * 80, dtype="<i2")
+    peak = 40
+    assert _VAD_BOOST_TARGET / peak > 128.0  # uncapped ratio really does exceed the cap
+    samples = np.array([5, -6, 7, -8] * 80, dtype="<i2")  # small -> no clipping at 128x
     frame = samples.tobytes()
     out = np.frombuffer(_vad_boost(frame, peak), dtype="<i2")
-    expected = np.clip(samples.astype(np.float32) * 16.0, -32768, 32767).astype("<i2")
+    expected = np.clip(samples.astype(np.float32) * 128.0, -32768, 32767).astype("<i2")
     assert np.array_equal(out, expected)
 
 
@@ -425,13 +424,12 @@ async def test_vad_endpoint_finalize(tmp_path, monkeypatch):
     patch_llm(monkeypatch, reply="готово")
     pipeline, events = make_pipeline(tmp_path, monkeypatch, stt_text="включи свет")
     set_small_vad_thresholds(pipeline)
-    # WAKE (2 speech) -> gap (2 silence >= wake_gap 40) -> COMMAND (2 speech)
-    # -> trailing silence (5 >= silence_ms 100) -> endpoint.
-    pipeline._vad = FakeVad([True, True, False, False, True, True, False, False, False, False, False])
+    # 3 speech frames (>= 40 ms min) then 6 silence frames (>= 100 ms) -> endpoint.
+    pipeline._vad = FakeVad([True, True, True, False, False, False, False, False, False])
 
     await pipeline.on_start("cid", 0, None, None)
-    # 11 frames in one chunk so all are processed in a single on_audio call.
-    await pipeline.on_audio(FRAME * 11)
+    # 9 frames in one chunk so all are processed in a single on_audio call.
+    await pipeline.on_audio(FRAME * 9)
 
     assert types_of(events) == FULL_SEQUENCE
     assert pipeline._finalized is True
@@ -501,84 +499,6 @@ async def test_vad_no_speech_finalize(tmp_path, monkeypatch):
     data = dict(events)
     assert data[VAET.VOICE_ASSISTANT_STT_END] == {"text": ""}
     assert_all_str(events)
-
-
-async def test_vad_waits_for_command_after_wake(tmp_path, monkeypatch):
-    # After the wake word, a silence longer than silence_ms but shorter than
-    # no_speech_timeout must NOT finalize (old behavior would have end-pointed at
-    # silence_ms). Only after no_speech_timeout, with no command, does it finalize.
-    patch_llm(monkeypatch)
-    pipeline, events = make_pipeline(tmp_path, monkeypatch, stt_text="   ")
-    set_small_vad_thresholds(pipeline)
-    pipeline._vad = FakeVad([True, True] + [False] * 30)  # wake, then only silence
-
-    await pipeline.on_start("cid", 0, None, None)
-    # 2 speech + 5 silence = 7 frames (140 ms): silence_ms=100 would have ended the
-    # OLD pipeline, but there is no command yet -> must stay open.
-    await pipeline.on_audio(FRAME * 7)
-    assert pipeline._finalized is False
-
-    # Cross no_speech_timeout_ms=200 (>=10 frames total) -> finalize as no_speech.
-    await pipeline.on_audio(FRAME * 6)  # total 13 frames = 260 ms
-    assert pipeline._finalized is True
-
-
-async def test_vad_glued_command_endpoints_via_wake_cap(tmp_path, monkeypatch):
-    # No pause after "Захар": the first speech run exceeds wake_max_ms, so it is
-    # treated as the command and end-points normally on trailing silence.
-    patch_llm(monkeypatch, reply="готово")
-    pipeline, events = make_pipeline(tmp_path, monkeypatch, stt_text="включи свет")
-    set_small_vad_thresholds(pipeline)
-    # 12 speech frames (> wake_max 200 = 10 frames) then 5 silence (>= silence_ms 100).
-    pipeline._vad = FakeVad([True] * 12 + [False] * 5)
-
-    await pipeline.on_start("cid", 0, None, None)
-    await pipeline.on_audio(FRAME * 17)
-    assert pipeline._finalized is True
-    assert types_of(events) == FULL_SEQUENCE
-
-
-async def test_vad_glued_command_endpoints_exactly_at_wake_cap(tmp_path, monkeypatch):
-    # Boundary guard for the off-by-one fix: a glued speech run of EXACTLY wake_max_ms
-    # (no pause) must still be treated as the command and end-point — the command flag
-    # is set on the very frame the cap is reached, not one frame later.
-    patch_llm(monkeypatch, reply="готово")
-    pipeline, events = make_pipeline(tmp_path, monkeypatch, stt_text="включи свет")
-    set_small_vad_thresholds(pipeline)
-    # Exactly 10 speech frames (== wake_max 200) then 5 silence (>= silence_ms 100).
-    pipeline._vad = FakeVad([True] * 10 + [False] * 5)
-
-    await pipeline.on_start("cid", 0, None, None)
-    await pipeline.on_audio(FRAME * 15)
-    assert pipeline._finalized is True
-    assert types_of(events) == FULL_SEQUENCE
-
-
-async def test_vad_short_glued_command_without_pause_is_dropped(tmp_path, monkeypatch):
-    # Documented trade-off of the WAKE -> pause -> COMMAND model: a command glued onto
-    # the wake word with NO pause and a total speech run SHORTER than wake_max_ms is
-    # indistinguishable from a lone drawn-out "захааар", so it is treated as no command
-    # (no_speech, STT skipped). Users are expected to pause after the wake word.
-    patch_llm(monkeypatch)
-    pipeline, events = make_pipeline(tmp_path, monkeypatch, stt_text="включи свет")
-    set_small_vad_thresholds(pipeline)
-    stt_calls = []
-    orig_transcribe = pipeline.stt_backend.transcribe
-
-    async def spy_transcribe(pcm):
-        stt_calls.append(pcm)
-        return await orig_transcribe(pcm)
-
-    pipeline.stt_backend.transcribe = spy_transcribe
-    # 5 speech frames (< wake_max 200 = 10 frames, no pause) then long silence.
-    pipeline._vad = FakeVad([True] * 5 + [False] * 30)
-
-    await pipeline.on_start("cid", 0, None, None)
-    # 13 frames = 260 ms: past no_speech_timeout_ms (200) but below max_utterance_ms
-    # (400), so the run finalizes as no_speech (not maxlen).
-    await pipeline.on_audio(FRAME * 13)
-    assert pipeline._finalized is True
-    assert stt_calls == []  # treated as no_speech -> STT skipped
 
 
 async def test_no_speech_run_is_recorded_as_empty(tmp_path, monkeypatch):

@@ -194,11 +194,21 @@ def _normalize_peak(pcm: bytes, target_dbfs: float = -3.0, max_gain: float = 30.
 # Target peak (~-3 dBFS) the VAD makeup gain lifts quiet audio toward, and the floor
 # below which the running utterance peak is treated as "no real signal yet" (so leading
 # pre-roll silence is NOT amplified into false speech).
-_VAD_BOOST_TARGET = 23197.0   # 32767 * 10**(-3/20)
-_VAD_BOOST_FLOOR = 200        # int16 peak; below this the utterance has no real signal
+# Target int16 peak the boost lifts the quiet channel's SPEECH toward. Deliberately
+# MODERATE (~-15 dBFS, not full-scale): a higher target needs a larger gain, which also
+# amplifies the channel's (clean, quiet) trailing silence enough that WebRTC VAD reads
+# it as speech and never end-points (the utterance runs to max-length). At -15 dBFS the
+# quiet channel's speech (peak ~50) reaches ~5800 (clearly speech) while its silence
+# (peak ~5) stays ~600 (clearly non-speech), so the pause is still detected → fast end-point.
+_VAD_BOOST_TARGET = 5824.0    # 32767 * 10**(-15/20)
+# int16 peak below which we treat the (very clean) less-processed channel as pre-roll
+# silence and don't boost — keeps leading noise from being amplified into false speech.
+# Must sit BELOW the real speech level of the quiet channel (measured ~50-80) and ABOVE
+# its silence floor (~1-5), so the boost engages once the wake word is heard.
+_VAD_BOOST_FLOOR = 30
 
 
-def _vad_boost(frame: bytes, peak: int, max_gain: float = 16.0) -> bytes:
+def _vad_boost(frame: bytes, peak: int, max_gain: float = 128.0) -> bytes:
     """Lift a 16-bit mono PCM frame toward _VAD_BOOST_TARGET for the VAD decision only.
 
     `peak` is the running peak of the WHOLE utterance so far (not this frame), so the
@@ -263,8 +273,6 @@ class Pipeline:
         self._silence_ms = 0
         self._speech_detected = False
         self._elapsed_ms = 0
-        self._wake_ended = False        # the wake word's first speech burst has ended
-        self._command_detected = False  # speech seen after the wake word (the command)
         self._vad_peak = 0              # running peak of the utterance (for VAD frame boost)
         self._finalized = False
         # Logging-only flag: log "receiving audio" once per run, not per chunk.
@@ -466,8 +474,6 @@ class Pipeline:
         self._silence_ms = 0
         self._speech_detected = False
         self._elapsed_ms = 0
-        self._wake_ended = False
-        self._command_detected = False
         self._vad_peak = 0
         self._finalized = False
         self._audio_logged = False
@@ -624,46 +630,21 @@ class Pipeline:
                     self._silence_ms = 0
                     if self._speech_ms >= vad.min_speech_ms:
                         self._speech_detected = True
-                    # Speech that resumes after the wake word has ended is the command.
-                    if self._wake_ended:
-                        self._command_detected = True
                 else:
                     # Trailing silence only counts once real speech has been observed.
                     if self._speech_detected:
                         self._silence_ms += FRAME_MS
-                # The wake word "Захар" is the first speech burst. It ends at the first
-                # real pause after it (so the wait for the command runs on
-                # no_speech_timeout, NOT silence_ms). Trade-off: a command glued onto the
-                # wake word with NO pause and a total speech run shorter than wake_max_ms
-                # can't be told apart from a lone "захааар", so it is treated as no
-                # command (raise wake_gap awareness / lower wake_max_ms if this bites).
-                if self._speech_detected and not self._wake_ended:
-                    if self._silence_ms >= vad.wake_gap_ms:
-                        # A real pause ends the wake word; the command (if any) is
-                        # detected on the next speech frame.
-                        self._wake_ended = True
-                    elif self._speech_ms >= vad.wake_max_ms:
-                        # No pause, but the first speech run is already longer than any
-                        # plausible drawn-out "захааар": the command is glued on, so the
-                        # speech still going in THIS frame is already the command.
-                        self._wake_ended = True
-                        self._command_detected = True
 
         # Decide end-of-utterance (reason or None). The HARD_CAP "maxlen" set above
         # takes precedence; otherwise check VAD endpoint, max length, no-speech.
         if reason is None:
             vad = self.rt.core.vad
-            # Endpoint only once the COMMAND (speech after the wake word) has been
-            # spoken and is then followed by silence_ms of trailing silence.
-            if self._command_detected and self._silence_ms >= vad.silence_ms:
+            if self._speech_detected and self._silence_ms >= vad.silence_ms:
                 reason = "endpoint"
             elif self._elapsed_ms >= vad.max_utterance_ms:
                 reason = "maxlen"
-            # No command within the grace: either nothing was said at all, or only the
-            # wake word "Захар". Give the user no_speech_timeout (NOT silence_ms) to
-            # start the command before giving up.
             elif (
-                not self._command_detected
+                not self._speech_detected
                 and self._elapsed_ms >= vad.no_speech_timeout_ms
             ):
                 reason = "no_speech"
@@ -672,8 +653,7 @@ class Pipeline:
             logger.debug(
                 f"{self.name}: VAD finalize reason={reason} speech_ms={self._speech_ms} "
                 f"silence_ms={self._silence_ms} elapsed_ms={self._elapsed_ms} "
-                f"wake_ended={self._wake_ended} command={self._command_detected} "
-                f"vad_peak={self._vad_peak}"
+                f"speech_detected={self._speech_detected} vad_peak={self._vad_peak}"
             )
 
         # All synchronous state is updated above; claim+run last (the only await).
