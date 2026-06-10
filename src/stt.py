@@ -11,6 +11,11 @@ from loguru import logger
 
 GROQ_STT_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
 
+# Groq rejects transcription prompts longer than this many characters (HTTP 400).
+# Truncate locally so an over-long vocabulary hint degrades gracefully instead of
+# failing the whole utterance.
+GROQ_PROMPT_MAX_CHARS = 896
+
 
 def pcm_to_wav(
     pcm: bytes, sample_rate: int = 16000, sample_width: int = 2, channels: int = 1
@@ -46,6 +51,7 @@ class GroqSttBackend(SttBackend):
         model: str,
         language: str = "ru",
         temperature: float = 0.0,
+        prompt: str = "",
         timeout: int = 60,
     ):
         self.client = client
@@ -53,6 +59,7 @@ class GroqSttBackend(SttBackend):
         self.model = model
         self.language = language
         self.temperature = temperature
+        self.prompt = prompt
         self.timeout = timeout
 
     async def transcribe(self, pcm: bytes) -> str:
@@ -72,6 +79,18 @@ class GroqSttBackend(SttBackend):
             "response_format": "json",
             "temperature": str(self.temperature),
         }
+        # Bias recognition toward specific words only when a hint is provided;
+        # never send an empty prompt to the API. Groq caps the prompt at
+        # GROQ_PROMPT_MAX_CHARS characters, so truncate over-long hints (and warn)
+        # rather than letting the API reject the whole request.
+        prompt = self.prompt.strip()
+        if len(prompt) > GROQ_PROMPT_MAX_CHARS:
+            logger.warning(
+                f"Groq STT prompt is {len(prompt)} chars; truncating to {GROQ_PROMPT_MAX_CHARS}"
+            )
+            prompt = prompt[:GROQ_PROMPT_MAX_CHARS]
+        if prompt:
+            data["prompt"] = prompt
         headers = {"Authorization": f"Bearer {self.api_key}"}
 
         try:
@@ -131,11 +150,12 @@ def make_stt_backend(
     *,
     api_key: str = "",
     model: str = "whisper-large-v3-turbo",
+    prompt: str = "",
     vosk_model_path: str = "models/vosk-model-small-ru-0.22",
 ) -> SttBackend:
     """Construct an STT backend by name (provider plugins are the primary path now)."""
     if name == "groq":
-        return GroqSttBackend(client, api_key=api_key, model=model)
+        return GroqSttBackend(client, api_key=api_key, model=model, prompt=prompt)
     if name == "vosk":
         return VoskSttBackend(vosk_model_path)
     raise ValueError(f"Unknown STT backend: {name}")
