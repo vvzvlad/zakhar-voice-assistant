@@ -3,7 +3,7 @@ import { Selector, PageHeader, FormSaveBar } from "../components/primitives.jsx"
 import SchemaForm from "../components/SchemaForm.jsx";
 import { useAppData } from "../appData.jsx";
 import { useStageForm, errorLines } from "../useStageForm.js";
-import { getOptions } from "../api.js";
+import { getOptions, getChimes } from "../api.js";
 
 function Card({ title, sub, children, foot }) {
   return <div className="z-card">
@@ -78,7 +78,7 @@ export function VAD() {
   const buildPatch = (draft) => ({ core: { vad: draft } });
   const { draft, onChange, dirty, saving, err, save } = useStageForm(vadValues, buildPatch, patch);
 
-  // Independent form for the server-side end-of-phrase confirmation chime ("блям").
+  // Independent form for the server-side end-of-phrase confirmation chime
   const ackSchema = coreSchema.$defs ? coreSchema.$defs.AckConfig : null;
   const ackValues = catalog.core.values.ack || {};
   const buildAckPatch = (draft) => ({ core: { ack: draft } });
@@ -86,6 +86,16 @@ export function VAD() {
     draft: ackDraft, onChange: ackOnChange, dirty: ackDirty,
     saving: ackSaving, err: ackErr, save: ackSave,
   } = useStageForm(ackValues, buildAckPatch, patch);
+
+  // Chime selector options for core.ack.sound_path: bundled files from assets/chimes,
+  // shown by bare filename, plus an empty-valued "synthesized" default at the top.
+  const ackOptionsFor = async () => {
+    const { options } = await getChimes();
+    return [
+      { value: "", label: "Synthesized chime (default)" },
+      ...options.map((p) => ({ value: p, label: p.split("/").pop() })),
+    ];
+  };
 
   // Mic input card: which device mic channel feeds the pipeline + the pre-STT
   // conditioning toggles. The fields live in VadConfig (core.vad.mic_channel /
@@ -126,8 +136,8 @@ export function VAD() {
     </>}
     {ackSchema && <>
       <div style={{ height: 16 }} />
-      <Card title="End-of-phrase chime" sub="confirmation «блям» played when your phrase ends">
-        <SchemaForm schema={{ ...ackSchema, $defs: coreSchema.$defs }} root={{ ...ackSchema, $defs: coreSchema.$defs }} values={ackDraft} onChange={ackOnChange} />
+      <Card title="End-of-phrase chime" sub="confirmation played when your phrase ends">
+        <SchemaForm schema={{ ...ackSchema, $defs: coreSchema.$defs }} root={{ ...ackSchema, $defs: coreSchema.$defs }} values={ackDraft} onChange={ackOnChange} optionsFor={ackOptionsFor} />
         <FormSaveBar dirty={ackDirty} saving={ackSaving} onSave={ackSave} errors={errorLines(ackErr)} />
       </Card>
     </>}

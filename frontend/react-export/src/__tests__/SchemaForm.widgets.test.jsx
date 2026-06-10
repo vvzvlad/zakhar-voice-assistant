@@ -75,6 +75,22 @@ describe("SchemaField widget selection", () => {
     expect(c.querySelector(".z-slider")).toBeNull();
   });
 
+  it("renders a DynamicSelect (.z-select) for a string field with options:'dynamic' and an optionsFor", () => {
+    const schema = { properties: { sound_path: { type: "string", options: "dynamic" } } };
+    const { container } = render(
+      <SchemaForm
+        schema={schema}
+        values={{ sound_path: "assets/chimes/a.wav" }}
+        onChange={() => {}}
+        optionsFor={async () => ["assets/chimes/a.wav", "assets/chimes/b.wav"]}
+      />
+    );
+    // The dynamic branch renders a Select (initial single-option fallback from the value),
+    // not a plaintext input.
+    expect(container.querySelector(".z-select")).toBeTruthy();
+    expect(container.querySelector(".z-inp input")).toBeNull();
+  });
+
   it("renders a textarea for a string field with widget:'textarea'", () => {
     const onChange = vi.fn();
     const c = renderField("prompt", { type: "string", widget: "textarea" }, "hello", onChange);

@@ -159,11 +159,17 @@ class AckConfig(BaseModel):
     # streams continuously with pre-roll); instead the server plays this short clip to
     # the speaker the instant VAD end-points the utterance — immediate "got it"
     # feedback, BEFORE STT/LLM/TTS run. The full spoken reply still plays later.
-    enabled: bool = True
-    # Optional override for the chime audio file (mp3 or wav). When set to an existing
-    # path the operator's exact device «блям» clip is used; when empty (or missing) a
-    # short two-tone sine chime is synthesized once and cached. Read live per run.
-    sound_path: str = ""
+    enabled: bool = Field(
+        True,
+        description="Play a short confirmation chime to the speaker the instant your phrase is end-pointed — immediate \"got it\" feedback before STT/LLM/TTS run. The full spoken reply still plays afterwards.",
+    )
+    # The dropdown is fed by GET /api/chimes (bundled assets/chimes clips); an empty
+    # value keeps the synthesized chime, which is built once and cached.
+    sound_path: str = Field(
+        "",
+        json_schema_extra={"options": "dynamic"},
+        description="Chime audio file (mp3 or wav) played on end-of-phrase. Pick a bundled clip to use that exact «блям»; the synthesized default (empty value) plays a short two-tone sine chime. Applies per run.",
+    )
 
 
 class CoreConfig(BaseModel):

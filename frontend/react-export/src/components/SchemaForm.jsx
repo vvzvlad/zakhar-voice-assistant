@@ -16,14 +16,17 @@ import { Field, KeyInput, Seg, Select, Slider, Stepper, Toggle } from "./primiti
 import { resolve, enumOf, isSecret, humanize } from "../schema.js";
 
 function DynamicSelect({ value, onChange, load }) {
-  const [opts, setOpts] = useState(value != null ? [String(value)] : []);
+  const norm = (o) => (o && typeof o === "object" ? o : { value: o, label: String(o) });
+  const [opts, setOpts] = useState(value != null ? [norm(value)] : []);
   useEffect(() => {
     let alive = true;
     load()
       .then((list) => {
         if (!alive || !Array.isArray(list)) return;
-        // Make sure the current value is selectable even if not in the list.
-        const merged = value != null && !list.includes(value) ? [value, ...list] : list;
+        const normalized = list.map(norm);
+        // Keep the current value selectable even if the fetched list omits it.
+        const has = value != null && normalized.some((o) => o.value === value);
+        const merged = value != null && !has ? [norm(value), ...normalized] : normalized;
         setOpts(merged);
       })
       .catch(() => { /* keep current single-option fallback */ });
@@ -44,6 +47,7 @@ function SchemaField({ name, node, root, value, onChange, optionsFor }) {
   const dynamic = (node.options || r.options) === "dynamic";
   const widget = node.widget || r.widget;
   const type = r.type;
+  const unit = node.unit || r.unit;
 
   let control;
   if (dynamic && optionsFor) {
@@ -75,6 +79,7 @@ function SchemaField({ name, node, root, value, onChange, optionsFor }) {
         <Stepper
           value={value ?? 0} step={step}
           min={r.minimum ?? -Infinity} max={r.maximum ?? Infinity}
+          unit={unit}
           onChange={(v) => set(isInt ? Math.round(v) : v)}
         />
       );

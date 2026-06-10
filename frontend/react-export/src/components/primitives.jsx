@@ -108,13 +108,18 @@ export function Select({ value, options, onChange, w }) {
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
   useEffect(() => { const h = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); }; document.addEventListener("pointerdown", h); return () => document.removeEventListener("pointerdown", h); }, []);
+  // Options may be plain strings/numbers OR {value, label} objects (label is shown,
+  // value is stored/emitted). Normalize so the rest is uniform; plain arrays keep their
+  // existing behavior (value === label).
+  const opts = (options || []).map((o) => (o && typeof o === "object" ? o : { value: o, label: String(o) }));
+  const selected = opts.find((o) => o.value === value);
   return <div ref={ref} style={{ position: "relative", width: w || "100%" }}>
     <div className="z-select" role="button" tabIndex={0} aria-haspopup="listbox" aria-expanded={open}
       onClick={() => setOpen((o) => !o)}
       onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setOpen((o) => !o); } }}>
-      {value}<svg width="11" height="11" viewBox="0 0 11 11" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><path d="M2 4l3.5 3.5L9 4" /></svg></div>
+      {selected ? selected.label : value}<svg width="11" height="11" viewBox="0 0 11 11" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><path d="M2 4l3.5 3.5L9 4" /></svg></div>
     {open && <div role="listbox" style={{ position: "absolute", top: "100%", left: 0, right: 0, marginTop: 4, background: "#fff", border: "1px solid var(--line)", borderRadius: 7, boxShadow: "0 8px 28px rgba(16,24,40,.16)", padding: 4, zIndex: 20, maxHeight: 240, overflowY: "auto" }}>
-      {options.map((o) => <div key={o} role="option" aria-selected={o === value} tabIndex={0} onClick={() => { onChange && onChange(o); setOpen(false); }} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onChange && onChange(o); setOpen(false); } }} style={{ padding: "7px 10px", borderRadius: 5, fontSize: 12.5, fontWeight: o === value ? 600 : 400, color: o === value ? "var(--acc-ink)" : "var(--ink)", background: o === value ? "var(--acc-bg)" : "transparent", cursor: "pointer" }} onMouseEnter={(e) => { if (o !== value) e.currentTarget.style.background = "var(--panel2)"; }} onMouseLeave={(e) => { if (o !== value) e.currentTarget.style.background = "transparent"; }}>{o}</div>)}
+      {opts.map((o) => <div key={String(o.value)} role="option" aria-selected={o.value === value} tabIndex={0} onClick={() => { onChange && onChange(o.value); setOpen(false); }} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onChange && onChange(o.value); setOpen(false); } }} style={{ padding: "7px 10px", borderRadius: 5, fontSize: 12.5, fontWeight: o.value === value ? 600 : 400, color: o.value === value ? "var(--acc-ink)" : "var(--ink)", background: o.value === value ? "var(--acc-bg)" : "transparent", cursor: "pointer" }} onMouseEnter={(e) => { if (o.value !== value) e.currentTarget.style.background = "var(--panel2)"; }} onMouseLeave={(e) => { if (o.value !== value) e.currentTarget.style.background = "transparent"; }}>{o.label}</div>)}
     </div>}
   </div>;
 }

@@ -51,6 +51,8 @@ export const getConfig = () => request("/api/config");
 export const patchConfig = (patch) => request("/api/config", { method: "PATCH", body: patch });
 export const getOptions = (category, plugin, field) =>
   request(`/api/options?category=${encodeURIComponent(category)}&plugin=${encodeURIComponent(plugin)}&field=${encodeURIComponent(field)}`);
+// Bundled end-of-phrase chime files for the ack sound_path selector.
+export const getChimes = () => request("/api/chimes");
 export const getPrompt = () => request("/api/prompt");
 export const putPrompt = (text) => request("/api/prompt", { method: "PUT", body: { text } });
 export const getSystem = () => request("/api/system");

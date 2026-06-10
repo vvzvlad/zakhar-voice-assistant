@@ -35,6 +35,31 @@ _ALLOW_METHODS = "GET, POST, PATCH, PUT, OPTIONS"
 # never readable from an arbitrary web page. Not a config knob.
 _ALLOWED_ORIGINS: frozenset[str] = frozenset()
 
+# Bundled end-of-phrase chime clips live under <repo-root>/assets/chimes. Resolve the
+# directory relative to the repo root (this file is in src/) so the listing works
+# regardless of the process CWD; the offered values are repo-root-relative POSIX paths
+# (e.g. "assets/chimes/Chime_SFX_001.wav") so they match how the pipeline opens
+# core.ack.sound_path (the app runs from the repo root).
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_CHIME_EXTS = (".wav", ".mp3", ".flac")
+
+
+def list_chimes(root: str = _REPO_ROOT) -> list[str]:
+    """Return sorted repo-root-relative paths of the bundled chime audio files.
+
+    Scans <root>/assets/chimes for audio files (wav/mp3/flac). Returns an empty list
+    when the directory is missing or unreadable."""
+    abs_dir = os.path.join(root, "assets", "chimes")
+    try:
+        names = os.listdir(abs_dir)
+    except OSError:
+        return []
+    files = sorted(
+        n for n in names
+        if n.lower().endswith(_CHIME_EXTS) and os.path.isfile(os.path.join(abs_dir, n))
+    )
+    return [f"assets/chimes/{n}" for n in files]
+
 
 def _add_cors(resp: web.StreamResponse, request: web.Request, allowed_origins) -> web.StreamResponse:
     """Reflect an allowlisted request Origin into CORS headers (never a wildcard).
@@ -147,6 +172,10 @@ class PanelServer:
         except ValueError as e:
             return web.json_response({"error": str(e)}, status=404)
         return web.json_response({"options": options})
+
+    async def _get_chimes(self, request: web.Request) -> web.Response:
+        """List the bundled end-of-phrase chime files for the ack sound_path selector."""
+        return web.json_response({"options": list_chimes()})
 
     async def _get_prompt(self, request: web.Request) -> web.Response:
         path = self.svc.core.prompt.system_prompt_path
@@ -360,6 +389,7 @@ class PanelServer:
             web.get("/api/config", self._get_config),
             web.patch("/api/config", self._patch_config),
             web.get("/api/options", self._get_options),
+            web.get("/api/chimes", self._get_chimes),
             web.get("/api/prompt", self._get_prompt),
             web.put("/api/prompt", self._put_prompt),
             web.get("/api/system", self._get_system),

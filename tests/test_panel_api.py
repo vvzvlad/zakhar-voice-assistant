@@ -156,6 +156,21 @@ async def test_get_options(tmp_path):
         await client.close()
 
 
+async def test_get_chimes_lists_bundled_files(tmp_path):
+    client, _svc_ = await _client(tmp_path)
+    try:
+        resp = await client.get("/api/chimes")
+        assert resp.status == 200
+        body = await resp.json()
+        assert isinstance(body["options"], list)
+        # The repo ships chime clips under assets/chimes; each option is a repo-root
+        # relative path the pipeline opens verbatim.
+        assert any(o.endswith(".wav") for o in body["options"])
+        assert all(o.startswith("assets/chimes/") for o in body["options"])
+    finally:
+        await client.close()
+
+
 async def test_options_unknown_field_returns_empty_list(tmp_path):
     client, _svc_ = await _client(tmp_path)
     try:
