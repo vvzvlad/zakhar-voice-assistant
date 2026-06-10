@@ -278,7 +278,8 @@ button{font-family:inherit;}
 /* ── Two-column layout ──────────────────────────────────── */
 .z-cols{display:grid;grid-template-columns:1fr 320px;gap:18px;align-items:start;}
 .z-cols.wide{grid-template-columns:1fr 360px;}
-@media (max-width:1180px){.z-cols,.z-cols.wide{grid-template-columns:1fr;}}
+.z-cols.even{grid-template-columns:1fr 1fr;}
+@media (max-width:1180px){.z-cols,.z-cols.wide,.z-cols.even{grid-template-columns:1fr;}}
 .z-aside{display:flex;flex-direction:column;gap:14px;}
 .z-info{font-size:12px;color:var(--ink2);line-height:1.6;}
 .z-info b{font-weight:600;}
