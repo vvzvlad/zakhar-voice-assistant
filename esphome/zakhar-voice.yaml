@@ -25,22 +25,22 @@ packages:
       models:
         # Local path to the model already committed in this repo. ESPHome resolves
         # the manifest's relative "model": "zakhar.tflite" against this file's dir,
-        # so both .json and .tflite are read straight from microWakeWord/v11/model/.
+        # so both .json and .tflite are read straight from microWakeWord/v8/model/.
         # (A remote github:// / raw URL fails here: ESPHome can't resolve the
         # relative .tflite inside a manifest fetched that way.)
         #
-        # v11 = v8 recipe + REAL device-tract negatives (idle/silence ~166min +
-        # music ~38min, recorded through this Voice PE). This FIXED the field bug:
-        # v8 actually false-fired ~12.5/h in real idle-room silence (synthetic noise
-        # gave 0 — it's real room texture amplified by the PCAN frontend; VAD masked
-        # it in the field but any gap leaked). v11 cuts real silence-FAPH 12.5->0.8/h,
-        # music 9.3->0/h, and improves real-human FRR 4.7->0.9%. Beats v8 on the field.
-        # VAD pre-gate is still inherited from the stock HA Voice PE firmware.
-        - model: ../microWakeWord/v11/model/zakhar.json
+        # REVERTED to v8: v11 (v8 + real silence/music negatives) cut the silence
+        # false-fires but its RECALL regressed in the field — it under-detects real
+        # «захааар». For day-to-day use, reliable detection matters more than the
+        # silence-FAPH fix, so we run v8 (better recall) at the field-tuned point.
+        # The v11 recall regression is exactly what the new real-positive recordings
+        # are meant to fix; revisit v8->v11(+real positives) after that retrain.
+        # VAD pre-gate is inherited from the stock HA Voice PE firmware.
+        - model: ../microWakeWord/v8/model/zakhar.json
           id: zakhar
-          # v11 deploy point (от которого считаны метрики выше): cutoff 0.90 / window 5.
-          # Raise toward 0.95 if it ever feels trigger-happy; lower if «захааар» is missed.
-          probability_cutoff: 90%
+          # v8 field point: cutoff 0.95 / window 5 (lower toward 0.90 if «захааар»
+          # gets missed; raise toward 0.97 if it false-fires too much).
+          probability_cutoff: 95%
           sliding_window_size: 5
 
   # Official Home Assistant Voice PE firmware, pinned to a release tag.

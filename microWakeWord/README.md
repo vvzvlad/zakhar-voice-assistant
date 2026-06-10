@@ -4,13 +4,14 @@ On-device wake word для протяжного **«захааар»** (рус.;
 microWakeWord (INT8 streaming TFLite, ESP32-S3 / Home Assistant Voice PE, ESPHome
 `micro_wake_word`). Каталог способов и вердиктов — [v10/HYPOTHESIS_REGISTRY.md](v10/HYPOTHESIS_REGISTRY.md).
 
-## Рекомендованная модель: v11 (прод пока v8 — переключить)
-- [v11/model/](v11/model/) — `zakhar.tflite` (INT8). v8-рецепт **+ реальные device-tract негативы**
-  (тишина ~166 мин + музыка ~38 мин). Drop-in, бьёт v8.
-- Деплой: **`probability_cutoff 0.9`, `sliding_window_size 5`, VAD on**. В
-  [../esphome/zakhar-voice.yaml](../esphome/zakhar-voice.yaml) пока стоит v8 — переключить на `v11/model`.
-- Результат (реальный device-eval, БЕЗ VAD): silence-FAPH **12.5→0.8/ч**, music **9.3→0/ч**,
-  FRR на реальных людях **4.7→0.9%** (dev_heldout FRR 8.5→12.4% — единственная цена).
+## Деплой: v8 (v11 откатан — недодетект в поле)
+- В проде/[../esphome/zakhar-voice.yaml](../esphome/zakhar-voice.yaml) стоит **[v8/model/](v8/model/)**
+  (`probability_cutoff 0.95`, `sliding_window_size 5`, VAD on).
+- **v11** (v8 + реальные silence/music негативы) убрал ложные в тишине (12.5→0.8/ч, music→0), НО его
+  **recall просел в поле — недодетектит «захааар»** (dev_heldout FRR 8.5→12.4%). Для повседневного
+  использования надёжный детект важнее фикса тишины → откатили на v8. v11 лежит в [v11/](v11).
+- Просадку recall у v11 чинят **реальные device-позитивы** (сейчас записываются) → после переобуча
+  пересмотреть v8→v11(+реальные позитивы).
 
 ## Баг тишины — НАЙДЕН и ПОЧИНЕН (v11)
 Реальные device-негативы сделали баг ВИДИМЫМ: v8 даёт **12.5 ложных/ч в реальной тишине/idle-комнате**
