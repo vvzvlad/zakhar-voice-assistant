@@ -40,6 +40,15 @@ export function AppDataProvider({ children }) {
     return () => { alive = false; };
   }, [loadAll]);
 
+  // Subscribe to run frames arriving on the app-wide WS tunnel. Returns an
+  // unsubscribe fn. A ref registry (not state) so run frames don't re-render
+  // the whole provider tree.
+  const runListenersRef = useRef(new Set());
+  const subscribeRuns = useCallback((fn) => {
+    runListenersRef.current.add(fn);
+    return () => runListenersRef.current.delete(fn);
+  }, []);
+
   // Liveness via the WS tunnel: the backend pushes a {type:"system",...} heartbeat
   // every second. Each one refreshes uptime and (re)arms a watchdog; if no
   // heartbeat arrives within HEARTBEAT_TIMEOUT_MS — or the socket closes — the
@@ -62,6 +71,11 @@ export function AppDataProvider({ children }) {
           setConnected(true);
           armWatchdog();
         }
+        if (msg && msg.type === "run" && msg.run) {
+          for (const fn of runListenersRef.current) {
+            try { fn(msg.run); } catch { /* a bad listener must not break the stream */ }
+          }
+        }
       },
       onStatus: (up) => { if (!up) { clearWatchdog(); setConnected(false); } },
     });
@@ -81,7 +95,7 @@ export function AppDataProvider({ children }) {
 
   const value = {
     catalog, config, system, loading, error, connected,
-    patch, reload: loadAll,
+    patch, reload: loadAll, subscribeRuns,
   };
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

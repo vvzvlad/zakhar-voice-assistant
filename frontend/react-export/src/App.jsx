@@ -6,6 +6,7 @@ import { Topbar } from "./components/Topbar.jsx";
 import { PAGES } from "./pages/index.js";
 import { useAppData } from "./appData.jsx";
 import { Loading, ErrorBox } from "./components/primitives.jsx";
+import { Toasts } from "./components/Toasts.jsx";
 
 // Set of valid section ids derived from the nav config.
 const VALID = new Set(Object.keys(TITLES));
@@ -81,6 +82,7 @@ export default function App() {
               : <Page />}
         </div>
       </div>
+      <Toasts active={active} />
     </div>
   );
 }
