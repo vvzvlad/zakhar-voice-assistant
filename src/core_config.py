@@ -45,32 +45,32 @@ class VadConfig(BaseModel):
     silence_ms: int = Field(
         800,
         title="End-of-phrase pause",
-        json_schema_extra={"unit": "ms"},
+        json_schema_extra={"unit": "ms", "multipleOf": 100},
         description="Trailing silence after speech before the utterance is considered finished. Higher tolerates longer mid-phrase pauses but adds the same delay before the reply starts.",
     )
     min_speech_ms: int = Field(
         200,
         title="Minimum utterance length",
-        json_schema_extra={"unit": "ms"},
+        json_schema_extra={"unit": "ms", "multipleOf": 100},
         description="Minimum total detected speech for the audio to count as a real utterance; shorter blips are treated as noise and dropped.",
     )
     max_utterance_ms: int = Field(
         15000,
         title="Maximum utterance length",
-        json_schema_extra={"unit": "ms"},
+        json_schema_extra={"unit": "ms", "multipleOf": 100},
         description="Hard cap on a single utterance — it is force-finalized once it reaches this length even if no trailing silence was seen.",
     )
     no_speech_timeout_ms: int = Field(
         8000,
         title="Give up after silence",
-        json_schema_extra={"unit": "ms"},
+        json_schema_extra={"unit": "ms", "multipleOf": 100},
         description="If no speech at all is detected after capture starts, give up and end the run after this long.",
     )
     trim_start_ms: int = Field(
         200,
         ge=0,
         title="Trim from start",
-        json_schema_extra={"unit": "ms"},
+        json_schema_extra={"unit": "ms", "multipleOf": 100},
         description="Drop this many ms off the start of the captured sample before STT (cuts the wake-word tail / button-press click). 0 disables.",
     )
     mic_channel: Literal[0, 1] = Field(
