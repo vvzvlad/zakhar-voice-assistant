@@ -612,7 +612,16 @@ void VoiceAssistant::client_subscription(api::APIConnection *client, bool subscr
       return;
     }
     this->api_client_ = nullptr;
-    this->client_disconnected_trigger_.trigger();
+    // Defer the trigger instead of firing it synchronously. This method is called from
+    // ~APIConnection() while APIServer::remove_client_() is mid-reset of the clients_ slot.
+    // In ESPHome <= 2026.5.3 api_connection_count_ is decremented only AFTER reset(), so a
+    // synchronous trigger runs user automations (voice_assistant.stop -> set_state_ -> ESP_LOGD)
+    // whose log line reenters APIServer::on_log(), which dereferences the now-null slot ->
+    // LoadProhibited crash. Deferring moves the automation out of the destructor call stack
+    // (same pattern as every other trigger in this file). Upstream fixed this on the API side
+    // in esphome/esphome#16834 (not in any 2026.5.x release); this divergence can be dropped
+    // when rebasing onto ESPHome >= 2026.6.
+    this->defer([this]() { this->client_disconnected_trigger_.trigger(); });
     return;
   }
 

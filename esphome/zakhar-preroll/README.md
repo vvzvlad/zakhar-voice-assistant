@@ -113,6 +113,10 @@ button:
   пассивных отводов (≈35 строк к стоку 2026.5.3)
 - `components/voice_assistant/voice_assistant.h` — сеттеры/поля/хелперы (≈25 строк)
 - `components/voice_assistant/voice_assistant.cpp` — setup-ветка pre-roll,
-  персистентные буферы, trim вместо reset, анти-burst (≈90 строк)
+  персистентные буферы, trim вместо reset, анти-burst (≈90 строк);
+  дополнительно — фикс краша LoadProhibited при дисконнекте API-клиента:
+  `client_disconnected_trigger_` теперь отложен через `defer()` (upstream-фикс
+  esphome#16834 на стороне api появится только в ≥2026.6; при ребейзе на
+  ≥2026.6 эту дивергенцию можно убрать)
 
 Диф к стоку: `git diff` против `esphome/components/voice_assistant` на теге 2026.5.3.
