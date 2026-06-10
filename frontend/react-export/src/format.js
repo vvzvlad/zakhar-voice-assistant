@@ -19,3 +19,14 @@ export function fmtStarted(iso) {
   const pad = (n) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
+
+// Human-readable byte size (binary units): "—" for null/NaN, then B / KB / MB / GB / TB.
+export function fmtBytes(n) {
+  if (n == null || isNaN(n)) return "—";
+  let v = Math.max(0, Number(n));
+  if (v < 1024) return `${Math.round(v)} B`;
+  const units = ["KB", "MB", "GB", "TB"];
+  let i = -1;
+  do { v /= 1024; i++; } while (v >= 1024 && i < units.length - 1);
+  return `${v >= 10 ? Math.round(v) : v.toFixed(1)} ${units[i]}`;
+}

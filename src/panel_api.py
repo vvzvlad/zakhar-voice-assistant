@@ -21,9 +21,11 @@ from aiohttp import web
 from loguru import logger
 from pydantic import ValidationError
 
+from src import config_store
 from src.capture_jobs import CaptureJobManager
 from src.pipeline import CAPTURE_MAX_SECONDS, CaptureBusyError
 from src.prompt import load_system_prompt, save_system_prompt
+from src.runs_store import db_file_size
 
 # HTTP methods the API exposes (used by the CORS preflight headers).
 _ALLOW_METHODS = "GET, POST, PATCH, PUT, OPTIONS"
@@ -232,12 +234,20 @@ class PanelServer:
 
     async def _get_system(self, request: web.Request) -> web.Response:
         started = datetime.fromtimestamp(self.started_at, tz=timezone.utc).isoformat()
+        # On-disk size of the runs DB (with WAL/SHM sidecars). When the runs store is
+        # open it owns the path; otherwise (recording disabled) stat the canonical
+        # file directly so the indicator still reports any leftover DB on disk.
+        if self.runs_store is not None:
+            db_size_bytes = self.runs_store.db_size_bytes()
+        else:
+            db_size_bytes = db_file_size(os.path.join(config_store.DATA_DIR, "runs.db"))
         return web.json_response({
             "version": self.version,
             "started": started,
             "uptime_seconds": int(time.time() - self.started_at),
             "running": True,
             "log_level": self.svc.core.log_level,
+            "db_size_bytes": db_size_bytes,
         })
 
     async def _get_devices(self, request: web.Request) -> web.Response:

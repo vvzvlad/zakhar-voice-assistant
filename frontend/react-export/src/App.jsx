@@ -20,7 +20,12 @@ function idFromPath(pathname) {
 function initialId() {
   const fromPath = idFromPath(window.location.pathname);
   if (fromPath) return fromPath;
-  try { return localStorage.getItem("z-active") || "dashboard"; } catch { return "dashboard"; }
+  // Validate the persisted id against the known sections so a stale/removed id
+  // (e.g. the old "network" before it was renamed to "device") falls back cleanly.
+  try {
+    const stored = localStorage.getItem("z-active");
+    return VALID.has(stored) ? stored : "dashboard";
+  } catch { return "dashboard"; }
 }
 
 export default function App() {

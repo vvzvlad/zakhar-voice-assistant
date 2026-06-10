@@ -5,7 +5,7 @@ import {
 import SchemaForm from "../components/SchemaForm.jsx";
 import { useAppData } from "../appData.jsx";
 import { useStageForm, errorLines } from "../useStageForm.js";
-import { fmtUptime, fmtStarted } from "../format.js";
+import { fmtUptime, fmtStarted, fmtBytes } from "../format.js";
 
 function Card({ title, sub, children, foot }) {
   return <div className="z-card">
@@ -15,8 +15,8 @@ function Card({ title, sub, children, foot }) {
   </div>;
 }
 
-// ── Network (core.network + core.audio) ───────────────────────────────────
-function Network() {
+// ── Device (core.network + core.audio + core.runs) ────────────────────────
+function Device() {
   const { catalog, patch } = useAppData();
   const defs = catalog.core.schema.$defs || {};
   const netSchema = defs.NetworkConfig;
@@ -29,9 +29,9 @@ function Network() {
   const audio = useStageForm(audioValues, (d) => ({ core: { audio: d } }), patch);
 
   return <div className="z-page">
-    <PageHeader title="Network & integrations" crumb="Operations · advanced"
-      desc="Outbound routing for cloud APIs and the audio server that feeds speakers." />
-    {/* Two equal columns: routing/audio on the left, system status + logging on the right */}
+    <PageHeader title="Device" crumb="Operations · advanced"
+      desc="Outbound routing for cloud APIs, the audio server that feeds speakers, and recorded-utterance storage." />
+    {/* Two equal columns: routing/audio on the left, system status + recordings + logging on the right */}
     <div className="z-cols even">
       <div className="z-grid">
         <Card title="External proxy" foot={<FormSaveBar dirty={net.dirty} saving={net.saving} onSave={net.save} errors={errorLines(net.err)} />}>
@@ -49,9 +49,34 @@ function Network() {
             </>}
         </Card>
       </div>
-      <System />
+      {/* Right column: system status + recordings storage + logging. */}
+      <div className="z-grid">
+        <System />
+        <Recordings />
+      </div>
     </div>
   </div>;
+}
+
+// ── Recordings (core.runs.audio_keep) + DB-on-disk indicator ───────────────
+function Recordings() {
+  const { catalog, patch, system } = useAppData();
+  const runsSchema = (catalog.core.schema.$defs || {}).RunsConfig;
+  const runsValues = catalog.core.values.runs || {};
+  // useStageForm keeps the WHOLE runs object as the draft; we render only the
+  // audio_keep field, so the other runs fields are saved back unchanged.
+  const runs = useStageForm(runsValues, (d) => ({ core: { runs: d } }), patch);
+
+  return <Card title="Recordings" sub="utterance audio kept for playback in the log"
+    foot={<FormSaveBar dirty={runs.dirty} saving={runs.saving} onSave={runs.save} errors={errorLines(runs.err)} />}>
+    {runsSchema
+      && <SchemaForm schema={runsSchema} values={runs.draft} onChange={runs.onChange}
+        skip={["enabled", "retention_days", "store_audio"]} />}
+    <div style={{ marginTop: 4 }}>
+      <div style={{ fontSize: 10.5, color: "var(--mut)", textTransform: "uppercase", letterSpacing: ".04em", fontWeight: 600 }}>Database on disk</div>
+      <div className="mono" style={{ fontSize: 15, fontWeight: 600, marginTop: 3 }}>{fmtBytes(system?.db_size_bytes)}</div>
+    </div>
+  </Card>;
 }
 
 // ── System (from /api/system; log_level editable) ─────────────────────────
@@ -98,4 +123,4 @@ export function System() {
   </div>;
 }
 
-export default Network;
+export default Device;

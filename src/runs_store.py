@@ -10,6 +10,7 @@ a `threading.Lock`. WAL journaling keeps concurrent readers from blocking writer
 """
 
 import json
+import os
 import sqlite3
 import threading
 
@@ -67,6 +68,7 @@ class RunsStore:
 
     def __init__(self, path):
         self._lock = threading.Lock()
+        self._path = path
         self._conn = sqlite3.connect(path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA journal_mode=WAL")
@@ -133,6 +135,10 @@ class RunsStore:
                 "SELECT wav FROM run_audio WHERE run_id = ?", (run_id,)
             ).fetchone()
         return bytes(row["wav"]) if row is not None else None
+
+    def db_size_bytes(self) -> int:
+        """On-disk size of this store's SQLite file (+ WAL/SHM sidecars), in bytes."""
+        return db_file_size(self._path)
 
     def list(self, *, device=None, result=None, search=None, limit=100) -> list[dict]:
         """Recent runs (newest first) as summary dicts, with optional filters.
@@ -257,6 +263,18 @@ class RunsStore:
         # _rebuild_runs disables runs while a concurrent DB op is still running.
         with self._lock:
             self._conn.close()
+
+
+def db_file_size(path: str) -> int:
+    """Total on-disk size in bytes of a SQLite DB: the main file plus its WAL and
+    SHM sidecars. Missing files count as 0, so a not-yet-created DB reports 0."""
+    total = 0
+    for suffix in ("", "-wal", "-shm"):
+        try:
+            total += os.path.getsize(path + suffix)
+        except OSError:
+            pass
+    return total
 
 
 def _percentile(sorted_values: list, pct: int):

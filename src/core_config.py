@@ -148,7 +148,14 @@ class RunsConfig(BaseModel):
     # Rolling window of recent utterance audio (the exact PCM sent to STT), kept in
     # runs.db so operators can download/play it from the log to diagnose mis-triggers.
     store_audio: bool = True
-    audio_keep: int = Field(100, ge=1)  # how many most-recent utterances keep their audio
+    audio_keep: int = Field(
+        100, ge=1,
+        title="Stored recordings",
+        description="How many of the most recent utterance recordings to keep for "
+        "playback in the Request Log. Older recordings are dropped as new ones "
+        "arrive (applied on the next utterance). The audio is stored in runs.db, "
+        "so a higher number uses more disk.",
+    )  # rolling ring-buffer cap; applied per-utterance via RunsStore.put_audio()
 
 
 class RemindersConfig(BaseModel):

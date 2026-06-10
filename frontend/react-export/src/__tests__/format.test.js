@@ -1,7 +1,7 @@
 // Unit tests for the display formatters (src/format.js).
 // TZ is pinned to UTC in src/test/setup.js so fmtStarted is deterministic.
 import { describe, it, expect } from "vitest";
-import { fmtUptime, fmtStarted } from "../format.js";
+import { fmtUptime, fmtStarted, fmtBytes } from "../format.js";
 
 describe("fmtUptime", () => {
   it("renders an em dash for null / NaN input", () => {
@@ -44,5 +44,31 @@ describe("fmtStarted", () => {
     expect(fmtStarted("")).toBe("—");
     expect(fmtStarted(null)).toBe("—");
     expect(fmtStarted(undefined)).toBe("—");
+  });
+});
+
+describe("fmtBytes", () => {
+  it("renders an em dash for null / NaN input", () => {
+    expect(fmtBytes(null)).toBe("—");
+    expect(fmtBytes(undefined)).toBe("—");
+    expect(fmtBytes(NaN)).toBe("—");
+  });
+
+  it("renders raw bytes below 1 KiB", () => {
+    expect(fmtBytes(0)).toBe("0 B");
+    expect(fmtBytes(512)).toBe("512 B");
+  });
+
+  it("renders one decimal in KB for values under 10", () => {
+    expect(fmtBytes(1024)).toBe("1.0 KB");
+    expect(fmtBytes(1536)).toBe("1.5 KB");
+  });
+
+  it("steps up to MB at the 1 MiB boundary", () => {
+    expect(fmtBytes(1048576)).toBe("1.0 MB");
+  });
+
+  it("rounds to an integer when the value is >= 10 in its unit", () => {
+    expect(fmtBytes(12 * 1024 * 1024)).toBe("12 MB");
   });
 });
