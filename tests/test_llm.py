@@ -4,8 +4,8 @@ import pytest
 from src.core_config import CoreConfig, OpenWeatherMapConfig, PromptConfig
 from src.llm import call_llm_api
 from src.plugins.llm.base import LlmConfig
+from src.llm_text import clean_llm_output
 from src.stage_errors import StageError
-from src.text import processing_response
 from src.tool_hub import ToolHub
 
 MAX_TOOL_ROUNDS = 5
@@ -163,8 +163,8 @@ async def test_tool_path(tmp_path):
     assert hub.calls == [
         ("set_light", {"device_id": "bright_room_light", "state": "on"})
     ]
-    # processing_response is applied to the final content.
-    assert result == processing_response("Готово.")
+    # clean_llm_output is applied to the final content.
+    assert result == clean_llm_output("Готово.")
 
 
 async def test_tool_path_through_real_tool_hub(tmp_path):
@@ -189,7 +189,7 @@ async def test_tool_path_through_real_tool_hub(tmp_path):
     assert source.calls == [
         ("set_light", {"device_id": "bright_room_light", "state": "on"})
     ]
-    assert result == processing_response("Готово.")
+    assert result == clean_llm_output("Готово.")
 
 
 async def test_no_tool_path(tmp_path):
@@ -199,7 +199,7 @@ async def test_no_tool_path(tmp_path):
     result = await _call(backend, hub, "привет", _core(tmp_path))
 
     assert hub.calls == []
-    assert result == processing_response("Привет, мясной мешок.")
+    assert result == clean_llm_output("Привет, мясной мешок.")
 
 
 async def test_rate_limit_raises_stage_error(tmp_path):
@@ -337,7 +337,7 @@ async def test_trace_is_populated(tmp_path):
         core=_core(tmp_path), llm_cfg=LlmConfig(max_tool_rounds=MAX_TOOL_ROUNDS),
         trace=trace,
     )
-    assert result == processing_response("Готово.")
+    assert result == clean_llm_output("Готово.")
 
     # model = last seen; tokens summed across rounds.
     assert trace["model"] == "m-final"
@@ -362,7 +362,7 @@ async def test_trace_is_populated(tmp_path):
     assert final_round["round"] == 2
     assert final_round["calls"] == []
     # Each round carries the RAW model content (the final spoken reply is
-    # processing_response("Готово."), but the stored content is the raw "Готово.").
+    # clean_llm_output("Готово."), but the stored content is the raw "Готово.").
     assert final_round["content"] == "Готово."
     assert "content" in tool_round
 
@@ -372,7 +372,7 @@ async def test_trace_none_is_a_noop(tmp_path):
     hub = StubHub(tools=[])
     backend = FakeLlmBackend([_final("ответ")])
     result = await _call(backend, hub, "привет", _core(tmp_path))
-    assert result == processing_response("ответ")
+    assert result == clean_llm_output("ответ")
 
 
 async def test_no_choices_raises_stage_error(tmp_path):
@@ -395,7 +395,7 @@ async def test_malformed_tool_args_degrade_to_empty_dict(tmp_path):
     ])
     result = await _call(backend, hub, "включи свет", _core(tmp_path))
     assert hub.calls == [("set_light", {})]
-    assert result == processing_response("Готово.")
+    assert result == clean_llm_output("Готово.")
 
 
 async def test_on_filler_called_for_round_with_content_and_tool_calls(tmp_path):
@@ -419,7 +419,7 @@ async def test_on_filler_called_for_round_with_content_and_tool_calls(tmp_path):
     )
 
     assert seen == [("Щас гляну…", ["set_light"])]
-    assert result == processing_response("Готово.")
+    assert result == clean_llm_output("Готово.")
 
 
 async def test_on_filler_not_called_without_tool_calls(tmp_path):
@@ -439,7 +439,7 @@ async def test_on_filler_not_called_without_tool_calls(tmp_path):
     )
 
     assert seen == []
-    assert result == processing_response("Привет, мясной мешок.")
+    assert result == clean_llm_output("Привет, мясной мешок.")
 
 
 async def test_on_filler_not_called_when_content_empty(tmp_path):
@@ -462,7 +462,7 @@ async def test_on_filler_not_called_when_content_empty(tmp_path):
     )
 
     assert seen == []
-    assert result == processing_response("Готово.")
+    assert result == clean_llm_output("Готово.")
 
 
 async def test_on_filler_failure_does_not_break_loop(tmp_path):
@@ -484,4 +484,4 @@ async def test_on_filler_failure_does_not_break_loop(tmp_path):
     )
 
     assert hub.calls == [("set_light", {})]
-    assert result == processing_response("Готово.")
+    assert result == clean_llm_output("Готово.")

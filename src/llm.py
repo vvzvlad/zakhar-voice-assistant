@@ -11,9 +11,9 @@ import httpx
 from loguru import logger
 
 from src.prompt import build_system_prompt
+from src.llm_text import clean_llm_output
 from src.run_context import current_device
 from src.stage_errors import StageError
-from src.text import processing_response
 
 
 async def call_llm_api(
@@ -143,7 +143,7 @@ async def call_llm_api(
                         "content": last_content,
                         "calls": [],
                     })
-                reply = processing_response(last_content)
+                reply = clean_llm_output(last_content)
                 if reply:
                     return reply
                 return llm_cfg.reply_empty_after_tools if tool_executed else llm_cfg.reply_empty
@@ -196,7 +196,7 @@ async def call_llm_api(
         # Rounds exhausted: the model kept asking for tools without a final reply.
         logger.warning(f"Tool-calling loop exhausted after {llm_cfg.max_tool_rounds} rounds")
         if last_content:
-            return processing_response(last_content)
+            return clean_llm_output(last_content)
         raise StageError("llm", "tool-calling rounds exhausted", kind="tool_rounds")
     finally:
         current_device.reset(token)

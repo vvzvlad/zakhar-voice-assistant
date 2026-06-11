@@ -18,12 +18,12 @@ from src.pipeline import (
     contains_stt_hallucination,
     is_slow_tool,
 )
+from src.llm_text import clean_llm_output
 from src.pipeline_events import StageEvent
 from src.plugins.llm.base import LlmConfig
 from src.runs_store import _LIST_COLS
 from src.runtime import Runtime
 from src.stage_errors import StageError
-from src.text import processing_response
 
 PUBLIC_BASE_URL = "http://10.0.0.10:8200"
 
@@ -1882,11 +1882,11 @@ async def test_filler_announced_for_slow_tool(tmp_path, monkeypatch):
     call = announcer.calls[0]
     assert call["media_id"].endswith("/tts/abc123.mp3")
     assert call["media_id"].startswith(PUBLIC_BASE_URL)
-    assert call["text"] == processing_response("Щас гляну…")
+    assert call["text"] == clean_llm_output("Щас гляну…")
     # The run record captured the filler.
     assert len(store.records) == 1
     rec = store.records[0]
-    assert rec["filler_text"] == processing_response("Щас гляну…")
+    assert rec["filler_text"] == clean_llm_output("Щас гляну…")
     assert rec["t_filler"] is not None and rec["t_filler"] >= 0
 
 
@@ -1953,7 +1953,7 @@ async def test_no_filler_when_send_announcement_none(tmp_path, monkeypatch):
 
 
 async def test_no_filler_when_content_blank_after_processing(tmp_path, monkeypatch):
-    # Content that reduces to empty after processing_response (whitespace / stripped
+    # Content that reduces to empty after clean_llm_output (whitespace / stripped
     # tags) -> no announcement even for a slow tool.
     patch_llm_with_filler(
         monkeypatch, tool_names=["search_events"], content="   ", reply="готово",

@@ -30,9 +30,9 @@ from loguru import logger
 from src import config_store, context, llm
 from src.audio_server import tts_url
 from src.pipeline_events import StageEvent
+from src.llm_text import clean_llm_output
 from src.runs_store import live_row, summary_row
 from src.stage_errors import StageError
-from src.text import processing_response
 from src.tts import make_ack_chime_mp3, wav_to_mp3
 
 # WebRTC VAD requires mono 16-bit PCM frames of exactly 10/20/30 ms at 16 kHz.
@@ -993,7 +993,7 @@ class Pipeline:
                             return
                         if not any(is_slow_tool(n) for n in tool_names):
                             return  # fast action: the final reply alone is enough
-                        spoken = processing_response(text)  # same +stress/ё/што post-processing as the final reply
+                        spoken = clean_llm_output(text)  # tag cleanup only; engine post-processing happens inside the TTS backend
                         if not spoken:
                             return
                         filler_fired = True
