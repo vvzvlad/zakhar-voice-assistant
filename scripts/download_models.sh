@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Download the in-process STT/TTS models (Vosk RU small + Piper RU ruslan) into
-# ./models. Models are large binaries and are NOT committed (see .gitignore).
+# Download the in-process STT/TTS/VAD models (Vosk RU small + Piper RU ruslan +
+# Silero VAD onnx) into ./models. Models are large binaries and are NOT committed
+# (see .gitignore).
 # Existing files are kept (skip-if-present), so re-running is cheap and idempotent.
 set -euo pipefail
 
@@ -43,6 +44,21 @@ if [ -f "$PIPER_JSON" ]; then
 else
     echo "Downloading Piper voice (config json)..."
     curl -fsSL "$PIPER_BASE/ru_RU-ruslan-medium.onnx.json?download=true" -o "$PIPER_JSON"
+fi
+
+# --- Silero VAD: bare ONNX model (~2 MB, run via onnxruntime, no torch) -------
+# Pinned to the v6.0 release tag (NOT master) so a fresh download is reproducible
+# and can't silently pick up a future model with a changed input interface; the
+# [1, 576] context-prefix interface is verified against this exact tag by the
+# integration tests in tests/test_vad_silero.py.
+SILERO_URL="https://github.com/snakers4/silero-vad/raw/v6.0/src/silero_vad/data/silero_vad.onnx"
+SILERO_ONNX="$MODELS_DIR/silero_vad.onnx"
+
+if [ -f "$SILERO_ONNX" ]; then
+    echo "Silero VAD model already present: $SILERO_ONNX (skip)"
+else
+    echo "Downloading Silero VAD model..."
+    curl -fsSL "$SILERO_URL" -o "$SILERO_ONNX"
 fi
 
 echo "Models ready in $MODELS_DIR/"
