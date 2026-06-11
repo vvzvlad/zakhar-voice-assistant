@@ -355,6 +355,156 @@ def test_synth_empty_frames_fragment_contributes_no_gap(monkeypatch):
     assert data == b"\x11\x22" * real_frames
 
 
+# --- Backend-side adaptation chains (canonical "+stress" contract, R3) -------
+
+
+class _RecordingStubVoice(_StubVoice):
+    """_StubVoice that also records every sentence passed to synthesize_wav,
+    so tests can assert the exact adapted text the engine receives."""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.sentences = []
+
+    def synthesize_wav(self, sentence, wav_file):
+        self.sentences.append(sentence)
+        super().synthesize_wav(sentence, wav_file)
+
+
+def test_piper_synth_applies_adaptation_chain_in_order(monkeypatch):
+    # _synth must adapt the canonical "+vowel" text for espeak-ng/Piper:
+    # stress_to_acute -> expand_units -> phonetic_ru. Order matters: only if
+    # stress conversion runs BEFORE phonetic_ru does "чт+о" become "што́"
+    # (the combining acute trails the vowel, so "что" still matches).
+    voice = _RecordingStubVoice(default_frames=5)
+    backend = PiperTtsBackend.from_voice(voice, sentence_silence=0.0)
+
+    _synth_wav(backend, monkeypatch, "чт+о нового? 50% и м/с")
+
+    joined = " ".join(voice.sentences)
+    assert "што́" in joined          # "чт+о" -> stressed phonetic "што" + combining acute
+    assert "процентов" in joined          # "%" expanded
+    assert "метров в секунду" in joined   # "м/с" expanded
+    assert "+" not in joined              # no "+" leaks to the engine
+
+
+@respx.mock
+async def test_teratts_synthesize_applies_adaptation_chain():
+    from urllib.parse import unquote
+
+    # TeraTTS gets the same Piper-style adaptation; the adapted text is
+    # URL-encoded into the path, so match the route with a wildcard path.
+    route = respx.get(url__regex=r"http://tera\.local/synthesize/.+").mock(
+        return_value=httpx.Response(200, content=b"\xff\xf3mp3",
+                                    headers={"Content-Type": "audio/mpeg"}))
+    async with httpx.AsyncClient() as client:
+        backend = TeraTtsHttpBackend("http://tera.local", client, timeout=10)
+        mime, _ = await backend.synthesize("чт+о, 50%?", "ru")
+
+    assert route.called
+    assert mime == "audio/mpeg"
+    raw_url = str(route.calls.last.request.url)
+    decoded = unquote(raw_url)
+    assert "што́" in decoded      # stress applied before phonetic_ru
+    assert "процентов" in decoded      # "%" expanded
+    assert "+" not in decoded          # no "+" leaks into the request text
+    # The combining acute (U+0301) must travel percent-encoded, never raw.
+    assert "́" not in raw_url
+
+
+@respx.mock
+async def test_yandex_synthesize_adapts_text_keeps_native_stress():
+    import json
+
+    route = respx.post(YANDEX_URL).mock(
+        return_value=httpx.Response(200, text="{}",
+                                    headers={"Content-Type": "application/json"}))
+    async with httpx.AsyncClient() as client:
+        backend = YandexTtsBackend(client, api_key="k", voice="zahar",
+                                   role="neutral", speed=1.0,
+                                   url=YANDEX_URL, timeout=10)
+        await backend.synthesize("прив+ет: 50% и что", "ru")
+
+    assert route.called
+    sent_text = json.loads(route.calls.last.request.content)["text"]
+    assert "прив+ет" in sent_text     # "+vowel" is Yandex-native, passes through
+    assert "процентов" in sent_text   # "%" expanded
+    assert "%" not in sent_text
+    assert "што" not in sent_text     # no espeak phonetic hacks for cloud TTS
+    assert "что" in sent_text         # the word stays unchanged
+
+
+def test_piper_applies_russian_adaptation_chain(monkeypatch):
+    # Exact-text proof that the backend runs phonetic_ru(expand_units(
+    # stress_to_acute(...))): the engine must receive precisely the adapted
+    # string — "што" + combining acute U+0301 + expanded "%". Substring checks
+    # alone could pass with a partially-deleted chain; equality cannot.
+    voice = _RecordingStubVoice(default_frames=5)
+    backend = PiperTtsBackend.from_voice(voice, sentence_silence=0.0)
+
+    _synth_wav(backend, monkeypatch, "чт+о 50%")
+
+    assert voice.sentences == ["што́ 50процентов"]
+
+
+@respx.mock
+async def test_teratts_applies_russian_adaptation_chain():
+    from urllib.parse import quote
+
+    # Exact-URL proof that TeraTTS runs the Piper-style chain: the GET path must
+    # contain the URL-encoded adapted text. Encoded via quote(safe="") exactly
+    # like the backend, so the expectation tracks the encoding, not hardcoded
+    # percent-escapes (note the combining acute U+0301 after "о").
+    route = respx.get(url__regex=r"http://tera\.local/synthesize/.+").mock(
+        return_value=httpx.Response(200, content=b"\xff\xf3mp3",
+                                    headers={"Content-Type": "audio/mpeg"}))
+    async with httpx.AsyncClient() as client:
+        backend = TeraTtsHttpBackend("http://tera.local", client, timeout=10)
+        await backend.synthesize("чт+о 50%", "ru")
+
+    assert route.called
+    expected = quote("што́ 50процентов", safe="")
+    assert expected in str(route.calls.last.request.url)
+
+
+@respx.mock
+async def test_yandex_applies_russian_adaptation_chain():
+    import json
+
+    # Exact-payload proof that Yandex runs sanitize_plus_stress(expand_units(...)):
+    # the native "+vowel" stress survives, units expand, and no espeak phonetic
+    # rewrite happens for cloud TTS.
+    route = respx.post(YANDEX_URL).mock(
+        return_value=httpx.Response(200, text="{}",
+                                    headers={"Content-Type": "application/json"}))
+    async with httpx.AsyncClient() as client:
+        backend = YandexTtsBackend(client, api_key="k", voice="zahar",
+                                   role="neutral", speed=1.0,
+                                   url=YANDEX_URL, timeout=10)
+        await backend.synthesize("чт+о 50%", "ru")
+
+    assert route.called
+    sent_text = json.loads(route.calls.last.request.content)["text"]
+    assert sent_text == "чт+о 50процентов"
+
+
+@respx.mock
+async def test_yandex_synthesize_unvoiceable_input_makes_no_request():
+    # Punctuation-only / empty input chunks to nothing pronounceable: the
+    # backend must serve empty audio WITHOUT POSTing to Yandex (which would 400).
+    route = respx.post(YANDEX_URL).mock(
+        return_value=httpx.Response(200, text="{}",
+                                    headers={"Content-Type": "application/json"}))
+    async with httpx.AsyncClient() as client:
+        backend = YandexTtsBackend(client, api_key="k", voice="zahar",
+                                   role="neutral", speed=1.0,
+                                   url=YANDEX_URL, timeout=10)
+        for text in ("…", ""):
+            mime, audio = await backend.synthesize(text, "ru")
+            assert (mime, audio) == ("audio/mpeg", b"")
+    assert not route.called
+
+
 def test_decode_v3_audio_ndjson_multi_chunk_concatenation():
     import base64
     import json

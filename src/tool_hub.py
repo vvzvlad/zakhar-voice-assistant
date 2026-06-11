@@ -228,7 +228,7 @@ class ToolHub:
     def is_slow(self, name: str) -> bool:
         """True when the tool's owning source declares its tools slow."""
         source = self._routes.get(name)
-        return bool(source is not None and source.slow)
+        return bool(source is not None and getattr(source, "slow", False))
 
     def describe(self) -> list[dict]:
         """Snapshot of each source for the admin panel: id, kind, online, slow, tools.

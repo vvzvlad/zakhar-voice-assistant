@@ -145,7 +145,16 @@ class VoskSttBackend(SttBackend):
         if not pcm:
             return ""
         # Speaker PCM is already 16 kHz mono 16-bit — no resampling needed.
-        return await asyncio.to_thread(self._decode, pcm)
+        try:
+            return await asyncio.to_thread(self._decode, pcm)
+        except StageError:
+            raise
+        except Exception as e:
+            # Honor the SttBackend contract: any decode failure (native Vosk error,
+            # malformed recognizer JSON, ...) surfaces as StageError("stt", ...) so
+            # the pipeline records the run as an STT error instead of dying raw.
+            logger.error(f"Vosk STT decode failed: {str(e)}")
+            raise StageError("stt", f"Vosk STT decode failed: {e}") from e
 
 
 def make_stt_backend(

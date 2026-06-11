@@ -191,3 +191,43 @@ async def test_vosk_decode_missing_text_key_returns_empty():
 
     # No "text" key in the recognizer result -> empty transcript.
     assert result == ""
+
+
+class _RaisingRecognizer:
+    """Stub recognizer whose AcceptWaveform raises (simulates a native decode crash)."""
+
+    def SetWords(self, value):  # noqa: N802 - mirror Vosk API
+        pass
+
+    def AcceptWaveform(self, pcm):  # noqa: N802 - mirror Vosk API
+        raise RuntimeError("native decode crashed")
+
+    def FinalResult(self):  # noqa: N802 - mirror Vosk API
+        return "{}"
+
+
+async def test_vosk_decode_exception_raises_stage_error():
+    # A recognizer crash must surface as StageError("stt", ...) per the SttBackend
+    # contract — NOT escape as the raw RuntimeError (which the pipeline does not catch).
+    backend = VoskSttBackend("unused/path", model=_RecordingModel())
+    backend._make_recognizer = lambda: _RaisingRecognizer()
+
+    with pytest.raises(StageError) as ei:
+        await backend.transcribe(b"\x01\x02" * 100)
+
+    assert ei.value.stage == "stt"
+    assert "native decode crashed" in str(ei.value)
+    # The original exception is chained (raise ... from e) for debuggability.
+    assert isinstance(ei.value.__cause__, RuntimeError)
+
+
+async def test_vosk_malformed_final_result_raises_stage_error():
+    # FinalResult() returning non-JSON must surface as StageError("stt", ...),
+    # not leak a raw json.JSONDecodeError out of transcribe().
+    backend = VoskSttBackend("unused/path", model=_RecordingModel())
+    backend._make_recognizer = lambda: _StubRecognizer("not-json{{{")
+
+    with pytest.raises(StageError) as ei:
+        await backend.transcribe(b"\x01\x02" * 100)
+
+    assert ei.value.stage == "stt"

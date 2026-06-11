@@ -6,8 +6,11 @@ EndpointPolicy, and the decision-only auto_gain boost.
 """
 
 import numpy as np
+import pytest
+from pydantic import ValidationError
 
-from src.plugins.base import get_provider
+import src.plugins  # noqa: F401  triggers @register on all providers
+from src.plugins.base import get_provider, providers
 from src.plugins.vad.webrtc import (
     _VAD_BOOST_FLOOR,
     _VAD_BOOST_TARGET,
@@ -280,3 +283,102 @@ def test_config_defaults_and_schema_extras():
     ]
     assert schema["poles"] == ["waits longest", "cuts off soonest"]
     assert schema["readout"] is True
+
+
+# --- finalize precedence (endpoint > maxlen > no_speech, per the feed docstring) --
+
+def test_endpoint_wins_over_maxlen_when_both_cross_in_one_chunk():
+    # One 20-frame chunk arms speech (2 frames) then trails 18 silence frames:
+    # silence_ms=360 >= 100 (endpoint) AND elapsed_ms=400 >= 400 (maxlen) are BOTH
+    # true after the chunk. The documented precedence picks "endpoint".
+    session, _ = make_session([True, True] + [False] * 18)
+    assert session.feed(FRAME * 20) == "endpoint"
+    state = session.debug_state()
+    assert state["elapsed_ms"] >= POLICY.max_utterance_ms  # maxlen really was crossed too
+
+
+def test_maxlen_wins_over_no_speech_when_timeouts_coincide():
+    # With no_speech_timeout_ms == max_utterance_ms and zero speech, both checks
+    # become true on the same frame; the precedence order picks "maxlen".
+    policy = EndpointPolicy(
+        silence_ms=100, min_speech_ms=40,
+        max_utterance_ms=200, no_speech_timeout_ms=200,
+    )
+    session, _ = make_session([False], policy=policy)
+    assert session.feed(FRAME * 10) == "maxlen"  # 10 frames = 200 ms hits both caps
+
+
+# --- _vad_boost: no-attenuation branch (gain <= 1) --------------------------------
+
+def test_vad_boost_never_attenuates_loud_signal():
+    # When the running peak already sits at or above the boost target, gain <= 1:
+    # the frame must come back byte-identical (the boost only ever lifts, never cuts).
+    frame = np.array([100, -200, 300, -400] * 80, dtype="<i2").tobytes()
+    assert _vad_boost(frame, int(_VAD_BOOST_TARGET)) == frame   # gain == 1 exactly
+    assert _vad_boost(frame, 8000) == frame                     # gain < 1
+
+
+# --- framing with auto_gain over odd-length chunks ---------------------------------
+
+def test_feed_auto_gain_odd_chunk_consumes_frame_and_carries_remainder():
+    # A 641-byte chunk with auto_gain on: peak tracking ignores the torn trailing
+    # byte, exactly one 640-byte frame reaches the classifier and the 1-byte
+    # remainder is carried into the next feed.
+    session, fake = make_session([False], auto_gain=True)
+    assert session.feed(b"\x01" * 641) is None
+    assert len(fake.frames) == 1
+    assert len(session._rem) == 1
+    # The remainder completes the next frame: 1 + 639 = 640 bytes -> one more frame.
+    session.feed(b"\x01" * 639)
+    assert len(fake.frames) == 2
+    assert len(session._rem) == 0
+
+
+# --- config bounds ------------------------------------------------------------------
+
+def test_config_aggressiveness_out_of_bounds_raises():
+    # WebRTC only accepts modes 0..3; the pydantic ge/le bounds must reject the rest.
+    with pytest.raises(ValidationError):
+        WebRtcVadConfig(aggressiveness=4)
+    with pytest.raises(ValidationError):
+        WebRtcVadConfig(aggressiveness=-1)
+
+
+# --- integration with the real webrtcvad C library ----------------------------------
+
+def test_real_webrtcvad_accepts_frames_and_hits_no_speech_timeout():
+    # No fake factory: the default backend builds a real webrtcvad.Vad, pinning that
+    # FRAME_BYTES/SAMPLE_RATE match the C library's accepted frame sizes (a wrong
+    # frame size would raise inside is_speech). Zero frames are silence, so feed()
+    # returns None until the no-speech timeout and "no_speech" exactly when crossed.
+    backend = WebRtcVadBackend()
+    policy = EndpointPolicy(
+        silence_ms=10_000, min_speech_ms=40,
+        max_utterance_ms=10_000, no_speech_timeout_ms=60,
+    )
+    session = backend.open(policy)
+    silence = b"\x00" * FRAME_BYTES
+    assert session.feed(silence) is None          # 20 ms
+    assert session.feed(silence) is None          # 40 ms
+    assert session.feed(silence) == "no_speech"   # 60 ms == the timeout
+
+
+# --- generic stage contract over every registered vad provider ----------------------
+
+@pytest.mark.parametrize("provider_id", sorted(providers("vad")))
+def test_vad_provider_contract(provider_id):
+    # Every "vad" provider must honor the stage contract: create() with its config
+    # defaults yields a VadBackend, open() yields a VadSession, feed() returns None
+    # or a known finalize reason, debug_state() returns a dict. Shape-only checks so
+    # new providers pass without snapshotting their internals.
+    prov = providers("vad")[provider_id]
+    backend = prov.create(prov.ConfigModel(), deps=None)
+    assert isinstance(backend, VadBackend)
+    session = backend.open(EndpointPolicy(
+        silence_ms=100, min_speech_ms=40,
+        max_utterance_ms=400, no_speech_timeout_ms=200,
+    ))
+    assert isinstance(session, VadSession)
+    reason = session.feed(b"")
+    assert reason is None or reason in {"endpoint", "maxlen", "no_speech"}
+    assert isinstance(session.debug_state(), dict)

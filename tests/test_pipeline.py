@@ -2339,3 +2339,208 @@ async def test_stored_run_audio_stays_mono_without_second_channel(tmp_path, monk
     assert nch == 1
     assert nframes == 100
     assert frames == b"\x01\x02" * 100
+
+
+# --- pipeline-isolation coverage gaps (R1/R3/R4/R5 audit) -------------------------
+
+
+async def test_llm_non_stage_exception_is_recorded_and_never_spoken(tmp_path, monkeypatch):
+    # A NON-StageError escaping the LLM call (a bug, not a classified stage failure)
+    # bypasses the LLM fallback branch and lands in the pipeline's top-level handler.
+    # Mirrors test_run_top_level_exception_is_recorded_and_run_ends (the STT variant):
+    # ERROR(code="server_error") before RUN_END, no TTS at all, and the raw error
+    # text is never synthesized for the user's ears.
+    patch_llm(monkeypatch, error=ValueError("oops"))
+    store = FakeRunsStore()
+    pipeline, events = make_pipeline(
+        tmp_path, monkeypatch, stt_text="включи свет", runs_store=store,
+    )
+
+    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_audio(b"\x01\x02" * 100)
+    await pipeline.on_stop(False)
+
+    types = types_of(events)
+    # No TTS stage was ever entered: the raw error text must not be spoken.
+    assert StageEvent.TTS_START not in types
+    assert StageEvent.TTS_END not in types
+    # The error event is emitted before RUN_END, and RUN_END still fires.
+    assert StageEvent.ERROR in types
+    assert StageEvent.RUN_END in types
+    assert types.index(StageEvent.ERROR) < types.index(StageEvent.RUN_END)
+    data = dict(events)
+    assert data[StageEvent.ERROR]["code"] == "server_error"
+    assert "oops" in data[StageEvent.ERROR]["message"]
+    assert_all_str(events)
+
+    # Recorded once as a pipeline-stage error; nothing served to the audio cache.
+    assert len(store.records) == 1
+    rec = store.records[0]
+    assert rec["result"] == "error"
+    assert rec["error_stage"] == "pipeline"
+    assert "oops" in rec["error_text"]
+    assert pipeline.audio_server.calls == []
+
+
+async def test_speak_without_announce_channel_synthesizes_but_does_not_announce(
+    tmp_path, monkeypatch
+):
+    # speak() with no bound announce channel (send_announcement is None) must not
+    # raise: the clip is still synthesized and served on the audio cache, but the
+    # announce step is skipped (the guard makes it a silent no-op).
+    pipeline, _ = make_pipeline(tmp_path, monkeypatch)
+    assert pipeline.send_announcement is None
+
+    await pipeline.speak("привет")  # must not raise
+
+    # TTS ran and the clip was served on the shared audio cache.
+    assert pipeline.audio_server.calls == [(b"MP3", "audio/mpeg")]
+
+
+async def test_run_completes_headless_when_send_event_is_none(tmp_path, monkeypatch):
+    # R4 contract: the pipeline is transport-neutral. With NO injected send_event
+    # (headless: no device/event transport bound) a full run still completes and is
+    # recorded — emission is guarded, never required.
+    patch_llm(monkeypatch, reply="готово")
+    store = FakeRunsStore()
+    pipeline, _ = make_pipeline(
+        tmp_path, monkeypatch, stt_text="включи свет", runs_store=store,
+    )
+    pipeline.send_event = None  # drop the recording transport installed by the harness
+
+    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_audio(b"\x01\x02" * 100)
+    await pipeline.on_stop(False)  # must not raise anywhere along the run
+
+    # The run completed fully and was recorded exactly once.
+    assert len(store.records) == 1
+    rec = store.records[0]
+    assert rec["result"] == "ok"
+    assert rec["stt_text"] == "включи свет"
+    assert rec["llm_text"] == "готово"
+    # The reply audio was still synthesized and served despite no event transport.
+    assert pipeline.audio_server.calls == [(b"MP3", "audio/mpeg")]
+
+
+async def test_intent_end_payload_carries_conversation_id(tmp_path, monkeypatch):
+    # INTENT_END carries the run's conversation id and the continue flag as a flat
+    # str->str payload (the transport-neutral StageEvent contract).
+    patch_llm(monkeypatch, reply="готово")
+    pipeline, events = make_pipeline(tmp_path, monkeypatch, stt_text="включи свет")
+
+    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_audio(b"\x01\x02" * 100)
+    await pipeline.on_stop(False)
+
+    assert dict(events)[StageEvent.INTENT_END] == {
+        "conversation_id": "cid",
+        "continue_conversation": "0",
+    }
+    assert_all_str(events)
+
+
+async def test_filler_think_block_stripped_before_announce(tmp_path, monkeypatch):
+    # The filler content goes through clean_llm_output before being spoken/recorded:
+    # a <think> reasoning block is stripped, only the spoken line survives.
+    patch_llm_with_filler(
+        monkeypatch, tool_names=["search_events"],
+        content="<think>план</think>Щас гляну", reply="готово",
+    )
+    store = FakeRunsStore()
+    pipeline, _ = make_pipeline(
+        tmp_path, monkeypatch, stt_text="что у меня в календаре", runs_store=store,
+    )
+    announcer = FakeAnnouncer()
+    pipeline.send_announcement = announcer
+
+    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_audio(b"\x01\x02" * 100)
+    await pipeline.on_stop(False)
+    await _drain_filler_tasks(pipeline)
+
+    # The announced and the recorded filler text are exactly the cleaned line.
+    assert len(announcer.calls) == 1
+    assert announcer.calls[0]["text"] == "Щас гляну"
+    assert store.records[0]["filler_text"] == "Щас гляну"
+
+
+async def test_spoken_llm_fallback_maps_kind_to_configured_phrase(tmp_path, monkeypatch):
+    # Direct unit test of the StageError(kind) -> spoken phrase policy:
+    # "rate_limit" gets its dedicated line; any unknown/future kind falls back to
+    # the generic error phrase.
+    pipeline, _ = make_pipeline(tmp_path, monkeypatch)
+
+    rate_limited = StageError("llm", "x", kind="rate_limit")
+    assert pipeline._spoken_llm_fallback(rate_limited) == pipeline.llm_cfg.reply_rate_limit
+
+    unknown_kind = StageError("llm", "x", kind="timeout")  # not specially mapped
+    assert pipeline._spoken_llm_fallback(unknown_kind) == pipeline.llm_cfg.reply_error
+
+
+class RestartingSttBackend:
+    """STT double that re-fires pipeline.on_start (a new wake word) MID-transcription,
+    then returns its text — driving the conversation-id snapshot race."""
+
+    def __init__(self, pipeline, new_cid, text="включи свет"):
+        self.pipeline = pipeline
+        self.new_cid = new_cid
+        self.text = text
+
+    async def transcribe(self, pcm):
+        # on_start takes no run lock, so awaiting it directly cannot deadlock; it
+        # resets per-run state and overwrites pipeline._conversation_id in place.
+        await self.pipeline.on_start(self.new_cid, 0, None, None)
+        return self.text
+
+
+async def test_intent_end_keeps_conversation_id_snapshotted_at_claim(tmp_path, monkeypatch):
+    # A wake word re-fired mid-run overwrites the pipeline's live _conversation_id,
+    # but the in-flight run's events must keep the id snapshotted at claim time
+    # (the conversation_id parameter of _run), not the relabeled one.
+    patch_llm(monkeypatch, reply="готово")
+    pipeline, events = make_pipeline(tmp_path, monkeypatch)
+    pipeline.rt.stt_backend = RestartingSttBackend(pipeline, "cid2")
+
+    await pipeline.on_start("cid1", 0, None, None)
+    await pipeline.on_audio(b"\x01\x02" * 100)
+    await pipeline.on_stop(False)
+
+    # The re-fired wake word DID overwrite the live conversation id...
+    assert pipeline._conversation_id == "cid2"
+    # ...but the original run's INTENT_END still carries the snapshotted id.
+    intent_ends = [data for et, data in events if et == StageEvent.INTENT_END]
+    assert intent_ends == [{
+        "conversation_id": "cid1",
+        "continue_conversation": "0",
+    }]
+    assert_all_str(events)
+
+
+async def test_llm_reply_reaches_tts_verbatim(tmp_path, monkeypatch):
+    # R3 canonical text contract: the LLM reply (with '+' stress marks and units)
+    # is handed to the TTS backend VERBATIM — any engine-specific adaptation is the
+    # backend's own job, never the pipeline's.
+    class _RecordingTts(FakeTtsBackend):
+        def __init__(self):
+            super().__init__(mime="audio/mpeg", audio=b"MP3")
+            self.calls = []  # (text, lang) per synthesize
+
+        async def synthesize(self, text, lang="ru"):
+            self.calls.append((text, lang))
+            return await super().synthesize(text, lang)
+
+    reply = "прив+ет, сейчас 5 °C"
+    patch_llm(monkeypatch, reply=reply)
+    tts = _RecordingTts()
+    pipeline, events = make_pipeline(
+        tmp_path, monkeypatch, stt_text="какая погода", tts_backend=tts,
+    )
+
+    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_audio(b"\x01\x02" * 100)
+    await pipeline.on_stop(False)
+
+    # The exact canonical string reached synthesize(); the event echoes it too.
+    assert tts.calls == [(reply, "ru")]
+    assert dict(events)[StageEvent.TTS_START] == {"text": reply}
+    assert_all_str(events)

@@ -105,6 +105,12 @@ def test_action_for_representative_paths():
         assert action_for(path) == expected, path
 
 
+def test_action_for_llm_reply_error_is_live():
+    # reply_error is one of the live LLM provider leaves (read per request, not baked
+    # into the backend), so changing it must NOT trigger a backend rebuild.
+    assert action_for("llm.instances.openrouter.reply_error") == "live"
+
+
 # --- backend_categories ------------------------------------------------------
 
 def test_backend_categories_maps_each_stage_path():
@@ -253,11 +259,12 @@ class _StubSvc:
 
 
 def _job_runtime(svc, *, tts_timeout=99):
-    """Runtime stub for apply_job: holds the three backends, the svc and a core whose
-    tts_timeout the TTS rebuild copies into deps."""
+    """Runtime stub for apply_job: holds the four stage backends, the svc and a core
+    whose tts_timeout the TTS rebuild copies into deps."""
     return types.SimpleNamespace(
         svc=svc,
         core=types.SimpleNamespace(tts_timeout=tts_timeout),
+        vad_backend="old-vad",
         stt_backend="old-stt",
         llm_backend="old-llm",
         tts_backend="old-tts",
@@ -283,6 +290,18 @@ async def test_apply_job_rebuilds_only_tts_and_pushes_timeout():
     assert rt.stt_backend == "old-stt"     # untouched
     assert rt.llm_backend == "old-llm"     # untouched
     assert deps.tts_timeout == 99          # pushed from core.tts_timeout before rebuild
+
+
+@pytest.mark.asyncio
+async def test_apply_job_rebuilds_only_vad():
+    # A vad instance change rebuilds ONLY the vad backend; stt/llm/tts stay untouched.
+    reconf, rt, deps = _make_job_reconf(_StubSvc(), deps_timeout=30)
+    await reconf.apply_job({"vad.instances.webrtc.aggressiveness"})
+    assert rt.vad_backend == ("backend", "vad", 30)   # swapped to the new sentinel
+    assert rt.stt_backend == "old-stt"     # untouched
+    assert rt.llm_backend == "old-llm"     # untouched
+    assert rt.tts_backend == "old-tts"     # untouched
+    assert deps.tts_timeout == 30          # no tts rebuild -> timeout not touched
 
 
 @pytest.mark.asyncio
@@ -630,6 +649,7 @@ def _http_runtime(svc, hub, *, external_proxy=""):
             tts_timeout=42,
             network=types.SimpleNamespace(external_proxy=external_proxy),
         ),
+        vad_backend="old-vad",
         stt_backend="old-stt",
         llm_backend="old-llm",
         tts_backend="old-tts",
@@ -771,6 +791,39 @@ async def test_apply_job_rebuild_http_also_rebuilds_offline_backend_changed_in_j
     # stt (offline, config changed) rebuilt despite NOT being cloud, plus the cloud stages.
     assert svc.calls == {"stt": 1, "llm": 1, "tts": 1}
     assert rt.stt_backend == ("backend", "stt", 42)   # offline stt change applied (not dropped)
+    assert rt.llm_backend == ("backend", "llm", 42)
+    assert rt.tts_backend == ("backend", "tts", 42)
+    assert hub.set_calls == [["new-src"]]              # tools rebuilt
+    assert deps.http_cloud is new_client               # client swapped
+    assert old_client.closed is True                   # old client closed
+
+
+@pytest.mark.asyncio
+async def test_apply_job_rebuild_http_also_rebuilds_vad_changed_in_job(monkeypatch):
+    # Coalesced job touching BOTH core.network.* (rebuild_http) AND a vad instance
+    # field. vad is OFFLINE (default _StubSvc cloud_cats has no vad), so it enters the
+    # http rebuild only through the backend_categories(paths) half of the union — and
+    # must be rebuilt EXACTLY once (not dropped, not doubled), alongside the cloud
+    # stages, with tools rebuilt and the client swapped/closed as usual.
+    monkeypatch.setattr("src.reconfig.build_sources", lambda c, h, s: ["new-src"])
+    new_client = _FakeHttpClient("new")
+    monkeypatch.setattr("src.reconfig.httpx.AsyncClient", lambda **kw: new_client)
+    old_client = _FakeHttpClient("old")
+    svc = _StubSvc()   # default cloud_cats: stt/llm/tts cloud, vad offline
+    hub = _FakeHub()
+    rt = _http_runtime(svc, hub)
+    deps = types.SimpleNamespace(http_cloud=old_client, tts_timeout=30)
+    svc.attach(deps)
+    reconf = Reconfigurator(rt, deps, asyncio.Queue())
+
+    await reconf.apply_job(
+        {"core.network.external_proxy", "vad.instances.webrtc.auto_gain"}
+    )
+
+    # vad rebuilt exactly once via the union, plus each cloud stage exactly once.
+    assert svc.calls == {"vad": 1, "stt": 1, "llm": 1, "tts": 1}
+    assert rt.vad_backend == ("backend", "vad", 42)    # vad change applied (not dropped)
+    assert rt.stt_backend == ("backend", "stt", 42)
     assert rt.llm_backend == ("backend", "llm", 42)
     assert rt.tts_backend == ("backend", "tts", 42)
     assert hub.set_calls == [["new-src"]]              # tools rebuilt

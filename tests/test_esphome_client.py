@@ -473,6 +473,60 @@ async def test_announce_offline_raises_without_speaking():
     assert c.pipeline.spoken == []
 
 
+# --- DeviceClient.play_media ---------------------------------------------------
+
+class _PlayMediaPipeline:
+    """Fake pipeline recording serve_audio() positional args, returning (ext, url)."""
+
+    def __init__(self, url="<url>"):
+        self.served = []  # positional-args tuples, exactly as serve_audio received them
+        self._url = url
+
+    def serve_audio(self, *args):
+        self.served.append(args)
+        return ("mp3", self._url)
+
+
+class _PlayMediaCli:
+    """Fake APIClient recording the announcement-await kwargs."""
+
+    def __init__(self):
+        self.announcements = []  # kwargs dicts
+
+    async def send_voice_assistant_announcement_await_response(self, **kwargs):
+        self.announcements.append(kwargs)
+
+
+def _play_media_client(name="dev", *, online=True):
+    """Build a DeviceClient via __new__ wired with the play_media fakes."""
+    from src.esphome_client import DeviceClient
+    c = DeviceClient.__new__(DeviceClient)
+    c.cfg = _Cfg(name)
+    c.online = online
+    c.pipeline = _PlayMediaPipeline()
+    c.cli = _PlayMediaCli()
+    return c
+
+
+async def test_play_media_serves_audio_and_announces_url():
+    c = _play_media_client()
+    await c.play_media(audio=b"AUD", mime="audio/mpeg")
+    # serve_audio takes (mime, audio) positionally, in EXACTLY that order — the
+    # pipeline.serve_audio contract (swapped args would serve garbage audio).
+    assert c.pipeline.served == [("audio/mpeg", b"AUD")]
+    # The served URL is played through the assist-satellite announcement channel.
+    assert c.cli.announcements == [{"media_id": "<url>", "timeout": 30.0, "text": ""}]
+
+
+async def test_play_media_offline_raises_without_serving():
+    c = _play_media_client(online=False)
+    with pytest.raises(RuntimeError):
+        await c.play_media(audio=b"AUD", mime="audio/mpeg")
+    # The offline guard must short-circuit before serving or announcing anything.
+    assert c.pipeline.served == []
+    assert c.cli.announcements == []
+
+
 # --- DeviceManager.announce routing ------------------------------------------
 
 class _MgrAnnounceClient:

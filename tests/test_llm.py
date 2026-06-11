@@ -252,6 +252,21 @@ async def test_max_tool_rounds_exhausted_raises_stage_error(tmp_path):
     assert ei.value.kind == "tool_rounds"
 
 
+async def test_max_tool_rounds_exhausted_with_content_returns_cleaned_text(tmp_path):
+    # Rounds exhausted but every round carried spoken content: the loop must
+    # RETURN the cleaned last content (clean_llm_output strips <think> blocks)
+    # instead of raising StageError(kind="tool_rounds").
+    hub = StubHub(tools=[SET_LIGHT_TOOL])
+    backend = FakeLlmBackend([
+        _tool_call_with_content("set_light", "{}", "<think>x</think>щас")
+        for _ in range(MAX_TOOL_ROUNDS + 1)
+    ])
+
+    result = await _call(backend, hub, "включи свет", _core(tmp_path))
+
+    assert result == "щас"
+
+
 async def test_empty_final_reply_uses_fallback(tmp_path):
     # No tool ever ran -> empty final content falls back to the "didn't hear" line.
     hub = StubHub(tools=[])
