@@ -17,11 +17,13 @@ def _tool(name):
 class FakeSource:
     """Minimal ToolSource double: fixed tool list, records call()s.
 
-    `fail_start` makes start() raise so we can test failure isolation.
+    `fail_start` makes start() raise so we can test failure isolation. `slow`
+    mirrors the real ToolSource declaration (read by ToolHub.is_slow/describe).
     """
 
-    def __init__(self, id, tool_names, *, fail_start=False):
+    def __init__(self, id, tool_names, *, fail_start=False, slow=False):
         self.id = id
+        self.slow = slow
         self._tools = [_tool(n) for n in tool_names]
         self.fail_start = fail_start
         self.calls = []          # records (raw_name, args)
@@ -229,9 +231,9 @@ async def test_describe_returns_one_entry_per_source():
 
     described = hub.describe()
     assert [s["id"] for s in described] == ["home", "weather"]
-    # Every entry carries the full id/kind/online/tools shape.
+    # Every entry carries the full id/kind/online/slow/tools shape.
     for entry in described:
-        assert set(entry) == {"id", "kind", "online", "tools"}
+        assert set(entry) == {"id", "kind", "online", "slow", "tools"}
 
     home_entry = described[0]
     assert home_entry["online"] is True
@@ -286,6 +288,55 @@ async def test_describe_kind_for_http_and_builtin_wrappers():
     described = {s["id"]: s for s in hub.describe()}
     assert described["home"]["kind"] == "http"
     assert described["weather"]["kind"] == "builtin"
+
+
+# --- is_slow(): the owning source declares whether its tools are slow ---------
+
+
+async def test_is_slow_follows_owning_source_declaration():
+    # A tool from a slow source is slow; one from a fast source is not; a name
+    # that routes nowhere is not slow either (no filler for unknown tools).
+    fast = FakeSource("home", ["set_light"])
+    slow = FakeSource("websearch", ["search_web"], slow=True)
+    hub = ToolHub([fast, slow])
+    await hub.start()
+
+    assert hub.is_slow("search_web") is True
+    assert hub.is_slow("set_light") is False
+    assert hub.is_slow("unknown_tool") is False
+
+
+async def test_describe_surfaces_per_source_slow_flag():
+    fast = FakeSource("home", ["set_light"])
+    slow = FakeSource("websearch", ["search_web"], slow=True)
+    hub = ToolHub([fast, slow])
+    await hub.start()
+
+    described = {s["id"]: s for s in hub.describe()}
+    assert described["home"]["slow"] is False
+    assert described["websearch"]["slow"] is True
+
+
+async def test_wrapper_sources_accept_slow_keyword():
+    # HttpMcpSource/BuiltinMcpSource carry the slow flag through to the hub.
+    class _FakeMcpHub:
+        tools = [_tool("search_web")]
+
+        async def start(self):
+            return None
+
+    class _FakeFastMcp:
+        async def list_tools(self):
+            return []
+
+    http = HttpMcpSource("websearch", _FakeMcpHub(), slow=True)
+    builtin = BuiltinMcpSource("reminders", _FakeFastMcp(), slow=False)
+    assert http.slow is True
+    assert builtin.slow is False
+
+    hub = ToolHub([http, builtin])
+    await hub.start()
+    assert hub.is_slow("search_web") is True
 
 
 # --- BuiltinMcpSource._normalize: flatten varied FastMCP call_tool shapes -----

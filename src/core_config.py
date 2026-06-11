@@ -113,6 +113,11 @@ class McpServerConfig(BaseModel):
     token: str = ""
     transport: Literal["auto", "streamable_http", "sse"] = "auto"
     prompt: str = ""
+    slow: bool = Field(
+        False,
+        title="Slow tools",
+        description="Mark this server's tools as slow (web search, long lookups). The assistant speaks a short filler line before calling a slow tool so the user is not left waiting in silence.",
+    )
 
 
 class CalendarConfig(BaseModel):

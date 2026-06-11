@@ -16,7 +16,6 @@ from src.pipeline import (
     _trim_start_pcm,
     _vad_boost,
     contains_stt_hallucination,
-    is_slow_tool,
 )
 from src.llm_text import clean_llm_output
 from src.pipeline_events import StageEvent
@@ -104,9 +103,20 @@ class FakeRunEvents:
         self.broadcasts.append(payload)
 
 
+class FakeToolHub:
+    """ToolHub double for the filler policy: is_slow() is membership in a fixed set
+    of slow tool names (mirrors the real hub, where the owning source declares it)."""
+
+    def __init__(self, slow_tools=()):
+        self.slow_tools = set(slow_tools)
+
+    def is_slow(self, name):
+        return name in self.slow_tools
+
+
 def make_pipeline(tmp_path, monkeypatch, name="dev", stt_text="распознанный текст",
                   stt_backend=None, tts_backend=None, runs_store=None,
-                  run_events=None, ack=False):
+                  run_events=None, ack=False, hub=None):
     # The data dir is hardcoded in config_store; the pipeline reads it as a module
     # attribute, so isolate per-test context files by monkeypatching DATA_DIR to
     # tmp_path BEFORE the pipeline (and its _context_path) is built.
@@ -125,7 +135,9 @@ def make_pipeline(tmp_path, monkeypatch, name="dev", stt_text="распозна�
         stt_backend=stt_backend or FakeSttBackend(stt_text),
         llm_backend=object(),
         tts_backend=tts_backend or FakeTtsBackend(),
-        hub=object(),
+        # Default hub double: the filler tests' slow tools are slow, everything
+        # else (set_light, ...) is fast — the same shape the real ToolHub exposes.
+        hub=hub or FakeToolHub(slow_tools={"search_events", "google", "get_current_weather"}),
         audio_server=audio_server,
         runs_store=runs_store,
         run_events=run_events,
@@ -1810,17 +1822,24 @@ async def test_capture_maxlen_finalize_ignores_late_chunk(tmp_path, monkeypatch)
 # --- early "filler" line (slow-tool placeholder via the announce channel) --------
 
 
-def test_is_slow_tool():
-    # Slow (network/think) tools trigger the early filler.
-    assert is_slow_tool("google")
-    assert is_slow_tool("search_events")
-    assert is_slow_tool("get_current_weather")
-    assert is_slow_tool("get_today_events")
-    # Instant smart-home actions do NOT.
-    assert not is_slow_tool("set_light")
-    assert not is_slow_tool("set_scene")
-    assert not is_slow_tool("set_reminder")
-    assert not is_slow_tool("list_reminders")
+async def test_filler_fires_when_any_tool_in_round_is_slow(tmp_path, monkeypatch):
+    # The pipeline asks the HUB which tools are slow (the owning source declares
+    # it; no name guessing here). A round mixing a fast and a slow tool still
+    # fires the filler — any slow tool in the batch makes the user wait.
+    patch_llm_with_filler(
+        monkeypatch, tool_names=["set_light", "search_events"],
+        content="Секунду…", reply="готово",
+    )
+    pipeline, _ = make_pipeline(tmp_path, monkeypatch, stt_text="свет и календарь")
+    announcer = FakeAnnouncer()
+    pipeline.send_announcement = announcer
+
+    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_audio(b"\x01\x02" * 100)
+    await pipeline.on_stop(False)
+    await _drain_filler_tasks(pipeline)
+
+    assert len(announcer.calls) == 1
 
 
 class FakeAnnouncer:

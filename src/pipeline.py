@@ -68,19 +68,6 @@ ARM_TTL = 5.0
 # the run as if nothing was said and drop it.
 STT_HALLUCINATION_MARKERS = ("dimatorzok", "продолжение следует")
 
-# Tool-name substrings (case-insensitive) that mark a "slow" tool — one that hits
-# the network / does a second LLM round and makes the user wait several seconds
-# (web/google search, calendar, weather, wiki). Only these trigger the early
-# spoken "filler"; instant smart-home actions (set_light, set_lock, set_scene,
-# set_reminder, …) are intentionally excluded so the assistant doesn't talk twice
-# for a trivial action. Extend this list to cover new slow tools.
-SLOW_TOOL_MARKERS = (
-    "google", "search", "web", "browse",
-    "weather", "погод",
-    "event", "calendar", "календар",
-    "wiki",
-)
-
 
 def contains_stt_hallucination(text: str) -> bool:
     """Return True if the STT text contains a known Whisper hallucination marker.
@@ -91,14 +78,6 @@ def contains_stt_hallucination(text: str) -> bool:
     """
     folded = text.casefold()
     return any(marker in folded for marker in STT_HALLUCINATION_MARKERS)
-
-
-def is_slow_tool(name: str) -> bool:
-    """Return True if a tool name looks like a slow (network/think) tool — i.e.
-    contains a SLOW_TOOL_MARKERS substring (case-insensitive). Used to decide
-    whether to speak an early filler before the tool runs."""
-    folded = (name or "").casefold()
-    return any(marker in folded for marker in SLOW_TOOL_MARKERS)
 
 
 class CaptureBusyError(Exception):
@@ -985,13 +964,15 @@ class Pipeline:
                     async def _speak_filler(text: str, tool_names: list[str]) -> None:
                         # Policy lives here (llm.py is policy-free): speak at most once per
                         # run, and only for a SLOW tool (so instant smart-home actions don't
-                        # double-talk). Schedule synthesis+announce as a fire-and-forget task
+                        # double-talk). The slow KNOWLEDGE comes from the tool source via
+                        # hub.is_slow (each source declares whether its tools are slow).
+                        # Schedule synthesis+announce as a fire-and-forget task
                         # so the slow tool is NOT delayed by filler TTS. Synchronous
                         # gate/dedup first (no await before we decide), then schedule.
                         nonlocal filler_fired
                         if filler_fired or self.send_announcement is None:
                             return
-                        if not any(is_slow_tool(n) for n in tool_names):
+                        if not any(self.hub.is_slow(n) for n in tool_names):
                             return  # fast action: the final reply alone is enough
                         spoken = clean_llm_output(text)  # tag cleanup only; engine post-processing happens inside the TTS backend
                         if not spoken:
