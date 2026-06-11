@@ -3,6 +3,7 @@ from pydantic import ValidationError
 
 from src.core_config import (
     AckConfig,
+    AgentMcpConfig,
     CalendarConfig,
     CoreConfig,
     DeviceConfig,
@@ -69,6 +70,28 @@ def test_builtin_mcp_prompts_default_to_empty_and_accept_values():
     assert CalendarConfig().prompt == ""
     assert OpenWeatherMapConfig(prompt="x").prompt == "x"
     assert CalendarConfig(prompt="y").prompt == "y"
+
+
+def test_agent_mcp_config_defaults():
+    # The agent-facing MCP server is ON by default on 0.0.0.0:8202; old docs carry
+    # no core.agent_mcp key, so the pydantic defaults must cover them.
+    amcp = AgentMcpConfig()
+    assert amcp.enabled is True
+    assert amcp.host == "0.0.0.0"
+    assert amcp.port == 8202
+
+
+def test_core_config_has_agent_mcp_section():
+    core = CoreConfig()
+    assert isinstance(core.agent_mcp, AgentMcpConfig)
+    assert core.agent_mcp.port == 8202
+
+
+def test_agent_mcp_config_accepts_overrides():
+    amcp = AgentMcpConfig(enabled=False, host="127.0.0.1", port=9000)
+    assert amcp.enabled is False
+    assert amcp.host == "127.0.0.1"
+    assert amcp.port == 9000
 
 
 def test_ack_config_defaults():

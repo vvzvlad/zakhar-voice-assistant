@@ -13,23 +13,31 @@ function Card({ title, sub, children, foot }) {
   </div>;
 }
 
-// ── System page (core.network + core.audio + core.runs) ───────────────────
+// ── System page (core.network + core.audio + core.agent_mcp + core.runs) ──
 // Named SystemPage to avoid clashing with the exported System status card below.
 function SystemPage() {
   const { catalog, patch } = useAppData();
   const defs = catalog.core.schema.$defs || {};
   const netSchema = defs.NetworkConfig;
   const audioSchema = defs.AudioConfig;
+  const mcpSchema = defs.AgentMcpConfig;
 
   const netValues = catalog.core.values.network || {};
   const audioValues = catalog.core.values.audio || {};
+  const mcpValues = catalog.core.values.agent_mcp || {};
 
   const net = useStageForm(netValues, (d) => ({ core: { network: d } }), patch);
   const audio = useStageForm(audioValues, (d) => ({ core: { audio: d } }), patch);
+  const amcp = useStageForm(mcpValues, (d) => ({ core: { agent_mcp: d } }), patch);
+
+  // Display host for the endpoint hint: a wildcard/empty bind means "this host".
+  const mcpHost = (!amcp.draft.host || amcp.draft.host === "0.0.0.0")
+    ? window.location.hostname : amcp.draft.host;
+  const mcpEndpoint = `http://${mcpHost}:${amcp.draft.port ?? 8202}/mcp`;
 
   return <div className="z-page">
     <PageHeader title="System" crumb="Operations · advanced"
-      desc="Outbound routing for cloud APIs, the audio server that feeds speakers, and recorded-utterance storage." />
+      desc="Outbound routing for cloud APIs, the audio server that feeds speakers, the agent MCP server, and recorded-utterance storage." />
     {/* Two equal columns: routing/audio on the left, system status + recordings + logging on the right */}
     <div className="z-cols even">
       <div className="z-grid">
@@ -46,6 +54,13 @@ function SystemPage() {
               <Field label="Port" row><Stepper value={audio.draft.port ?? 8200} onChange={(v) => audio.onChange("port", v)} /></Field>
               <Field label="Cache TTL" hint="Seconds." row><Stepper value={audio.draft.ttl ?? 300} step={30} onChange={(v) => audio.onChange("ttl", v)} unit="s" /></Field>
             </>}
+        </Card>
+        <Card title="Agent MCP" sub="lets external agents drive the assistant" foot={<FormSaveBar dirty={amcp.dirty} saving={amcp.saving} onSave={amcp.save} errors={errorLines(amcp.err)} />}>
+          {mcpSchema && <SchemaForm schema={mcpSchema} values={amcp.draft} onChange={amcp.onChange} />}
+          <div style={{ marginTop: 4 }}>
+            <div style={{ fontSize: 10.5, color: "var(--mut)", textTransform: "uppercase", letterSpacing: ".04em", fontWeight: 600 }}>Endpoint</div>
+            <div className="mono" style={{ fontSize: 15, fontWeight: 600, marginTop: 3 }}>{mcpEndpoint}</div>
+          </div>
         </Card>
       </div>
       {/* Right column: system status + recordings storage + logging. */}

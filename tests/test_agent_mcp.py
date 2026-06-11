@@ -8,11 +8,13 @@ test needs it) a real RunsStore on a tmp sqlite file.
 """
 
 import json
+import socket
 from types import SimpleNamespace
 
+import pytest
 from mcp.shared.memory import create_connected_server_and_client_session
 
-from src.agent_mcp import build_agent_mcp
+from src.agent_mcp import AgentMcpServer, build_agent_mcp
 from src.runs_store import RunsStore
 
 
@@ -277,3 +279,23 @@ async def test_ask_no_devices_configured():
     rt = make_rt(clients=[])
     out = await call(rt, "ask", {"text": "привет"})
     assert out == {"error": "no devices configured"}
+
+
+# --- AgentMcpServer.start() bind failure ----------------------------------------
+
+async def test_start_raises_on_taken_port_and_stop_is_safe():
+    # Occupy a port with a plain socket so uvicorn cannot bind. start() must
+    # surface that as a RuntimeError (not fire-and-forget a doomed serve task),
+    # and a subsequent stop() must stay idempotent/safe.
+    blocker = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    blocker.bind(("127.0.0.1", 0))
+    blocker.listen(1)
+    port = blocker.getsockname()[1]
+    try:
+        server = AgentMcpServer(make_rt(), "127.0.0.1", port)
+        with pytest.raises(RuntimeError, match=f"failed to bind 127.0.0.1:{port}"):
+            await server.start()
+        # The failed start cleared its task/server refs; stop() is a quiet no-op.
+        await server.stop()
+    finally:
+        blocker.close()

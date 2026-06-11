@@ -48,9 +48,9 @@ make run               # runs .venv/bin/python main.py
 All config lives in `data/config.json` (created on first boot from
 `templates/default_config.json`). There is no `.env` / environment-based config —
 the only env-tunable values are the bind host/port of the admin panel
-(`PANEL_HOST` / `PANEL_PORT`, defaults `0.0.0.0` / `8201`) and of the agent MCP
-server (`AGENT_MCP_HOST` / `AGENT_MCP_PORT`, defaults `0.0.0.0` / `8202`), applied
-at process start.
+(`PANEL_HOST` / `PANEL_PORT`, defaults `0.0.0.0` / `8201`), applied at process
+start. The agent MCP server is configured under `core.agent_mcp`
+(enabled / host / port), panel-editable and hot-applied like the rest of the JSON.
 
 - Per stage (`vad`/`stt`/`llm`/`tts`) the doc holds `{selected, instances}`; each provider
   defines its own settings via a pydantic `ConfigModel` in `src/plugins/<stage>/<id>.py`.
@@ -58,8 +58,8 @@ at process start.
   provider's fields. Adding a provider = one new plugin file; zero changes to the core.
 - `core.*` holds non-provider settings (context, audio, vad — end-pointing thresholds +
   mic conditioning, network, openweathermap, mcp_servers,
-  calendar, esphome, prompt, panel, runs, reminders, devices, tts_timeout, log_level) as plain
-  `CoreConfig` pydantic sections.
+  calendar, esphome, agent_mcp, prompt, panel, runs, reminders, devices, tts_timeout,
+  log_level) as plain `CoreConfig` pydantic sections.
 - API keys are plain string fields in the JSON (trusted-LAN service, no masking). `data/`
   is gitignored so `config.json` never gets committed.
 

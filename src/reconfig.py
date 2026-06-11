@@ -15,6 +15,7 @@ import httpx
 from loguru import logger
 
 from src import config_store
+from src.agent_mcp import AgentMcpServer
 from src.logging_setup import setup_logging
 from src.runs_store import RunsStore
 from src.tool_factory import build_sources
@@ -48,7 +49,8 @@ def action_for(path: str) -> str:
     """Map one changed dotted path to a reconfiguration action.
     Actions: 'live', 'logging', 'rebuild_backends', 'rebuild_http',
     'rebuild_tools', 'rebuild_audio', 'rebuild_devices', 'rebuild_runs',
-    'rebuild_reminders', 'restart'. Unknown paths default to 'restart' (safe)."""
+    'rebuild_reminders', 'rebuild_agent_mcp', 'restart'. Unknown paths default
+    to 'restart' (safe)."""
     # core.* rules (most specific first)
     if path == "core.log_level":
         return "logging"
@@ -71,6 +73,8 @@ def action_for(path: str) -> str:
     if (path.startswith("core.openweathermap") or path.startswith("core.calendar")
             or path.startswith("core.mcp_servers")):
         return "rebuild_tools"
+    if path.startswith("core.agent_mcp"):         # enabled/host/port -> server rebuild
+        return "rebuild_agent_mcp"
     if path.startswith("core.reminders"):
         return "rebuild_reminders"
     if path.startswith("core.runs"):
@@ -92,7 +96,7 @@ def action_for(path: str) -> str:
 # reconnect start, reminders store open/close).
 ASYNC_ACTIONS = {"rebuild_backends", "rebuild_audio", "rebuild_runs",
                  "rebuild_tools", "rebuild_http",
-                 "rebuild_devices", "rebuild_reminders"}
+                 "rebuild_devices", "rebuild_reminders", "rebuild_agent_mcp"}
 
 
 def backend_categories(paths) -> set[str]:
@@ -174,6 +178,8 @@ class Reconfigurator:
             await self._rebuild_devices()
         if "rebuild_reminders" in actions:
             await self._rebuild_reminders()
+        if "rebuild_agent_mcp" in actions:
+            await self._rebuild_agent_mcp()
         if do_http:
             await self._rebuild_http(paths)
 
@@ -309,6 +315,34 @@ class Reconfigurator:
             # else: no enable<->disable transition -> nothing to do.
         except Exception as e:
             logger.error(f"reminders reconfigure failed: {e}")
+
+    async def _rebuild_agent_mcp(self) -> None:
+        """Apply core.agent_mcp changes hot: stop the running agent-facing MCP server
+        and, when enabled, start a fresh one on the configured host/port. Config is
+        read at apply time (last-writer-wins); a failed start is logged and leaves
+        rt.agent_mcp None (never raises), same apply-what-you-can policy as the
+        other rebuilds."""
+        cfg = self.rt.core.agent_mcp
+        old, self.rt.agent_mcp = self.rt.agent_mcp, None
+        if old is not None:
+            try:
+                await old.stop()
+            except Exception as e:
+                logger.warning(f"stopping old agent MCP server failed: {e}")
+        if not cfg.enabled:
+            logger.info("agent MCP server disabled (hot)")
+            return
+        try:
+            server = AgentMcpServer(self.rt, cfg.host, cfg.port)
+            await server.start()
+        except Exception as e:
+            logger.error(
+                f"agent MCP server start failed: {e}; it is DOWN until the next "
+                f"config change"
+            )
+            return
+        self.rt.agent_mcp = server
+        logger.info(f"agent MCP server rebuilt on http://{cfg.host}:{cfg.port}/mcp (hot)")
 
     async def _rebuild_tools(self) -> None:
         """Rebuild the tool source set from current config and hot-swap it into the hub."""

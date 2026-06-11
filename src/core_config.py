@@ -22,6 +22,13 @@ class AudioConfig(BaseModel):
     public_base_url: str = ""
 
 
+class AgentMcpConfig(BaseModel):
+    """Agent-facing MCP server (external agents drive the assistant over /mcp)."""
+    enabled: bool = True
+    host: str = "0.0.0.0"
+    port: int = 8202
+
+
 class VadConfig(BaseModel):
     """Engine-independent voice-capture policy: end-pointing thresholds plus the
     mic channel selection and pre-STT conditioning toggles. The speech classifier
@@ -202,6 +209,7 @@ class CoreConfig(BaseModel):
     mcp_servers: list[McpServerConfig] = []
     calendar: CalendarConfig = CalendarConfig()
     esphome: EsphomeConfig = EsphomeConfig()
+    agent_mcp: AgentMcpConfig = AgentMcpConfig()
     prompt: PromptConfig = PromptConfig()
     runs: RunsConfig = RunsConfig()
     reminders: RemindersConfig = RemindersConfig()
