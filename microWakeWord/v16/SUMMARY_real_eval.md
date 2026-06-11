@@ -74,3 +74,52 @@ The recall↔FAPH split is fundamental this round:
 
 RECOMMEND: ship **v16** now (single-model, fixes FAPH, same recall as prod v8). Pursue v19+verifier
 (firmware 2-stage) OR short-«захар» negs (single-model duration-aware) for the recall jump next round.
+
+## #A PROBE — do models fire on SHORT «захар» (compressed «захааар»)? YES (confirms duration verdict)
+Firing rate (score≥0.9) on held-out positives compressed to target duration (RMS-normalised):
+| targ | v16 | v17 | v19 |
+|-----:|----:|----:|----:|
+| 5.0s (drawn-out) | 0.75 | 0.91 | 0.98 |
+| 1.3s | 0.15 | 0.70 | 0.85 |
+| 1.0s (SHORT захар) | 0.65 | 0.68 | **0.93** |
+| 0.8s | 0.60 | 0.72 | 0.72 |
+All models fire substantially on SHORT «захар» → they don't use vowel duration (confirms the
+DURATION_CAUSALITY verdict). v19 (best recall) is the WORST at distinguishing (93% fires on 1.0s).
+A short «захар» (common word) would falsely trigger — a false-accept class the FAPH eval misses.
+
+## #A PROTOTYPE — short-«захар» hard-negs instill DURATION-AWARENESS (standard model)
+| model | drawn-out FRR | short-«захар» firing @1.0s | @0.8s |
+|-------|--------------:|---------------------------:|------:|
+| v16 (baseline) | 21.0% | 0.65 | 0.60 |
+| **v21 = v16 + short-negs** | 26.0% | **0.175** | 0.235 |
+| v19 angular | 3.0% | 0.93 | 0.72 |
+| v22 = angular + short-negs | 5.2% | 0.93 | 0.94 |
+
+**Result (PoC success):** the STANDARD model (v21) learns duration discrimination from synthetic
+compress-shorts — firing on a 1.0 s short «захар» drops 65%→17% while drawn-out recall barely moves
+(FRR 21%→26%, small cost). So short-«захар» as hard-negatives WORKS, and synthetic compression is a
+valid de-risk for recording REAL short «захар». The ANGULAR model (v22) does NOT learn it (fires 93%
+on short still — the margin overpowers the short-negs, same as it resists FAPH suppression). →
+**duration-awareness is a STANDARD-model lever; pair with real short «захар» negs next round.**
+The v21 recall cost (21→26%) is tunable down via lower short-neg weight.
+
+## #B detection-aware loss (noisy-OR window pool) — regressed (impl issue)
+v23 = per-frame detection head + noisy-OR soft-pool loss (instead of per-frame BCE). Per-frame head
+converts to int8 streaming (feasibility ✓, 77 KB). But FRR 45% @0.9 (subset) vs v16's 21% — REGRESS.
+Cause: noisy-OR over the FULL 20-frame window inflates NEGATIVES too (20 frames × small p → OR≈0.9),
+forcing the model to over-suppress every frame → recall collapses. The Apple gain needs a MAX-pool or
+a calibrated narrow soft-pool, not full-window noisy-OR. Documented as next-step; this variant rejected.
+
+# ============ FINAL (round: real positives + the 4 follow-ups) ============
+SHIP UNCHANGED: **output_v16/ (=output_best/)** single-model — FRR 21%, all-class FAPH 0 (VAD),
+strictly better than v8. The 4 follow-ups produced INSIGHTS, not a better single model:
+- **#A (headline):** models fire on SHORT «захар» (duration verdict confirmed); synthetic short-«захар»
+  hard-negs INSTILL duration-awareness in the STANDARD model (short-firing 65%→17%, small recall cost
+  21→26%); ANGULAR can't learn it. → next round: standard model + REAL short «захар» negs (de-risked).
+- **#C:** DET curves — v16 flat ~21% recall floor (all-FAPH 0); v19 angular tunable (4.4%/5.8h → 10.8%/3.3h).
+- **#D:** on-device 2-stage = dual-OUTPUT tflite [kws,verify] + per-trigger AND (spec+host-ref ready),
+  BUT the verifier needs a STREAMING-INT8-embedding refit to actually work on-device (offline 3.8%/0.85
+  doesn't transfer — key de-risk finding).
+- **#B:** detection-aware feasible but the noisy-OR variant regressed; max-pool variant is the next-step.
+Best recall path remains angular (FRR 3%) + a streaming-refit verifier (firmware 2-stage), OR the
+duration-aware standard model with REAL short negs. v1/v4/v5/v8 untouched. Not pushed to repo.
