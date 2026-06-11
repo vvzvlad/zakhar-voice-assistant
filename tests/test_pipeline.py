@@ -2791,3 +2791,142 @@ async def test_llm_stage_error_without_partial_attribute(tmp_path, monkeypatch):
     assert rec["tokens"] is None
     assert rec["rounds"] == []
     assert rec["request"] is None
+
+
+# --- pipeline.run_text() (text requests from the agent MCP server) ------------
+
+
+async def test_run_text_happy_path(tmp_path, monkeypatch):
+    # A text run does the full LLM turn, appends context, speaks the reply on the
+    # announce channel, records the run (reason="text", request in stt_text) and
+    # broadcasts the finalized summary — all WITHOUT any VA events.
+    from src import context
+
+    patch_llm(monkeypatch, reply="готово")
+    store = FakeRunsStore()
+    hub = FakeRunEvents()
+    pipeline, events = make_pipeline(
+        tmp_path, monkeypatch, runs_store=store, run_events=hub,
+    )
+    announcer = FakeAnnouncer()
+    pipeline.send_announcement = announcer
+
+    result = await pipeline.run_text("включи свет")
+
+    assert result == {
+        "reply": "готово", "result": "ok",
+        "error_stage": None, "error_text": None,
+    }
+    # Recorded once, with the text-run shape.
+    assert len(store.records) == 1
+    rec = store.records[0]
+    assert rec["reason"] == "text"
+    assert rec["stt_text"] == "включи свет"
+    assert rec["llm_text"] == "готово"
+    assert rec["t_vad"] == 0 and rec["t_stt"] == 0
+    assert rec["t_total"] >= 0
+    assert rec["error_stage"] is None
+    # Context appended like a normal conversation turn.
+    assert context.load_context(pipeline._context_path) == [
+        {"role": "user", "content": "включи свет"},
+        {"role": "assistant", "content": "готово"},
+    ]
+    # The reply was spoken: synthesized, served and announced.
+    assert pipeline.audio_server.calls == [(b"MP3", "audio/mpeg")]
+    assert [c["text"] for c in announcer.calls] == ["готово"]
+    # No voice-assistant events for a text run (no ESPHome voice session).
+    assert events == []
+    # Exactly one finalized broadcast, after the insert (id echoes the store).
+    assert len(hub.broadcasts) == 1
+    assert hub.broadcasts[0]["type"] == "run"
+    assert hub.broadcasts[0]["run"]["id"] == 1
+    assert hub.broadcasts[0]["run"]["result"] == "ok"
+
+
+async def test_run_text_llm_error_speaks_fallback_and_skips_context(tmp_path, monkeypatch):
+    # An LLM StageError on a text run mirrors _run: the configured fallback
+    # phrase is the reply, the run records error/LLM, and the failed turn is
+    # NOT appended to the conversation context.
+    from src import context
+
+    appended = []
+    monkeypatch.setattr(context, "append_context", lambda *a, **k: appended.append(a))
+    patch_llm(monkeypatch, error=StageError("llm", "boom"))
+    store = FakeRunsStore()
+    pipeline, events = make_pipeline(tmp_path, monkeypatch, runs_store=store)
+
+    result = await pipeline.run_text("привет")
+
+    assert result["result"] == "error"
+    assert result["error_stage"] == "LLM"
+    assert result["error_text"] == "boom"
+    assert result["reply"] == LlmConfig().reply_error
+    assert appended == []
+    rec = store.records[0]
+    assert rec["result"] == "error"
+    assert rec["error_stage"] == "LLM"
+    assert rec["llm_text"] == LlmConfig().reply_error
+    # The fallback phrase is still spoken (TTS ran).
+    assert pipeline.audio_server.calls == [(b"MP3", "audio/mpeg")]
+    assert events == []
+
+
+async def test_run_text_speak_false_skips_tts(tmp_path, monkeypatch):
+    # speak=False: the LLM turn runs but nothing is synthesized or announced.
+    patch_llm(monkeypatch, reply="готово")
+    tts_calls = []
+
+    class SpyTts:
+        async def synthesize(self, text, lang="ru"):
+            tts_calls.append(text)
+            return ("audio/mpeg", b"MP3")
+
+    store = FakeRunsStore()
+    pipeline, events = make_pipeline(
+        tmp_path, monkeypatch, tts_backend=SpyTts(), runs_store=store,
+    )
+    announcer = FakeAnnouncer()
+    pipeline.send_announcement = announcer
+
+    result = await pipeline.run_text("включи свет", speak=False)
+
+    assert result["result"] == "ok"
+    assert result["reply"] == "готово"
+    assert tts_calls == []
+    assert announcer.calls == []
+    assert pipeline.audio_server.calls == []
+    assert store.records[0]["t_tts"] == 0
+    assert events == []
+
+
+async def test_run_text_tts_failure_still_returns_reply(tmp_path, monkeypatch):
+    # A TTS failure marks the run error/TTS but the text reply still comes back.
+    patch_llm(monkeypatch, reply="готово")
+    store = FakeRunsStore()
+    pipeline, events = make_pipeline(
+        tmp_path, monkeypatch, tts_backend=RaisingTtsBackend(), runs_store=store,
+    )
+
+    result = await pipeline.run_text("включи свет")
+
+    assert result["reply"] == "готово"
+    assert result["result"] == "error"
+    assert result["error_stage"] == "TTS"
+    assert result["error_text"] == "tts boom"
+    rec = store.records[0]
+    assert rec["result"] == "error"
+    assert rec["error_stage"] == "TTS"
+    assert rec["llm_text"] == "готово"
+    assert events == []
+
+
+async def test_run_text_without_store_or_hub(tmp_path, monkeypatch):
+    # runs_store=None / run_events=None: the call still works and returns the reply.
+    patch_llm(monkeypatch, reply="ок")
+    pipeline, events = make_pipeline(tmp_path, monkeypatch)
+
+    result = await pipeline.run_text("привет", speak=False)
+
+    assert result["reply"] == "ок"
+    assert result["result"] == "ok"
+    assert events == []

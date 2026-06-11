@@ -62,6 +62,23 @@ Shape (see `templates/default_config.json` for the full default):
 API keys are plain string fields in the JSON (this is a trusted-LAN service); `data/` is
 gitignored, so `config.json` and its keys never get committed.
 
+## Agent MCP server
+
+The app is also an MCP **server**, so an external agent (e.g. Claude) can drive the
+assistant. Endpoint: `http://<host>:8202/mcp` (MCP streamable HTTP). Bind host/port
+come from the `AGENT_MCP_HOST` / `AGENT_MCP_PORT` environment variables (defaults
+`0.0.0.0` / `8202`), applied at process start — same env-only posture as the panel.
+There is NO authentication (trusted-LAN service, like the admin panel). Tools:
+
+- `list_runs(limit, device?, search?)` — recent voice interactions (user text, reply, timings).
+- `get_run(run_id)` — full record of one interaction (tool rounds, timings, errors).
+- `get_config()` — the full live config document.
+- `update_config(patch)` — deep-merge a config patch; changes apply live (hot-reload).
+- `list_devices()` — configured speakers with live status.
+- `say(text, device?)` — speak arbitrary text on a speaker (TTS + announce).
+- `ask(text, device?, speak?)` — full assistant turn (LLM + smart-home tools +
+  conversation context) as if the user spoke it; the reply is optionally spoken.
+
 ## What's here
 
 | Path | Purpose |

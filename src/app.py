@@ -12,6 +12,7 @@ from loguru import logger
 
 import src.plugins  # noqa: F401  triggers provider registration
 from src import config_store
+from src.agent_mcp import AgentMcpServer
 from src.audio_server import AudioServer
 from src.config_service import ConfigDoc, ConfigService
 from src.esphome_client import DeviceManager
@@ -258,6 +259,7 @@ async def main() -> None:
     # the finally cleanup for the resources opened above.
     static_dir = "frontend/react-export/dist"
     panel = None
+    agent_mcp = None
     reconfig_task = None
 
     # The admin panel's bind host/port are the one setting NOT in the JSON config:
@@ -265,6 +267,11 @@ async def main() -> None:
     # requires a restart anymore.
     panel_host = os.environ.get("PANEL_HOST", "0.0.0.0")
     panel_port = int(os.environ.get("PANEL_PORT", "8201"))
+
+    # The agent-facing MCP server binds the same way: env only, applied at
+    # process start (trusted-LAN service, no auth — same posture as the panel).
+    agent_mcp_host = os.environ.get("AGENT_MCP_HOST", "0.0.0.0")
+    agent_mcp_port = int(os.environ.get("AGENT_MCP_PORT", "8202"))
 
     try:
         panel = PanelServer(
@@ -285,6 +292,10 @@ async def main() -> None:
         # hot-swapped store. Set before the reconfig loop can run.
         rt.panel = panel
         await panel.start()
+        # Agent-facing MCP server (external agents drive the assistant over
+        # streamable HTTP at /mcp). Reads everything live through `rt`.
+        agent_mcp = AgentMcpServer(rt, agent_mcp_host, agent_mcp_port)
+        await agent_mcp.start()
         await manager.start()
         if scheduler is not None:
             await scheduler.start()
@@ -305,6 +316,8 @@ async def main() -> None:
                 await reconfig_task
         if panel is not None:
             await panel.stop()
+        if agent_mcp is not None:
+            await agent_mcp.stop()
         # Tear down the LIVE scheduler/store: a reminders hot toggle may have swapped
         # rt.scheduler/rt.reminders_store away from the boot-time locals (or to None).
         if rt.scheduler is not None:
