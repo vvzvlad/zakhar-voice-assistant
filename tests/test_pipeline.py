@@ -1833,6 +1833,53 @@ class FakeAnnouncer:
         self.calls.append(kwargs)
 
 
+# --- pipeline.speak() (public proactive-speech entry) -------------------------
+
+async def test_speak_synthesizes_serves_and_announces(tmp_path, monkeypatch):
+    # speak() is the single text->speaker path: synthesize via the current tts
+    # stage, serve the clip on the shared audio cache, announce the served URL.
+    class _RecordingTts(FakeTtsBackend):
+        def __init__(self):
+            super().__init__(mime="audio/mpeg", audio=b"MP3")
+            self.calls = []  # (text, lang)
+
+        async def synthesize(self, text, lang="ru"):
+            self.calls.append((text, lang))
+            return await super().synthesize(text, lang)
+
+    tts = _RecordingTts()
+    pipeline, _ = make_pipeline(tmp_path, monkeypatch, tts_backend=tts)
+    announcer = FakeAnnouncer()
+    pipeline.send_announcement = announcer
+
+    await pipeline.speak("привет")
+
+    assert tts.calls == [("привет", "ru")]
+    assert pipeline.audio_server.calls == [(b"MP3", "audio/mpeg")]
+    assert announcer.calls == [{
+        "media_id": f"{PUBLIC_BASE_URL}/tts/abc123.mp3",
+        "timeout": 30.0,
+        "text": "привет",
+    }]
+
+
+async def test_speak_propagates_synthesis_errors(tmp_path, monkeypatch):
+    # speak() raises on failure — isolation is the CALLER's job (the filler wraps
+    # it in try/except; DeviceClient.announce lets it surface to the API caller).
+    class _BoomTts:
+        async def synthesize(self, text, lang="ru"):
+            raise RuntimeError("tts down")
+
+    pipeline, _ = make_pipeline(tmp_path, monkeypatch, tts_backend=_BoomTts())
+    announcer = FakeAnnouncer()
+    pipeline.send_announcement = announcer
+    with pytest.raises(RuntimeError, match="tts down"):
+        await pipeline.speak("hi")
+    # Nothing served, nothing announced.
+    assert pipeline.audio_server.calls == []
+    assert announcer.calls == []
+
+
 def patch_llm_with_filler(monkeypatch, *, tool_names, content, reply="готово", times=1):
     """Stub call_llm_api with a fake that invokes the passed on_filler callback
     `times` times (with the same content + tool_names) before returning `reply`.

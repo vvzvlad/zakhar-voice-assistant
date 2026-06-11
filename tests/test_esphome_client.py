@@ -370,105 +370,40 @@ def test_statuses_empty_client_list_is_empty():
 
 # --- DeviceClient.announce ----------------------------------------------------
 
-class _AnnounceTTS:
-    """Fake tts_backend recording synthesize() calls, returning (mime, audio)."""
-
-    def __init__(self, mime="audio/mpeg", audio=b"MP3DATA"):
-        self.calls = []  # (text, lang)
-        self._mime = mime
-        self._audio = audio
-
-    async def synthesize(self, text, lang):
-        self.calls.append((text, lang))
-        return self._mime, self._audio
-
-
-class _AnnounceAudioServer:
-    """Fake audio_server recording put(data, mime) and returning a fixed id."""
-
-    def __init__(self, audio_id="aud-123"):
-        self.calls = []  # (data, mime)
-        self._id = audio_id
-
-    def put(self, data, mime):
-        self.calls.append((data, mime))
-        return self._id
-
-
 class _AnnouncePipeline:
-    """Fake pipeline bundling the announce-path dependencies."""
-
-    def __init__(self, tts, audio_server, base_url):
-        self.tts_backend = tts
-        self.audio_server = audio_server
-        self.public_base_url = base_url
-
-
-class _AnnounceCli:
-    """Fake APIClient recording the announcement call kwargs."""
+    """Fake pipeline recording speak() calls (the single text->speaker entry)."""
 
     def __init__(self):
-        self.announcements = []  # dict of kwargs
+        self.spoken = []  # text
 
-    async def send_voice_assistant_announcement_await_response(
-        self, media_id, timeout, text
-    ):
-        self.announcements.append(
-            {"media_id": media_id, "timeout": timeout, "text": text}
-        )
+    async def speak(self, text):
+        self.spoken.append(text)
 
 
-def _announce_client(name="dev", *, online=True, mime="audio/mpeg",
-                     audio=b"MP3DATA", audio_id="aud-123",
-                     base_url="http://host:8080"):
+def _announce_client(name="dev", *, online=True):
     """Build a DeviceClient via __new__ wired with the announce fakes."""
     from src.esphome_client import DeviceClient
     c = DeviceClient.__new__(DeviceClient)
     c.cfg = _Cfg(name)
     c.online = online
-    c.cli = _AnnounceCli()
-    c.pipeline = _AnnouncePipeline(
-        _AnnounceTTS(mime=mime, audio=audio),
-        _AnnounceAudioServer(audio_id=audio_id),
-        base_url,
-    )
+    c.pipeline = _AnnouncePipeline()
     return c
 
 
-async def test_announce_synthesizes_caches_and_plays():
-    c = _announce_client(mime="audio/mpeg", audio=b"MP3DATA",
-                         audio_id="aud-123", base_url="http://host:8080")
+async def test_announce_delegates_to_pipeline_speak():
+    # The device layer no longer touches pipeline internals (tts_backend /
+    # audio_server): announce is online-check + pipeline.speak(text).
+    c = _announce_client()
     await c.announce("привет")
-    # Synthesized at the device language with the announce text.
-    assert c.pipeline.tts_backend.calls == [("привет", "ru")]
-    # Cached with the SAME mime the synthesizer returned, and the audio bytes.
-    assert c.pipeline.audio_server.calls == [(b"MP3DATA", "audio/mpeg")]
-    # The announcement plays the tts_url-built URL (mp3 ext for audio/mpeg).
-    assert c.cli.announcements == [{
-        "media_id": "http://host:8080/tts/aud-123.mp3",
-        "timeout": 30.0,
-        "text": "привет",
-    }]
+    assert c.pipeline.spoken == ["привет"]
 
 
-async def test_announce_mime_drives_extension_and_put():
-    # A wav mime must flow through to put() and shape the URL extension, proving
-    # the announce path doesn't hardcode mp3.
-    c = _announce_client(mime="audio/wav", audio=b"WAVDATA",
-                         audio_id="aud-9", base_url="http://host:8080/")
-    await c.announce("hi")
-    assert c.pipeline.audio_server.calls == [(b"WAVDATA", "audio/wav")]
-    assert c.cli.announcements[0]["media_id"] == "http://host:8080/tts/aud-9.wav"
-
-
-async def test_announce_offline_raises_without_synthesizing():
+async def test_announce_offline_raises_without_speaking():
     c = _announce_client(online=False)
     with pytest.raises(RuntimeError):
         await c.announce("hi")
     # The offline guard must short-circuit before any synthesis / playback.
-    assert c.pipeline.tts_backend.calls == []
-    assert c.pipeline.audio_server.calls == []
-    assert c.cli.announcements == []
+    assert c.pipeline.spoken == []
 
 
 # --- DeviceManager.announce routing ------------------------------------------

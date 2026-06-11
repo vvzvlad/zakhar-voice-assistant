@@ -9,7 +9,6 @@ import asyncio
 from aioesphomeapi import APIClient, ReconnectLogic, VoiceAssistantEventType
 from loguru import logger
 
-from src.audio_server import tts_url
 from src.core_config import DeviceConfig
 from src.pipeline import CAPTURE_MAX_SECONDS, Pipeline, build_ack_clip
 from src.pipeline_events import StageEvent
@@ -311,15 +310,11 @@ class DeviceClient:
         """Proactively speak `text` on this speaker via the assist-satellite announce path."""
         if not self.online:
             raise RuntimeError(f"{self.cfg.name} is offline")
-        # Synthesize at fire time so the audio-cache TTL never matters (URL is fresh).
-        mime, audio = await self.pipeline.tts_backend.synthesize(text, "ru")
-        audio_id = self.pipeline.audio_server.put(audio, mime)
-        _ext, url = tts_url(self.pipeline.public_base_url, audio_id, mime)
-        logger.info(f"{self.cfg.name}: 🔔 announce: {text!r} -> {url}")
-        # Assist-satellite announce ducks any current audio and plays while idle.
-        await self.cli.send_voice_assistant_announcement_await_response(
-            media_id=url, timeout=30.0, text=text,
-        )
+        # The pipeline's public speak() owns the whole text->speaker path: it
+        # synthesizes at fire time (so the audio-cache TTL never matters), serves
+        # the clip, logs the announce, and plays it through the announcement
+        # channel bound to this live connection on connect.
+        await self.pipeline.speak(text)
 
     async def play_media(self, audio: bytes, mime: str) -> None:
         """Play a ready audio clip on this speaker via the assist-satellite announce path.
@@ -329,8 +324,7 @@ class DeviceClient:
         """
         if not self.online:
             raise RuntimeError(f"{self.cfg.name} is offline")
-        audio_id = self.pipeline.audio_server.put(audio, mime)
-        _ext, url = tts_url(self.pipeline.public_base_url, audio_id, mime)
+        _ext, url = self.pipeline.serve_audio(mime, audio)
         logger.info(f"{self.cfg.name}: 🔔 play media -> {url}")
         await self.cli.send_voice_assistant_announcement_await_response(
             media_id=url, timeout=30.0, text="",

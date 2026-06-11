@@ -1077,8 +1077,7 @@ class Pipeline:
                             f"{self.name}: 🔊 TTS ({time.perf_counter() - tts_t:.2f}s, "
                             f"{len(audio)} bytes)"
                         )
-                        audio_id = self.audio_server.put(audio, mime)
-                        ext, url = tts_url(self.public_base_url, audio_id, mime)
+                        ext, url = self.serve_audio(mime, audio)
                         record["audio_bytes"] = len(audio)
                         record["audio_fmt"] = ext
                         logger.info(f"{self.name}: ▶ serving {url}")
@@ -1174,8 +1173,33 @@ class Pipeline:
                 except Exception as e:
                     logger.error(f"{self.name}: run broadcast failed: {e}")
 
+    def serve_audio(self, mime: str, audio: bytes) -> tuple[str, str]:
+        """Cache the clip on the shared audio server and return (ext, public URL).
+
+        The single put+tts_url pair behind every audio-serving path in the
+        pipeline; also the public helper for device-layer callers that already
+        hold ready audio bytes (e.g. the panel chime preview via play_media).
+        """
+        audio_id = self.audio_server.put(audio, mime)
+        ext, url = tts_url(self.public_base_url, audio_id, mime)
+        return ext, url
+
+    async def speak(self, text: str) -> None:
+        """Public entry for proactive speech (reminders, external callers).
+
+        Synthesizes via the CURRENT tts stage, serves the clip, and plays it
+        on the announcement channel (ducks current audio, plays while idle).
+        The single text->speaker path shared by the filler and the device
+        layer's announce. Raises on failure (callers decide isolation).
+        """
+        mime, audio = await self.tts_backend.synthesize(text, "ru")
+        _ext, url = self.serve_audio(mime, audio)
+        logger.info(f"{self.name}: 🔔 announce: {text!r} -> {url}")
+        if self.send_announcement is not None:
+            await self.send_announcement(media_id=url, timeout=30.0, text=text)
+
     async def _deliver_filler(self, text: str) -> None:
-        """Synthesize an early 'filler' line and play it on the announcement channel.
+        """Speak an early 'filler' line on the announcement channel via speak().
 
         The announcement ducks any current audio and plays immediately, so the user
         hears a short 'I'll go check it' line while the slow tool + final LLM round
@@ -1184,12 +1208,8 @@ class Pipeline:
         keeps its own final TTS_END for the real answer).
         """
         try:
-            mime, audio = await self.tts_backend.synthesize(text, "ru")
-            audio_id = self.audio_server.put(audio, mime)
-            _ext, url = tts_url(self.public_base_url, audio_id, mime)
-            logger.info(f"{self.name}: 🗣️ filler announce: {text!r} -> {url}")
-            if self.send_announcement is not None:
-                await self.send_announcement(media_id=url, timeout=30.0, text=text)
+            logger.info(f"{self.name}: 🗣️ filler: {text!r}")
+            await self.speak(text)
         except Exception as e:
             logger.error(f"{self.name}: filler announce failed: {e}")
 
@@ -1235,8 +1255,7 @@ class Pipeline:
         """
         try:
             mime, audio = self._ack_clip_bytes()
-            audio_id = self.audio_server.put(audio, mime)
-            _ext, url = tts_url(self.public_base_url, audio_id, mime)
+            _ext, url = self.serve_audio(mime, audio)
             logger.info(f"{self.name}: 🔔 end-of-phrase ack -> {url}")
             if self.send_announcement is not None:
                 await self.send_announcement(media_id=url, timeout=30.0, text="")
