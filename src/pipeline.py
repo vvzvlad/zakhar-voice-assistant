@@ -966,7 +966,7 @@ class Pipeline:
                     )
                     llm_failed = False
                     try:
-                        system_prompt = build_system_prompt(self.core)
+                        system_prompt = build_system_prompt(self.core, self.prompt_store)
                         stage = llm.LlmStage(self.llm_backend, self.hub, self.llm_cfg)
                         # No on_filler: a text run has no listener waiting in
                         # silence, so no early filler line is spoken.
