@@ -7,7 +7,6 @@ import wave
 from loguru import logger
 from pydantic import BaseModel
 
-from src.audio_codec import wav_to_mp3
 from src.plugins.base import Deps, Provider, register
 # The canonical LLM->TTS text is the model's own notation: plain text with "+"
 # before the stressed vowel (e.g. "прив+ет"). The backend adapts that canon to
@@ -17,12 +16,13 @@ from src.tts import TtsBackend, split_sentences
 
 
 class PiperTtsBackend(TtsBackend):
-    """In-process Piper backend (neural VITS via onnxruntime). Returns MP3.
+    """In-process Piper backend (neural VITS via onnxruntime). Returns WAV.
 
     The voice is loaded once and shared (espeak-ng-data is bundled in the Piper
     package, so no system espeak is needed). Synthesis is blocking, so it runs in
-    a worker thread. Piper produces WAV 22050 Hz mono 16-bit, which is then
-    transcoded to MP3 (audio/mpeg) because the speaker firmware can't decode WAV.
+    a worker thread. Returns the engine's NATIVE format — WAV 22050 Hz mono
+    16-bit (audio/wav); adapting it to what the consumer can play is the
+    delivery boundary's job (see audio_codec.to_playable), not synthesis'.
     """
 
     def __init__(self, voice_path: str | None = None, *, sentence_silence: float = 0.4, voice=None):
@@ -81,12 +81,11 @@ class PiperTtsBackend(TtsBackend):
             wf.setnchannels(channels)
             wf.setsampwidth(sampwidth)
             wf.writeframes(bytes(pcm))
-        # Transcode here so the blocking lameenc call runs in the worker thread.
-        return wav_to_mp3(out.getvalue())
+        return out.getvalue()
 
     async def synthesize(self, text: str, lang: str = "ru") -> tuple[str, bytes]:
-        mp3_bytes = await asyncio.to_thread(self._synth, text)
-        return ("audio/mpeg", mp3_bytes)
+        wav_bytes = await asyncio.to_thread(self._synth, text)
+        return ("audio/wav", wav_bytes)
 
 
 class PiperConfig(BaseModel):

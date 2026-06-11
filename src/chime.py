@@ -68,6 +68,10 @@ def build_ack_clip(sound_path: str, *, name: str = "") -> tuple[str, bytes]:
     and (for WAV) a blocking transcode, so callers on the event loop should run it via
     asyncio.to_thread. No caching here — callers cache as needed.
     """
+    # Deliberate exception to the "transcode at the delivery boundary" rule
+    # (audio_codec.to_playable): the ack clip is a CACHED asset played on every
+    # utterance, so a WAV source is transcoded ONCE here at build time instead
+    # of per play via to_playable in serve_audio.
     path = (sound_path or "").strip()
     use_file = bool(path) and os.path.isfile(path)
     if use_file:

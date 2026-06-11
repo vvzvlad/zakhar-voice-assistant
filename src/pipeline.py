@@ -32,6 +32,7 @@ from src.audio_prep import (
     trim_start_pcm,
     write_wav,
 )
+from src.audio_codec import to_playable
 from src.audio_server import tts_url
 from src.pipeline_events import StageEvent
 from src.llm_text import clean_llm_output
@@ -818,8 +819,10 @@ class Pipeline:
                             f"{self.name}: 🔊 TTS ({time.perf_counter() - tts_t:.2f}s, "
                             f"{len(audio)} bytes)"
                         )
-                        ext, url = self.serve_audio(mime, audio)
-                        record["audio_bytes"] = len(audio)
+                        ext, url, served_bytes = await self.serve_audio(mime, audio)
+                        # Record what the speaker actually downloads (post-transcode),
+                        # not the backend's native-format size.
+                        record["audio_bytes"] = served_bytes
                         record["audio_fmt"] = ext
                         logger.info(f"{self.name}: ▶ serving {url}")
                         self._emit(StageEvent.TTS_END, {"url": url})
@@ -914,16 +917,22 @@ class Pipeline:
                 except Exception as e:
                     logger.error(f"{self.name}: run broadcast failed: {e}")
 
-    def serve_audio(self, mime: str, audio: bytes) -> tuple[str, str]:
-        """Cache the clip on the shared audio server and return (ext, public URL).
+    async def serve_audio(self, mime: str, audio: bytes) -> tuple[str, str, int]:
+        """Adapt the clip to a playable format and cache it; return (ext, url, nbytes).
 
-        The single put+tts_url pair behind every audio-serving path in the
-        pipeline; also the public helper for device-layer callers that already
-        hold ready audio bytes (e.g. the panel chime preview via play_media).
+        THE delivery boundary: TTS backends return their engine's NATIVE format
+        (e.g. Piper -> audio/wav) and this single put-point adapts it to what
+        the speaker firmware can decode (to_playable, run off-loop because the
+        WAV->MP3 transcode blocks). The single adapt+put+tts_url path behind
+        every audio-serving caller in the pipeline; also the public helper for
+        device-layer callers that already hold ready audio bytes (e.g. the
+        panel chime preview via play_media). `nbytes` is the size of the SERVED
+        clip — what the speaker actually downloads (post-transcode).
         """
+        mime, audio = await asyncio.to_thread(to_playable, mime, audio)
         audio_id = self.audio_server.put(audio, mime)
         ext, url = tts_url(self.public_base_url, audio_id, mime)
-        return ext, url
+        return ext, url, len(audio)
 
     async def speak(self, text: str) -> None:
         """Public entry for proactive speech (reminders, external callers).
@@ -934,7 +943,7 @@ class Pipeline:
         layer's announce. Raises on failure (callers decide isolation).
         """
         mime, audio = await self.tts_backend.synthesize(text, "ru")
-        _ext, url = self.serve_audio(mime, audio)
+        _ext, url, _nbytes = await self.serve_audio(mime, audio)
         logger.info(f"{self.name}: 🔔 announce: {text!r} -> {url}")
         if self.send_announcement is not None:
             await self.send_announcement(media_id=url, timeout=30.0, text=text)
@@ -996,7 +1005,7 @@ class Pipeline:
         """
         try:
             mime, audio = self._ack_clip_bytes()
-            _ext, url = self.serve_audio(mime, audio)
+            _ext, url, _nbytes = await self.serve_audio(mime, audio)
             logger.info(f"{self.name}: 🔔 end-of-phrase ack -> {url}")
             if self.send_announcement is not None:
                 await self.send_announcement(media_id=url, timeout=30.0, text="")

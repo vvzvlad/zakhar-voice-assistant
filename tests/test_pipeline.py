@@ -278,13 +278,24 @@ async def test_happy_path(tmp_path, monkeypatch):
     assert_all_str(events)
 
 
-async def test_happy_path_wav_extension(tmp_path, monkeypatch):
-    # A WAV-producing backend (like Piper) -> url ends .wav and the stored mime is wav.
+async def test_happy_path_wav_backend_served_as_mp3(tmp_path, monkeypatch):
+    # The whole point of R8: a WAV-producing backend (like Piper) returns its
+    # NATIVE format, and the delivery boundary (serve_audio -> to_playable)
+    # transcodes it — the audio server holds audio/mpeg and the url ends .mp3.
     patch_llm(monkeypatch, reply="готово")
+    # A real (tiny, silent) WAV: to_playable parses it for the MP3 transcode.
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(16000)
+        wf.writeframes(b"\x00\x00" * 160)
+    wav_bytes = buf.getvalue()
     pipeline, events = make_pipeline(
         tmp_path, monkeypatch,
         stt_text="включи свет",
-        tts_backend=FakeTtsBackend(mime="audio/wav", audio=b"RIFF...."),
+        tts_backend=FakeTtsBackend(mime="audio/wav", audio=wav_bytes),
+        runs_store=(runs := FakeRunsStore()),
     )
 
     await pipeline.on_start("cid", 0, None, None)
@@ -293,8 +304,16 @@ async def test_happy_path_wav_extension(tmp_path, monkeypatch):
 
     data = dict(events)
     url = data[StageEvent.TTS_END]["url"]
-    assert url.endswith("/tts/abc123.wav")
-    assert pipeline.audio_server.calls == [(b"RIFF....", "audio/wav")]
+    assert url.endswith("/tts/abc123.mp3")
+    # The cache holds the TRANSCODED clip, not the backend's native WAV.
+    [(served_audio, served_mime)] = pipeline.audio_server.calls
+    assert served_mime == "audio/mpeg"
+    assert served_audio[0] == 0xFF  # MP3 frame sync byte
+    assert served_audio != wav_bytes
+    # The run record reports what the speaker downloads (post-transcode).
+    rec = runs.records[-1]
+    assert rec["audio_fmt"] == "mp3"
+    assert rec["audio_bytes"] == len(served_audio)
     assert_all_str(events)
 
 

@@ -325,7 +325,7 @@ class DeviceClient:
         """
         if not self.online:
             raise RuntimeError(f"{self.cfg.name} is offline")
-        _ext, url = self.pipeline.serve_audio(mime, audio)
+        _ext, url, _nbytes = await self.pipeline.serve_audio(mime, audio)
         logger.info(f"{self.cfg.name}: 🔔 play media -> {url}")
         await self.cli.send_voice_assistant_announcement_await_response(
             media_id=url, timeout=30.0, text="",

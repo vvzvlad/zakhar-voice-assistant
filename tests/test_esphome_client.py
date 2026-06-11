@@ -476,15 +476,15 @@ async def test_announce_offline_raises_without_speaking():
 # --- DeviceClient.play_media ---------------------------------------------------
 
 class _PlayMediaPipeline:
-    """Fake pipeline recording serve_audio() positional args, returning (ext, url)."""
+    """Fake pipeline recording serve_audio() positional args, returning (ext, url, nbytes)."""
 
     def __init__(self, url="<url>"):
         self.served = []  # positional-args tuples, exactly as serve_audio received them
         self._url = url
 
-    def serve_audio(self, *args):
+    async def serve_audio(self, *args):
         self.served.append(args)
-        return ("mp3", self._url)
+        return ("mp3", self._url, len(args[1]))
 
 
 class _PlayMediaCli:
