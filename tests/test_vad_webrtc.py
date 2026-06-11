@@ -5,6 +5,7 @@ framing across odd chunk sizes, the end-pointing decisions against an
 EndpointPolicy, and the decision-only auto_gain boost.
 """
 
+import importlib.util
 import os
 
 import numpy as np
@@ -380,6 +381,11 @@ def test_vad_provider_contract(provider_id):
     model_path = getattr(cfg, "model_path", None)
     if model_path and not os.path.exists(model_path):
         pytest.skip(f"model file not present: {model_path}")
+    # Package-backed providers (ten) fail fast in create() when their optional
+    # pip package isn't installed; skip ONLY that provider — webrtc/silero must
+    # still run the real create() path unconditionally.
+    if provider_id == "ten" and importlib.util.find_spec("ten_vad") is None:
+        pytest.skip("ten-vad package not installed")
     backend = prov.create(cfg, deps=None)
     assert isinstance(backend, VadBackend)
     session = backend.open(EndpointPolicy(

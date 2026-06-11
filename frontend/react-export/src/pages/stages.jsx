@@ -188,7 +188,7 @@ export function VAD() {
 
   return <div className="z-page">
     <PageHeader title="VAD · Voice capture" crumb="Pipeline / Stage 01"
-      desc="The speaker streams audio continuously and never signals end-of-phrase — we detect it with WebRTC VAD. Tune sensitivity to pauses here." />
+      desc="The speaker streams audio continuously and never signals end-of-phrase — we detect it server-side with the selected VAD. Tune sensitivity to pauses here." />
     {/* Two equal columns: VAD provider + end-pointing on the left, mic + chime cards stacked on the right */}
     <div className="z-cols even">
       <div className="z-grid">
