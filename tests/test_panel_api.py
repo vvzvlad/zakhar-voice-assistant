@@ -632,10 +632,13 @@ def _seed_runs(tmp_path):
     })
     store.insert({
         "ts": now, "device": "bedroom", "result": "error", "reason": "endpoint",
-        "stt_text": "сломайся", "llm_text": "Ошибка: boom", "model": None, "tokens": None,
+        # error_text carries the RAW stage error (StageError message), llm_text the
+        # spoken fallback phrase — mirrors what pipeline records since the R1 contract.
+        "stt_text": "сломайся", "llm_text": "Что-то сломалось, попробуй ещё раз попозже.",
+        "model": None, "tokens": None,
         "t_vad": 1000, "t_stt": 200, "t_llm": 300, "t_ruaccent": 0, "t_tts": 0,
         "t_total": 1500, "audio_ms": None, "audio_bytes": None, "audio_fmt": None,
-        "error_stage": "LLM", "error_text": "Ошибка: boom", "rounds": [],
+        "error_stage": "LLM", "error_text": "boom", "rounds": [],
     })
     return store
 

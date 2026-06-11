@@ -31,6 +31,7 @@ from src import config_store, context, llm
 from src.audio_server import tts_url
 from src.pipeline_events import StageEvent
 from src.runs_store import live_row, summary_row
+from src.stage_errors import StageError
 from src.text import processing_response
 from src.tts import make_ack_chime_mp3, wav_to_mp3
 
@@ -781,6 +782,13 @@ class Pipeline:
 
         self._live_send_tail = asyncio.create_task(_send())
 
+    def _spoken_llm_fallback(self, e: StageError) -> str:
+        """Map an LLM StageError to the configured phrase spoken instead of the
+        raw error text (policy lives here, phrases live in LlmConfig)."""
+        if e.kind == "rate_limit":
+            return self.llm_cfg.reply_rate_limit
+        return self.llm_cfg.reply_error
+
     async def _run(self, reason, pcm, conversation_id, pcm2: bytes = b"") -> None:
         """Run STT -> LLM -> TTS -> events on the already-claimed audio, once.
 
@@ -921,7 +929,21 @@ class Pipeline:
                         self._emit(StageEvent.RUN_END, {})
                         return
                     stt_t = time.perf_counter()
-                    text = await self.stt_backend.transcribe(pcm)
+                    try:
+                        text = await self.stt_backend.transcribe(pcm)
+                    except StageError as e:
+                        # STT failed: record the run honestly as an error (not "empty"),
+                        # balance the STT_START emitted in on_start with an empty
+                        # STT_END, and end the run. Nothing is spoken — same audible
+                        # behavior (silence) as before, but observability tells the truth.
+                        record["t_stt"] = int((time.perf_counter() - stt_t) * 1000)
+                        record["result"] = "error"
+                        record["error_stage"] = "STT"
+                        record["error_text"] = str(e)
+                        logger.error(f"{self.name}: STT failed: {e}")
+                        self._emit(StageEvent.STT_END, {"text": ""})
+                        self._emit(StageEvent.RUN_END, {})
+                        return
                     record["t_stt"] = int((time.perf_counter() - stt_t) * 1000)
                     logger.info(
                         f"{self.name}: 📝 STT ({time.perf_counter() - stt_t:.2f}s): "
@@ -981,32 +1003,39 @@ class Pipeline:
                         self._filler_tasks.add(task)
                         task.add_done_callback(self._filler_tasks.discard)
 
-                    reply = await llm.call_llm_api(
-                        self.llm_backend,
-                        self.hub,
-                        text,
-                        core=self.core,
-                        llm_cfg=self.llm_cfg,
-                        history=history,
-                        trace=trace,
-                        device=self.name,
-                        on_filler=_speak_filler,
-                    )
+                    llm_failed = False
+                    try:
+                        reply = await llm.call_llm_api(
+                            self.llm_backend,
+                            self.hub,
+                            text,
+                            core=self.core,
+                            llm_cfg=self.llm_cfg,
+                            history=history,
+                            trace=trace,
+                            device=self.name,
+                            on_filler=_speak_filler,
+                        )
+                    except StageError as e:
+                        # LLM failed: record the raw error, then continue into the
+                        # normal TTS path speaking a configured fallback phrase
+                        # (rate limits get their own line). The raw API error text
+                        # never reaches the user's ears.
+                        llm_failed = True
+                        record["result"] = "error"
+                        record["error_stage"] = "LLM"
+                        record["error_text"] = str(e)
+                        logger.error(f"{self.name}: LLM failed: {e}")
+                        reply = self._spoken_llm_fallback(e)
                     record["t_llm"] = int((time.perf_counter() - llm_t) * 1000)
                     record["llm_text"] = reply
                     record["model"] = trace.get("model")
                     record["tokens"] = trace.get("tokens")
                     record["rounds"] = trace.get("rounds") or []
                     record["request"] = trace.get("request")
-                    # Did the model actually run any tool this round?
-                    tool_used = any(r.get("calls") for r in record["rounds"])
-                    if reply.startswith("Ошибка:"):
-                        # LLM-layer error (already a human-readable string). Classify it
-                        # but keep current behavior: continue on to the TTS attempt.
-                        record["result"] = "error"
-                        record["error_stage"] = "LLM"
-                        record["error_text"] = reply
-                    else:
+                    if not llm_failed:
+                        # Did the model actually run any tool this round?
+                        tool_used = any(r.get("calls") for r in record["rounds"])
                         record["result"] = "tool" if tool_used else "ok"
                     logger.info(
                         f"{self.name}: 💬 LLM reply ({time.perf_counter() - llm_t:.2f}s): "
@@ -1016,17 +1045,20 @@ class Pipeline:
                     # rounds, t_llm and the updated result.
                     self._emit_live(record)
 
-                    try:
-                        context.append_context(
-                            self._context_path,
-                            text,
-                            reply,
-                            max_turns=self.core.context.max_turns,
-                            ttl_seconds=self.core.context.ttl_seconds,
-                        )
-                    except Exception as e:
-                        # Context persistence failure must not break the run.
-                        logger.error(f"{self.name}: context append failed: {e}")
+                    # A failed LLM turn is not a conversation turn: don't pollute the
+                    # context history with the spoken fallback phrase.
+                    if not llm_failed:
+                        try:
+                            context.append_context(
+                                self._context_path,
+                                text,
+                                reply,
+                                max_turns=self.core.context.max_turns,
+                                ttl_seconds=self.core.context.ttl_seconds,
+                            )
+                        except Exception as e:
+                            # Context persistence failure must not break the run.
+                            logger.error(f"{self.name}: context append failed: {e}")
 
                     self._emit(
                         StageEvent.INTENT_END,

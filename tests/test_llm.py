@@ -1,8 +1,10 @@
 import httpx
+import pytest
 
 from src.core_config import CoreConfig, OpenWeatherMapConfig, PromptConfig
 from src.llm import call_llm_api
 from src.plugins.llm.base import LlmConfig
+from src.stage_errors import StageError
 from src.text import processing_response
 from src.tool_hub import ToolHub
 
@@ -200,42 +202,54 @@ async def test_no_tool_path(tmp_path):
     assert result == processing_response("Привет, мясной мешок.")
 
 
-async def test_rate_limit_path(tmp_path):
+async def test_rate_limit_raises_stage_error(tmp_path):
+    # HTTP 429 -> StageError(kind="rate_limit"); the pipeline maps it to the
+    # configured reply_rate_limit phrase (tested at the pipeline level).
     hub = StubHub(tools=[])
     backend = FakeLlmBackend([_http_status_error(429)])
 
-    result = await _call(backend, hub, "привет", _core(tmp_path))
+    with pytest.raises(StageError) as ei:
+        await _call(backend, hub, "привет", _core(tmp_path))
 
-    assert result == LlmConfig().reply_rate_limit
+    assert ei.value.stage == "llm"
+    assert ei.value.kind == "rate_limit"
 
 
-async def test_non_2xx_returns_error_message(tmp_path):
+async def test_non_2xx_raises_stage_error_with_reason(tmp_path):
     hub = StubHub(tools=[])
     backend = FakeLlmBackend([_http_status_error(500, {"error": {"message": "boom"}})])
 
-    result = await _call(backend, hub, "привет", _core(tmp_path))
+    with pytest.raises(StageError) as ei:
+        await _call(backend, hub, "привет", _core(tmp_path))
 
-    assert result == "Ошибка: boom"
+    assert ei.value.stage == "llm"
+    assert ei.value.kind == "error"
+    # The JSON error message is extracted as the StageError text.
+    assert str(ei.value) == "boom"
 
 
-async def test_httpx_error_returns_error_prefix(tmp_path):
+async def test_httpx_error_raises_stage_error(tmp_path):
     hub = StubHub(tools=[])
     backend = FakeLlmBackend([httpx.ConnectError("down")])
 
-    result = await _call(backend, hub, "привет", _core(tmp_path))
+    with pytest.raises(StageError) as ei:
+        await _call(backend, hub, "привет", _core(tmp_path))
 
-    assert result.startswith("Ошибка:")
+    assert ei.value.stage == "llm"
+    assert ei.value.kind == "error"
 
 
-async def test_max_tool_rounds_exhausted(tmp_path):
+async def test_max_tool_rounds_exhausted_raises_stage_error(tmp_path):
     hub = StubHub(tools=[SET_LIGHT_TOOL])
     backend = FakeLlmBackend([
         _tool_call("set_light", "{}") for _ in range(MAX_TOOL_ROUNDS + 1)
     ])
 
-    result = await _call(backend, hub, "включи свет", _core(tmp_path))
+    with pytest.raises(StageError) as ei:
+        await _call(backend, hub, "включи свет", _core(tmp_path))
 
-    assert result == "Ошибка: слишком много вызовов инструментов"
+    assert ei.value.stage == "llm"
+    assert ei.value.kind == "tool_rounds"
 
 
 async def test_empty_final_reply_uses_fallback(tmp_path):
@@ -361,12 +375,14 @@ async def test_trace_none_is_a_noop(tmp_path):
     assert result == processing_response("ответ")
 
 
-async def test_no_choices_returns_error(tmp_path):
-    # Provider returned a response with no choices -> user-facing error, no KeyError.
+async def test_no_choices_raises_stage_error(tmp_path):
+    # Provider returned a response with no choices -> StageError, no KeyError.
     hub = StubHub(tools=[])
     backend = FakeLlmBackend([{"model": "x", "usage": {}}])  # no "choices"
-    result = await _call(backend, hub, "привет", _core(tmp_path))
-    assert result == "Ошибка: не найден ответ от модели"
+    with pytest.raises(StageError) as ei:
+        await _call(backend, hub, "привет", _core(tmp_path))
+    assert ei.value.stage == "llm"
+    assert ei.value.kind == "error"
 
 
 async def test_malformed_tool_args_degrade_to_empty_dict(tmp_path):

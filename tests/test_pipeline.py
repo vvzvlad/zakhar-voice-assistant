@@ -22,6 +22,7 @@ from src.pipeline_events import StageEvent
 from src.plugins.llm.base import LlmConfig
 from src.runs_store import _LIST_COLS
 from src.runtime import Runtime
+from src.stage_errors import StageError
 from src.text import processing_response
 
 PUBLIC_BASE_URL = "http://10.0.0.10:8200"
@@ -104,7 +105,8 @@ class FakeRunEvents:
 
 
 def make_pipeline(tmp_path, monkeypatch, name="dev", stt_text="распознанный текст",
-                  tts_backend=None, runs_store=None, run_events=None, ack=False):
+                  stt_backend=None, tts_backend=None, runs_store=None,
+                  run_events=None, ack=False):
     # The data dir is hardcoded in config_store; the pipeline reads it as a module
     # attribute, so isolate per-test context files by monkeypatching DATA_DIR to
     # tmp_path BEFORE the pipeline (and its _context_path) is built.
@@ -120,7 +122,7 @@ def make_pipeline(tmp_path, monkeypatch, name="dev", stt_text="распозна�
     )
     rt = Runtime(
         FakeSvc(core, LlmConfig()),
-        stt_backend=FakeSttBackend(stt_text),
+        stt_backend=stt_backend or FakeSttBackend(stt_text),
         llm_backend=object(),
         tts_backend=tts_backend or FakeTtsBackend(),
         hub=object(),
@@ -166,10 +168,14 @@ def set_small_vad_thresholds(pipeline):
     vad.no_speech_timeout_ms = 200  # 10 frames with no speech -> finalize
 
 
-def patch_llm(monkeypatch, reply="ответ"):
-    """Stub the whole LLM call. STT is injected as a fake backend, not patched."""
+def patch_llm(monkeypatch, reply="ответ", error=None):
+    """Stub the whole LLM call. STT is injected as a fake backend, not patched.
+
+    When `error` is given (a StageError), the stub raises it instead of replying."""
 
     async def fake(llm_backend, hub, text, **kwargs):
+        if error is not None:
+            raise error
         return reply
 
     monkeypatch.setattr("src.llm.call_llm_api", fake)
@@ -907,10 +913,10 @@ class RaisingTtsBackend:
 
 
 async def test_llm_error_then_tts_fail_keeps_error_stage_llm(tmp_path, monkeypatch):
-    # When the LLM reply is an "Ошибка:" string the run is classified as an
-    # LLM error but still continues into TTS. If TTS then fails, the TTS except
-    # must NOT clobber the already-set LLM root cause.
-    patch_llm(monkeypatch, reply="Ошибка: модель недоступна")
+    # When the LLM raises a StageError the run is classified as an LLM error
+    # but still continues into TTS with the configured fallback phrase. If TTS
+    # then fails, the TTS except must NOT clobber the already-set LLM root cause.
+    patch_llm(monkeypatch, error=StageError("llm", "модель недоступна"))
     store = FakeRunsStore()
     pipeline, _ = make_pipeline(
         tmp_path, monkeypatch,
@@ -928,7 +934,111 @@ async def test_llm_error_then_tts_fail_keeps_error_stage_llm(tmp_path, monkeypat
     assert rec["result"] == "error"
     # LLM stage/text preserved despite the later TTS failure.
     assert rec["error_stage"] == "LLM"
-    assert rec["error_text"] == "Ошибка: модель недоступна"
+    assert rec["error_text"] == "модель недоступна"
+
+
+async def test_llm_stage_error_speaks_reply_error(tmp_path, monkeypatch):
+    # A generic LLM StageError: the run is recorded as an LLM error, but the user
+    # hears the configured reply_error phrase (never the raw API error text).
+    patch_llm(monkeypatch, error=StageError("llm", "boom from API"))
+    store = FakeRunsStore()
+    pipeline, events = make_pipeline(
+        tmp_path, monkeypatch, stt_text="включи свет", runs_store=store,
+    )
+
+    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_audio(b"\x01\x02" * 100)
+    await pipeline.on_stop(False)
+
+    assert types_of(events) == [
+        StageEvent.RUN_START,
+        StageEvent.STT_START,
+        StageEvent.STT_END,
+        StageEvent.INTENT_START,
+        StageEvent.INTENT_END,
+        StageEvent.TTS_START,
+        StageEvent.TTS_END,
+        StageEvent.RUN_END,
+    ]
+    data = dict(events)
+    assert data[StageEvent.TTS_START] == {"text": LlmConfig().reply_error}
+    rec = store.records[0]
+    assert rec["result"] == "error"
+    assert rec["error_stage"] == "LLM"
+    assert rec["error_text"] == "boom from API"
+    # The spoken fallback is what was sent to TTS, recorded as llm_text.
+    assert rec["llm_text"] == LlmConfig().reply_error
+
+
+async def test_llm_rate_limit_speaks_reply_rate_limit(tmp_path, monkeypatch):
+    # kind="rate_limit" maps to the dedicated rate-limit phrase.
+    patch_llm(monkeypatch, error=StageError("llm", "rate limited", kind="rate_limit"))
+    store = FakeRunsStore()
+    pipeline, events = make_pipeline(
+        tmp_path, monkeypatch, stt_text="привет", runs_store=store,
+    )
+
+    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_audio(b"\x01\x02" * 100)
+    await pipeline.on_stop(False)
+
+    data = dict(events)
+    assert data[StageEvent.TTS_START] == {"text": LlmConfig().reply_rate_limit}
+    rec = store.records[0]
+    assert rec["result"] == "error"
+    assert rec["error_stage"] == "LLM"
+    assert rec["error_text"] == "rate limited"
+
+
+async def test_llm_stage_error_does_not_append_context(tmp_path, monkeypatch):
+    # A failed LLM turn is not a conversation turn: nothing is appended to the
+    # context history (the next run must not see the fallback phrase as a reply).
+    from src import context
+
+    appended = []
+    monkeypatch.setattr(
+        context, "append_context",
+        lambda *a, **k: appended.append(a),
+    )
+    patch_llm(monkeypatch, error=StageError("llm", "boom"))
+    pipeline, _ = make_pipeline(tmp_path, monkeypatch, stt_text="привет")
+
+    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_audio(b"\x01\x02" * 100)
+    await pipeline.on_stop(False)
+
+    assert appended == []
+
+
+async def test_stt_stage_error_records_error_and_stays_silent(tmp_path, monkeypatch):
+    # An STT failure ends the run silently (no LLM/TTS), but the record now says
+    # error/STT instead of lying with result="empty". RaisingSttBackend (defined
+    # below for the top-level-exception test) is reused with a StageError here.
+    patch_llm(monkeypatch, reply="не должно быть произнесено")
+    store = FakeRunsStore()
+    pipeline, events = make_pipeline(
+        tmp_path, monkeypatch,
+        stt_backend=RaisingSttBackend(StageError("stt", "groq down")),
+        runs_store=store,
+    )
+
+    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_audio(b"\x01\x02" * 100)
+    await pipeline.on_stop(False)
+
+    # STT_END balances STT_START; RUN_END closes the run; no TTS events at all.
+    assert types_of(events) == [
+        StageEvent.RUN_START,
+        StageEvent.STT_START,
+        StageEvent.STT_END,
+        StageEvent.RUN_END,
+    ]
+    assert dict(events)[StageEvent.STT_END] == {"text": ""}
+    assert pipeline.audio_server.calls == []  # nothing synthesized/served
+    rec = store.records[0]
+    assert rec["result"] == "error"
+    assert rec["error_stage"] == "STT"
+    assert rec["error_text"] == "groq down"
 
 
 async def test_raw_capture_writes_wav_when_enabled(tmp_path, monkeypatch):

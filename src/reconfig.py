@@ -41,7 +41,7 @@ def changed_paths(old, new, prefix: str = "") -> set[str]:
 
 # Live LLM provider fields read per request (not baked into the backend).
 _LLM_LIVE_LEAVES = {"reply_rate_limit", "reply_empty", "reply_empty_after_tools",
-                    "max_tool_rounds"}
+                    "reply_error", "max_tool_rounds"}
 
 
 def action_for(path: str) -> str:
