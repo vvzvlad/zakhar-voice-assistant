@@ -15,7 +15,7 @@ import React, { useEffect, useState } from "react";
 import { Field, KeyInput, ScaleSeg, Seg, Select, Slider, Stepper, Toggle } from "./primitives.jsx";
 import { resolve, enumOf, isSecret, humanize } from "../schema.js";
 
-function DynamicSelect({ value, onChange, load, itemAction, itemActionBusy }) {
+function DynamicSelect({ value, onChange, load, itemAction, itemActionBusy, allowCustom }) {
   const norm = (o) => (o && typeof o === "object" ? o : { value: o, label: String(o) });
   const [opts, setOpts] = useState(value != null ? [norm(value)] : []);
   useEffect(() => {
@@ -33,7 +33,13 @@ function DynamicSelect({ value, onChange, load, itemAction, itemActionBusy }) {
     return () => { alive = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  return <Select value={value} options={opts} onChange={onChange} itemAction={itemAction} itemActionBusy={itemActionBusy} />;
+  // Auto-enable in-dropdown search for long lists (provider model catalogs);
+  // short lists (chimes/voices) keep the plain dropdown. Freeform fields
+  // (allowCustom) get the search input regardless of list length inside Select —
+  // it is the only way to type an arbitrary value when the fetched list is
+  // short or empty (e.g. a provider with no api_key returns []).
+  return <Select value={value} options={opts} onChange={onChange} itemAction={itemAction} itemActionBusy={itemActionBusy}
+    searchable={opts.length > 10} allowCustom={allowCustom} />;
 }
 
 // One property → one <Field> with the right widget.
@@ -55,10 +61,14 @@ function SchemaField({ name, node, root, value, onChange, optionsFor, itemAction
   // enum decorated with `poles` (numeric segments + edge captions). Stores the numeric value.
   const segOptions = choices || (enums && poles ? enums.map((v) => ({ value: v, label: String(v) })) : null);
 
+  // `freeform` marks a dynamic select that also accepts arbitrary typed values
+  // (e.g. an LLM model id missing from the provider's catalog).
+  const freeform = !!(node.freeform || r.freeform);
+
   let control;
   if (dynamic && optionsFor) {
     const itemAction = itemActionFor ? itemActionFor(name) : null;
-    control = <DynamicSelect value={value} onChange={set} load={() => optionsFor(name)} itemAction={itemAction || undefined} itemActionBusy={itemActionBusy} />;
+    control = <DynamicSelect value={value} onChange={set} load={() => optionsFor(name)} itemAction={itemAction || undefined} itemActionBusy={itemActionBusy} allowCustom={freeform} />;
   } else if (segOptions) {
     control = <ScaleSeg
       options={segOptions} value={value} onChange={set}

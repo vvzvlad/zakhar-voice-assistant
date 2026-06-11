@@ -14,12 +14,14 @@ same-origin and the dev Vite server proxies /api, so neither needs CORS.
 
 import asyncio
 import contextlib
+import inspect
 import io
 import os
 import time
 import wave
 from datetime import datetime, timezone
 
+import httpx
 import numpy as np
 from aiohttp import web
 from loguru import logger
@@ -222,10 +224,20 @@ class PanelServer:
                 {"error": "category, plugin and field are required"}, status=400
             )
         try:
-            options = self.svc.options(category, plugin, field) or []
+            # ValueError (unknown plugin) is raised by get_provider BEFORE any
+            # coroutine is created, so nothing is left un-awaited on that path.
+            options = self.svc.options(category, plugin, field)
         except ValueError as e:
             return web.json_response({"error": str(e)}, status=404)
-        return web.json_response({"options": options})
+        # Network-backed lists (provider model catalogs) come back as an awaitable.
+        if inspect.isawaitable(options):
+            try:
+                options = await options
+            except httpx.HTTPError as e:
+                return web.json_response(
+                    {"error": f"upstream fetch failed: {e}"}, status=502
+                )
+        return web.json_response({"options": options or []})
 
     async def _get_chimes(self, request: web.Request) -> web.Response:
         """List the bundled end-of-phrase chime files for the ack sound_path selector."""

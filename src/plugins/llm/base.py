@@ -16,12 +16,20 @@ class LlmBackend(ABC):
         (with 'choices'/'usage'/'model'). Raises httpx.HTTPStatusError on non-2xx."""
 
 
+# Shared schema annotation for the `model` field: rendered as a dynamic select
+# (option list fetched from the provider's model-list API) that still accepts an
+# arbitrary, not-listed model id (`freeform` is consumed by the frontend).
+# Subclasses overriding `model` must re-attach this dict explicitly — pydantic
+# does NOT inherit Field metadata on overridden fields.
+MODEL_FIELD_EXTRA: dict = {"widget": "select", "options": "dynamic", "freeform": True}
+
+
 class LlmConfig(BaseModel):
     # The per-field apply class is computed centrally by reconfig.action_for and injected
     # into the catalog schema by ConfigService.catalog() (single source of truth), so the
     # fields below carry no per-field "apply" annotation.
     api_key: str = ""
-    model: str = "anthropic/claude-haiku-4.5"
+    model: str = Field("anthropic/claude-haiku-4.5", json_schema_extra=MODEL_FIELD_EXTRA)
     temperature: float = Field(0.8, ge=0.0, le=2.0)
     max_tokens: int = Field(4096, ge=1)
     max_tool_rounds: int = Field(5, ge=1)

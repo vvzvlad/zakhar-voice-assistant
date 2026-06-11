@@ -72,7 +72,12 @@ function ProviderStage({ cat, title, crumb, desc }) {
       caption={prov.label}
     />
     <Card title={prov.label} foot={<FormSaveBar dirty={dirty} saving={saving} onSave={save} errors={errorLines(err)} />}>
-      <SchemaForm schema={prov.schema} values={draft} onChange={onChange} optionsFor={optionsFor} />
+      {/* key={selected}: dynamic selects fetch their option list once on mount, and
+          providers often share an identical field set, so without the key a provider
+          switch would be reconciled in place and keep the PREVIOUS provider's options
+          (e.g. OpenRouter's model catalog shown under Groq). The key forces a remount
+          so every DynamicSelect refetches for the newly selected provider. */}
+      <SchemaForm key={selected} schema={prov.schema} values={draft} onChange={onChange} optionsFor={optionsFor} />
     </Card>
   </div>;
 }
@@ -122,7 +127,10 @@ function ProviderCard({ cat, sub }) {
       onChange={switchProvider}
       caption={prov.label}
     />
-    <SchemaForm schema={prov.schema} values={draft} onChange={onChange} optionsFor={optionsFor} />
+    {/* key={selected}: see ProviderStage — remount the form on provider switch so
+        DynamicSelect fields (which fetch options on mount) refetch for the new
+        provider instead of keeping the previous provider's option list. */}
+    <SchemaForm key={selected} schema={prov.schema} values={draft} onChange={onChange} optionsFor={optionsFor} />
   </Card>;
 }
 

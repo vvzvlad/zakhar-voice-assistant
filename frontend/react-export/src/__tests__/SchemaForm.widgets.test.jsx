@@ -6,7 +6,7 @@
 //   - a float value flowing into an integer field (pydantic 422).
 import React from "react";
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { render, screen, fireEvent, cleanup } from "@testing-library/react";
+import { render, screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
 import SchemaForm from "../components/SchemaForm.jsx";
 
 afterEach(cleanup);
@@ -89,6 +89,64 @@ describe("SchemaField widget selection", () => {
     // not a plaintext input.
     expect(container.querySelector(".z-select")).toBeTruthy();
     expect(container.querySelector(".z-inp input")).toBeNull();
+  });
+
+  it("auto-enables in-dropdown search for a dynamic field whose list exceeds 10 options", async () => {
+    const many = Array.from({ length: 12 }, (_, i) => `model-${i}`);
+    const schema = { properties: { model: { type: "string", options: "dynamic" } } };
+    const { container } = render(
+      <SchemaForm schema={schema} values={{ model: "model-0" }} onChange={() => {}}
+        optionsFor={async () => many} />
+    );
+    fireEvent.click(container.querySelector(".z-select"));
+    // The search box appears once the long list has loaded.
+    const input = await screen.findByPlaceholderText("Search…");
+    fireEvent.change(input, { target: { value: "model-11" } });
+    const opts = screen.getAllByRole("option");
+    expect(opts).toHaveLength(1);
+    expect(opts[0].textContent).toContain("model-11");
+  });
+
+  it("keeps a short NON-freeform dynamic list (<= 10 options) non-searchable", async () => {
+    const schema = { properties: { voice: { type: "string", options: "dynamic" } } };
+    const { container } = render(
+      <SchemaForm schema={schema} values={{ voice: "a" }} onChange={() => {}}
+        optionsFor={async () => ["a", "b", "c"]} />
+    );
+    fireEvent.click(container.querySelector(".z-select"));
+    await waitFor(() => expect(screen.getAllByRole("option")).toHaveLength(3));
+    expect(screen.queryByPlaceholderText("Search…")).toBeNull();
+  });
+
+  it("a FREEFORM dynamic field keeps the search input even for a short list", async () => {
+    // Regression: a freeform model field whose provider returns a short/empty
+    // list (e.g. missing api_key) must still allow typing an arbitrary id.
+    const onChange = vi.fn();
+    const schema = { properties: { model: { type: "string", options: "dynamic", freeform: true } } };
+    const { container } = render(
+      <SchemaForm schema={schema} values={{ model: "a" }} onChange={onChange}
+        optionsFor={async () => ["a", "b"]} />
+    );
+    fireEvent.click(container.querySelector(".z-select"));
+    const input = await screen.findByPlaceholderText("Search…");
+    fireEvent.change(input, { target: { value: "vendor/typed-by-hand" } });
+    fireEvent.click(screen.getByText('Use "vendor/typed-by-hand"'));
+    expect(onChange).toHaveBeenCalledWith("model", "vendor/typed-by-hand");
+  });
+
+  it("propagates the freeform annotation: the custom 'Use ...' row emits the raw query", async () => {
+    const onChange = vi.fn();
+    const many = Array.from({ length: 12 }, (_, i) => `model-${i}`);
+    const schema = { properties: { model: { type: "string", options: "dynamic", freeform: true } } };
+    const { container } = render(
+      <SchemaForm schema={schema} values={{ model: "model-0" }} onChange={onChange}
+        optionsFor={async () => many} />
+    );
+    fireEvent.click(container.querySelector(".z-select"));
+    const input = await screen.findByPlaceholderText("Search…");
+    fireEvent.change(input, { target: { value: "vendor/not-in-list" } });
+    fireEvent.click(screen.getByText('Use "vendor/not-in-list"'));
+    expect(onChange).toHaveBeenCalledWith("model", "vendor/not-in-list");
   });
 
   it("renders a textarea for a string field with widget:'textarea'", () => {

@@ -35,7 +35,13 @@ class Provider:
         raise NotImplementedError
 
     def options(self, field: str, cfg: BaseModel, deps: Deps):
-        return None           # optional dynamic option lists (voices/models)
+        """Optional dynamic option lists (voices/models) for a config field.
+
+        May return a list (or None for "no dynamic options for this field"), OR an
+        awaitable resolving to such a list for network-backed catalogs (e.g. model
+        lists fetched from the provider's API). Callers that may receive a
+        network-backed list must check `inspect.isawaitable` and await it."""
+        return None
 
 
 REGISTRY: dict[str, dict[str, Provider]] = defaultdict(dict)

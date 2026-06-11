@@ -12,6 +12,7 @@ import time
 import aiohttp
 import httpx
 import pytest
+import respx
 
 import src.plugins  # noqa: F401  register all providers
 from aiohttp.test_utils import TestClient, TestServer
@@ -167,6 +168,53 @@ async def test_get_chimes_lists_bundled_files(tmp_path):
         # relative path the pipeline opens verbatim.
         assert any(o.endswith(".wav") for o in body["options"])
         assert all(o.startswith("assets/chimes/") for o in body["options"])
+    finally:
+        await client.close()
+
+
+@pytest.fixture
+def _reset_openrouter_models_cache():
+    """The OpenRouter model list is TTL-cached at module level; reset around each
+    test so test order never matters."""
+    from src.plugins.llm import openrouter as openrouter_mod
+    openrouter_mod._models_cache.update({"at": 0.0, "data": None})
+    yield
+    openrouter_mod._models_cache.update({"at": 0.0, "data": None})
+
+
+@respx.mock
+async def test_get_options_async_provider_returns_fetched_list(
+    tmp_path, _reset_openrouter_models_cache
+):
+    # llm/openrouter "model" options are network-backed: the provider returns a
+    # coroutine that the handler must await before responding.
+    from src.plugins.llm.openrouter import OPENROUTER_MODELS_URL
+    respx.get(OPENROUTER_MODELS_URL).mock(
+        return_value=httpx.Response(200, json={"data": [{"id": "a/x", "name": "X"}]})
+    )
+    client, _svc_ = await _client(tmp_path)
+    try:
+        resp = await client.get("/api/options",
+                                params={"category": "llm", "plugin": "openrouter", "field": "model"})
+        assert resp.status == 200
+        body = await resp.json()
+        assert body["options"] == [{"value": "a/x", "label": "X"}]
+    finally:
+        await client.close()
+
+
+@respx.mock
+async def test_get_options_upstream_http_error_returns_502(
+    tmp_path, _reset_openrouter_models_cache
+):
+    from src.plugins.llm.openrouter import OPENROUTER_MODELS_URL
+    respx.get(OPENROUTER_MODELS_URL).mock(return_value=httpx.Response(500))
+    client, _svc_ = await _client(tmp_path)
+    try:
+        resp = await client.get("/api/options",
+                                params={"category": "llm", "plugin": "openrouter", "field": "model"})
+        assert resp.status == 502
+        assert "upstream fetch failed" in (await resp.json())["error"]
     finally:
         await client.close()
 

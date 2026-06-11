@@ -121,16 +121,34 @@ export function Stepper({ value, onChange, min = -Infinity, max = Infinity, step
     {unit && <span style={{ fontSize: 11.5, color: "var(--mut)" }}>{unit}</span>}
   </div>;
 }
-export function Select({ value, options, onChange, w, itemAction, itemActionBusy }) {
+export function Select({ value, options, onChange, w, itemAction, itemActionBusy, searchable, allowCustom }) {
   const [open, setOpen] = useState(false);
   const [up, setUp] = useState(false); // open upward when the trigger sits near the viewport bottom
+  const [query, setQuery] = useState("");
   const ref = useRef(null);
   useEffect(() => { const h = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); }; document.addEventListener("pointerdown", h); return () => document.removeEventListener("pointerdown", h); }, []);
+  // The search query never survives an open/close cycle: reopening starts clean.
+  useEffect(() => { setQuery(""); }, [open]);
   // Options may be plain strings/numbers OR {value, label} objects (label is shown,
   // value is stored/emitted). Normalize so the rest is uniform; plain arrays keep their
   // existing behavior (value === label).
   const opts = (options || []).map((o) => (o && typeof o === "object" ? o : { value: o, label: String(o) }));
   const selected = opts.find((o) => o.value === value);
+  // The search input (and the whole search/custom machinery) renders when EITHER
+  // prop is set: `searchable` opts into filtering long lists, while `allowCustom`
+  // alone still needs the input as the only way to type an arbitrary value —
+  // otherwise short/empty fetched lists would make custom values unreachable.
+  // With neither prop the Select stays a plain dropdown (strict no-op).
+  const hasSearch = !!(searchable || allowCustom);
+  // Case-insensitive filter on label OR value; without the input (or an empty
+  // query) the full list renders as before.
+  const q = hasSearch ? query.trim().toLowerCase() : "";
+  const shown = q ? opts.filter((o) => o.label.toLowerCase().includes(q) || String(o.value).toLowerCase().includes(q)) : opts;
+  // Freeform escape hatch: a typed query that matches no option value exactly gets a
+  // synthetic "Use ..." row emitting the raw query as the value. The query can only
+  // be non-empty when the input is rendered, so no extra hasSearch guard is needed.
+  const customRow = !!(allowCustom && query.trim() && !opts.some((o) => String(o.value) === query.trim()));
+  const pick = (v) => { onChange && onChange(v); setOpen(false); };
   // Decide drop direction from the live trigger position: flip up only when there
   // isn't enough room below AND there's more room above. Menu height is estimated
   // from the row count, capped at the 240px max-height.
@@ -150,7 +168,27 @@ export function Select({ value, options, onChange, w, itemAction, itemActionBusy
       onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); } }}>
       {selected ? selected.label : value}<svg width="11" height="11" viewBox="0 0 11 11" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><path d="M2 4l3.5 3.5L9 4" /></svg></div>
     {open && <div role="listbox" style={{ position: "absolute", left: 0, right: 0, ...(up ? { bottom: "100%", marginBottom: 4 } : { top: "100%", marginTop: 4 }), background: "#fff", border: "1px solid var(--line)", borderRadius: 7, boxShadow: "0 8px 28px rgba(16,24,40,.16)", padding: 4, zIndex: 20, maxHeight: 240, overflowY: "auto" }}>
-      {opts.map((o) => <div key={String(o.value)} role="option" aria-selected={o.value === value} tabIndex={0} onClick={() => { onChange && onChange(o.value); setOpen(false); }} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onChange && onChange(o.value); setOpen(false); } }} style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 10px", borderRadius: 5, fontSize: 12.5, fontWeight: o.value === value ? 600 : 400, color: o.value === value ? "var(--acc-ink)" : "var(--ink)", background: o.value === value ? "var(--acc-bg)" : "transparent", cursor: "pointer" }} onMouseEnter={(e) => { if (o.value !== value) e.currentTarget.style.background = "var(--panel2)"; }} onMouseLeave={(e) => { if (o.value !== value) e.currentTarget.style.background = "transparent"; }}>
+      {hasSearch && <div style={{ position: "sticky", top: -4, margin: "-4px -4px 4px", padding: 0, background: "#fff", borderBottom: "1px solid var(--line)", zIndex: 1 }}
+        onPointerDown={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()}>
+        <input
+          autoFocus
+          value={query}
+          placeholder="Search…"
+          onChange={(e) => setQuery(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              // Priority: a filtered match wins over the custom row. A partial match
+              // usually means the user is narrowing down to a known option, so Enter
+              // picks the first one; the custom "Use ..." row stays reachable by click.
+              if (shown.length > 0) pick(shown[0].value);
+              else if (customRow) pick(query.trim());
+            } else if (e.key === "Escape") { e.preventDefault(); setOpen(false); }
+          }}
+          style={{ width: "100%", boxSizing: "border-box", padding: "7px 10px", border: "none", outline: "none", fontSize: 12, fontFamily: "inherit", color: "var(--ink)", background: "transparent" }}
+        />
+      </div>}
+      {shown.map((o) => <div key={String(o.value)} role="option" aria-selected={o.value === value} tabIndex={0} onClick={() => { onChange && onChange(o.value); setOpen(false); }} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onChange && onChange(o.value); setOpen(false); } }} style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 10px", borderRadius: 5, fontSize: 12.5, fontWeight: o.value === value ? 600 : 400, color: o.value === value ? "var(--acc-ink)" : "var(--ink)", background: o.value === value ? "var(--acc-bg)" : "transparent", cursor: "pointer" }} onMouseEnter={(e) => { if (o.value !== value) e.currentTarget.style.background = "var(--panel2)"; }} onMouseLeave={(e) => { if (o.value !== value) e.currentTarget.style.background = "transparent"; }}>
         <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{o.label}</span>
         {itemAction && <button type="button" className="z-mini" title="Play this chime" disabled={itemActionBusy != null}
           onClick={(e) => { e.stopPropagation(); itemAction(o.value); }} style={{ flex: "0 0 auto" }}>
@@ -159,6 +197,14 @@ export function Select({ value, options, onChange, w, itemAction, itemActionBusy
             : <svg width="10" height="10" viewBox="0 0 12 12" fill="currentColor" aria-hidden="true"><path d="M2 1l9 5-9 5z" /></svg>}
         </button>}
       </div>)}
+      {customRow && <div role="option" aria-selected={false} tabIndex={0}
+        onClick={() => pick(query.trim())}
+        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(query.trim()); } }}
+        style={{ padding: "7px 10px", borderRadius: 5, fontSize: 12.5, color: "var(--mut)", fontStyle: "italic", cursor: "pointer" }}
+        onMouseEnter={(e) => { e.currentTarget.style.background = "var(--panel2)"; }}
+        onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}>
+        Use "{query.trim()}"
+      </div>}
     </div>}
   </div>;
 }
