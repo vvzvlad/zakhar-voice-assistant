@@ -35,6 +35,7 @@ from src.audio_prep import (
 from src.audio_server import tts_url
 from src.pipeline_events import StageEvent
 from src.llm_text import clean_llm_output
+from src.prompt import build_system_prompt
 from src.runs_store import live_row, summary_row
 from src.stage_errors import StageError
 from src.tts import make_ack_chime_mp3, wav_to_mp3
@@ -766,8 +767,6 @@ class Pipeline:
                         max_turns=self.core.context.max_turns,
                         ttl_seconds=self.core.context.ttl_seconds,
                     )
-                    trace: dict = {}
-
                     filler_fired = False  # at most one early filler per run
 
                     async def _speak_filler(text: str, tool_names: list[str]) -> None:
@@ -795,15 +794,20 @@ class Pipeline:
 
                     llm_failed = False
                     try:
-                        reply = await llm.call_llm_api(
-                            self.llm_backend,
-                            self.hub,
-                            text,
-                            core=self.core,
-                            llm_cfg=self.llm_cfg,
-                            history=history,
-                            trace=trace,
-                            device=self.name,
+                        # The orchestrator prepares the stage input: the assembled
+                        # system prompt (file IO; same blocking profile as before,
+                        # when it ran inside the LLM stage on the event loop) plus
+                        # history/user text/device. The stage is constructed per run
+                        # so a hot-swapped backend/config applies naturally.
+                        system_prompt = build_system_prompt(self.core)
+                        stage = llm.LlmStage(self.llm_backend, self.hub, self.llm_cfg)
+                        result = await stage.respond(
+                            llm.LlmRequest(
+                                system_prompt=system_prompt,
+                                history=history,
+                                user_text=text,
+                                device=self.name,
+                            ),
                             on_filler=_speak_filler,
                         )
                     except StageError as e:
@@ -817,16 +821,24 @@ class Pipeline:
                         record["error_text"] = str(e)
                         logger.error(f"{self.name}: LLM failed: {e}")
                         reply = self._spoken_llm_fallback(e)
+                        # Preserve observability on failure: the stage attaches the
+                        # partial data accumulated before the error (the same fields
+                        # the old partial trace dict carried).
+                        partial = getattr(e, "partial", None) or {}
+                        record["model"] = partial.get("model")
+                        record["tokens"] = partial.get("tokens")
+                        record["rounds"] = partial.get("rounds") or []
+                        record["request"] = partial.get("request")
+                    else:
+                        reply = result.reply
+                        record["model"] = result.model
+                        record["tokens"] = result.tokens
+                        record["rounds"] = result.rounds
+                        record["request"] = result.request_debug
+                        # Did the model actually run any tool this run?
+                        record["result"] = "tool" if result.tool_used else "ok"
                     record["t_llm"] = int((time.perf_counter() - llm_t) * 1000)
                     record["llm_text"] = reply
-                    record["model"] = trace.get("model")
-                    record["tokens"] = trace.get("tokens")
-                    record["rounds"] = trace.get("rounds") or []
-                    record["request"] = trace.get("request")
-                    if not llm_failed:
-                        # Did the model actually run any tool this round?
-                        tool_used = any(r.get("calls") for r in record["rounds"])
-                        record["result"] = "tool" if tool_used else "ok"
                     logger.info(
                         f"{self.name}: 💬 LLM reply ({time.perf_counter() - llm_t:.2f}s): "
                         f"{reply!r}"

@@ -1,5 +1,7 @@
+import pytest
 from loguru import logger
 
+from src.run_context import current_device
 from src.tool_hub import BuiltinMcpSource, HttpMcpSource, ToolHub
 
 
@@ -564,3 +566,64 @@ async def test_is_slow_duck_typed_source_without_slow_attribute():
     await hub.start()
 
     assert hub.is_slow("quack") is False
+
+
+# --- ambient device publication (current_device ContextVar) -------------------
+
+
+class DeviceRecordingSource(FakeSource):
+    """FakeSource whose call() also records the ambient current_device at call time."""
+
+    def __init__(self, id, tool_names, **kwargs):
+        super().__init__(id, tool_names, **kwargs)
+        self.seen_devices = []
+
+    async def call(self, raw_name, args):
+        self.seen_devices.append(current_device.get())
+        return await super().call(raw_name, args)
+
+
+async def test_call_publishes_device_to_source_and_resets():
+    # hub.call(..., device=...) is the single place the ambient device is published:
+    # the source sees it via the current_device ContextVar DURING the call, and the
+    # var is reset back to its default afterwards.
+    source = DeviceRecordingSource("home", ["set_light"])
+    hub = ToolHub([source])
+    await hub.start()
+
+    out = await hub.call("set_light", {"state": "on"}, device="kitchen")
+
+    assert out == "home:set_light"
+    assert source.seen_devices == ["kitchen"]
+    # After the call the ContextVar is back to its default.
+    assert current_device.get() is None
+
+
+async def test_call_without_device_leaves_contextvar_none():
+    # Omitting device (or passing None) publishes None for the duration of the call.
+    source = DeviceRecordingSource("home", ["set_light"])
+    hub = ToolHub([source])
+    await hub.start()
+
+    await hub.call("set_light", {})
+    await hub.call("set_light", {}, device=None)
+
+    assert source.seen_devices == [None, None]
+    assert current_device.get() is None
+
+
+async def test_call_resets_device_even_when_source_raises():
+    # The reset is in a finally: a (contract-violating) raising source must not
+    # leak the published device into the surrounding context.
+    class BoomSource(FakeSource):
+        async def call(self, raw_name, args):
+            raise RuntimeError("boom")
+
+    source = BoomSource("home", ["set_light"])
+    hub = ToolHub([source])
+    await hub.start()
+
+    with pytest.raises(RuntimeError):
+        await hub.call("set_light", {}, device="kitchen")
+
+    assert current_device.get() is None

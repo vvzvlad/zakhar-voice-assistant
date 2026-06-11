@@ -6,7 +6,8 @@ Layers covered:
   * ReminderScheduler (async): fires after due, drops overdue on start, cancel.
   * Built-in reminders MCP server driven through BuiltinMcpSource.call_tool:
     set_reminder reads current_device, list/cancel text output.
-  * call_llm_api contextvar wiring: device reaches an in-process tool and resets.
+  * LlmStage device wiring: LlmRequest.device travels via hub.call's ContextVar
+    publication to an in-process tool and resets after the run.
   * DeviceManager.announce routing: named-online / named-offline / None.
 
 Async code is driven with asyncio.run(...) (config-independent), matching the
@@ -18,8 +19,7 @@ import time
 from datetime import datetime
 
 from src.builtin_mcp.reminders import _format_due, build_reminders_server
-from src.core_config import CoreConfig, PromptConfig
-from src.llm import call_llm_api
+from src.llm import LlmRequest, LlmStage
 from src.plugins.llm.base import LlmConfig
 from src.reminders import (
     ReminderScheduler,
@@ -28,7 +28,7 @@ from src.reminders import (
     _format_reminder_speech,
 )
 from src.run_context import current_device
-from src.tool_hub import BuiltinMcpSource
+from src.tool_hub import BuiltinMcpSource, ToolHub
 
 
 def _store(tmp_path):
@@ -451,14 +451,20 @@ def test_cancel_reminder_found_and_not_found():
     assert sched.cancelled == [7, 8]
 
 
-# --- call_llm_api contextvar wiring ------------------------------------------
+# --- LlmStage device wiring ---------------------------------------------------
 
 
-class _DeviceRecordingHub:
-    """Tool hub double whose call() records the current_device at call time."""
+class _DeviceRecordingSource:
+    """In-process ToolSource double whose call() records the ambient current_device.
+
+    Driven through a REAL ToolHub so the test proves the whole chain:
+    LlmRequest.device -> hub.call(..., device=...) -> ContextVar -> tool.
+    """
+
+    id = "rem"
 
     def __init__(self):
-        self.tools = [{
+        self._tools = [{
             "type": "function",
             "function": {
                 "name": "set_reminder",
@@ -468,8 +474,14 @@ class _DeviceRecordingHub:
         }]
         self.seen_device = "UNSET"
 
-    async def ensure_tools(self):
+    async def start(self):
         return None
+
+    async def ensure(self):
+        return None
+
+    def raw_tools(self):
+        return self._tools
 
     async def call(self, name, args):
         self.seen_device = current_device.get()
@@ -501,23 +513,21 @@ class _ScriptedBackend:
         }
 
 
-def test_call_llm_api_publishes_device_and_resets(tmp_path):
-    prompt_path = tmp_path / "system_prompt.md"
-    prompt_path.write_text("PROMPT", encoding="utf-8")
-    core = CoreConfig(prompt=PromptConfig(system_prompt_path=str(prompt_path)))
-    hub = _DeviceRecordingHub()
+def test_llm_stage_publishes_device_via_hub_and_resets():
+    source = _DeviceRecordingSource()
     backend = _ScriptedBackend()
 
     async def main():
-        return await call_llm_api(
-            backend, hub, "напомни",
-            core=core, llm_cfg=LlmConfig(max_tool_rounds=5),
-            device="kitchen",
-        )
+        hub = ToolHub([source])
+        await hub.start()
+        stage = LlmStage(backend, hub, LlmConfig(max_tool_rounds=5))
+        return await stage.respond(LlmRequest(
+            system_prompt="PROMPT", history=[], user_text="напомни", device="kitchen",
+        ))
 
     asyncio.run(main())
-    # The tool saw the device via the ContextVar.
-    assert hub.seen_device == "kitchen"
+    # The tool saw the device via the ContextVar the hub published.
+    assert source.seen_device == "kitchen"
     # After the call the ContextVar is back to its default.
     assert current_device.get() is None
 
