@@ -5,17 +5,17 @@ import httpx
 import pytest
 import respx
 
+from src.audio_codec import to_playable, wav_to_mp3
+from src.chime import make_ack_chime_mp3
 from src.plugins.tts._ru_text import expand_units, sanitize_plus_stress
-from src.tts import (
-    PiperTtsBackend,
-    TeraTtsHttpBackend,
+from src.plugins.tts.piper import PiperTtsBackend
+from src.plugins.tts.teratts import TeraTtsHttpBackend
+from src.plugins.tts.yandex import (
     YandexTtsBackend,
     _chunk_for_v3,
     _decode_v3_audio,
-    make_ack_chime_mp3,
-    split_sentences,
-    wav_to_mp3,
 )
+from src.tts import split_sentences
 
 YANDEX_URL = "https://tts.api.cloud.yandex.net/tts/v3/utteranceSynthesis"
 
@@ -38,6 +38,33 @@ def test_wav_to_mp3_produces_mp3_frame():
     out = wav_to_mp3(wav)
     assert out  # non-empty
     assert out[0] == 0xFF  # MP3 frame sync byte
+
+
+# --- to_playable (delivery-boundary format adaptation, R8) -------------------
+
+
+def test_to_playable_mp3_passthrough():
+    # Already speaker-decodable -> untouched bytes, same mime, no transcode.
+    assert to_playable("audio/mpeg", b"\xff\xf3mp3") == ("audio/mpeg", b"\xff\xf3mp3")
+
+
+def test_to_playable_flac_passthrough():
+    assert to_playable("audio/flac", b"fLaC....") == ("audio/flac", b"fLaC....")
+
+
+def test_to_playable_wav_transcodes_to_mp3():
+    # WAV is not speaker-decodable -> transcoded to MP3 at the delivery boundary.
+    wav = _make_wav()
+    mime, out = to_playable("audio/wav", wav)
+    assert mime == "audio/mpeg"
+    assert out  # non-empty
+    assert out[0] == 0xFF  # MP3 frame sync byte
+    assert out != wav
+
+
+def test_to_playable_unknown_mime_passthrough():
+    # Unknown formats are served as-is (same lenient behavior as tts_url).
+    assert to_playable("audio/ogg", b"OggS") == ("audio/ogg", b"OggS")
 
 
 def test_make_ack_chime_mp3_is_deterministic_mp3():
@@ -286,14 +313,14 @@ class _StubVoice:
         wav_file.writeframes(b"\x11\x22" * n)
 
 
-def _synth_wav(backend, monkeypatch, text):
-    """Run _synth but capture the raw WAV instead of the MP3 transcode, so the
-    silence padding / frame alignment is observable at the byte level."""
-    monkeypatch.setattr("src.tts.wav_to_mp3", lambda wav_bytes, **kw: wav_bytes)
+def _synth_wav(backend, text):
+    """Run _synth and return its raw WAV output (the backend's native format
+    since R8 — no MP3 transcode in synthesis), so the silence padding / frame
+    alignment is observable at the byte level."""
     return backend._synth(text)
 
 
-def test_synth_silence_padding_is_whole_frames_and_off_by_value(monkeypatch):
+def test_synth_silence_padding_is_whole_frames_and_off_by_value():
     # Two short sentences; compare 0.4s vs 0.0s sentence_silence. The only
     # difference must be exactly one inter-sentence silence gap of
     # int(framerate*0.4) whole frames.
@@ -303,8 +330,8 @@ def test_synth_silence_padding_is_whole_frames_and_off_by_value(monkeypatch):
     b0 = PiperTtsBackend.from_voice(voice0, sentence_silence=0.0)
     b4 = PiperTtsBackend.from_voice(voice4, sentence_silence=0.4)
 
-    wav0 = _synth_wav(b0, monkeypatch, text)
-    wav4 = _synth_wav(b4, monkeypatch, text)
+    wav0 = _synth_wav(b0, text)
+    wav4 = _synth_wav(b4, text)
 
     with wave.open(io.BytesIO(wav0), "rb") as r0:
         rate = r0.getframerate()
@@ -324,14 +351,14 @@ def test_synth_silence_padding_is_whole_frames_and_off_by_value(monkeypatch):
     assert silence == b"\x00" * expected_silence_bytes
 
 
-def test_synth_all_unpronounceable_returns_valid_silent_clip(monkeypatch):
+def test_synth_all_unpronounceable_returns_valid_silent_clip():
     # Every fragment raises -> except/continue path for all, framerate stays None
     # -> 22050/1/16 fallback fires. Must yield a parseable empty-but-valid WAV.
     text = "Раз. Два."
     voice = _StubVoice(raises={"Раз.", "Два."})
     backend = PiperTtsBackend.from_voice(voice, sentence_silence=0.4)
 
-    wav = _synth_wav(backend, monkeypatch, text)
+    wav = _synth_wav(backend, text)
     with wave.open(io.BytesIO(wav), "rb") as r:
         assert r.getframerate() == 22050
         assert r.getnchannels() == 1
@@ -339,7 +366,7 @@ def test_synth_all_unpronounceable_returns_valid_silent_clip(monkeypatch):
         assert r.getnframes() == 0  # nothing pronounceable -> silent (empty) clip
 
 
-def test_synth_empty_frames_fragment_contributes_no_gap(monkeypatch):
+def test_synth_empty_frames_fragment_contributes_no_gap():
     # One real sentence + one zero-frame sentence. The empty one must be skipped
     # before any silence gap is added (the `if not frames: continue` guard), so
     # the output equals exactly the single real sentence with no padding.
@@ -348,11 +375,28 @@ def test_synth_empty_frames_fragment_contributes_no_gap(monkeypatch):
     voice = _StubVoice(frames_for={"Раз.": real_frames, "Два.": 0})
     backend = PiperTtsBackend.from_voice(voice, sentence_silence=0.4)
 
-    wav = _synth_wav(backend, monkeypatch, text)
+    wav = _synth_wav(backend, text)
     with wave.open(io.BytesIO(wav), "rb") as r:
         data = r.readframes(r.getnframes())
     # Exactly the real sentence's audio, no silence gap appended for the empty one.
     assert data == b"\x11\x22" * real_frames
+
+
+async def test_piper_synthesize_returns_native_wav():
+    # R8 contract: the backend returns its engine's NATIVE format (audio/wav),
+    # NOT a device-ready MP3 — adapting to the speaker is the delivery
+    # boundary's job (audio_codec.to_playable in pipeline.serve_audio).
+    voice = _StubVoice(default_frames=5)
+    backend = PiperTtsBackend.from_voice(voice, sentence_silence=0.0)
+
+    mime, audio = await backend.synthesize("Раз.", "ru")
+
+    assert mime == "audio/wav"
+    with wave.open(io.BytesIO(audio), "rb") as r:  # parseable, real WAV bytes
+        assert r.getframerate() == _STUB_RATE
+        assert r.getnchannels() == _STUB_CHANNELS
+        assert r.getsampwidth() == _STUB_WIDTH
+        assert r.readframes(r.getnframes()) == b"\x11\x22" * 5
 
 
 # --- Backend-side adaptation chains (canonical "+stress" contract, R3) -------
@@ -371,7 +415,7 @@ class _RecordingStubVoice(_StubVoice):
         super().synthesize_wav(sentence, wav_file)
 
 
-def test_piper_synth_applies_adaptation_chain_in_order(monkeypatch):
+def test_piper_synth_applies_adaptation_chain_in_order():
     # _synth must adapt the canonical "+vowel" text for espeak-ng/Piper:
     # stress_to_acute -> expand_units -> phonetic_ru. Order matters: only if
     # stress conversion runs BEFORE phonetic_ru does "чт+о" become "што́"
@@ -379,7 +423,7 @@ def test_piper_synth_applies_adaptation_chain_in_order(monkeypatch):
     voice = _RecordingStubVoice(default_frames=5)
     backend = PiperTtsBackend.from_voice(voice, sentence_silence=0.0)
 
-    _synth_wav(backend, monkeypatch, "чт+о нового? 50% и м/с")
+    _synth_wav(backend, "чт+о нового? 50% и м/с")
 
     joined = " ".join(voice.sentences)
     assert "што́" in joined          # "чт+о" -> stressed phonetic "што" + combining acute
@@ -434,7 +478,7 @@ async def test_yandex_synthesize_adapts_text_keeps_native_stress():
     assert "что" in sent_text         # the word stays unchanged
 
 
-def test_piper_applies_russian_adaptation_chain(monkeypatch):
+def test_piper_applies_russian_adaptation_chain():
     # Exact-text proof that the backend runs phonetic_ru(expand_units(
     # stress_to_acute(...))): the engine must receive precisely the adapted
     # string — "што" + combining acute U+0301 + expanded "%". Substring checks
@@ -442,7 +486,7 @@ def test_piper_applies_russian_adaptation_chain(monkeypatch):
     voice = _RecordingStubVoice(default_frames=5)
     backend = PiperTtsBackend.from_voice(voice, sentence_silence=0.0)
 
-    _synth_wav(backend, monkeypatch, "чт+о 50%")
+    _synth_wav(backend, "чт+о 50%")
 
     assert voice.sentences == ["што́ 50процентов"]
 

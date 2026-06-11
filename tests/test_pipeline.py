@@ -10,13 +10,19 @@ from src.audio_prep import (
     pcm_to_wav_bytes,
     trim_start_pcm,
 )
-from src.core_config import AckConfig, AudioConfig, ContextConfig, CoreConfig
+from src.core_config import (
+    AckConfig,
+    AudioConfig,
+    ContextConfig,
+    CoreConfig,
+    PromptConfig,
+)
+from src.llm import LlmResult
 from src.pipeline import (
     SAMPLE_RATE,
     CaptureBusyError,
     CaptureEmptyError,
     Pipeline,
-    contains_stt_hallucination,
 )
 from src.llm_text import clean_llm_output
 from src.pipeline_events import StageEvent
@@ -127,10 +133,15 @@ def make_pipeline(tmp_path, monkeypatch, name="dev", stt_text="распозна�
     # The end-of-phrase ack chime is ON by default in CoreConfig, but it shares the
     # announce channel that the filler tests inspect; default it OFF here so existing
     # tests see only the announcements they assert on, and let ack tests opt in (ack=True).
+    # The pipeline now assembles the system prompt itself (build_system_prompt in
+    # _run does file IO), so point it at a tmp prompt file to keep tests hermetic.
+    prompt_path = tmp_path / "system_prompt.md"
+    prompt_path.write_text("PROMPT BODY <<<<<TDW>>>>>", encoding="utf-8")
     core = CoreConfig(
         audio=AudioConfig(public_base_url=PUBLIC_BASE_URL),
         context=ContextConfig(),
         ack=AckConfig(enabled=ack),
+        prompt=PromptConfig(system_prompt_path=str(prompt_path)),
     )
     rt = Runtime(
         FakeSvc(core, LlmConfig()),
@@ -193,17 +204,37 @@ def set_small_vad_thresholds(pipeline):
     vad.no_speech_timeout_ms = 200  # 10 frames with no speech -> finalize
 
 
-def patch_llm(monkeypatch, reply="ответ", error=None):
-    """Stub the whole LLM call. STT is injected as a fake backend, not patched.
+def make_llm_result(reply="ответ", **overrides):
+    """Build a canned LlmResult with neutral observability defaults."""
+    fields = {
+        "reply": reply,
+        "model": None,
+        "tokens": None,
+        "rounds": [],
+        "request_debug": {},
+        "tool_used": False,
+    }
+    fields.update(overrides)
+    return LlmResult(**fields)
 
-    When `error` is given (a StageError), the stub raises it instead of replying."""
 
-    async def fake(llm_backend, hub, text, **kwargs):
-        if error is not None:
-            raise error
-        return reply
+def patch_llm(monkeypatch, reply="ответ", error=None, result=None):
+    """Stub the whole LLM stage. STT is injected as a fake backend, not patched.
 
-    monkeypatch.setattr("src.llm.call_llm_api", fake)
+    Replaces llm.LlmStage with a fake whose respond() returns a canned LlmResult
+    (built from `reply`, or `result` verbatim when given). When `error` is given
+    (a StageError), respond() raises it instead."""
+
+    class FakeLlmStage:
+        def __init__(self, backend, hub, cfg):
+            pass
+
+        async def respond(self, req, *, on_filler=None):
+            if error is not None:
+                raise error
+            return result if result is not None else make_llm_result(reply)
+
+    monkeypatch.setattr("src.llm.LlmStage", FakeLlmStage)
 
 
 def types_of(events):
@@ -247,13 +278,24 @@ async def test_happy_path(tmp_path, monkeypatch):
     assert_all_str(events)
 
 
-async def test_happy_path_wav_extension(tmp_path, monkeypatch):
-    # A WAV-producing backend (like Piper) -> url ends .wav and the stored mime is wav.
+async def test_happy_path_wav_backend_served_as_mp3(tmp_path, monkeypatch):
+    # The whole point of R8: a WAV-producing backend (like Piper) returns its
+    # NATIVE format, and the delivery boundary (serve_audio -> to_playable)
+    # transcodes it — the audio server holds audio/mpeg and the url ends .mp3.
     patch_llm(monkeypatch, reply="готово")
+    # A real (tiny, silent) WAV: to_playable parses it for the MP3 transcode.
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(16000)
+        wf.writeframes(b"\x00\x00" * 160)
+    wav_bytes = buf.getvalue()
     pipeline, events = make_pipeline(
         tmp_path, monkeypatch,
         stt_text="включи свет",
-        tts_backend=FakeTtsBackend(mime="audio/wav", audio=b"RIFF...."),
+        tts_backend=FakeTtsBackend(mime="audio/wav", audio=wav_bytes),
+        runs_store=(runs := FakeRunsStore()),
     )
 
     await pipeline.on_start("cid", 0, None, None)
@@ -262,8 +304,16 @@ async def test_happy_path_wav_extension(tmp_path, monkeypatch):
 
     data = dict(events)
     url = data[StageEvent.TTS_END]["url"]
-    assert url.endswith("/tts/abc123.wav")
-    assert pipeline.audio_server.calls == [(b"RIFF....", "audio/wav")]
+    assert url.endswith("/tts/abc123.mp3")
+    # The cache holds the TRANSCODED clip, not the backend's native WAV.
+    [(served_audio, served_mime)] = pipeline.audio_server.calls
+    assert served_mime == "audio/mpeg"
+    assert served_audio[0] == 0xFF  # MP3 frame sync byte
+    assert served_audio != wav_bytes
+    # The run record reports what the speaker downloads (post-transcode).
+    rec = runs.records[-1]
+    assert rec["audio_fmt"] == "mp3"
+    assert rec["audio_bytes"] == len(served_audio)
     assert_all_str(events)
 
 
@@ -301,57 +351,13 @@ async def test_empty_stt(tmp_path, monkeypatch):
     assert_all_str(events)
 
 
-def test_contains_stt_hallucination():
-    assert contains_stt_hallucination("Субтитры создавал DimaTorzok")
-    assert contains_stt_hallucination("dimatorzok")
-    assert contains_stt_hallucination("Продолжение следует...")
-    assert not contains_stt_hallucination("включи свет")
-
+# The Whisper hallucination filter is the groq STT brick's concern now; its unit
+# tests live in tests/test_stt.py against GroqSttBackend directly (the backend
+# returns "" for a hallucinated transcript, which the pipeline handles via the
+# existing empty-transcription path — covered by the empty-STT tests above).
 
 # The VAD-decision boost (auto_gain) is the webrtc plugin's concern now; its unit
 # tests live in tests/test_vad_webrtc.py against the session/backend directly.
-
-
-async def test_stt_hallucination_discarded(tmp_path, monkeypatch):
-    # A Whisper hallucination ("DimaTorzok" subtitle-credit artifact) is blanked,
-    # so the run ends like an empty transcription: no INTENT/TTS, STT_END empty.
-    patch_llm(monkeypatch)
-    pipeline, events = make_pipeline(
-        tmp_path, monkeypatch, stt_text="Субтитры создавал DimaTorzok"
-    )
-
-    await pipeline.on_start("cid", 0, None, None)
-    await pipeline.on_audio(b"\x01\x02" * 100)
-    await pipeline.on_stop(False)
-
-    assert types_of(events) == [
-        StageEvent.RUN_START,
-        StageEvent.STT_START,
-        StageEvent.STT_END,
-        StageEvent.RUN_END,
-    ]
-    data = dict(events)
-    assert data[StageEvent.STT_END] == {"text": ""}
-    assert_all_str(events)
-
-
-async def test_run_recorded_on_stt_hallucination(tmp_path, monkeypatch):
-    patch_llm(monkeypatch)
-    store = FakeRunsStore()
-    pipeline, _ = make_pipeline(
-        tmp_path, monkeypatch,
-        stt_text="Субтитры создавал DimaTorzok", runs_store=store,
-    )
-
-    await pipeline.on_start("cid", 0, None, None)
-    await pipeline.on_audio(b"\x01\x02" * 100)
-    await pipeline.on_stop(False)
-
-    # The hallucination is dropped: recorded like an empty transcription.
-    assert len(store.records) == 1
-    rec = store.records[0]
-    assert rec["result"] == "empty"
-    assert rec["stt_text"] == ""
 
 
 async def test_pipelines_are_independent(tmp_path, monkeypatch):
@@ -584,15 +590,20 @@ async def test_history_flows_across_runs(tmp_path, monkeypatch):
 
     from src import context
 
-    # Capturing fake: records (text, history) per call and returns a scripted reply.
-    seen = []  # list of (text, history)
+    # Capturing fake: records (user_text, history) per request and returns a
+    # scripted reply.
+    seen = []  # list of (user_text, history)
     replies = {"первый вопрос": "первый ответ", "второй вопрос": "второй ответ"}
 
-    async def fake(llm_backend, hub, text, **kwargs):
-        seen.append((text, kwargs.get("history")))
-        return replies[text]
+    class FakeLlmStage:
+        def __init__(self, backend, hub, cfg):
+            pass
 
-    monkeypatch.setattr("src.llm.call_llm_api", fake)
+        async def respond(self, req, *, on_filler=None):
+            seen.append((req.user_text, req.history))
+            return make_llm_result(replies[req.user_text])
+
+    monkeypatch.setattr("src.llm.LlmStage", FakeLlmStage)
 
     pipeline, _ = make_pipeline(tmp_path, monkeypatch, name="hist", stt_text="первый вопрос")
 
@@ -655,6 +666,67 @@ async def test_run_recorded_on_happy_path(tmp_path, monkeypatch):
     assert rec["audio_bytes"] == len(b"MP3")
     assert rec["audio_fmt"] == "mp3"
     assert rec["error_stage"] is None
+
+
+async def test_run_records_llm_result_observability_fields(tmp_path, monkeypatch):
+    # model/tokens/rounds/request now land in the run record via the returned
+    # LlmResult (no shared trace dict), and tool_used drives result="tool".
+    rounds = [
+        {"round": 1, "note": "tool call", "tokens": 30, "content": "",
+         "calls": [{"name": "set_light", "args": {}, "result": "ok"}]},
+        {"round": 2, "note": "final answer", "tokens": 12, "content": "готово",
+         "calls": []},
+    ]
+    request_debug = {
+        "system_prompt": "P", "context": [], "user_text": "включи свет", "tools": [],
+    }
+    patch_llm(monkeypatch, result=make_llm_result(
+        "готово", model="m-final", tokens=42, rounds=rounds,
+        request_debug=request_debug, tool_used=True,
+    ))
+    store = FakeRunsStore()
+    pipeline, _ = make_pipeline(tmp_path, monkeypatch, stt_text="включи свет", runs_store=store)
+
+    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_audio(b"\x01\x02" * 100)
+    await pipeline.on_stop(False)
+
+    rec = store.records[0]
+    assert rec["model"] == "m-final"
+    assert rec["tokens"] == 42
+    assert rec["rounds"] == rounds
+    assert rec["request"] == request_debug
+    assert rec["result"] == "tool"
+    assert rec["llm_text"] == "готово"
+
+
+async def test_llm_error_records_partial_observability(tmp_path, monkeypatch):
+    # On StageError the stage attaches the partial data accumulated before the
+    # failure; the pipeline must record it (same fields the old partial trace
+    # dict carried) alongside the error classification.
+    rounds = [{"round": 1, "note": "tool call", "tokens": 30, "content": "",
+               "calls": [{"name": "set_light", "args": {}, "result": "ok"}]}]
+    request_debug = {"system_prompt": "P", "context": [], "user_text": "q", "tools": []}
+    err = StageError("llm", "boom mid-loop")
+    err.partial = {
+        "model": "m-tool", "tokens": 30, "rounds": rounds, "request": request_debug,
+    }
+    patch_llm(monkeypatch, error=err)
+    store = FakeRunsStore()
+    pipeline, _ = make_pipeline(tmp_path, monkeypatch, stt_text="включи свет", runs_store=store)
+
+    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_audio(b"\x01\x02" * 100)
+    await pipeline.on_stop(False)
+
+    rec = store.records[0]
+    assert rec["result"] == "error"
+    assert rec["error_stage"] == "LLM"
+    assert rec["error_text"] == "boom mid-loop"
+    assert rec["model"] == "m-tool"
+    assert rec["tokens"] == 30
+    assert rec["rounds"] == rounds
+    assert rec["request"] == request_debug
 
 
 async def test_utterance_audio_stored_on_happy_path(tmp_path, monkeypatch):
@@ -1081,11 +1153,15 @@ async def test_capture_run_returns_wav_bytes_and_skips_pipeline(tmp_path, monkey
     pipeline.stt_backend.transcribe = spy_transcribe
     llm_calls = []
 
-    async def fake_llm(*a, **k):
-        llm_calls.append(a)
-        return "nope"
+    class SpyLlmStage:
+        def __init__(self, backend, hub, cfg):
+            pass
 
-    monkeypatch.setattr("src.llm.call_llm_api", fake_llm)
+        async def respond(self, req, *, on_filler=None):
+            llm_calls.append(req)
+            return make_llm_result("nope")
+
+    monkeypatch.setattr("src.llm.LlmStage", SpyLlmStage)
 
     pcm = b"\x01\x02" * 100  # 400 bytes -> 200 16-bit frames
     future = pipeline.arm_capture(5)
@@ -1849,20 +1925,23 @@ async def test_speak_propagates_synthesis_errors(tmp_path, monkeypatch):
 
 
 def patch_llm_with_filler(monkeypatch, *, tool_names, content, reply="готово", times=1):
-    """Stub call_llm_api with a fake that invokes the passed on_filler callback
+    """Stub the LLM stage with a fake that invokes the passed on_filler callback
     `times` times (with the same content + tool_names) before returning `reply`.
 
     Lets a test drive the pipeline's _speak_filler policy through the real _run
     wiring without a live LLM backend."""
 
-    async def fake(llm_backend, hub, text, **kwargs):
-        on_filler = kwargs.get("on_filler")
-        if on_filler is not None:
-            for _ in range(times):
-                await on_filler(content, tool_names)
-        return reply
+    class FakeLlmStage:
+        def __init__(self, backend, hub, cfg):
+            pass
 
-    monkeypatch.setattr("src.llm.call_llm_api", fake)
+        async def respond(self, req, *, on_filler=None):
+            if on_filler is not None:
+                for _ in range(times):
+                    await on_filler(content, tool_names)
+            return make_llm_result(reply)
+
+    monkeypatch.setattr("src.llm.LlmStage", FakeLlmStage)
 
 
 async def _drain_filler_tasks(pipeline):

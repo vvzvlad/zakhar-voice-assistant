@@ -239,8 +239,7 @@ def test_provider_returns_selected_provider_object(tmp_path):
     # provider() must hand back the SELECTED provider singleton (same identity as the
     # service's own get_provider path) — not a freshly built backend and not a ConfigModel.
     from src.plugins.base import get_provider
-    from src.plugins.tts.yandex import YandexTtsConfig, YandexTtsProvider
-    from src.tts import YandexTtsBackend
+    from src.plugins.tts.yandex import YandexTtsBackend, YandexTtsConfig, YandexTtsProvider
 
     svc = _service(tmp_path)
     prov = svc.provider("tts")

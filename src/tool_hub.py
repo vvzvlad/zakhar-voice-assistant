@@ -1,9 +1,15 @@
 """Multi-source tool hub: aggregates several tool sources behind one interface.
 
 The LLM tool-loop only ever touches `hub.tools` (the merged tool list) and
-`hub.call(name, args)` (routed to the owning source). This lets the model see,
-through ONE interface, both the external smart-home MCP server (HttpMcpSource) and
-in-process built-in MCP servers (BuiltinMcpSource, e.g. OpenWeatherMap).
+`hub.call(name, args, device=...)` (routed to the owning source). This lets the model
+see, through ONE interface, both the external smart-home MCP server (HttpMcpSource)
+and in-process built-in MCP servers (BuiltinMcpSource, e.g. OpenWeatherMap).
+
+The hub is also the single place that publishes the ambient device to in-process
+tools: `call(..., device=...)` sets the current_device ContextVar around the source
+call (and resets it after), so a tool like set_reminder can target the originating
+speaker without it being an LLM-visible argument. Sources' `call` signatures are
+unchanged.
 
 Tool names are advertised RAW (unchanged from each source), so the system prompt and
 the external MCP server keep working with their existing names. The hub routes by raw
@@ -17,6 +23,7 @@ from loguru import logger
 from mcp.server.fastmcp import FastMCP
 
 from src.mcp_client import McpToolHub
+from src.run_context import current_device
 
 
 class ToolSource:
@@ -144,8 +151,8 @@ class ToolHub:
     """Drop-in replacement for the single MCP hub: aggregates N ToolSources.
 
     Exposes the same surface the LLM loop expects: a `tools` property (merged advertised
-    tool list, with each source's RAW names unchanged) and an async `call(name, args)`
-    that routes by that name to the owning source.
+    tool list, with each source's RAW names unchanged) and an async
+    `call(name, args, device=...)` that routes by that name to the owning source.
     """
 
     def __init__(self, sources: list[ToolSource]):
@@ -258,11 +265,22 @@ class ToolHub:
             })
         return result
 
-    async def call(self, name: str, args: dict) -> str:
+    async def call(self, name: str, args: dict, *, device: str | None = None) -> str:
+        """Route a tool call to its owning source.
+
+        `device`, when given, names the speaker the current run belongs to. The hub
+        is the single place that publishes this ambient device to in-process tools:
+        it is set into the current_device ContextVar for the duration of the source
+        call and reset afterwards. Sources' `call` signatures are unchanged.
+        """
         source = self._routes.get(name)
         if source is None:
             return f"error: unknown tool {name}"
-        return await source.call(name, args)
+        token = current_device.set(device)
+        try:
+            return await source.call(name, args)
+        finally:
+            current_device.reset(token)
 
     async def stop(self) -> None:
         # Best-effort: stop each source that supports it.

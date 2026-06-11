@@ -32,12 +32,14 @@ from src.audio_prep import (
     trim_start_pcm,
     write_wav,
 )
+from src.audio_codec import to_playable
 from src.audio_server import tts_url
 from src.pipeline_events import StageEvent
 from src.llm_text import clean_llm_output
+from src.prompt import build_system_prompt
 from src.runs_store import live_row, summary_row
+from src.chime import build_ack_clip
 from src.stage_errors import StageError
-from src.tts import make_ack_chime_mp3, wav_to_mp3
 # SAMPLE_RATE now lives in the VAD stage contract module; re-exported here so the
 # many existing `from src.pipeline import SAMPLE_RATE` users keep working.
 from src.vad import SAMPLE_RATE, EndpointPolicy  # noqa: F401  (SAMPLE_RATE re-export)
@@ -61,26 +63,6 @@ CAPTURE_MAX_SECONDS = 300
 # of (and much shorter than) the requested capture audio duration.
 ARM_TTL = 5.0
 
-# Known Whisper STT hallucination markers (lowercase). Whisper tends to emit
-# leftover subtitle-credit / stock phrases (training-data artifacts) on
-# silence/noise: "DimaTorzok" is one such credit string and "Продолжение
-# следует..." ("to be continued") is a recurring stock caption. When a
-# transcription contains one of these (substring, case-insensitive), we treat
-# the run as if nothing was said and drop it.
-STT_HALLUCINATION_MARKERS = ("dimatorzok", "продолжение следует")
-
-
-def contains_stt_hallucination(text: str) -> bool:
-    """Return True if the STT text contains a known Whisper hallucination marker.
-
-    These are known STT (Whisper) hallucinations — subtitle-credit artifacts that
-    surface on silence/noise — and are dropped as if nothing was said. The check is
-    case-insensitive (Whisper varies the casing of the artifact).
-    """
-    folded = text.casefold()
-    return any(marker in folded for marker in STT_HALLUCINATION_MARKERS)
-
-
 class CaptureBusyError(Exception):
     """A manual capture is already armed/in-flight on this pipeline.
 
@@ -97,38 +79,6 @@ class CaptureEmptyError(Exception):
     server-side capture failure, so the panel API maps it to HTTP 500. Raised
     (via the capture Future) by _finish_capture when the buffered PCM is empty.
     """
-
-
-def build_ack_clip(sound_path: str, *, name: str = "") -> tuple[str, bytes]:
-    """Build the end-of-phrase ack clip (mime, audio) from a sound_path.
-
-    If sound_path points to an existing file, load it — transcoding a WAV to MP3 (the
-    speaker firmware can't decode WAV; a bad/unreadable WAV falls back to the
-    synthesized chime so playback never goes silent). An empty or missing path yields
-    the synthesized two-tone chime. `name` is only used for log context. Does file IO
-    and (for WAV) a blocking transcode, so callers on the event loop should run it via
-    asyncio.to_thread. No caching here — callers cache as needed.
-    """
-    path = (sound_path or "").strip()
-    use_file = bool(path) and os.path.isfile(path)
-    if use_file:
-        with open(path, "rb") as f:
-            raw = f.read()
-        ext = os.path.splitext(path)[1].lstrip(".").lower()
-        if ext == "wav":
-            try:
-                return "audio/mpeg", wav_to_mp3(raw)
-            except Exception as e:
-                logger.warning(
-                    f"{name}: ack chime transcode failed for {path}: {e}; "
-                    f"using synthesized chime"
-                )
-                return "audio/mpeg", make_ack_chime_mp3()
-        if ext == "flac":
-            return "audio/flac", raw
-        # mp3 (and any other) served verbatim as audio/mpeg
-        return "audio/mpeg", raw
-    return "audio/mpeg", make_ack_chime_mp3()
 
 
 class Pipeline:
@@ -737,15 +687,6 @@ class Pipeline:
                         f"{self.name}: 📝 STT ({time.perf_counter() - stt_t:.2f}s): "
                         f"{text!r}"
                     )
-                    # Whisper emits leftover subtitle-credit artifacts (e.g.
-                    # "DimaTorzok") on silence/noise. Blank such hallucinated text so it
-                    # falls through into the empty-transcription branch below — the run
-                    # ends exactly like an empty result (no LLM/TTS, recorded "empty").
-                    if contains_stt_hallucination(text):
-                        logger.info(
-                            f"{self.name}: 🗑️ discarding STT hallucination: {text!r}"
-                        )
-                        text = ""
                     record["stt_text"] = text
                     self._emit(StageEvent.STT_END, {"text": text})
                     # Live STT partial: surface the recognized text in the panel
@@ -766,8 +707,6 @@ class Pipeline:
                         max_turns=self.core.context.max_turns,
                         ttl_seconds=self.core.context.ttl_seconds,
                     )
-                    trace: dict = {}
-
                     filler_fired = False  # at most one early filler per run
 
                     async def _speak_filler(text: str, tool_names: list[str]) -> None:
@@ -795,15 +734,20 @@ class Pipeline:
 
                     llm_failed = False
                     try:
-                        reply = await llm.call_llm_api(
-                            self.llm_backend,
-                            self.hub,
-                            text,
-                            core=self.core,
-                            llm_cfg=self.llm_cfg,
-                            history=history,
-                            trace=trace,
-                            device=self.name,
+                        # The orchestrator prepares the stage input: the assembled
+                        # system prompt (file IO; same blocking profile as before,
+                        # when it ran inside the LLM stage on the event loop) plus
+                        # history/user text/device. The stage is constructed per run
+                        # so a hot-swapped backend/config applies naturally.
+                        system_prompt = build_system_prompt(self.core)
+                        stage = llm.LlmStage(self.llm_backend, self.hub, self.llm_cfg)
+                        result = await stage.respond(
+                            llm.LlmRequest(
+                                system_prompt=system_prompt,
+                                history=history,
+                                user_text=text,
+                                device=self.name,
+                            ),
                             on_filler=_speak_filler,
                         )
                     except StageError as e:
@@ -817,16 +761,24 @@ class Pipeline:
                         record["error_text"] = str(e)
                         logger.error(f"{self.name}: LLM failed: {e}")
                         reply = self._spoken_llm_fallback(e)
+                        # Preserve observability on failure: the stage attaches the
+                        # partial data accumulated before the error (the same fields
+                        # the old partial trace dict carried).
+                        partial = getattr(e, "partial", None) or {}
+                        record["model"] = partial.get("model")
+                        record["tokens"] = partial.get("tokens")
+                        record["rounds"] = partial.get("rounds") or []
+                        record["request"] = partial.get("request")
+                    else:
+                        reply = result.reply
+                        record["model"] = result.model
+                        record["tokens"] = result.tokens
+                        record["rounds"] = result.rounds
+                        record["request"] = result.request_debug
+                        # Did the model actually run any tool this run?
+                        record["result"] = "tool" if result.tool_used else "ok"
                     record["t_llm"] = int((time.perf_counter() - llm_t) * 1000)
                     record["llm_text"] = reply
-                    record["model"] = trace.get("model")
-                    record["tokens"] = trace.get("tokens")
-                    record["rounds"] = trace.get("rounds") or []
-                    record["request"] = trace.get("request")
-                    if not llm_failed:
-                        # Did the model actually run any tool this round?
-                        tool_used = any(r.get("calls") for r in record["rounds"])
-                        record["result"] = "tool" if tool_used else "ok"
                     logger.info(
                         f"{self.name}: 💬 LLM reply ({time.perf_counter() - llm_t:.2f}s): "
                         f"{reply!r}"
@@ -867,8 +819,10 @@ class Pipeline:
                             f"{self.name}: 🔊 TTS ({time.perf_counter() - tts_t:.2f}s, "
                             f"{len(audio)} bytes)"
                         )
-                        ext, url = self.serve_audio(mime, audio)
-                        record["audio_bytes"] = len(audio)
+                        ext, url, served_bytes = await self.serve_audio(mime, audio)
+                        # Record what the speaker actually downloads (post-transcode),
+                        # not the backend's native-format size.
+                        record["audio_bytes"] = served_bytes
                         record["audio_fmt"] = ext
                         logger.info(f"{self.name}: ▶ serving {url}")
                         self._emit(StageEvent.TTS_END, {"url": url})
@@ -963,16 +917,22 @@ class Pipeline:
                 except Exception as e:
                     logger.error(f"{self.name}: run broadcast failed: {e}")
 
-    def serve_audio(self, mime: str, audio: bytes) -> tuple[str, str]:
-        """Cache the clip on the shared audio server and return (ext, public URL).
+    async def serve_audio(self, mime: str, audio: bytes) -> tuple[str, str, int]:
+        """Adapt the clip to a playable format and cache it; return (ext, url, nbytes).
 
-        The single put+tts_url pair behind every audio-serving path in the
-        pipeline; also the public helper for device-layer callers that already
-        hold ready audio bytes (e.g. the panel chime preview via play_media).
+        THE delivery boundary: TTS backends return their engine's NATIVE format
+        (e.g. Piper -> audio/wav) and this single put-point adapts it to what
+        the speaker firmware can decode (to_playable, run off-loop because the
+        WAV->MP3 transcode blocks). The single adapt+put+tts_url path behind
+        every audio-serving caller in the pipeline; also the public helper for
+        device-layer callers that already hold ready audio bytes (e.g. the
+        panel chime preview via play_media). `nbytes` is the size of the SERVED
+        clip — what the speaker actually downloads (post-transcode).
         """
+        mime, audio = await asyncio.to_thread(to_playable, mime, audio)
         audio_id = self.audio_server.put(audio, mime)
         ext, url = tts_url(self.public_base_url, audio_id, mime)
-        return ext, url
+        return ext, url, len(audio)
 
     async def speak(self, text: str) -> None:
         """Public entry for proactive speech (reminders, external callers).
@@ -983,7 +943,7 @@ class Pipeline:
         layer's announce. Raises on failure (callers decide isolation).
         """
         mime, audio = await self.tts_backend.synthesize(text, "ru")
-        _ext, url = self.serve_audio(mime, audio)
+        _ext, url, _nbytes = await self.serve_audio(mime, audio)
         logger.info(f"{self.name}: 🔔 announce: {text!r} -> {url}")
         if self.send_announcement is not None:
             await self.send_announcement(media_id=url, timeout=30.0, text=text)
@@ -1045,7 +1005,7 @@ class Pipeline:
         """
         try:
             mime, audio = self._ack_clip_bytes()
-            _ext, url = self.serve_audio(mime, audio)
+            _ext, url, _nbytes = await self.serve_audio(mime, audio)
             logger.info(f"{self.name}: 🔔 end-of-phrase ack -> {url}")
             if self.send_announcement is not None:
                 await self.send_announcement(media_id=url, timeout=30.0, text="")

@@ -9,8 +9,9 @@ import asyncio
 from aioesphomeapi import APIClient, ReconnectLogic, VoiceAssistantEventType
 from loguru import logger
 
+from src.chime import build_ack_clip
 from src.core_config import DeviceConfig
-from src.pipeline import CAPTURE_MAX_SECONDS, Pipeline, build_ack_clip
+from src.pipeline import CAPTURE_MAX_SECONDS, Pipeline
 from src.pipeline_events import StageEvent
 
 # The ONLY place that knows how pipeline stage events map onto the
@@ -324,7 +325,7 @@ class DeviceClient:
         """
         if not self.online:
             raise RuntimeError(f"{self.cfg.name} is offline")
-        _ext, url = self.pipeline.serve_audio(mime, audio)
+        _ext, url, _nbytes = await self.pipeline.serve_audio(mime, audio)
         logger.info(f"{self.cfg.name}: 🔔 play media -> {url}")
         await self.cli.send_voice_assistant_announcement_await_response(
             media_id=url, timeout=30.0, text="",
