@@ -9,8 +9,9 @@ import asyncio
 from aioesphomeapi import APIClient, ReconnectLogic, VoiceAssistantEventType
 from loguru import logger
 
+from src.chime import build_ack_clip
 from src.core_config import DeviceConfig
-from src.pipeline import CAPTURE_MAX_SECONDS, Pipeline, build_ack_clip
+from src.pipeline import CAPTURE_MAX_SECONDS, Pipeline
 from src.pipeline_events import StageEvent
 
 # The ONLY place that knows how pipeline stage events map onto the

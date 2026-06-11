@@ -5,17 +5,17 @@ import httpx
 import pytest
 import respx
 
+from src.audio_codec import wav_to_mp3
+from src.chime import make_ack_chime_mp3
 from src.plugins.tts._ru_text import expand_units, sanitize_plus_stress
-from src.tts import (
-    PiperTtsBackend,
-    TeraTtsHttpBackend,
+from src.plugins.tts.piper import PiperTtsBackend
+from src.plugins.tts.teratts import TeraTtsHttpBackend
+from src.plugins.tts.yandex import (
     YandexTtsBackend,
     _chunk_for_v3,
     _decode_v3_audio,
-    make_ack_chime_mp3,
-    split_sentences,
-    wav_to_mp3,
 )
+from src.tts import split_sentences
 
 YANDEX_URL = "https://tts.api.cloud.yandex.net/tts/v3/utteranceSynthesis"
 
@@ -289,7 +289,7 @@ class _StubVoice:
 def _synth_wav(backend, monkeypatch, text):
     """Run _synth but capture the raw WAV instead of the MP3 transcode, so the
     silence padding / frame alignment is observable at the byte level."""
-    monkeypatch.setattr("src.tts.wav_to_mp3", lambda wav_bytes, **kw: wav_bytes)
+    monkeypatch.setattr("src.plugins.tts.piper.wav_to_mp3", lambda wav_bytes, **kw: wav_bytes)
     return backend._synth(text)
 
 

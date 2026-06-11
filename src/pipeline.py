@@ -37,8 +37,8 @@ from src.pipeline_events import StageEvent
 from src.llm_text import clean_llm_output
 from src.prompt import build_system_prompt
 from src.runs_store import live_row, summary_row
+from src.chime import build_ack_clip
 from src.stage_errors import StageError
-from src.tts import make_ack_chime_mp3, wav_to_mp3
 # SAMPLE_RATE now lives in the VAD stage contract module; re-exported here so the
 # many existing `from src.pipeline import SAMPLE_RATE` users keep working.
 from src.vad import SAMPLE_RATE, EndpointPolicy  # noqa: F401  (SAMPLE_RATE re-export)
@@ -62,26 +62,6 @@ CAPTURE_MAX_SECONDS = 300
 # of (and much shorter than) the requested capture audio duration.
 ARM_TTL = 5.0
 
-# Known Whisper STT hallucination markers (lowercase). Whisper tends to emit
-# leftover subtitle-credit / stock phrases (training-data artifacts) on
-# silence/noise: "DimaTorzok" is one such credit string and "Продолжение
-# следует..." ("to be continued") is a recurring stock caption. When a
-# transcription contains one of these (substring, case-insensitive), we treat
-# the run as if nothing was said and drop it.
-STT_HALLUCINATION_MARKERS = ("dimatorzok", "продолжение следует")
-
-
-def contains_stt_hallucination(text: str) -> bool:
-    """Return True if the STT text contains a known Whisper hallucination marker.
-
-    These are known STT (Whisper) hallucinations — subtitle-credit artifacts that
-    surface on silence/noise — and are dropped as if nothing was said. The check is
-    case-insensitive (Whisper varies the casing of the artifact).
-    """
-    folded = text.casefold()
-    return any(marker in folded for marker in STT_HALLUCINATION_MARKERS)
-
-
 class CaptureBusyError(Exception):
     """A manual capture is already armed/in-flight on this pipeline.
 
@@ -98,38 +78,6 @@ class CaptureEmptyError(Exception):
     server-side capture failure, so the panel API maps it to HTTP 500. Raised
     (via the capture Future) by _finish_capture when the buffered PCM is empty.
     """
-
-
-def build_ack_clip(sound_path: str, *, name: str = "") -> tuple[str, bytes]:
-    """Build the end-of-phrase ack clip (mime, audio) from a sound_path.
-
-    If sound_path points to an existing file, load it — transcoding a WAV to MP3 (the
-    speaker firmware can't decode WAV; a bad/unreadable WAV falls back to the
-    synthesized chime so playback never goes silent). An empty or missing path yields
-    the synthesized two-tone chime. `name` is only used for log context. Does file IO
-    and (for WAV) a blocking transcode, so callers on the event loop should run it via
-    asyncio.to_thread. No caching here — callers cache as needed.
-    """
-    path = (sound_path or "").strip()
-    use_file = bool(path) and os.path.isfile(path)
-    if use_file:
-        with open(path, "rb") as f:
-            raw = f.read()
-        ext = os.path.splitext(path)[1].lstrip(".").lower()
-        if ext == "wav":
-            try:
-                return "audio/mpeg", wav_to_mp3(raw)
-            except Exception as e:
-                logger.warning(
-                    f"{name}: ack chime transcode failed for {path}: {e}; "
-                    f"using synthesized chime"
-                )
-                return "audio/mpeg", make_ack_chime_mp3()
-        if ext == "flac":
-            return "audio/flac", raw
-        # mp3 (and any other) served verbatim as audio/mpeg
-        return "audio/mpeg", raw
-    return "audio/mpeg", make_ack_chime_mp3()
 
 
 class Pipeline:
@@ -738,15 +686,6 @@ class Pipeline:
                         f"{self.name}: 📝 STT ({time.perf_counter() - stt_t:.2f}s): "
                         f"{text!r}"
                     )
-                    # Whisper emits leftover subtitle-credit artifacts (e.g.
-                    # "DimaTorzok") on silence/noise. Blank such hallucinated text so it
-                    # falls through into the empty-transcription branch below — the run
-                    # ends exactly like an empty result (no LLM/TTS, recorded "empty").
-                    if contains_stt_hallucination(text):
-                        logger.info(
-                            f"{self.name}: 🗑️ discarding STT hallucination: {text!r}"
-                        )
-                        text = ""
                     record["stt_text"] = text
                     self._emit(StageEvent.STT_END, {"text": text})
                     # Live STT partial: surface the recognized text in the panel

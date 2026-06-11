@@ -23,7 +23,6 @@ from src.pipeline import (
     CaptureBusyError,
     CaptureEmptyError,
     Pipeline,
-    contains_stt_hallucination,
 )
 from src.llm_text import clean_llm_output
 from src.pipeline_events import StageEvent
@@ -333,57 +332,13 @@ async def test_empty_stt(tmp_path, monkeypatch):
     assert_all_str(events)
 
 
-def test_contains_stt_hallucination():
-    assert contains_stt_hallucination("Субтитры создавал DimaTorzok")
-    assert contains_stt_hallucination("dimatorzok")
-    assert contains_stt_hallucination("Продолжение следует...")
-    assert not contains_stt_hallucination("включи свет")
-
+# The Whisper hallucination filter is the groq STT brick's concern now; its unit
+# tests live in tests/test_stt.py against GroqSttBackend directly (the backend
+# returns "" for a hallucinated transcript, which the pipeline handles via the
+# existing empty-transcription path — covered by the empty-STT tests above).
 
 # The VAD-decision boost (auto_gain) is the webrtc plugin's concern now; its unit
 # tests live in tests/test_vad_webrtc.py against the session/backend directly.
-
-
-async def test_stt_hallucination_discarded(tmp_path, monkeypatch):
-    # A Whisper hallucination ("DimaTorzok" subtitle-credit artifact) is blanked,
-    # so the run ends like an empty transcription: no INTENT/TTS, STT_END empty.
-    patch_llm(monkeypatch)
-    pipeline, events = make_pipeline(
-        tmp_path, monkeypatch, stt_text="Субтитры создавал DimaTorzok"
-    )
-
-    await pipeline.on_start("cid", 0, None, None)
-    await pipeline.on_audio(b"\x01\x02" * 100)
-    await pipeline.on_stop(False)
-
-    assert types_of(events) == [
-        StageEvent.RUN_START,
-        StageEvent.STT_START,
-        StageEvent.STT_END,
-        StageEvent.RUN_END,
-    ]
-    data = dict(events)
-    assert data[StageEvent.STT_END] == {"text": ""}
-    assert_all_str(events)
-
-
-async def test_run_recorded_on_stt_hallucination(tmp_path, monkeypatch):
-    patch_llm(monkeypatch)
-    store = FakeRunsStore()
-    pipeline, _ = make_pipeline(
-        tmp_path, monkeypatch,
-        stt_text="Субтитры создавал DimaTorzok", runs_store=store,
-    )
-
-    await pipeline.on_start("cid", 0, None, None)
-    await pipeline.on_audio(b"\x01\x02" * 100)
-    await pipeline.on_stop(False)
-
-    # The hallucination is dropped: recorded like an empty transcription.
-    assert len(store.records) == 1
-    rec = store.records[0]
-    assert rec["result"] == "empty"
-    assert rec["stt_text"] == ""
 
 
 async def test_pipelines_are_independent(tmp_path, monkeypatch):

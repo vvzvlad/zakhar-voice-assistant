@@ -5,14 +5,17 @@ import httpx
 import pytest
 import respx
 
-from src.stage_errors import StageError
-from src.stt import (
+import src.plugins  # noqa: F401  register all providers
+from src.plugins.base import Deps, get_provider
+from src.plugins.stt.groq import (
     GROQ_STT_URL,
     GroqSttBackend,
-    VoskSttBackend,
-    make_stt_backend,
-    pcm_to_wav,
+    GroqSttConfig,
+    contains_stt_hallucination,
 )
+from src.plugins.stt.vosk import VoskSttBackend
+from src.stage_errors import StageError
+from src.stt import pcm_to_wav
 
 
 def test_pcm_to_wav_roundtrip():
@@ -110,16 +113,42 @@ async def test_groq_backend_empty_pcm_skips_http():
     assert not route.called
 
 
-async def test_make_stt_backend_groq():
-    async with httpx.AsyncClient(verify=False) as client:
-        backend = make_stt_backend("groq", client, api_key="k", model="whisper-large-v3-turbo")
-    assert isinstance(backend, GroqSttBackend)
+def test_contains_stt_hallucination():
+    assert contains_stt_hallucination("Субтитры создавал DimaTorzok")
+    assert contains_stt_hallucination("dimatorzok")
+    assert contains_stt_hallucination("Продолжение следует...")
+    assert not contains_stt_hallucination("включи свет")
 
 
-async def test_make_stt_backend_unknown_raises():
+@respx.mock
+async def test_groq_backend_discards_hallucination_as_empty():
+    # A 200 carrying a known Whisper hallucination marker ("DimaTorzok"
+    # subtitle-credit artifact) is discarded: transcribe returns "" — the
+    # "no speech recognized" contract — so the pipeline ends the run like an
+    # empty transcription.
+    respx.post(GROQ_STT_URL).mock(
+        return_value=httpx.Response(200, json={"text": "Субтитры создавал DimaTorzok"})
+    )
     async with httpx.AsyncClient(verify=False) as client:
-        with pytest.raises(ValueError):
-            make_stt_backend("nope", client)
+        backend = GroqSttBackend(client, api_key="test-key", model="whisper-large-v3-turbo")
+        result = await backend.transcribe(b"\x01\x02" * 100)
+    assert result == ""
+
+
+async def test_registry_groq_provider_creates_groq_backend():
+    # REGISTRY-based construction (the primary path now): the groq STT provider's
+    # create() returns a GroqSttBackend wired to the cloud HTTP client.
+    async with httpx.AsyncClient(verify=False) as cloud, httpx.AsyncClient(verify=False) as local:
+        deps = Deps(http_cloud=cloud, http_local=local)
+        backend = get_provider("stt", "groq").create(GroqSttConfig(api_key="k"), deps)
+        assert isinstance(backend, GroqSttBackend)
+        assert backend.client is cloud
+        assert backend.api_key == "k"
+
+
+def test_registry_unknown_stt_provider_raises():
+    with pytest.raises(ValueError):
+        get_provider("stt", "nope")
 
 
 class _RecordingModel:
