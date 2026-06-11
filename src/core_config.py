@@ -130,6 +130,9 @@ class DeviceConfig(BaseModel):
     name: str
     host: str
     psk: str
+    # When False the server does NOT build a client for this speaker (no connection
+    # attempts); flipping it is hot-applied via DeviceManager.reconfigure().
+    enabled: bool = True
 
 
 class EsphomeConfig(BaseModel):

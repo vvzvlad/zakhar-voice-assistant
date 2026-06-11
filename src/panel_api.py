@@ -291,6 +291,9 @@ class PanelServer:
             "uptime_seconds": int(time.time() - self.started_at),
             "running": True,
             "log_level": self.svc.core.log_level,
+            # Live device statuses for the panel: flows through the 1 s WS heartbeat
+            # so the Devices page / Sidebar update without polling. Cheap in-memory read.
+            "devices": self.device_status() if self.device_status else [],
         }
 
     async def _get_system(self, request: web.Request) -> web.Response:

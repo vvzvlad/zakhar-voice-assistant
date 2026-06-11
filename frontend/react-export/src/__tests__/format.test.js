@@ -1,7 +1,7 @@
 // Unit tests for the display formatters (src/format.js).
 // TZ is pinned to UTC in src/test/setup.js so fmtStarted is deterministic.
 import { describe, it, expect } from "vitest";
-import { fmtUptime, fmtStarted, fmtBytes } from "../format.js";
+import { fmtUptime, fmtStarted, fmtBytes, deviceVersion } from "../format.js";
 
 describe("fmtUptime", () => {
   it("renders an em dash for null / NaN input", () => {
@@ -70,5 +70,36 @@ describe("fmtBytes", () => {
 
   it("rounds to an integer when the value is >= 10 in its unit", () => {
     expect(fmtBytes(12 * 1024 * 1024)).toBe("12 MB");
+  });
+});
+
+describe("deviceVersion", () => {
+  const entry = {
+    name: "kitchen", online: true, enabled: true,
+    versions: [
+      { id: "config_version", name: "Config Version", value: "v16" },
+      { id: "model_version", name: "Model Version", value: "night-v3" },
+    ],
+  };
+
+  it("returns the matching version value by id", () => {
+    expect(deviceVersion(entry, "config_version")).toBe("v16");
+    expect(deviceVersion(entry, "model_version")).toBe("night-v3");
+  });
+
+  it("returns null when the id is not reported", () => {
+    expect(deviceVersion(entry, "nope")).toBeNull();
+  });
+
+  it("returns null for a missing entry or empty versions (offline / disabled)", () => {
+    expect(deviceVersion(null, "config_version")).toBeNull();
+    expect(deviceVersion(undefined, "config_version")).toBeNull();
+    expect(deviceVersion({ versions: [] }, "config_version")).toBeNull();
+    expect(deviceVersion({}, "config_version")).toBeNull();
+  });
+
+  it("returns null when the version value has not arrived yet", () => {
+    // The backend reports value: null until the first state push.
+    expect(deviceVersion({ versions: [{ id: "config_version", value: null }] }, "config_version")).toBeNull();
   });
 });

@@ -254,8 +254,8 @@ class _ReconcileClient:
         self.stopped = True
 
 
-def _device(name, host="10.0.0.1", psk="psk0"):
-    return DeviceConfig(name=name, host=host, psk=psk)
+def _device(name, host="10.0.0.1", psk="psk0", enabled=True):
+    return DeviceConfig(name=name, host=host, psk=psk, enabled=enabled)
 
 
 def _reconfigure_runtime(devices, *, port=6053):
@@ -333,6 +333,39 @@ async def test_reconfigure_port_change_rebuilds_all(monkeypatch):
     assert all(c.started for c in mgr.clients)        # every new client started
 
 
+def test_init_skips_disabled_devices(monkeypatch):
+    # A disabled device must get NO client at construction time.
+    a, off = _device("a"), _device("off", host="10.0.0.9", enabled=False)
+    mgr, _rt = _make_manager([a, off], monkeypatch=monkeypatch)
+    assert [c.cfg.name for c in mgr.clients] == ["a"]
+
+
+@pytest.mark.asyncio
+async def test_reconfigure_disabling_stops_and_removes_client(monkeypatch):
+    a, b = _device("a"), _device("b", host="10.0.0.2", psk="psk-b")
+    mgr, rt = _make_manager([a, b], monkeypatch=monkeypatch)
+    client_b = next(c for c in mgr.clients if c.cfg.name == "b")
+    # Flip b to disabled (same name/host/psk) -> its client is stopped + removed.
+    rt.core.devices = [a, _device("b", host="10.0.0.2", psk="psk-b", enabled=False)]
+    await mgr.reconfigure()
+    assert [c.cfg.name for c in mgr.clients] == ["a"]
+    assert client_b.stopped is True
+
+
+@pytest.mark.asyncio
+async def test_reconfigure_reenabling_creates_and_starts_client(monkeypatch):
+    a = _device("a")
+    off = _device("b", host="10.0.0.2", psk="psk-b", enabled=False)
+    mgr, rt = _make_manager([a, off], monkeypatch=monkeypatch)
+    assert [c.cfg.name for c in mgr.clients] == ["a"]  # disabled -> no client
+    # Re-enable b -> a fresh client is created and started.
+    rt.core.devices = [a, _device("b", host="10.0.0.2", psk="psk-b", enabled=True)]
+    await mgr.reconfigure()
+    assert sorted(c.cfg.name for c in mgr.clients) == ["a", "b"]
+    new = next(c for c in mgr.clients if c.cfg.name == "b")
+    assert new.started is True
+
+
 @pytest.mark.asyncio
 async def test_reconfigure_noop_when_unchanged(monkeypatch):
     a = _device("a")
@@ -346,26 +379,60 @@ async def test_reconfigure_noop_when_unchanged(monkeypatch):
 # --- DeviceManager.statuses --------------------------------------------------
 
 class _StatusClient:
-    """Minimal client exposing the .cfg.name/.cfg.host/.online statuses() reads."""
+    """Minimal client exposing the .cfg.name/.online/.versions() statuses() reads."""
 
-    def __init__(self, name, host, online):
-        self.cfg = types.SimpleNamespace(name=name, host=host)
+    def __init__(self, name, online, versions=None):
+        self.cfg = types.SimpleNamespace(name=name)
         self.online = online
+        self._versions = versions or []
+
+    def versions(self):
+        return self._versions
 
 
-def test_statuses_reports_each_client_in_order():
-    a = _StatusClient("a", "10.0.0.1", online=True)
-    b = _StatusClient("b", "10.0.0.2", online=False)
-    mgr = _manager([a, b])
-    # One dict per client, in client order, carrying name/host/online verbatim.
+def _status_manager(devices, clients):
+    """Manager via __new__ with a fake runtime carrying the configured devices."""
+    mgr = _manager(clients)
+    mgr.rt = types.SimpleNamespace(core=types.SimpleNamespace(devices=devices))
+    return mgr
+
+
+def test_statuses_reports_each_configured_device_in_order():
+    devices = [
+        DeviceConfig(name="a", host="10.0.0.1", psk="p1"),
+        DeviceConfig(name="b", host="10.0.0.2", psk="p2"),
+    ]
+    versions = [{"id": "config_version", "name": "Config Version", "value": "v16"}]
+    a = _StatusClient("a", online=True, versions=versions)
+    b = _StatusClient("b", online=False)
+    mgr = _status_manager(devices, [a, b])
+    # One dict per CONFIGURED device, in config order. versions flow through only
+    # for online clients (the offline one reads []).
     assert mgr.statuses() == [
-        {"name": "a", "host": "10.0.0.1", "online": True},
-        {"name": "b", "host": "10.0.0.2", "online": False},
+        {"name": "a", "host": "10.0.0.1", "enabled": True, "online": True,
+         "versions": versions},
+        {"name": "b", "host": "10.0.0.2", "enabled": True, "online": False,
+         "versions": []},
     ]
 
 
-def test_statuses_empty_client_list_is_empty():
-    assert _manager([]).statuses() == []
+def test_statuses_disabled_device_reads_offline_without_client():
+    # A disabled speaker has no client at all but is still reported (offline).
+    devices = [
+        DeviceConfig(name="a", host="10.0.0.1", psk="p1"),
+        DeviceConfig(name="off", host="10.0.0.9", psk="p9", enabled=False),
+    ]
+    mgr = _status_manager(devices, [_StatusClient("a", online=True)])
+    assert mgr.statuses() == [
+        {"name": "a", "host": "10.0.0.1", "enabled": True, "online": True,
+         "versions": []},
+        {"name": "off", "host": "10.0.0.9", "enabled": False, "online": False,
+         "versions": []},
+    ]
+
+
+def test_statuses_empty_config_is_empty():
+    assert _status_manager([], []).statuses() == []
 
 
 # --- DeviceClient.announce ----------------------------------------------------

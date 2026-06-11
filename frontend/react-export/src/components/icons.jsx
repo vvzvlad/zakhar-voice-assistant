@@ -13,7 +13,6 @@ export const ICONS = {
   devices: "M5 4h14v12H5zM9 20h6M12 16v4M9 8h6M9 11h3",
   log: "M4 5h16M4 10h16M4 15h10M4 20h13",
   network: "M12 2a10 10 0 100 20 10 10 0 000-20zM2 12h20M12 2c3.5 3 3.5 17 0 20M12 2c-3.5 3-3.5 17 0 20",
-  device: "M7 7h10v10H7zM9 3v4M15 3v4M9 17v4M15 17v4M3 9h4M3 15h4M17 9h4M17 15h4",
   system: "M4 7h10M18 7h2M4 17h6M14 17h6M14 5v4M10 15v4",
   restart: "M4 12a8 8 0 112.3 5.6M4 20v-5h5",
   search: "M11 11m-7 0a7 7 0 1014 0 7 7 0 10-14 0M21 21l-4-4",

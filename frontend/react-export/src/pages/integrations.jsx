@@ -7,7 +7,8 @@ import SchemaForm from "../components/SchemaForm.jsx";
 import { useAppData } from "../appData.jsx";
 import { useStageForm, errorLines } from "../useStageForm.js";
 import { deref } from "../schema.js";
-import { getPrompt, putPrompt, getDevices, getTools, startCapture, getCaptureStatus, downloadCaptureResult, getDeviceControls, setDeviceControl } from "../api.js";
+import { getPrompt, putPrompt, getTools, startCapture, getCaptureStatus, downloadCaptureResult, getDeviceControls, setDeviceControl } from "../api.js";
+import { deviceVersion } from "../format.js";
 
 function Card({ title, sub, children, foot, right }) {
   return <div className="z-card">
@@ -344,7 +345,8 @@ function DeviceModal({ initial, onSave, onClose, title, device, online }) {
   const [psk, setPsk] = useState(initial?.psk || "");
   return <Modal title={title} onClose={onClose}
     footer={<><button className="z-btn g" onClick={onClose}>Cancel</button>
-      <button className="z-btn p" disabled={!name || !host} onClick={() => onSave({ name, host, psk })}>Save</button></>}>
+      {/* Preserve the enabled flag across edits; Add mode defaults to enabled. */}
+      <button className="z-btn p" disabled={!name || !host} onClick={() => onSave({ name, host, psk, enabled: initial?.enabled ?? true })}>Save</button></>}>
     <Field label="Name" hint="Unique — also keys the dialog context."><div className="z-inp"><input value={name} placeholder="e.g. hallway" onChange={(e) => setName(e.target.value)} /></div></Field>
     <Field label="Host / IP"><div className="z-inp mono"><input value={host} placeholder="10.0.0.25" onChange={(e) => setHost(e.target.value)} /></div></Field>
     <Field label="PSK" hint="ESPHome API encryption key."><KeyInput value={psk} placeholder="base64 key…" onChange={setPsk} /></Field>
@@ -524,18 +526,16 @@ function DeviceControls({ device, online: onlineProp }) {
 }
 
 export function Devices() {
-  const { catalog, patch } = useAppData();
+  const { catalog, patch, system } = useAppData();
   const devices = catalog.core.values.devices || [];
   const esphomePort = catalog.core.values.esphome?.port ?? 6053;
 
-  const [live, setLive] = useState([]);
-  useEffect(() => {
-    let alive = true;
-    getDevices().then((d) => { if (alive && Array.isArray(d)) setLive(d); }).catch(() => {});
-    return () => { alive = false; };
-  }, [catalog]);
+  // Statuses arrive live over the panel WS heartbeat (system.devices is refreshed
+  // every second), so no one-shot fetch / polling is needed here.
+  const live = system?.devices || [];
+  const liveOf = (name) => live.find((d) => d.name === name) || null;
   const statusOf = (name) => {
-    const m = live.find((d) => d.name === name);
+    const m = liveOf(name);
     if (!m) return "off";
     return m.online ? "online" : "offline";
   };
@@ -551,6 +551,11 @@ export function Devices() {
   const onAdd = (d) => saveList([...devices, d]);
   const onEdit = (i, d) => saveList(devices.map((x, idx) => (idx === i ? d : x)));
   const onDelete = (i) => saveList(devices.filter((_, idx) => idx !== i));
+  // Flip the persisted enabled flag (missing = true on old configs). Disabling stops
+  // the server's client for that speaker; re-enabling recreates it — both hot.
+  const onToggle = (i) => saveList(devices.map((x, idx) => (
+    idx === i ? { ...x, enabled: !(x.enabled ?? true) } : x
+  )));
 
   // Common params (esphome.port + audio.public_base_url) as their own save form.
   const commonValues = {
@@ -566,20 +571,26 @@ export function Devices() {
     {busyErr && <div className="z-banner warn" style={{ margin: "0 0 12px" }}><Ic n="restart" w={15} /><span>{errorLines(busyErr).join(" · ")}</span></div>}
     <Card>
       <table className="z-tbl">
-        <thead><tr><th>Name</th><th>Host / IP</th><th>PSK</th><th>Status</th><th></th></tr></thead>
+        <thead><tr><th>Name</th><th>Host / IP</th><th>Firmware</th><th>Model</th><th>Status</th><th></th></tr></thead>
         <tbody>
           {devices.length === 0
-            ? <tr><td colSpan={5} style={{ color: "var(--mut)", padding: "14px 0" }}>No speakers configured.</td></tr>
-            : devices.map((d, i) => <tr key={i} style={{ cursor: "default" }}>
-              <td style={{ fontWeight: 600 }}>{d.name}</td>
-              <td className="mono" style={{ fontSize: 11.5 }}>{d.host}<span style={{ color: "var(--mut2)" }}>:{esphomePort}</span></td>
-              <td className="mono" style={{ fontSize: 11.5, color: "var(--mut)" }}>{d.psk ? "••••••••" : "—"}</td>
-              <td><StatusPill status={statusOf(d.name)} /></td>
-              <td style={{ textAlign: "right" }}><div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
-                <button className="z-mini" onClick={() => setModal({ mode: "edit", index: i })}>Edit</button>
-                <button className="z-mini" onClick={() => onDelete(i)}>Delete</button>
-              </div></td>
-            </tr>)}
+            ? <tr><td colSpan={6} style={{ color: "var(--mut)", padding: "14px 0" }}>No speakers configured.</td></tr>
+            : devices.map((d, i) => {
+              const enabled = d.enabled ?? true;
+              return <tr key={i} style={{ cursor: "default", opacity: enabled ? 1 : 0.55 }}>
+                <td style={{ fontWeight: 600 }}>{d.name}</td>
+                <td className="mono" style={{ fontSize: 11.5 }}>{d.host}<span style={{ color: "var(--mut2)" }}>:{esphomePort}</span></td>
+                {/* Firmware/model versions come from the live WS snapshot; "—" while offline/disabled. */}
+                <td className="mono" style={{ fontSize: 11.5 }}>{deviceVersion(liveOf(d.name), "config_version") ?? "—"}</td>
+                <td className="mono" style={{ fontSize: 11.5 }}>{deviceVersion(liveOf(d.name), "model_version") ?? "—"}</td>
+                <td>{enabled ? <StatusPill status={statusOf(d.name)} /> : <Pill tone="muted">disabled</Pill>}</td>
+                <td style={{ textAlign: "right" }}><div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+                  <button className="z-mini" onClick={() => onToggle(i)}>{enabled ? "Disable" : "Enable"}</button>
+                  <button className="z-mini" onClick={() => setModal({ mode: "edit", index: i })}>Edit</button>
+                  <button className="z-mini" onClick={() => onDelete(i)}>Delete</button>
+                </div></td>
+              </tr>;
+            })}
         </tbody>
       </table>
     </Card>

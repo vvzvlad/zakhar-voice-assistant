@@ -13,8 +13,9 @@ function Card({ title, sub, children, foot }) {
   </div>;
 }
 
-// ── Device (core.network + core.audio + core.runs) ────────────────────────
-function Device() {
+// ── System page (core.network + core.audio + core.runs) ───────────────────
+// Named SystemPage to avoid clashing with the exported System status card below.
+function SystemPage() {
   const { catalog, patch } = useAppData();
   const defs = catalog.core.schema.$defs || {};
   const netSchema = defs.NetworkConfig;
@@ -27,7 +28,7 @@ function Device() {
   const audio = useStageForm(audioValues, (d) => ({ core: { audio: d } }), patch);
 
   return <div className="z-page">
-    <PageHeader title="Device" crumb="Operations · advanced"
+    <PageHeader title="System" crumb="Operations · advanced"
       desc="Outbound routing for cloud APIs, the audio server that feeds speakers, and recorded-utterance storage." />
     {/* Two equal columns: routing/audio on the left, system status + recordings + logging on the right */}
     <div className="z-cols even">
@@ -123,4 +124,4 @@ export function System() {
   </div>;
 }
 
-export default Device;
+export default SystemPage;

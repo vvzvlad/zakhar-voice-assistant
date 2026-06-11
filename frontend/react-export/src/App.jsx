@@ -22,7 +22,7 @@ function initialId() {
   const fromPath = idFromPath(window.location.pathname);
   if (fromPath) return fromPath;
   // Validate the persisted id against the known sections so a stale/removed id
-  // (e.g. the old "network" before it was renamed to "device") falls back cleanly.
+  // (e.g. the old "device" before it was renamed to "system") falls back cleanly.
   try {
     const stored = localStorage.getItem("z-active");
     return VALID.has(stored) ? stored : "dashboard";

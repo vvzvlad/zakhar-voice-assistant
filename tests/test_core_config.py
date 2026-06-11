@@ -5,6 +5,7 @@ from src.core_config import (
     AckConfig,
     CalendarConfig,
     CoreConfig,
+    DeviceConfig,
     McpServerConfig,
     OpenWeatherMapConfig,
     VadConfig,
@@ -41,6 +42,15 @@ def test_mcp_server_transport_literal_is_validated():
 def test_mcp_server_requires_name():
     with pytest.raises(ValidationError):
         McpServerConfig(url="http://x")
+
+
+def test_device_config_enabled_defaults_true_and_round_trips_false():
+    # Old config.json entries carry no `enabled` -> they must validate as enabled.
+    d = DeviceConfig(name="a", host="10.0.0.1", psk="p")
+    assert d.enabled is True
+    # enabled=False survives a dump/validate round trip (persisted config flag).
+    off = DeviceConfig(name="a", host="10.0.0.1", psk="p", enabled=False)
+    assert DeviceConfig.model_validate(off.model_dump()).enabled is False
 
 
 def test_vad_trim_start_ms_defaults_to_200():

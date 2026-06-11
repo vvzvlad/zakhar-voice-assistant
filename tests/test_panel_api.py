@@ -281,6 +281,21 @@ async def test_get_system(tmp_path):
         assert body["log_level"] == "DEBUG"
         assert "started" in body
         assert isinstance(body["uptime_seconds"], int)
+        # Without a wired device_status the snapshot carries an empty device list.
+        assert body["devices"] == []
+    finally:
+        await client.close()
+
+
+async def test_get_system_includes_device_statuses(tmp_path):
+    devices = [{"name": "x", "host": "y", "enabled": True, "online": True, "versions": []}]
+    client, _svc_ = await _client(tmp_path, device_status=lambda: devices)
+    try:
+        resp = await client.get("/api/system")
+        assert resp.status == 200
+        body = await resp.json()
+        # The snapshot embeds the live device_status() result verbatim.
+        assert body["devices"] == devices
     finally:
         await client.close()
 
@@ -881,6 +896,29 @@ async def test_runs_stream_pushes_system_heartbeat(tmp_path):
         assert msg["running"] is True
         assert isinstance(msg["uptime_seconds"], int)
         assert "db_size_bytes" not in msg  # heartbeat stays lightweight
+        # No device_status wired -> the heartbeat still carries an (empty) device list.
+        assert msg["devices"] == []
+        await ws.close()
+    finally:
+        await client.close()
+
+
+async def test_runs_stream_heartbeat_carries_device_statuses(tmp_path):
+    # The 1 s heartbeat is the panel's live device-status feed: it must embed the
+    # device_status() snapshot so the Devices page updates without polling.
+    hub = RunEventsHub()
+    devices = [{"name": "x", "host": "y", "enabled": True, "online": False, "versions": []}]
+    client, _svc_ = await _client(
+        tmp_path, run_events=hub, heartbeat_interval=0.05,
+        device_status=lambda: devices,
+    )
+    try:
+        ws = await client.ws_connect("/api/runs/stream")
+        while True:
+            msg = await asyncio.wait_for(ws.receive_json(), 2)
+            if msg.get("type") == "system":
+                break
+        assert msg["devices"] == devices
         await ws.close()
     finally:
         await client.close()

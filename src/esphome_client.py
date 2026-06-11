@@ -339,16 +339,29 @@ class DeviceManager:
         # The esphome port is global (not per-device); track the value the live
         # clients were built with so reconfigure() can detect a port change.
         self._esphome_port = runtime.core.esphome.port
+        # Disabled speakers get no client at all: the server never connects to them.
         self.clients = [
-            DeviceClient(cfg, zc, runtime) for cfg in runtime.core.devices
+            DeviceClient(cfg, zc, runtime) for cfg in runtime.core.devices if cfg.enabled
         ]
 
     def statuses(self) -> list[dict]:
-        """Live connection status for every configured speaker (for the panel API)."""
-        return [
-            {"name": c.cfg.name, "host": c.cfg.host, "online": c.online}
-            for c in self.clients
-        ]
+        """Live connection status for every configured speaker (for the panel API).
+
+        Iterates the CONFIG (so disabled speakers are reported too) and matches the
+        live client by name; a disabled speaker has no client and reads offline."""
+        by_name = {c.cfg.name: c for c in self.clients}
+        out = []
+        for cfg in self.rt.core.devices:
+            client = by_name.get(cfg.name) if cfg.enabled else None
+            online = bool(client and client.online)
+            out.append({
+                "name": cfg.name,
+                "host": cfg.host,
+                "enabled": cfg.enabled,
+                "online": online,
+                "versions": client.versions() if online else [],
+            })
+        return out
 
     async def announce(self, device_name: str | None, text: str) -> None:
         """Route a reminder to its originating speaker; drop if unavailable."""
@@ -460,6 +473,8 @@ class DeviceManager:
 
         A device is keyed by (name, host, psk); changed keys are stopped+recreated.
         A global esphome.port change rebuilds every client (the port is not per-device).
+        Disabled devices are simply absent from the desired set (`enabled` is NOT part
+        of the key), so disabling stops+removes the client and re-enabling recreates it.
         `self.clients` is mutated in place so the panel/scheduler keep their bound
         `statuses`/`announce` methods (we never replace the manager object)."""
         core = self.rt.core
@@ -467,10 +482,12 @@ class DeviceManager:
         if port != self._esphome_port:
             await self.stop()
             self._esphome_port = port
-            self.clients = [DeviceClient(cfg, self.zc, self.rt) for cfg in core.devices]
+            self.clients = [
+                DeviceClient(cfg, self.zc, self.rt) for cfg in core.devices if cfg.enabled
+            ]
             await self.start()
             return
-        desired = {(d.name, d.host, d.psk): d for d in core.devices}
+        desired = {(d.name, d.host, d.psk): d for d in core.devices if d.enabled}
         current = {(c.cfg.name, c.cfg.host, c.cfg.psk): c for c in self.clients}
         for key, client in list(current.items()):
             if key not in desired:

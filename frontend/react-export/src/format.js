@@ -20,6 +20,14 @@ export function fmtStarted(iso) {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
+// Read one firmware version value (e.g. "config_version" / "model_version") from a
+// live device-status entry ({versions:[{id,name,value}]}). Returns null when the
+// entry is missing, offline/disabled (empty versions) or the id is not reported.
+export function deviceVersion(liveEntry, id) {
+  const v = (liveEntry?.versions || []).find((e) => e.id === id);
+  return v?.value ?? null;
+}
+
 // Human-readable byte size (binary units): "—" for null/NaN, then B / KB / MB / GB / TB.
 export function fmtBytes(n) {
   if (n == null || isNaN(n)) return "—";

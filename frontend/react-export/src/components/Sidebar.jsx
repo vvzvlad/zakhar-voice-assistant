@@ -1,20 +1,16 @@
-import React, { useEffect, useState } from "react";
+import React from "react";
 import { NAV } from "../nav.js";
 import { Ic } from "./icons.jsx";
 import { useAppData } from "../appData.jsx";
-import { getDevices } from "../api.js";
 
 export function Sidebar({ active, onNav }) {
-  const { config } = useAppData();
+  const { config, system } = useAppData();
   const mcpCount = (config?.core?.mcp_servers || []).length;
   const devCfg = config?.core?.devices || [];
 
-  const [devStatus, setDevStatus] = useState([]);
-  useEffect(() => {
-    let alive = true;
-    getDevices().then((d) => { if (alive && Array.isArray(d)) setDevStatus(d); }).catch(() => {});
-    return () => { alive = false; };
-  }, []);
+  // Device statuses arrive live over the panel WS heartbeat (system.devices),
+  // so the online/total badge updates without polling or page reloads.
+  const devStatus = system?.devices || [];
   const online = devStatus.filter((d) => d.online).length;
   const devTotal = devCfg.length || devStatus.length;
 
