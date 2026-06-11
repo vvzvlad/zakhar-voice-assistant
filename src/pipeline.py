@@ -49,7 +49,7 @@ HARD_CAP_BYTES = SAMPLE_RATE * 2 * 60
 
 # Maximum duration (seconds) of a manual "record X seconds" capture. Single source
 # of truth shared by the panel API / ESPHome client validation; the device-side
-# template number caps at the same value in esphome/zakhar-voice.yaml.
+# template number caps at the same value in esphome/zakhar-voice-preroll.yaml.
 CAPTURE_MAX_SECONDS = 300
 
 # How long an armed manual capture stays valid waiting for its voice_assistant.start

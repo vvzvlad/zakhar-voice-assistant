@@ -2,11 +2,16 @@
 # AND the PRE-ROLL voice_assistant fork — say «Захар <команда>» in ONE continuous
 # breath, no waiting for the confirmation beep.
 #
-# This is zakhar-voice.yaml + two additions:
+# This is now the SINGLE canonical device config (the plain zakhar-voice.yaml was
+# removed): a pre-roll fork of the stock HA Voice PE firmware, carrying everything in
+# one place. On top of the stock firmware it adds:
 #   1) external_components: swap in the patched `voice_assistant` (zakhar-preroll/).
 #   2) voice_assistant: preroll_duration — how much audio BEFORE wake detection to
 #      prepend to the stream, so the server receives «Захар …» + the command as one
 #      stream (the «захар» segment is then also available for a server-side verifier).
+#   3) Runtime panel controls (Wake Probability Cutoff + Speaker Volume) tunable live
+#      from the server's Devices page with no re-flash.
+#   4) Config Version / Model Version diagnostic entities to confirm what's flashed.
 #
 # The stock firmware (mic, LED ring, buttons, media player, timers, OTA, improv,
 # etc.) is still pulled UNCHANGED from the official Nabu Casa package; we only
@@ -23,6 +28,14 @@
 #
 # NOTE: the fork is pinned to ESPHome 2026.5.x (same as home-assistant-voice@26.5.0).
 # When you bump ESPHome past 2026.5.x, the fork must be rebased (see its README).
+
+substitutions:
+  # Bump on EVERY change to this device config — the Config Version entity lets you
+  # verify which config is actually flashed (catches a stale / wrong-file flash).
+  config_version: "v13_preroll"
+  # micro_wake_word model version flashed; keep in sync with the model path in
+  # packages.zakhar_wake_word below (currently microWakeWord/v8).
+  model_version: "zakhar_v8"
 
 # --- Pre-roll fork: overrides the built-in voice_assistant with the patched copy ---
 external_components:
@@ -56,17 +69,15 @@ packages:
         # inherited here), so continuous instrumental music stays ~0 false-accepts.
         - model: ../microWakeWord/v8/model/zakhar.json
           id: zakhar
-          # FIELD-TUNED (after v8 over-fired in silence/noise at cutoff 0.80):
-          # cutoff 0.80 was set from a device-eval whose FAPH was measured WITH VAD
-          # (=0); it does NOT reflect bare false-positives, so on-device the KWS fired
-          # constantly (VAD masked most: "predicts 'Захар' but VAD doesn't" log spam,
-          # but vocal-music/noise leaks through). v5 felt better largely because it ran
-          # at 0.95. So we run v8 at 0.95 + window 5 (≈ the conservative okay_nabu point).
-          # Tune: lower toward 0.90 if real «захааар» starts getting missed; raise to
-          # 0.97 if it still false-fires. (Real fix = retrain with silence/AGC-floor
-          # negatives + a silence eval mode — see microWakeWord/v9/REALDATA_RUNBOOK.md.)
-          probability_cutoff: 95%
-          sliding_window_size: 5
+          # v8 KNOWN-GOOD operating point: cutoff 0.80 (device FRR 4.6%, FAPH 0 with
+          # VAD) — the point at which v8 actually detects «захааар» reliably (commit
+          # e7ec0dd). The later 0.95 + window-5 tightening (to fight silence false-fires)
+          # OVER-suppressed the model: real «захааар» peaks below 0.95, so it stopped
+          # detecting at all. Detection matters more than the silence FAPH, and the VAD
+          # pre-gate already masks most silence false-accepts. Window override removed ->
+          # manifest default (3). Tune live from the panel (Wake Probability Cutoff,
+          # below) — raise toward 0.90 only if silence false-fires get annoying.
+          probability_cutoff: 80%
 
   # Official Home Assistant Voice PE firmware, pinned to a release tag.
   # Bump the @ref to update the base firmware later.
@@ -92,6 +103,44 @@ voice_assistant:
 switch:
   - id: !extend wake_sound
     restore_mode: ALWAYS_OFF
+
+# --- Firmware versioning: config + model version as separate read-only diagnostic
+# entities, so you can confirm exactly what's flashed and catch config/file drift.
+text_sensor:
+  - platform: template
+    name: "Config Version"
+    id: cfg_version
+    entity_category: diagnostic
+    update_interval: never
+  - platform: template
+    name: "Model Version"
+    id: mdl_version
+    entity_category: diagnostic
+    update_interval: never
+
+# One 1s housekeeping tick — no logging of its own:
+#   * mirror the real media-player volume onto the Speaker Volume slider, but
+#     publish ONLY when it actually changed (no per-tick spam; reflects the dial);
+#   * publish the static Config/Model version strings exactly once (while still empty).
+interval:
+  - interval: 1s
+    then:
+      - lambda: |-
+          // Volume: publish only on change. publish_state() does NOT run set_action,
+          // so this can't feed back into media_player.volume_set.
+          float v = id(external_media_player)->volume * 100.0f;
+          float cur = id(speaker_volume_number).state;
+          // cur is NaN before the first publish (NaN != NaN), so this fires once at boot too.
+          if (!(cur == cur) || fabsf(v - cur) >= 0.5f) {
+            id(speaker_volume_number).publish_state(v);
+          }
+          // Versions: publish the static strings once, then never again (state stays set).
+          if (id(cfg_version).state.empty()) {
+            id(cfg_version).publish_state("${config_version}");
+          }
+          if (id(mdl_version).state.empty()) {
+            id(mdl_version).publish_state("${model_version}");
+          }
 
 # Bake Wi-Fi credentials in (the stock config relies on Bluetooth/serial "improv"
 # provisioning; for a headless setup hard-coding the network is more reliable).
@@ -176,6 +225,48 @@ number:
     step: 1
     initial_value: 5
     restore_value: true
+  # Runtime wake-word sensitivity (object_id wake_probability_cutoff) — the server
+  # exposes it as a 0..100 slider on the Devices page; tune live, no re-flash.
+  - platform: template
+    name: "Wake Probability Cutoff"
+    id: wake_probability_cutoff
+    optimistic: true
+    restore_value: true
+    initial_value: 80
+    min_value: 0
+    max_value: 100
+    step: 1
+    unit_of_measurement: "%"
+    mode: slider
+    on_value:
+      then:
+        - lambda: |-
+            // micro_wake_word stores the cutoff as a uint8 (probability * 255).
+            // Convert this percentage entity (0..100) to that 0..255 scale and push it
+            // to the model at runtime. Truncate (not round) to match ESPHome's own
+            // codegen, which bakes the static cutoff as int(probability * 255) — so the
+            // runtime knob behaves identically to re-flashing with the same %.
+            const float frac = x / 100.0f;
+            id(zakhar)->set_probability_cutoff((uint8_t) (frac * 255.0f));
+  # Runtime speaker-volume control (object_id speaker_volume) on a plain 0..100 scale.
+  # optimistic + set_action: writing it (panel/HA) runs media_player.volume_set AND
+  # publishes the set value immediately. The REAL volume (incl. the physical dial) is
+  # reflected back by the 1s interval below, which publishes ONLY on change — so there
+  # is no per-tick log/API spam. (publish_state from that interval does NOT re-trigger
+  # set_action, so there's no feedback loop.)
+  - platform: template
+    name: "Speaker Volume"
+    id: speaker_volume_number
+    optimistic: true
+    min_value: 0
+    max_value: 100
+    step: 1
+    unit_of_measurement: "%"
+    mode: slider
+    set_action:
+      - media_player.volume_set:
+          id: external_media_player
+          volume: !lambda 'return x / 100.0f;'
 
 button:
   - platform: template

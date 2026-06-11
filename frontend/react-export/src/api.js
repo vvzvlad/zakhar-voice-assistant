@@ -66,6 +66,14 @@ export const putPrompt = (text) => request("/api/prompt", { method: "PUT", body:
 export const getSystem = () => request("/api/system");
 export const getDevices = () => request("/api/devices");
 
+// Live device controls (wake-word probability cutoff + speaker volume) exposed by
+// the firmware as 0..100 number entities. GET returns {device, online, controls:[{id,name,value,min,max,step,unit}]}.
+export const getDeviceControls = (device) =>
+  request(`/api/device/controls?device=${encodeURIComponent(device)}`);
+// Set one control; returns the refreshed snapshot.
+export const setDeviceControl = (device, control, value) =>
+  request("/api/device/controls", { method: "POST", body: { device, control, value } });
+
 // Background capture: the recording runs as a server-side task decoupled from the
 // browser request, so closing the browser no longer cancels it (which used to
 // reboot the device). start kicks it off (202 -> initial status), getCaptureStatus

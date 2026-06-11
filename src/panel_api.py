@@ -111,6 +111,7 @@ async def _read_json(request: web.Request):
 class PanelServer:
     def __init__(self, svc, host, port, *, version, started_at,
                  device_status=None, device_capture=None, device_play=None,
+                 device_controls_get=None, device_controls_set=None,
                  static_dir=None, runs_store=None, tool_sources=None,
                  run_events=None, heartbeat_interval: float = 1.0):
         # svc: ConfigService; started_at: float (time.time())
@@ -134,6 +135,14 @@ class PanelServer:
         #   plays the preview chime on the speaker(s) (DeviceManager.play_chime). None ->
         #   the /api/chimes/play endpoint returns 503.
         self.device_play = device_play
+        # device_controls_get: optional SYNC callable (device_name) -> dict snapshot of the
+        #   live device controls (cutoff %, volume %) (DeviceManager.device_controls).
+        # device_controls_set: optional SYNC callable (device_name, control_id, value) -> dict
+        #   that sets one control and returns the refreshed snapshot
+        #   (DeviceManager.set_device_control). For both: None -> the /api/device/controls
+        #   endpoints return 503.
+        self.device_controls_get = device_controls_get
+        self.device_controls_set = device_controls_set
         # Background capture jobs: the recording runs as a server-side task so a
         # browser disconnect no longer cancels it (which used to reboot the device).
         self._capture_jobs = CaptureJobManager(device_capture) if device_capture is not None else None
@@ -273,6 +282,42 @@ class PanelServer:
 
     async def _get_devices(self, request: web.Request) -> web.Response:
         return web.json_response(self.device_status() if self.device_status else [])
+
+    async def _get_device_controls(self, request: web.Request) -> web.Response:
+        """Current control values (cutoff %, volume %) for one speaker."""
+        if self.device_controls_get is None:
+            return web.json_response({"error": "device controls not available"}, status=503)
+        device = request.query.get("device")
+        if not device:
+            return web.json_response({"error": 'query param "device" is required'}, status=400)
+        try:
+            return web.json_response(self.device_controls_get(device))
+        except LookupError as e:
+            return web.json_response({"error": str(e)}, status=404)
+
+    async def _post_device_controls(self, request: web.Request) -> web.Response:
+        """Set one control on a speaker. Body: {device, control, value(number)}."""
+        if self.device_controls_set is None:
+            return web.json_response({"error": "device controls not available"}, status=503)
+        body = await _read_json(request)
+        if not isinstance(body, dict):
+            return web.json_response({"error": "body must be a JSON object"}, status=400)
+        device = body.get("device")
+        if not isinstance(device, str) or not device:
+            return web.json_response({"error": 'field "device" (string) is required'}, status=400)
+        control = body.get("control")
+        if not isinstance(control, str) or not control:
+            return web.json_response({"error": 'field "control" (string) is required'}, status=400)
+        value = body.get("value")
+        # bools are ints in Python — reject them explicitly; accept int or float.
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return web.json_response({"error": 'field "value" (number) is required'}, status=400)
+        try:
+            return web.json_response(self.device_controls_set(device, control, float(value)))
+        except LookupError as e:
+            return web.json_response({"error": str(e)}, status=404)
+        except RuntimeError as e:  # offline
+            return web.json_response({"error": str(e)}, status=409)
 
     async def _post_capture(self, request: web.Request) -> web.Response:
         """Start a background capture of a manual sample on a speaker (non-blocking).
@@ -464,6 +509,8 @@ class PanelServer:
             web.put("/api/prompt", self._put_prompt),
             web.get("/api/system", self._get_system),
             web.get("/api/devices", self._get_devices),
+            web.get("/api/device/controls", self._get_device_controls),
+            web.post("/api/device/controls", self._post_device_controls),
             web.post("/api/capture", self._post_capture),
             web.get("/api/capture", self._get_capture_status),
             web.get("/api/capture/result", self._get_capture_result),

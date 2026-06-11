@@ -1,13 +1,13 @@
 import React, { useEffect, useLayoutEffect, useState, useCallback, useRef } from "react";
 import { Ic } from "../components/icons.jsx";
 import {
-  Field, KeyInput, PageHeader, FormSaveBar, StatusPill, Pill, Modal, Stepper, Loading, Select,
+  Field, KeyInput, PageHeader, FormSaveBar, StatusPill, Pill, Modal, Stepper, Loading, Select, Slider,
 } from "../components/primitives.jsx";
 import SchemaForm from "../components/SchemaForm.jsx";
 import { useAppData } from "../appData.jsx";
 import { useStageForm, errorLines } from "../useStageForm.js";
 import { deref } from "../schema.js";
-import { getPrompt, putPrompt, getDevices, getTools, startCapture, getCaptureStatus, downloadCaptureResult } from "../api.js";
+import { getPrompt, putPrompt, getDevices, getTools, startCapture, getCaptureStatus, downloadCaptureResult, getDeviceControls, setDeviceControl } from "../api.js";
 
 function Card({ title, sub, children, foot, right }) {
   return <div className="z-card">
@@ -349,6 +349,7 @@ function DeviceModal({ initial, onSave, onClose, title, device, online }) {
     <Field label="Host / IP"><div className="z-inp mono"><input value={host} placeholder="10.0.0.25" onChange={(e) => setHost(e.target.value)} /></div></Field>
     <Field label="PSK" hint="ESPHome API encryption key."><KeyInput value={psk} placeholder="base64 key…" onChange={setPsk} /></Field>
     {device && <CaptureControl device={device} online={online} />}
+    {device && <DeviceControls device={device} online={online} />}
   </Modal>;
 }
 
@@ -429,6 +430,97 @@ function CaptureControl({ device, online }) {
     {!running && phase && <div className="z-fh">{phase}</div>}
     {err && <div className="z-fh" style={{ color: "#b91c1c" }}>{err}</div>}
   </Field>;
+}
+
+// Short per-control hint shown under the slider label, keyed by firmware object_id.
+const CONTROL_HINTS = {
+  wake_probability_cutoff: "Higher = fewer false-fires, may miss wake word",
+};
+
+// Live per-device controls (wake-word probability cutoff + speaker volume) shown
+// inside the Edit-speaker modal, next to CaptureControl. Each is a 0..100 Slider:
+// the value is read live from the device and written back debounced; a background
+// poll keeps the slider in sync with external changes (e.g. the physical volume
+// dial) without stomping a control the user is actively dragging. `online` seeds the
+// initial reachability and is refreshed from each snapshot. The server returns an
+// empty control list when the speaker is offline or its firmware lacks the entities.
+function DeviceControls({ device, online: onlineProp }) {
+  const [online, setOnline] = useState(onlineProp);
+  const [controls, setControls] = useState([]); // [{id,name,value,min,max,step,unit}]
+  const [versions, setVersions] = useState([]); // [{id,name,value}] read-only firmware versions
+  const [err, setErr] = useState(null);
+  const [local, setLocal] = useState({});        // id -> in-flight value (responsive drag)
+  const pending = useRef({});                     // id -> bool (freeze poll-sync while writing)
+  const timers = useRef({});                      // id -> debounce timeout handle
+
+  // Apply a fresh snapshot, skipping controls the user is actively writing.
+  const applySnapshot = (snap) => {
+    setOnline(snap.online);
+    setControls(snap.controls || []);
+    setVersions(snap.versions || []);
+    setLocal((prev) => {
+      const next = { ...prev };
+      for (const c of snap.controls || []) {
+        if (!pending.current[c.id] && c.value != null) next[c.id] = c.value;
+      }
+      return next;
+    });
+  };
+
+  // Initial load + background poll while the modal is open.
+  useEffect(() => {
+    if (!device) return undefined;
+    let alive = true;
+    const load = () => getDeviceControls(device)
+      .then((snap) => { if (alive) { applySnapshot(snap); setErr(null); } })
+      .catch((e) => { if (alive) setErr(e); });
+    load();
+    const iv = setInterval(load, 2500);
+    return () => { alive = false; clearInterval(iv); };
+  }, [device]);
+
+  // Clear any pending debounce timers on unmount (modal close).
+  useEffect(() => () => { for (const t of Object.values(timers.current)) clearTimeout(t); }, []);
+
+  const onSlide = (c, v) => {
+    setLocal((prev) => ({ ...prev, [c.id]: v }));
+    pending.current[c.id] = true;
+    if (timers.current[c.id]) clearTimeout(timers.current[c.id]);
+    timers.current[c.id] = setTimeout(() => {
+      // `device` is a stable prop for the modal's lifetime, so no stale-closure risk.
+      setDeviceControl(device, c.id, v)
+        .then((snap) => { applySnapshot(snap); setErr(null); })
+        .catch((e) => setErr(e))
+        .finally(() => { pending.current[c.id] = false; });
+    }, 250);
+  };
+
+  if (controls.length === 0) {
+    return <Field label="Device controls" hint="Wake-word cutoff & speaker volume">
+      <div className="z-fh">{online ? "Re-flash the firmware to enable device controls." : "Speaker offline."}</div>
+    </Field>;
+  }
+
+  return <>
+    {controls.map((c) => {
+      const v = local[c.id] ?? c.value ?? c.min ?? 0;
+      return <Field key={c.id} label={c.name} hint={CONTROL_HINTS[c.id]}>
+        <Slider min={c.min} max={c.max} step={c.step || 1} value={v}
+          onChange={(nv) => onSlide(c, nv)}
+          fmt={(val) => `${Math.round(val)}${c.unit || ""}`} />
+      </Field>;
+    })}
+    {err && <div className="z-fh" style={{ color: "#b91c1c", marginTop: 6 }}>
+      {(err && (err.message || String(err))) || "Failed to load controls."}
+    </div>}
+    {/* Read-only firmware versions (config/model) shown below the live sliders. */}
+    {versions.length > 0 && <div style={{ marginTop: 8, display: "flex", gap: 16, flexWrap: "wrap" }}>
+      {versions.map((vv) => <div key={vv.id}>
+        <div style={{ fontSize: 10.5, color: "var(--mut)", textTransform: "uppercase", letterSpacing: ".04em", fontWeight: 600 }}>{vv.name}</div>
+        <div className="mono" style={{ fontSize: 13, fontWeight: 600, marginTop: 2 }}>{vv.value ?? "—"}</div>
+      </div>)}
+    </div>}
+  </>;
 }
 
 export function Devices() {

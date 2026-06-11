@@ -43,9 +43,9 @@ External component для ESPHome, подменяющий встроенный `
 Единственный producer каждого буфера — колбэк микрофонного таска (как в стоке),
 читатель — главный loop. Конкурентный паттерн идентичен стоковому.
 
-## Интеграция в zakhar-voice.yaml
+## Интеграция в zakhar-voice-preroll.yaml
 
-Положить папку `components/` рядом с `zakhar-voice.yaml` (или сослаться на git)
+Положить папку `components/` рядом с `zakhar-voice-preroll.yaml` (или сослаться на git)
 и добавить в конфиг:
 
 ```yaml

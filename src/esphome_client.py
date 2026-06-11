@@ -20,10 +20,23 @@ CAPTURE_WAIT_MARGIN = 8.0
 
 # Native API object_ids of the manual-capture template entities. The firmware
 # transmits object_id = slugify(name) over the API (NOT the YAML `id:` field), so
-# these MUST equal slugify(name) from esphome/zakhar-voice.yaml — i.e. the entities
-# named "Capture Seconds" / "Capture Sample".
+# these MUST equal slugify(name) from esphome/zakhar-voice-preroll.yaml — i.e. the
+# entities named "Capture Seconds" / "Capture Sample".
 CAPTURE_SECONDS_OBJECT_ID = "capture_seconds"
 CAPTURE_SAMPLE_OBJECT_ID = "capture_sample"
+
+# Native API object_ids of the live device-control number entities exposed to our
+# panel (wake-word probability cutoff + speaker volume), both on a plain 0..100
+# scale. As above these MUST equal slugify(name) from esphome/zakhar-voice-preroll.yaml.
+WAKE_CUTOFF_OBJECT_ID = "wake_probability_cutoff"
+SPEAKER_VOLUME_OBJECT_ID = "speaker_volume"
+CONTROL_OBJECT_IDS = (WAKE_CUTOFF_OBJECT_ID, SPEAKER_VOLUME_OBJECT_ID)
+
+# Native API object_ids of the read-only firmware version text_sensors exposed to
+# our panel (config + model versions). As above these MUST equal slugify(name).
+CONFIG_VERSION_OBJECT_ID = "config_version"
+MODEL_VERSION_OBJECT_ID = "model_version"
+VERSION_OBJECT_IDS = (CONFIG_VERSION_OBJECT_ID, MODEL_VERSION_OBJECT_ID)
 
 
 class DeviceClient:
@@ -50,6 +63,17 @@ class DeviceClient:
         # on connect by object_id. None when the firmware predates these entities.
         self._capture_button_key = None
         self._capture_seconds_key = None
+        # Discovered number-control entities (cutoff, volume) by object_id, plus a live
+        # value cache keyed by Native API entity key (filled from subscribe_states).
+        self._control_info = {}   # object_id -> {"key","name","min","max","step","unit"}
+        self._control_keys = set()  # Native API keys we care about (fast filter in _on_state)
+        self._control_value = {}  # key -> float (latest reported value)
+        # Discovered firmware version text_sensors (config/model) by object_id, plus a
+        # live value cache keyed by Native API entity key (filled from subscribe_states).
+        self._version_info = {}    # object_id -> {"key","name"}
+        self._version_keys = set()
+        self._version_value = {}   # key -> str
+        self._states_unsub = None
 
     async def _on_connect(self) -> None:
         """Re-runs on every (re)connection: log device, discover entities, wire & subscribe."""
@@ -62,6 +86,13 @@ class DeviceClient:
                 f"connected {self.cfg.name}: {info.name} (esphome {info.esphome_version})"
             )
             self._discover_capture_keys(entities)
+            self._discover_control_keys(entities)
+            self._discover_version_keys(entities)
+            # Re-subscribe to entity states each (re)connect so the panel can read current
+            # control values (cutoff %, volume %) without its own device round-trip.
+            self._control_value = {}
+            self._version_value = {}
+            self._states_unsub = self.cli.subscribe_states(self._on_state)
         except Exception as e:
             logger.warning(f"{self.cfg.name}: device_info/list_entities failed: {e}")
 
@@ -85,6 +116,8 @@ class DeviceClient:
         logger.info(f"disconnected {self.cfg.name} (expected={expected})")
         # Subscription is re-created on the next on_connect.
         self._unsub = None
+        # The states subscription dies with the connection too; re-made on reconnect.
+        self._states_unsub = None
         self.online = False
 
     async def _handle_start(self, conversation_id, flags, audio_settings, wake_word_phrase):
@@ -118,6 +151,99 @@ class DeviceClient:
                 f"(button={self._capture_button_key}, seconds={self._capture_seconds_key}); "
                 f"flash the firmware with the capture entities to enable it"
             )
+
+    def _discover_control_keys(self, entities) -> None:
+        """Map our number-control template entities (cutoff, volume) by object_id.
+
+        Stores per-control {key,name,min,max,step,unit} from the NumberInfo; leaves the
+        maps empty for controls the firmware doesn't expose (older flash)."""
+        self._control_info = {}
+        self._control_keys = set()
+        for ent in entities:
+            object_id = getattr(ent, "object_id", None)
+            if object_id in CONTROL_OBJECT_IDS:
+                self._control_info[object_id] = {
+                    "key": ent.key,
+                    "name": getattr(ent, "name", object_id),
+                    "min": float(getattr(ent, "min_value", 0.0)),
+                    "max": float(getattr(ent, "max_value", 100.0)),
+                    "step": float(getattr(ent, "step", 1.0)),
+                    "unit": getattr(ent, "unit_of_measurement", "") or "",
+                }
+                self._control_keys.add(ent.key)
+
+    def _discover_version_keys(self, entities) -> None:
+        """Map the firmware version text_sensors (config/model) by object_id."""
+        self._version_info = {}
+        self._version_keys = set()
+        for ent in entities:
+            object_id = getattr(ent, "object_id", None)
+            if object_id in VERSION_OBJECT_IDS:
+                self._version_info[object_id] = {
+                    "key": ent.key,
+                    "name": getattr(ent, "name", object_id),
+                }
+                self._version_keys.add(ent.key)
+
+    def _on_state(self, state) -> None:
+        """Cache the latest value for our control entities (called from subscribe_states)."""
+        key = getattr(state, "key", None)
+        if key in self._control_keys and not getattr(state, "missing_state", False):
+            value = getattr(state, "state", None)
+            if value is not None:
+                self._control_value[key] = float(value)
+        if key in self._version_keys and not getattr(state, "missing_state", False):
+            value = getattr(state, "state", None)
+            if value is not None:
+                self._version_value[key] = str(value)
+
+    def controls(self) -> list[dict]:
+        """Current control snapshot for the panel: id/name/value/min/max/step/unit.
+
+        value is None until the first state arrives. Order is stable (cutoff, volume)."""
+        out = []
+        for object_id in CONTROL_OBJECT_IDS:
+            info = self._control_info.get(object_id)
+            if info is None:
+                continue
+            out.append({
+                "id": object_id,
+                "name": info["name"],
+                "value": self._control_value.get(info["key"]),
+                "min": info["min"], "max": info["max"],
+                "step": info["step"], "unit": info["unit"],
+            })
+        return out
+
+    def versions(self) -> list[dict]:
+        """Firmware version text_sensors for the panel: id/name/value (value None until first state)."""
+        out = []
+        for object_id in VERSION_OBJECT_IDS:
+            info = self._version_info.get(object_id)
+            if info is None:
+                continue
+            out.append({
+                "id": object_id,
+                "name": info["name"],
+                "value": self._version_value.get(info["key"]),
+            })
+        return out
+
+    def set_control(self, control_id: str, value: float) -> None:
+        """Set one control (clamped to its range) on the device via number_command.
+
+        Raises RuntimeError if offline, LookupError if the control is unknown / not
+        exposed by the current firmware."""
+        if not self.online:
+            raise RuntimeError(f"{self.cfg.name} is offline")
+        info = self._control_info.get(control_id)
+        if info is None:
+            raise LookupError(f"{self.cfg.name} has no control {control_id!r}")
+        clamped = max(info["min"], min(info["max"], float(value)))
+        self.cli.number_command(info["key"], clamped)
+        # Optimistic local update so an immediate GET reflects the change before the
+        # device's next state push.
+        self._control_value[info["key"]] = clamped
 
     async def capture(self, seconds: int) -> bytes:
         """Record `seconds` of mic audio on this speaker and RETURN it as WAV bytes.
@@ -253,6 +379,35 @@ class DeviceManager:
         if not target.online:
             raise RuntimeError(f"{device_name} is offline")
         return await target.capture(seconds)
+
+    def device_controls(self, device_name: str) -> dict:
+        """Snapshot of a speaker's controls for the panel. Raises LookupError if unknown."""
+        target = next((c for c in self.clients if c.cfg.name == device_name), None)
+        if target is None:
+            raise LookupError(f"unknown device {device_name!r}")
+        return {
+            "device": device_name,
+            "online": target.online,
+            "controls": target.controls() if target.online else [],
+            "versions": target.versions() if target.online else [],
+        }
+
+    def set_device_control(self, device_name: str, control_id: str, value: float) -> dict:
+        """Set one control on a speaker and return the refreshed snapshot.
+
+        Raises LookupError (unknown device/control) or RuntimeError (offline)."""
+        target = next((c for c in self.clients if c.cfg.name == device_name), None)
+        if target is None:
+            raise LookupError(f"unknown device {device_name!r}")
+        target.set_control(control_id, value)
+        return {
+            "device": device_name,
+            "online": target.online,
+            "controls": target.controls() if target.online else [],
+            # Mirror device_controls() so a control write doesn't blank the version
+            # section in the UI (the panel applies this POST response as a snapshot).
+            "versions": target.versions() if target.online else [],
+        }
 
     async def play_chime(self, sound_path: str, device_name: str | None = None) -> dict:
         """Play the given end-of-phrase chime on the speaker(s) for an operator preview.

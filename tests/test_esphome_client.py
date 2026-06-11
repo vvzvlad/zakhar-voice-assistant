@@ -118,7 +118,7 @@ def _capture_client(name="dev", *, online=True, btn_key=11, sec_key=22,
 def test_discover_capture_keys_maps_by_object_id():
     # These object_ids are exactly what the firmware sends over the Native API:
     # object_id = slugify(name) for the "Capture Seconds" / "Capture Sample"
-    # entities in esphome/zakhar-voice.yaml (NOT the YAML `id:` field). They
+    # entities in esphome/zakhar-voice-preroll.yaml (NOT the YAML `id:` field). They
     # MUST stay equal to slugify(name) or discovery silently fails on real hardware.
     c = _capture_client(btn_key=None, sec_key=None)
     c._discover_capture_keys([

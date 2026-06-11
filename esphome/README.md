@@ -4,13 +4,13 @@ Takes control of a **Home Assistant Voice PE** (ESP32-S3) and runs the custom
 on-device wake word **«Захар»**. The stock firmware is pulled unchanged from the
 official Nabu Casa repo as a remote package — only the device name, Wi-Fi/API
 credentials and the `micro_wake_word` model list are overridden in
-[`zakhar-voice.yaml`](zakhar-voice.yaml).
+[`zakhar-voice-preroll.yaml`](zakhar-voice-preroll.yaml).
 
 ## What's here
 
 | File | Purpose |
 |------|---------|
-| `zakhar-voice.yaml` | The config. Pulls official Voice PE firmware `@26.5.0` + adds «Захар». |
+| `zakhar-voice-preroll.yaml` | The config. Pulls official Voice PE firmware `@26.5.0` + adds «Захар». |
 | `secrets.yaml` | Wi-Fi creds + API key (gitignored). **Edit the two Wi-Fi lines.** |
 | `.gitignore` | Keeps `secrets.yaml` and `.esphome/` out of git. |
 
@@ -34,13 +34,13 @@ flashing it.
 2. **(optional) Validate the merged config:**
    ```bash
    cd esphome
-   esphome config zakhar-voice.yaml
+   esphome config zakhar-voice-preroll.yaml
    ```
 
 3. **First flash over USB-C** (the factory OTA password is unknown to us, so the
    first take-over must be wired). Plug the Voice PE into this computer:
    ```bash
-   esphome run zakhar-voice.yaml      # choose the /dev/cu.usbmodem… serial port
+   esphome run zakhar-voice-preroll.yaml   # choose the /dev/cu.usbmodem… serial port
    ```
    Compiling the full Voice PE firmware downloads the esp-idf toolchain on first
    run (large, slow) — expect a long first build. Subsequent updates can go OTA.
@@ -56,18 +56,21 @@ flashing it.
 
 ## Tuning (no retrain needed)
 
-- `probability_cutoff` is set to `80%` in `zakhar-voice.yaml` — v8's known-good
-  operating point (device FRR 4.6%, FAPH 0 with VAD), the point at which «захааар»
-  actually detects reliably. An earlier `95%` + `sliding_window_size: 5` tightening
-  (to fight silence false-fires) over-suppressed the model and it stopped detecting
-  at all, so it was reverted. The `vad:` gate from the stock config stays on and
-  already suppresses most silence/music false-accepts. Raise toward `90%` only if
+- `probability_cutoff` defaults to `80%` in `zakhar-voice-preroll.yaml` — v8's
+  known-good operating point (device FRR 4.6%, FAPH 0 with VAD), the point at which
+  «захааар» actually detects reliably. An earlier `95%` + `sliding_window_size: 5`
+  tightening (to fight silence false-fires) over-suppressed the model and it stopped
+  detecting at all, so it was reverted. The `vad:` gate from the stock config stays on
+  and already suppresses most silence/music false-accepts. Raise toward `90%` only if
   silence false-fires get annoying.
-- `probability_cutoff` can now be changed live from Home Assistant via the **Wake
-  Probability Cutoff** number (50–100%) with NO re-flash; the chosen value persists
-  across reboots. `sliding_window_size` is compile-time only and still needs a re-flash.
+- Both the **wake cutoff** and the **speaker volume** are now adjustable **live from
+  the panel's Devices page** (the **Wake Probability Cutoff** and **Speaker Volume**
+  numbers, 0–100) with NO re-flash; the cutoff value persists across reboots.
+  `sliding_window_size` is compile-time only and still needs a re-flash.
+- The firmware also exposes **Config Version** and **Model Version** read-only
+  diagnostic entities, so you can confirm exactly which config/model is flashed.
 
 ## Updating the base firmware later
 
 Bump the `@26.5.0` ref on the `home-assistant-voice` package in
-`zakhar-voice.yaml` to a newer release tag and re-flash.
+`zakhar-voice-preroll.yaml` to a newer release tag and re-flash.

@@ -1,7 +1,5 @@
 import React, { useState, useEffect } from "react";
-import {
-  Field, PageHeader, FormSaveBar, Select, Stepper,
-} from "../components/primitives.jsx";
+import { Field, PageHeader, FormSaveBar, Select, Stepper } from "../components/primitives.jsx";
 import SchemaForm from "../components/SchemaForm.jsx";
 import { useAppData } from "../appData.jsx";
 import { useStageForm, errorLines } from "../useStageForm.js";
