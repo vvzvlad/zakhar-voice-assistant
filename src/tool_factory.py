@@ -16,18 +16,18 @@ def build_sources(core, http_cloud, scheduler):
     (a ReminderScheduler or None) gates the reminders source — None omits it."""
     sources = []
     for srv in core.mcp_servers:
-        if srv.url and srv.name:
+        if srv.enabled and srv.url and srv.name:
             # The operator marks slow external servers (web search, ...) in config.
             sources.append(HttpMcpSource(srv.name, McpToolHub(srv.url, srv.token or None, srv.transport),
                                          slow=srv.slow))
-    if core.openweathermap.api_key:
+    if core.openweathermap.enabled and core.openweathermap.api_key:
         # Weather hits the network: slow, warrants the early spoken filler.
         sources.append(BuiltinMcpSource(
             "openweathermap",
             build_openweathermap_server(http_cloud, core.openweathermap.api_key, core.openweathermap.city),
             slow=True,
         ))
-    if core.calendar.url and core.calendar.username:
+    if core.calendar.enabled and core.calendar.url and core.calendar.username:
         from src.builtin_mcp.calendar import CalendarClient, build_calendar_server
         cal_client = CalendarClient(core.calendar.url, core.calendar.username,
                                     core.calendar.password, core.calendar.calendar)

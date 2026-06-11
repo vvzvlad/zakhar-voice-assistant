@@ -113,6 +113,35 @@ def test_build_sources_combined_order_matches_boot():
     assert _ids(sources) == ["home", "openweathermap", "reminders"]
 
 
+# --- enabled flag: the master switch drops a source from the ToolHub ----------
+
+
+def test_build_sources_skips_disabled_mcp_server():
+    # A fully configured external server with enabled=False is omitted; the
+    # enabled one next to it still builds (missing flag defaults to True).
+    core = CoreConfig(mcp_servers=[
+        {"name": "home", "url": "http://home/mcp", "enabled": False},
+        {"name": "garage", "url": "http://garage/mcp"},
+    ])
+    sources = build_sources(core, http_cloud=object(), scheduler=None)
+    assert _ids(sources) == ["garage"]
+
+
+def test_build_sources_skips_disabled_openweathermap():
+    # enabled=False omits the OWM source even though the api key is set.
+    core = CoreConfig(openweathermap={"enabled": False, "api_key": "k", "city": "Berlin"})
+    sources = build_sources(core, http_cloud=object(), scheduler=None)
+    assert sources == []
+
+
+def test_build_sources_skips_disabled_calendar():
+    # enabled=False omits the calendar source even with full credentials.
+    core = CoreConfig(calendar={"enabled": False, "url": "https://dav.example/cal",
+                                "username": "u", "password": "p"})
+    sources = build_sources(core, http_cloud=object(), scheduler=None)
+    assert sources == []
+
+
 # --- slow declarations: the source factory bakes in who is slow ---------------
 
 

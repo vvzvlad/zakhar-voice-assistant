@@ -84,6 +84,8 @@ class NetworkConfig(BaseModel):
 
 
 class OpenWeatherMapConfig(BaseModel):
+    # Master switch: a disabled source is removed from the ToolHub and its prompt block is dropped.
+    enabled: bool = True
     api_key: str = ""
     city: str = "Moscow"
     # Appended to the system prompt to describe this built-in MCP's tools to the model.
@@ -94,6 +96,8 @@ class McpServerConfig(BaseModel):
     # One external MCP server entry. `name` is unique and also the ToolHub source id
     # (so it matches the /api/tools source id). `prompt` is appended to the system
     # prompt to describe this server's tools to the model.
+    # Master switch: a disabled source is removed from the ToolHub and its prompt block is dropped.
+    enabled: bool = True
     name: str
     url: str = ""
     token: str = ""
@@ -109,6 +113,8 @@ class McpServerConfig(BaseModel):
 class CalendarConfig(BaseModel):
     # CalDAV account for the built-in calendar MCP. `calendar` selects which calendar
     # to use by name; empty means the first calendar on the account.
+    # Master switch: a disabled source is removed from the ToolHub and its prompt block is dropped.
+    enabled: bool = True
     url: str = ""
     username: str = ""
     password: str = ""

@@ -79,6 +79,39 @@ def test_build_system_prompt_skips_empty_builtin_prompts(tmp_path):
     store.close()
 
 
+def test_build_system_prompt_skips_disabled_mcp_server_prompts(tmp_path):
+    store = _store(tmp_path, "BODY <<<<<TDW>>>>>")
+    # A disabled server's prompt block is dropped (its tools are not in the
+    # ToolHub); the enabled server's block is still appended.
+    core = CoreConfig(
+        mcp_servers=[
+            McpServerConfig(name="off", url="http://off", prompt="OFF-BLOCK", enabled=False),
+            McpServerConfig(name="on", url="http://on", prompt="ON-BLOCK"),
+        ],
+    )
+
+    out = build_system_prompt(core, store)
+
+    assert "OFF-BLOCK" not in out
+    assert "ON-BLOCK" in out
+    store.close()
+
+
+def test_build_system_prompt_skips_disabled_builtin_prompts(tmp_path):
+    store = _store(tmp_path, "BODY <<<<<TDW>>>>>")
+    # Disabled built-in sources contribute no prompt block even when set.
+    core = CoreConfig(
+        openweathermap=OpenWeatherMapConfig(prompt="WEATHER-BLOCK", enabled=False),
+        calendar=CalendarConfig(prompt="CAL-BLOCK", enabled=False),
+    )
+
+    out = build_system_prompt(core, store)
+
+    assert "WEATHER-BLOCK" not in out
+    assert "CAL-BLOCK" not in out
+    store.close()
+
+
 def test_build_system_prompt_uses_active_profile_not_seed_file(tmp_path):
     # The prompt body comes from the ACTIVE store profile, not from the legacy
     # seed file: after switching profiles the new text is what gets assembled.

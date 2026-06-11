@@ -55,11 +55,13 @@ function SourceCard({ id, name, sub, schema, root, values, buildPatch, configure
   const isConfigured = configured(draft);
   const kind = live?.kind || "builtin";
 
-  // Status: online/offline come from the live source; otherwise "not configured"
-  // when the relevant config is empty (a configured source absent from /api/tools
-  // failed to start — shown as offline rather than "not configured").
+  // Status: online/offline come from the live source; a source switched off via
+  // its `enabled` flag shows "disabled"; otherwise "not configured" when the
+  // relevant config is empty (a configured source absent from /api/tools failed
+  // to start — shown as offline rather than "not configured").
   let pill;
   if (live) pill = <StatusPill status={live.online ? "online" : "offline"} />;
+  else if (draft.enabled === false) pill = <Pill tone="muted">disabled</Pill>;
   else if (!isConfigured) pill = <Pill tone="muted">not configured</Pill>;
   else pill = <StatusPill status="offline" />;
 
@@ -108,7 +110,9 @@ function McpServerModal({ initial, onSave, onClose, title, takenNames }) {
   const valid = !!name && !!url && !dup && !reserved;
   return <Modal title={title} onClose={onClose}
     footer={<><button className="z-btn g" onClick={onClose}>Cancel</button>
-      <button className="z-btn p" disabled={!valid} onClick={() => onSave({ name, url, token, transport, prompt })}>Save</button></>}>
+      {/* Preserve the enabled/slow flags across edits (they have no modal fields);
+          Add mode defaults to enabled + not slow. */}
+      <button className="z-btn p" disabled={!valid} onClick={() => onSave({ name, url, token, transport, prompt, enabled: initial?.enabled ?? true, slow: initial?.slow ?? false })}>Save</button></>}>
     <Field label="Name" hint="Unique name — it is also the source id in /api/tools.">
       <div className="z-inp"><input value={name} placeholder="e.g. home" onChange={(e) => setName(e.target.value)} /></div>
       {dup && <div className="z-fh" style={{ color: "#b91c1c" }}>Name is already in use.</div>}
@@ -130,12 +134,15 @@ function McpServerModal({ initial, onSave, onClose, title, takenNames }) {
 
 // One external MCP server card: header (name + external tag + status pill), the
 // url in mono, and the live tool chips matched from /api/tools by source id ===
-// server name. Edit / Delete buttons drive the CRUD flow above.
-function McpServerCard({ server, live, onEdit, onDelete }) {
+// server name. Enable/Disable / Edit / Delete buttons drive the CRUD flow above;
+// a disabled server is dimmed and shows a "disabled" pill (missing flag = enabled).
+function McpServerCard({ server, live, onToggle, onEdit, onDelete }) {
+  const enabled = server.enabled ?? true;
   let pill;
-  if (live) pill = <StatusPill status={live.online ? "online" : "offline"} />;
+  if (!enabled) pill = <Pill tone="muted">disabled</Pill>;
+  else if (live) pill = <StatusPill status={live.online ? "online" : "offline"} />;
   else pill = <StatusPill status="offline" />;
-  return <div className="z-card" style={{ marginBottom: 14 }}>
+  return <div className="z-card" style={{ marginBottom: 14, opacity: enabled ? 1 : 0.55 }}>
     <div className="z-card-h">
       <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
         <Ic n="mcp" w={17} />
@@ -148,6 +155,7 @@ function McpServerCard({ server, live, onEdit, onDelete }) {
         <Pill tone="warn">external</Pill>
         {pill}
         <div style={{ display: "flex", gap: 6 }}>
+          <button className="z-mini" onClick={onToggle}>{enabled ? "Disable" : "Enable"}</button>
           <button className="z-mini" onClick={onEdit}>Edit</button>
           <button className="z-mini" onClick={onDelete}>Delete</button>
         </div>
@@ -168,7 +176,7 @@ export function MCP() {
   // schema with `.properties` (and pass the full core schema as `root` for $defs).
   const sub = (key) => deref(coreSchema.properties?.[key] || {}, coreSchema);
 
-  const servers = coreValues.mcp_servers || [];   // [{name,url,token,transport,prompt}]
+  const servers = coreValues.mcp_servers || [];   // [{enabled,name,url,token,transport,prompt}]
 
   const [tools, setTools] = useState(null);   // null = loading; [] = loaded/empty
   const [toolsErr, setToolsErr] = useState(null);
@@ -200,6 +208,9 @@ export function MCP() {
   const onAdd = (s) => saveList([...servers, s]);
   const onEdit = (i, s) => saveList(servers.map((x, idx) => (idx === i ? s : x)));
   const onDelete = (i) => saveList(servers.filter((_, idx) => idx !== i));
+  // Flip the persisted enabled flag (missing = true on old configs). A disabled
+  // server is dropped from the ToolHub and its prompt block — both hot-applied.
+  const onToggle = (i) => saveList(servers.map((x, idx) => (idx === i ? { ...x, enabled: !(x.enabled ?? true) } : x)));
 
   return <div className="z-page narrow">
     <PageHeader title="Tool sources" desc="Tool sources the model calls: external smart-home MCP servers and built-in weather/calendar/reminders. Sources are applied live — rebuilt on save, no restart needed."
@@ -218,17 +229,18 @@ export function MCP() {
         {servers.length === 0
           ? <Card><div className="z-fh" style={{ padding: "6px 0" }}>No external MCP servers — smart home is unavailable.</div></Card>
           : servers.map((s, i) => <McpServerCard key={s.name || i} server={s} live={liveOf(s.name)}
+              onToggle={() => onToggle(i)}
               onEdit={() => setModal({ mode: "edit", index: i })} onDelete={() => onDelete(i)} />)}
         <div className="z-sl">Built-in sources<div className="ln" /></div>
         <SourceCard
           id="openweathermap" name="OpenWeatherMap (built-in)" sub="core.openweathermap · built-in MCP"
-          schema={sub("openweathermap")} root={coreSchema} values={coreValues.openweathermap || { api_key: "", city: "Moscow" }}
+          schema={sub("openweathermap")} root={coreSchema} values={coreValues.openweathermap || { enabled: true, api_key: "", city: "Moscow" }}
           buildPatch={(d) => ({ core: { openweathermap: d } })}
           configured={(v) => !!(v && v.api_key)} live={liveOf("openweathermap")} patch={patchAndRefresh} />
         <SourceCard
           id="calendar" name="Calendar (built-in)" sub="core.calendar · built-in MCP (CalDAV)"
           schema={sub("calendar")} root={coreSchema}
-          values={coreValues.calendar || { url: "", username: "", password: "", calendar: "" }}
+          values={coreValues.calendar || { enabled: true, url: "", username: "", password: "", calendar: "" }}
           buildPatch={(d) => ({ core: { calendar: d } })}
           configured={(v) => !!(v && v.url && v.username)} live={liveOf("calendar")} patch={patchAndRefresh} />
         <SourceCard

@@ -26,10 +26,11 @@ def build_system_prompt(core: CoreConfig, prompt_store) -> str:
 
     # Append each tool source's non-empty prompt so the model learns what those
     # tools do (one block per source, blank-line separated): external MCP servers
-    # first, then the built-in weather/calendar sources.
-    extra = [s.prompt.strip() for s in core.mcp_servers if s.prompt.strip()]
+    # first, then the built-in weather/calendar sources. Disabled sources are
+    # skipped — their tools are not in the ToolHub, so the model must not learn them.
+    extra = [s.prompt.strip() for s in core.mcp_servers if s.enabled and s.prompt.strip()]
     for builtin in (core.openweathermap, core.calendar):
-        if builtin.prompt.strip():
+        if builtin.enabled and builtin.prompt.strip():
             extra.append(builtin.prompt.strip())
     if extra:
         system_prompt = system_prompt + "\n\n" + "\n\n".join(extra)
