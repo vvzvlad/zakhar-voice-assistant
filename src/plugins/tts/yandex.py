@@ -19,6 +19,10 @@ from src.tts import TtsBackend, split_sentences
 # Source: yandex.cloud/docs/speechkit limits, API v3.
 YANDEX_V3_TEXT_LIMIT = 250
 
+# v3 utteranceSynthesis REST endpoint; it is the same for every deployment,
+# so it is hardcoded rather than configurable.
+YANDEX_V3_URL = "https://tts.api.cloud.yandex.net/tts/v3/utteranceSynthesis"
+
 
 def _split_oversized(fragment: str, limit: int) -> list[str]:
     """Split a single over-limit fragment into <=limit pieces on word boundaries.
@@ -111,7 +115,7 @@ class YandexTtsBackend(TtsBackend):
     contract), so no stress conversion is needed — only unit expansion and
     dropping stray '+' signs."""
 
-    def __init__(self, client, *, api_key, voice, role, speed, url, timeout):
+    def __init__(self, client, *, api_key, voice, role, speed, timeout):
         if not api_key:
             raise ValueError(
                 "Yandex TTS api_key is required (set tts.instances.yandex.api_key in data/config.json)"
@@ -121,7 +125,6 @@ class YandexTtsBackend(TtsBackend):
         self.voice = voice
         self.role = role
         self.speed = speed
-        self.url = url
         self.timeout = timeout
 
     async def synthesize(self, text: str, lang: str = "ru") -> tuple[str, bytes]:
@@ -151,7 +154,7 @@ class YandexTtsBackend(TtsBackend):
             "loudnessNormalizationType": "LUFS",
         }
         headers = {"Authorization": f"Api-Key {self.api_key}"}
-        resp = await self.client.post(self.url, headers=headers, json=payload, timeout=self.timeout)
+        resp = await self.client.post(YANDEX_V3_URL, headers=headers, json=payload, timeout=self.timeout)
         try:
             resp.raise_for_status()
         except httpx.HTTPStatusError as e:
@@ -210,7 +213,6 @@ class YandexTtsConfig(BaseModel):
     # the voice's default by the validator below.
     role: str = Field("neutral", json_schema_extra={"widget": "select", "options": "dynamic"})
     speed: float = Field(1.0, ge=0.1, le=3.0, json_schema_extra={"widget": "slider"})
-    url: str = "https://tts.api.cloud.yandex.net/tts/v3/utteranceSynthesis"
 
     @model_validator(mode="after")
     def _coerce_role(self):
@@ -238,7 +240,6 @@ class YandexTtsProvider(Provider):
             voice=cfg.voice,
             role=cfg.role,
             speed=cfg.speed,
-            url=cfg.url,
             timeout=deps.tts_timeout,
         )
 

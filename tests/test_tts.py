@@ -11,6 +11,7 @@ from src.plugins.tts._ru_text import expand_units, sanitize_plus_stress
 from src.plugins.tts.piper import PiperTtsBackend
 from src.plugins.tts.teratts import TeraTtsHttpBackend
 from src.plugins.tts.yandex import (
+    YANDEX_V3_URL,
     YandexTtsBackend,
     _chunk_for_v3,
     _decode_v3_audio,
@@ -18,7 +19,7 @@ from src.plugins.tts.yandex import (
 )
 from src.tts import split_sentences
 
-YANDEX_URL = "https://tts.api.cloud.yandex.net/tts/v3/utteranceSynthesis"
+YANDEX_URL = YANDEX_V3_URL
 
 
 def _make_wav(sample_rate: int = 16000, channels: int = 1, seconds: float = 0.1) -> bytes:
@@ -315,7 +316,7 @@ def test_split_oversized_flushes_around_hard_sliced_word():
 def test_yandex_backend_requires_api_key():
     with pytest.raises(ValueError):
         YandexTtsBackend(None, api_key="", voice="zahar", role="neutral",
-                         speed=1.0, url="http://x", timeout=5)
+                         speed=1.0, timeout=5)
 
 
 @respx.mock
@@ -331,7 +332,7 @@ async def test_yandex_synthesize_posts_mp3_and_returns_audio():
     async with httpx.AsyncClient() as client:
         backend = YandexTtsBackend(client, api_key="k", voice="zahar",
                                    role="neutral", speed=1.0,
-                                   url=YANDEX_URL, timeout=10)
+                                   timeout=10)
         # Canonical LLM->TTS text: the model's own "+vowel" stress notation,
         # which is also Yandex SpeechKit's native markup.
         mime, audio = await backend.synthesize("прив+ет", "ru")
@@ -370,7 +371,7 @@ async def test_yandex_synthesize_chunks_long_text_and_concatenates_audio():
     async with httpx.AsyncClient() as client:
         backend = YandexTtsBackend(client, api_key="k", voice="zahar",
                                    role="neutral", speed=1.0,
-                                   url=YANDEX_URL, timeout=10)
+                                   timeout=10)
         mime, audio = await backend.synthesize(_LONG_REPLY, "ru")
 
     assert mime == "audio/mpeg"
@@ -391,7 +392,7 @@ async def test_yandex_synthesize_surfaces_error_body():
     async with httpx.AsyncClient() as client:
         backend = YandexTtsBackend(client, api_key="k", voice="zahar",
                                    role="neutral", speed=1.0,
-                                   url=YANDEX_URL, timeout=10)
+                                   timeout=10)
         with pytest.raises(Exception) as exc:
             await backend.synthesize("привет", "ru")
     assert route.called
@@ -616,7 +617,7 @@ async def test_yandex_synthesize_adapts_text_keeps_native_stress():
     async with httpx.AsyncClient() as client:
         backend = YandexTtsBackend(client, api_key="k", voice="zahar",
                                    role="neutral", speed=1.0,
-                                   url=YANDEX_URL, timeout=10)
+                                   timeout=10)
         await backend.synthesize("прив+ет: 50% и что", "ru")
 
     assert route.called
@@ -674,7 +675,7 @@ async def test_yandex_applies_russian_adaptation_chain():
     async with httpx.AsyncClient() as client:
         backend = YandexTtsBackend(client, api_key="k", voice="zahar",
                                    role="neutral", speed=1.0,
-                                   url=YANDEX_URL, timeout=10)
+                                   timeout=10)
         await backend.synthesize("чт+о 50%", "ru")
 
     assert route.called
@@ -692,7 +693,7 @@ async def test_yandex_synthesize_unvoiceable_input_makes_no_request():
     async with httpx.AsyncClient() as client:
         backend = YandexTtsBackend(client, api_key="k", voice="zahar",
                                    role="neutral", speed=1.0,
-                                   url=YANDEX_URL, timeout=10)
+                                   timeout=10)
         for text in ("…", ""):
             mime, audio = await backend.synthesize(text, "ru")
             assert (mime, audio) == ("audio/mpeg", b"")
