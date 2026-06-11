@@ -917,6 +917,155 @@ class Pipeline:
                 except Exception as e:
                     logger.error(f"{self.name}: run broadcast failed: {e}")
 
+    async def run_text(self, text: str, speak: bool = True) -> dict:
+        """Public entry for TEXT requests (agent MCP `ask`): a full LLM turn with
+        tools and conversation context, optionally spoken on the speaker.
+
+        A simplified mirror of the LLM/TTS portion of `_run`: no audio, no VAD/STT
+        and NO voice-assistant events (`_emit` is never called — there is no live
+        ESPHome voice session for a text run, so VA events would hit a live voice
+        connection out of band). Serialized with voice runs via the same per-device
+        lock. The run is recorded to the runs store with reason="text" and the
+        request in stt_text, so the panel run log shows it in the usual column.
+
+        Returns {"reply", "result", "error_stage", "error_text"}.
+        """
+        pending_run = None
+        reply = ""
+        try:
+            async with self._lock:
+                t0 = time.perf_counter()
+                # Same record shape as `_run`'s: audio-stage fields stay at their
+                # text-run values (t_vad/t_stt = 0, audio_* = None).
+                record = {
+                    "ts": time.time(),
+                    "device": self.name,
+                    "reason": "text",
+                    "result": "empty",
+                    "t_vad": 0,
+                    "t_stt": 0, "t_llm": 0, "t_ruaccent": 0, "t_tts": 0,
+                    "stt_text": text, "llm_text": "",
+                    "filler_text": "", "t_filler": None,
+                    "model": None, "tokens": None,
+                    "audio_ms": None, "audio_bytes": None, "audio_fmt": None,
+                    "error_stage": None, "error_text": None,
+                    "rounds": [],
+                    "request": None,
+                }
+                try:
+                    logger.info(f"{self.name}: 🤖 → LLM (text): {text!r}")
+                    llm_t = time.perf_counter()
+                    history = context.load_context(
+                        self._context_path,
+                        max_turns=self.core.context.max_turns,
+                        ttl_seconds=self.core.context.ttl_seconds,
+                    )
+                    llm_failed = False
+                    try:
+                        system_prompt = build_system_prompt(self.core)
+                        stage = llm.LlmStage(self.llm_backend, self.hub, self.llm_cfg)
+                        # No on_filler: a text run has no listener waiting in
+                        # silence, so no early filler line is spoken.
+                        result = await stage.respond(
+                            llm.LlmRequest(
+                                system_prompt=system_prompt,
+                                history=history,
+                                user_text=text,
+                                device=self.name,
+                            ),
+                        )
+                    except StageError as e:
+                        # Same handling as `_run`: record the raw error, reply with
+                        # the configured fallback phrase, keep partial observability.
+                        llm_failed = True
+                        record["result"] = "error"
+                        record["error_stage"] = "LLM"
+                        record["error_text"] = str(e)
+                        logger.error(f"{self.name}: LLM failed: {e}")
+                        reply = self._spoken_llm_fallback(e)
+                        partial = getattr(e, "partial", None) or {}
+                        record["model"] = partial.get("model")
+                        record["tokens"] = partial.get("tokens")
+                        record["rounds"] = partial.get("rounds") or []
+                        record["request"] = partial.get("request")
+                    else:
+                        reply = result.reply
+                        record["model"] = result.model
+                        record["tokens"] = result.tokens
+                        record["rounds"] = result.rounds
+                        record["request"] = result.request_debug
+                        record["result"] = "tool" if result.tool_used else "ok"
+                    record["t_llm"] = int((time.perf_counter() - llm_t) * 1000)
+                    record["llm_text"] = reply
+                    logger.info(
+                        f"{self.name}: 💬 LLM reply ({time.perf_counter() - llm_t:.2f}s): "
+                        f"{reply!r}"
+                    )
+
+                    # A failed LLM turn is not a conversation turn: don't pollute
+                    # the context history with the spoken fallback phrase.
+                    if not llm_failed:
+                        try:
+                            context.append_context(
+                                self._context_path,
+                                text,
+                                reply,
+                                max_turns=self.core.context.max_turns,
+                                ttl_seconds=self.core.context.ttl_seconds,
+                            )
+                        except Exception as e:
+                            # Context persistence failure must not break the run.
+                            logger.error(f"{self.name}: context append failed: {e}")
+
+                    if speak and reply:
+                        try:
+                            tts_t = time.perf_counter()
+                            await self.speak(reply)
+                            record["t_tts"] = int((time.perf_counter() - tts_t) * 1000)
+                        except Exception as e:
+                            # Same precedence rule as `_run`: a TTS failure must
+                            # not overwrite an earlier (LLM) root cause. The reply
+                            # is still returned to the caller.
+                            record["result"] = "error"
+                            if record["error_stage"] is None:
+                                record["error_stage"] = "TTS"
+                                record["error_text"] = str(e)
+                            logger.error(f"{self.name}: text-run TTS failed: {e}")
+                except Exception as e:
+                    # Mirror `_run`'s catch-all: an unexpected failure is recorded
+                    # honestly and never propagates to the MCP caller.
+                    record["result"] = "error"
+                    record["error_stage"] = "pipeline"
+                    record["error_text"] = str(e)
+                    logger.exception(f"{self.name}: text run failed: {e}")
+                finally:
+                    # Record the run; a store failure must never break the call.
+                    if self.runs_store is not None:
+                        record["t_total"] = int((time.perf_counter() - t0) * 1000)
+                        try:
+                            run_id = await asyncio.to_thread(self.runs_store.insert, record)
+                        except Exception as e:
+                            logger.error(f"{self.name}: run record failed: {e}")
+                        else:
+                            # Defer the broadcast until the lock is released (same
+                            # reason as `_run`).
+                            if self.run_events is not None:
+                                pending_run = summary_row(record, run_id)
+        finally:
+            # Outside the lock: best-effort push of the finalized run to live
+            # panel subscribers; only fires when the insert succeeded.
+            if pending_run is not None:
+                try:
+                    await self.run_events.broadcast({"type": "run", "run": pending_run})
+                except Exception as e:
+                    logger.error(f"{self.name}: run broadcast failed: {e}")
+        return {
+            "reply": reply,
+            "result": record["result"],
+            "error_stage": record["error_stage"],
+            "error_text": record["error_text"],
+        }
+
     async def serve_audio(self, mime: str, audio: bytes) -> tuple[str, str, int]:
         """Adapt the clip to a playable format and cache it; return (ext, url, nbytes).
 

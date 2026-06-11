@@ -27,6 +27,8 @@ services:
       - "8200:8200"                          # publish the audio server to the LAN
       # Admin panel API + UI; must match PANEL_PORT (default 8201).
       - "8201:8201"
+      # Agent-facing MCP server (/mcp); must match AGENT_MCP_PORT (default 8202).
+      - "8202:8202"
     environment:
       # All app config is in data/config.json (in the volume). The only env-tunable
       # values are the admin panel's bind host/port (applied at process start).

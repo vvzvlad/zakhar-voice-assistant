@@ -18,6 +18,9 @@ configured under `core.mcp_servers` in `data/config.json`.
   `src/reconfig.py` (+ `src/runtime.py`) own how config changes are applied at runtime:
   `reconfig.action_for` classifies each changed path and the `Reconfigurator` hot-reconfigures
   the running process (backends/tools/audio/devices/reminders) without a restart.
+  `src/agent_mcp.py` — the agent-facing MCP SERVER (FastMCP over streamable HTTP at
+  `/mcp`): external agents read the run log, view/patch the config, speak text and
+  send full text requests through the pipeline.
 - `tests/` — pytest
 - `data/` — runtime state: `config.json`, per-device context files, cached prompt (gitignored, docker volume)
 - `templates/` — committed reference assets seeded into `data/` on first boot (`default_prompt.md`, `default_config.json`)
@@ -43,7 +46,11 @@ make run               # runs .venv/bin/python main.py
 ## Configuration
 
 All config lives in `data/config.json` (created on first boot from
-`templates/default_config.json`). There is no `.env` / environment-based config.
+`templates/default_config.json`). There is no `.env` / environment-based config —
+the only env-tunable values are the bind host/port of the admin panel
+(`PANEL_HOST` / `PANEL_PORT`, defaults `0.0.0.0` / `8201`) and of the agent MCP
+server (`AGENT_MCP_HOST` / `AGENT_MCP_PORT`, defaults `0.0.0.0` / `8202`), applied
+at process start.
 
 - Per stage (`vad`/`stt`/`llm`/`tts`) the doc holds `{selected, instances}`; each provider
   defines its own settings via a pydantic `ConfigModel` in `src/plugins/<stage>/<id>.py`.
