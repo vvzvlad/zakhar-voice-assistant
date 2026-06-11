@@ -25,11 +25,11 @@ import wave
 
 import numpy as np
 import webrtcvad
-from aioesphomeapi import VoiceAssistantEventType as VAET
 from loguru import logger
 
 from src import config_store, context, llm
 from src.audio_server import tts_url
+from src.pipeline_events import StageEvent
 from src.runs_store import live_row, summary_row
 from src.text import processing_response
 from src.tts import make_ack_chime_mp3, wav_to_mp3
@@ -425,7 +425,7 @@ class Pipeline:
         return os.path.join(config_store.DATA_DIR, f"context_{self.name}.txt")
 
     def _emit(self, event_type, data=None):
-        """Emit a voice_assistant event with a flat dict[str, str] payload."""
+        """Emit a transport-neutral StageEvent with a flat dict[str, str] payload."""
         if self.send_event is not None:
             self.send_event(
                 event_type, {str(k): str(v) for k, v in (data or {}).items()}
@@ -571,11 +571,11 @@ class Pipeline:
                 f"{self.name}: ⏺️ capture run started "
                 f"({self._capture_seconds}s, cid={conversation_id})"
             )
-            self._emit(VAET.VOICE_ASSISTANT_RUN_START, {})
+            self._emit(StageEvent.RUN_START, {})
             return 0  # Capture-only: no STT_START, no VAD/STT/LLM/TTS.
         logger.info(f"{self.name}: ▶️ run started (cid={conversation_id})")
-        self._emit(VAET.VOICE_ASSISTANT_RUN_START, {})
-        self._emit(VAET.VOICE_ASSISTANT_STT_START, {})
+        self._emit(StageEvent.RUN_START, {})
+        self._emit(StageEvent.STT_START, {})
         return 0  # 0 = audio comes in-band over the API connection.
 
     async def on_audio(self, data: bytes, data2=None) -> None:
@@ -801,7 +801,7 @@ class Pipeline:
                 if not pcm:
                     # Truly-empty audio: nothing to transcribe and nothing to record.
                     logger.info(f"{self.name}: empty audio, ending run")
-                    self._emit(VAET.VOICE_ASSISTANT_RUN_END, {})
+                    self._emit(StageEvent.RUN_END, {})
                     return
 
                 # End-of-phrase ack ("блям"): we've just finalized the utterance, so play
@@ -917,8 +917,8 @@ class Pipeline:
                         logger.info(
                             f"{self.name}: 😶 no speech detected by VAD, skipping STT"
                         )
-                        self._emit(VAET.VOICE_ASSISTANT_STT_END, {"text": ""})
-                        self._emit(VAET.VOICE_ASSISTANT_RUN_END, {})
+                        self._emit(StageEvent.STT_END, {"text": ""})
+                        self._emit(StageEvent.RUN_END, {})
                         return
                     stt_t = time.perf_counter()
                     text = await self.stt_backend.transcribe(pcm)
@@ -937,7 +937,7 @@ class Pipeline:
                         )
                         text = ""
                     record["stt_text"] = text
-                    self._emit(VAET.VOICE_ASSISTANT_STT_END, {"text": text})
+                    self._emit(StageEvent.STT_END, {"text": text})
                     # Live STT partial: surface the recognized text in the panel
                     # immediately, before the empty-transcription check (fires for
                     # both empty and non-empty text).
@@ -945,10 +945,10 @@ class Pipeline:
                     if not text.strip():
                         # Empty transcription: result stays "empty"; record in finally.
                         logger.info(f"{self.name}: empty transcription, ending run")
-                        self._emit(VAET.VOICE_ASSISTANT_RUN_END, {})
+                        self._emit(StageEvent.RUN_END, {})
                         return
 
-                    self._emit(VAET.VOICE_ASSISTANT_INTENT_START, {})
+                    self._emit(StageEvent.INTENT_START, {})
                     logger.info(f"{self.name}: 🤖 → LLM: {text!r}")
                     llm_t = time.perf_counter()
                     history = context.load_context(
@@ -1029,14 +1029,14 @@ class Pipeline:
                         logger.error(f"{self.name}: context append failed: {e}")
 
                     self._emit(
-                        VAET.VOICE_ASSISTANT_INTENT_END,
+                        StageEvent.INTENT_END,
                         {
                             "conversation_id": conversation_id,
                             "continue_conversation": "0",
                         },
                     )
 
-                    self._emit(VAET.VOICE_ASSISTANT_TTS_START, {"text": reply})
+                    self._emit(StageEvent.TTS_START, {"text": reply})
                     try:
                         tts_t = time.perf_counter()
                         mime, audio = await self.tts_backend.synthesize(reply, "ru")
@@ -1050,7 +1050,7 @@ class Pipeline:
                         record["audio_bytes"] = len(audio)
                         record["audio_fmt"] = ext
                         logger.info(f"{self.name}: ▶ serving {url}")
-                        self._emit(VAET.VOICE_ASSISTANT_TTS_END, {"url": url})
+                        self._emit(StageEvent.TTS_END, {"url": url})
                     except Exception as e:
                         # No TTS_END on failure; the run still ends cleanly.
                         # result="error" unconditionally, but only claim the stage/
@@ -1067,17 +1067,17 @@ class Pipeline:
                     logger.info(
                         f"{self.name}: ✅ run complete in {time.perf_counter() - t0:.2f}s"
                     )
-                    self._emit(VAET.VOICE_ASSISTANT_RUN_END, {})
+                    self._emit(StageEvent.RUN_END, {})
                 except Exception as e:
                     record["result"] = "error"
                     record["error_stage"] = "pipeline"
                     record["error_text"] = str(e)
                     logger.exception(f"{self.name}: pipeline run failed: {e}")
                     self._emit(
-                        VAET.VOICE_ASSISTANT_ERROR,
+                        StageEvent.ERROR,
                         {"code": "server_error", "message": str(e)},
                     )
-                    self._emit(VAET.VOICE_ASSISTANT_RUN_END, {})
+                    self._emit(StageEvent.RUN_END, {})
                 finally:
                     # Record the run on every non-empty-pcm path (empty-STT return,
                     # success, TTS-fail, exception). A recording failure must never
@@ -1251,7 +1251,7 @@ class Pipeline:
             if fut is not None and not fut.done():
                 fut.set_exception(CaptureEmptyError("capture produced no audio"))
         # Return the device to idle. No STT/LLM/TTS events are sent for a capture run.
-        self._emit(VAET.VOICE_ASSISTANT_RUN_END, {})
+        self._emit(StageEvent.RUN_END, {})
 
     async def on_stop(self, abort: bool = False) -> None:
         """Explicit device stop: finalize the run (exactly once)."""

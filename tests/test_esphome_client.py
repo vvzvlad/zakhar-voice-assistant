@@ -562,8 +562,9 @@ async def test_on_connect_wires_subscribes_and_discovers_keys():
     ]
     c = _connect_client(entities=ents, unsub="TOKEN")
     await c._on_connect()
-    # Emitters rebound to the live connection's send methods.
-    assert c.pipeline.send_event == c.cli.send_voice_assistant_event
+    # Emitters rebound to the live connection: stage events go through the
+    # StageEvent -> VAET translator, audio straight to the client.
+    assert c.pipeline.send_event == c._send_stage_event
     assert c.pipeline.send_audio == c.cli.send_voice_assistant_audio
     # Subscribed and the unsub token retained.
     assert c.cli.subscribed is True
@@ -592,6 +593,31 @@ async def test_on_disconnect_clears_unsub_and_online():
     await c._on_disconnect(expected=False)
     assert c._unsub is None
     assert c.online is False
+
+
+# --- StageEvent -> VAET translation ------------------------------------------
+
+def test_event_to_vaet_covers_every_stage_event():
+    # Pins table completeness: every transport-neutral StageEvent must have an
+    # ESPHome wire mapping, or a pipeline emit would KeyError at runtime.
+    from src.esphome_client import _EVENT_TO_VAET
+    from src.pipeline_events import StageEvent
+    assert set(_EVENT_TO_VAET) == set(StageEvent)
+
+
+def test_send_stage_event_translates_to_vaet():
+    from aioesphomeapi import VoiceAssistantEventType as VAET
+
+    from src.esphome_client import DeviceClient
+    from src.pipeline_events import StageEvent
+
+    sent = []
+    c = DeviceClient.__new__(DeviceClient)
+    c.cli = types.SimpleNamespace(
+        send_voice_assistant_event=lambda et, data: sent.append((et, data))
+    )
+    c._send_stage_event(StageEvent.STT_END, {"text": "hi"})
+    assert sent == [(VAET.VOICE_ASSISTANT_STT_END, {"text": "hi"})]
 
 
 # --- DeviceClient.stop failure isolation -------------------------------------

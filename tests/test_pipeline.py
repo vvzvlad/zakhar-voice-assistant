@@ -3,7 +3,6 @@ import wave
 
 import numpy as np
 import pytest
-from aioesphomeapi import VoiceAssistantEventType as VAET
 
 from src.core_config import AckConfig, AudioConfig, ContextConfig, CoreConfig
 from src.pipeline import (
@@ -19,6 +18,7 @@ from src.pipeline import (
     contains_stt_hallucination,
     is_slow_tool,
 )
+from src.pipeline_events import StageEvent
 from src.plugins.llm.base import LlmConfig
 from src.runs_store import _LIST_COLS
 from src.runtime import Runtime
@@ -195,20 +195,20 @@ async def test_happy_path(tmp_path, monkeypatch):
     await pipeline.on_stop(False)
 
     assert types_of(events) == [
-        VAET.VOICE_ASSISTANT_RUN_START,
-        VAET.VOICE_ASSISTANT_STT_START,
-        VAET.VOICE_ASSISTANT_STT_END,
-        VAET.VOICE_ASSISTANT_INTENT_START,
-        VAET.VOICE_ASSISTANT_INTENT_END,
-        VAET.VOICE_ASSISTANT_TTS_START,
-        VAET.VOICE_ASSISTANT_TTS_END,
-        VAET.VOICE_ASSISTANT_RUN_END,
+        StageEvent.RUN_START,
+        StageEvent.STT_START,
+        StageEvent.STT_END,
+        StageEvent.INTENT_START,
+        StageEvent.INTENT_END,
+        StageEvent.TTS_START,
+        StageEvent.TTS_END,
+        StageEvent.RUN_END,
     ]
 
     data = dict(events)
-    assert data[VAET.VOICE_ASSISTANT_STT_END] == {"text": "включи свет"}
-    assert data[VAET.VOICE_ASSISTANT_TTS_START] == {"text": "готово"}
-    url = data[VAET.VOICE_ASSISTANT_TTS_END]["url"]
+    assert data[StageEvent.STT_END] == {"text": "включи свет"}
+    assert data[StageEvent.TTS_START] == {"text": "готово"}
+    url = data[StageEvent.TTS_END]["url"]
     assert url.endswith("/tts/abc123.mp3")
     assert url.startswith(PUBLIC_BASE_URL)
     # MP3 backend -> audio_server stored the audio/mpeg mime.
@@ -230,7 +230,7 @@ async def test_happy_path_wav_extension(tmp_path, monkeypatch):
     await pipeline.on_stop(False)
 
     data = dict(events)
-    url = data[VAET.VOICE_ASSISTANT_TTS_END]["url"]
+    url = data[StageEvent.TTS_END]["url"]
     assert url.endswith("/tts/abc123.wav")
     assert pipeline.audio_server.calls == [(b"RIFF....", "audio/wav")]
     assert_all_str(events)
@@ -244,9 +244,9 @@ async def test_empty_audio(tmp_path, monkeypatch):
     await pipeline.on_stop(False)
 
     assert types_of(events) == [
-        VAET.VOICE_ASSISTANT_RUN_START,
-        VAET.VOICE_ASSISTANT_STT_START,
-        VAET.VOICE_ASSISTANT_RUN_END,
+        StageEvent.RUN_START,
+        StageEvent.STT_START,
+        StageEvent.RUN_END,
     ]
     assert_all_str(events)
 
@@ -260,13 +260,13 @@ async def test_empty_stt(tmp_path, monkeypatch):
     await pipeline.on_stop(False)
 
     assert types_of(events) == [
-        VAET.VOICE_ASSISTANT_RUN_START,
-        VAET.VOICE_ASSISTANT_STT_START,
-        VAET.VOICE_ASSISTANT_STT_END,
-        VAET.VOICE_ASSISTANT_RUN_END,
+        StageEvent.RUN_START,
+        StageEvent.STT_START,
+        StageEvent.STT_END,
+        StageEvent.RUN_END,
     ]
     data = dict(events)
-    assert data[VAET.VOICE_ASSISTANT_STT_END] == {"text": ""}
+    assert data[StageEvent.STT_END] == {"text": ""}
     assert_all_str(events)
 
 
@@ -363,13 +363,13 @@ async def test_stt_hallucination_discarded(tmp_path, monkeypatch):
     await pipeline.on_stop(False)
 
     assert types_of(events) == [
-        VAET.VOICE_ASSISTANT_RUN_START,
-        VAET.VOICE_ASSISTANT_STT_START,
-        VAET.VOICE_ASSISTANT_STT_END,
-        VAET.VOICE_ASSISTANT_RUN_END,
+        StageEvent.RUN_START,
+        StageEvent.STT_START,
+        StageEvent.STT_END,
+        StageEvent.RUN_END,
     ]
     data = dict(events)
-    assert data[VAET.VOICE_ASSISTANT_STT_END] == {"text": ""}
+    assert data[StageEvent.STT_END] == {"text": ""}
     assert_all_str(events)
 
 
@@ -412,14 +412,14 @@ async def test_pipelines_are_independent(tmp_path, monkeypatch):
 FRAME = b"\x00" * 640
 
 FULL_SEQUENCE = [
-    VAET.VOICE_ASSISTANT_RUN_START,
-    VAET.VOICE_ASSISTANT_STT_START,
-    VAET.VOICE_ASSISTANT_STT_END,
-    VAET.VOICE_ASSISTANT_INTENT_START,
-    VAET.VOICE_ASSISTANT_INTENT_END,
-    VAET.VOICE_ASSISTANT_TTS_START,
-    VAET.VOICE_ASSISTANT_TTS_END,
-    VAET.VOICE_ASSISTANT_RUN_END,
+    StageEvent.RUN_START,
+    StageEvent.STT_START,
+    StageEvent.STT_END,
+    StageEvent.INTENT_START,
+    StageEvent.INTENT_END,
+    StageEvent.TTS_START,
+    StageEvent.TTS_END,
+    StageEvent.RUN_END,
 ]
 
 
@@ -456,7 +456,7 @@ async def test_vad_maxlen_finalize(tmp_path, monkeypatch):
     await pipeline.on_audio(FRAME * 21)
 
     assert pipeline._finalized is True
-    assert VAET.VOICE_ASSISTANT_RUN_END in types_of(events)
+    assert StageEvent.RUN_END in types_of(events)
     # Full happy path because STT returned text.
     assert types_of(events) == FULL_SEQUENCE
 
@@ -494,13 +494,13 @@ async def test_vad_no_speech_finalize(tmp_path, monkeypatch):
     assert stt_calls == []
     # STT_START (from on_start) is balanced by an empty STT_END; no intent/TTS.
     assert types_of(events) == [
-        VAET.VOICE_ASSISTANT_RUN_START,
-        VAET.VOICE_ASSISTANT_STT_START,
-        VAET.VOICE_ASSISTANT_STT_END,
-        VAET.VOICE_ASSISTANT_RUN_END,
+        StageEvent.RUN_START,
+        StageEvent.STT_START,
+        StageEvent.STT_END,
+        StageEvent.RUN_END,
     ]
     data = dict(events)
-    assert data[VAET.VOICE_ASSISTANT_STT_END] == {"text": ""}
+    assert data[StageEvent.STT_END] == {"text": ""}
     assert_all_str(events)
 
 
@@ -597,12 +597,12 @@ async def test_finalize_once_race(tmp_path, monkeypatch):
     await pipeline._run("a", pcm, pipeline._conversation_id)
     after_first = list(types_of(events))
     assert after_first == [
-        VAET.VOICE_ASSISTANT_STT_END,
-        VAET.VOICE_ASSISTANT_INTENT_START,
-        VAET.VOICE_ASSISTANT_INTENT_END,
-        VAET.VOICE_ASSISTANT_TTS_START,
-        VAET.VOICE_ASSISTANT_TTS_END,
-        VAET.VOICE_ASSISTANT_RUN_END,
+        StageEvent.STT_END,
+        StageEvent.INTENT_START,
+        StageEvent.INTENT_END,
+        StageEvent.TTS_START,
+        StageEvent.TTS_END,
+        StageEvent.RUN_END,
     ]
 
     # A second claim is a no-op: already finalized -> returns None, so no second
@@ -1028,8 +1028,8 @@ async def test_capture_run_returns_wav_bytes_and_skips_pipeline(tmp_path, monkey
 
     # Only the capture-only event pair, NO STT/INTENT/TTS events.
     assert types_of(events) == [
-        VAET.VOICE_ASSISTANT_RUN_START,
-        VAET.VOICE_ASSISTANT_RUN_END,
+        StageEvent.RUN_START,
+        StageEvent.RUN_END,
     ]
     assert stt_calls == [] and llm_calls == []
     # No run recorded: capture-only never touches the runs store.
@@ -1063,8 +1063,8 @@ async def test_capture_run_ends_on_deadline(tmp_path, monkeypatch):
 
     assert pipeline._capture_run is False
     assert types_of(events) == [
-        VAET.VOICE_ASSISTANT_RUN_START,
-        VAET.VOICE_ASSISTANT_RUN_END,
+        StageEvent.RUN_START,
+        StageEvent.RUN_END,
     ]
     assert future.done()
     _nch, _sw, _fr, _n, frames = _read_wav_bytes(future.result())
@@ -1142,7 +1142,7 @@ async def test_normal_run_hard_cap_truncates_at_60s(tmp_path, monkeypatch):
     await pipeline.on_audio(b"\x07\x08" * (SAMPLE_RATE * 65))
 
     assert pipeline._finalized is True
-    assert VAET.VOICE_ASSISTANT_RUN_END in types_of(events)
+    assert StageEvent.RUN_END in types_of(events)
     # The transcribed PCM was capped at exactly the 60 s HARD_CAP_BYTES.
     assert captured["len"] == HARD_CAP_BYTES
 
@@ -1187,8 +1187,8 @@ async def test_capture_run_after_normal_run_is_isolated(tmp_path, monkeypatch):
     await pipeline.on_audio(pcm)
     await pipeline.on_stop(False)
     assert types_of(events) == [
-        VAET.VOICE_ASSISTANT_RUN_START,
-        VAET.VOICE_ASSISTANT_RUN_END,
+        StageEvent.RUN_START,
+        StageEvent.RUN_END,
     ]
     # Capture returns WAV bytes via the Future; nothing is written to disk.
     assert future.done()
@@ -1259,8 +1259,8 @@ async def test_wake_word_run_while_armed_keeps_flag_for_manual_start(tmp_path, m
     await pipeline.on_stop(False)
 
     assert types_of(events) == [
-        VAET.VOICE_ASSISTANT_RUN_START,
-        VAET.VOICE_ASSISTANT_RUN_END,
+        StageEvent.RUN_START,
+        StageEvent.RUN_END,
     ]
     # The capture resolved its Future with WAV bytes; nothing on disk.
     assert future.done()
@@ -1298,8 +1298,8 @@ async def test_second_concurrent_capture_is_rejected_first_still_completes(
     await pipeline.on_stop(False)
 
     assert types_of(events) == [
-        VAET.VOICE_ASSISTANT_RUN_START,
-        VAET.VOICE_ASSISTANT_RUN_END,
+        StageEvent.RUN_START,
+        StageEvent.RUN_END,
     ]
     assert first.done()
     _nch, _sw, _fr, _n, frames = _read_wav_bytes(first.result())
@@ -1328,8 +1328,8 @@ async def test_capture_empty_audio_fails_future_with_capture_empty_error(
     with pytest.raises(CaptureEmptyError):
         future.result()
     assert types_of(events) == [
-        VAET.VOICE_ASSISTANT_RUN_START,
-        VAET.VOICE_ASSISTANT_RUN_END,
+        StageEvent.RUN_START,
+        StageEvent.RUN_END,
     ]
     assert pipeline._capture_run is False
 
@@ -1508,12 +1508,12 @@ async def test_run_top_level_exception_is_recorded_and_run_ends(tmp_path, monkey
 
     types = types_of(events)
     # The error event is emitted before RUN_END, and RUN_END still fires.
-    assert VAET.VOICE_ASSISTANT_ERROR in types
-    assert VAET.VOICE_ASSISTANT_RUN_END in types
-    assert types.index(VAET.VOICE_ASSISTANT_ERROR) < types.index(VAET.VOICE_ASSISTANT_RUN_END)
+    assert StageEvent.ERROR in types
+    assert StageEvent.RUN_END in types
+    assert types.index(StageEvent.ERROR) < types.index(StageEvent.RUN_END)
     data = dict(events)
-    assert data[VAET.VOICE_ASSISTANT_ERROR]["code"] == "server_error"
-    assert "boom" in data[VAET.VOICE_ASSISTANT_ERROR]["message"]
+    assert data[StageEvent.ERROR]["code"] == "server_error"
+    assert "boom" in data[StageEvent.ERROR]["message"]
     assert_all_str(events)
 
     # The run is recorded once as a pipeline-stage error carrying the message.
@@ -1578,7 +1578,7 @@ async def test_put_audio_failure_is_isolated(tmp_path, monkeypatch):
     await pipeline.on_audio(b"\x01\x02" * 100)
     await pipeline.on_stop(False)  # must not raise
 
-    assert VAET.VOICE_ASSISTANT_RUN_END in types_of(events)
+    assert StageEvent.RUN_END in types_of(events)
     # Recorded exactly once despite the audio-store failure.
     assert len(store.records) == 1
     # The finalized broadcast (last one, after the live partials) still fires, but
@@ -1611,7 +1611,7 @@ async def test_broadcast_failure_is_isolated(tmp_path, monkeypatch):
     await pipeline.on_audio(b"\x01\x02" * 100)
     await pipeline.on_stop(False)  # must not raise
 
-    assert VAET.VOICE_ASSISTANT_RUN_END in types_of(events)
+    assert StageEvent.RUN_END in types_of(events)
     assert len(store.records) == 1
     # Broadcasts (live partials + the finalized one) were attempted and each raised,
     # but none broke the run.
@@ -1685,14 +1685,14 @@ async def test_capture_maxlen_finalize_ignores_late_chunk(tmp_path, monkeypatch)
     # The capture truncated the buffer to exactly the cap (maxlen branch).
     assert len(pipeline._buffer) <= cap
     buffer_after_finalize = len(pipeline._buffer)
-    runend_count = types_of(events).count(VAET.VOICE_ASSISTANT_RUN_END)
+    runend_count = types_of(events).count(StageEvent.RUN_END)
     result_before = future.result()
 
     # A SECOND chunk after finalize is ignored: no second finalize, Future unchanged,
     # the buffer is not re-grown.
     await pipeline.on_audio(b"\xff\xff" * cap)
 
-    assert types_of(events).count(VAET.VOICE_ASSISTANT_RUN_END) == runend_count
+    assert types_of(events).count(StageEvent.RUN_END) == runend_count
     assert future.result() == result_before
     assert len(pipeline._buffer) == buffer_after_finalize <= cap
 
