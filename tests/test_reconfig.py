@@ -96,6 +96,9 @@ def test_action_for_representative_paths():
         "llm.instances.openrouter.max_tool_rounds": "live",
         "tts.instances.yandex.voice": "rebuild_backends",
         "stt.instances.groq.api_key": "rebuild_backends",
+        "vad.instances.webrtc.aggressiveness": "rebuild_backends",
+        "vad.instances.webrtc.auto_gain": "rebuild_backends",
+        "vad.selected": "rebuild_backends",
         "something.unknown.path": "restart",
     }
     for path, expected in cases.items():
@@ -108,6 +111,7 @@ def test_backend_categories_maps_each_stage_path():
     assert backend_categories({"tts.instances.yandex.voice"}) == {"tts"}
     assert backend_categories({"llm.selected"}) == {"llm"}
     assert backend_categories({"core.tts_timeout"}) == {"tts"}
+    assert backend_categories({"vad.instances.webrtc.aggressiveness"}) == {"vad"}
     assert backend_categories(
         {"stt.instances.groq.api_key", "tts.selected"}
     ) == {"stt", "tts"}

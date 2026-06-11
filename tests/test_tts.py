@@ -5,6 +5,7 @@ import httpx
 import pytest
 import respx
 
+from src.plugins.tts._ru_text import expand_units, sanitize_plus_stress
 from src.tts import (
     PiperTtsBackend,
     TeraTtsHttpBackend,
@@ -14,7 +15,6 @@ from src.tts import (
     make_ack_chime_mp3,
     split_sentences,
     wav_to_mp3,
-    yandex_stress_markup,
 )
 
 YANDEX_URL = "https://tts.api.cloud.yandex.net/tts/v3/utteranceSynthesis"
@@ -87,24 +87,6 @@ def test_split_sentences_drops_bang_only_fragment():
     assert split_sentences("Раз. ! Два.") == ["Раз.", "Два."]
 
 
-def test_yandex_stress_markup_single_word():
-    assert yandex_stress_markup("приве́т") == "прив+ет"
-
-
-def test_yandex_stress_markup_two_words():
-    assert yandex_stress_markup("больша́я ко́мната") == "больш+ая к+омната"
-
-
-def test_yandex_stress_markup_passthrough():
-    assert yandex_stress_markup("просто текст") == "просто текст"
-
-
-def test_yandex_stress_markup_orphan_acute_dropped():
-    # consonant + combining acute (U+0301) -> accent removed, no "+".
-    # Built explicitly so the input is "к" + U+0301, not the precomposed U+045C.
-    assert yandex_stress_markup("ќ") == "к"
-
-
 # --- _chunk_for_v3 (v3 250-char request limit) ------------------------------
 
 # The real 325-char reply that triggered the original 400 Bad Request from
@@ -173,7 +155,9 @@ async def test_yandex_synthesize_posts_mp3_and_returns_audio():
         backend = YandexTtsBackend(client, api_key="k", voice="zahar",
                                    role="neutral", speed=1.0,
                                    url=YANDEX_URL, timeout=10)
-        mime, audio = await backend.synthesize("приве́т", "ru")
+        # Canonical LLM->TTS text: the model's own "+vowel" stress notation,
+        # which is also Yandex SpeechKit's native markup.
+        mime, audio = await backend.synthesize("прив+ет", "ru")
     assert mime == "audio/mpeg"
     assert audio == audio_bytes
     req = route.calls.last.request
@@ -182,7 +166,7 @@ async def test_yandex_synthesize_posts_mp3_and_returns_audio():
     assert {"voice": "zahar"} in sent["hints"]
     assert {"role": "neutral"} in sent["hints"]
     assert sent["outputAudioSpec"]["containerAudio"]["containerAudioType"] == "MP3"
-    assert "прив+ет" in sent["text"]   # stress markup from "приве́т"
+    assert "прив+ет" in sent["text"]   # "+vowel" markup passes through untouched
 
 
 @respx.mock
@@ -190,9 +174,9 @@ async def test_yandex_synthesize_chunks_long_text_and_concatenates_audio():
     import base64
     import json
 
-    # Expected number of chunks for the 325-char reply, measured on the marked text
+    # Expected number of chunks for the 325-char reply, measured on the adapted text
     # exactly as synthesize() does, so the assertion tracks the real chunker.
-    num_calls = len(_chunk_for_v3(yandex_stress_markup(_LONG_REPLY)))
+    num_calls = len(_chunk_for_v3(sanitize_plus_stress(expand_units(_LONG_REPLY))))
     assert num_calls >= 2  # the long reply must split into multiple requests
 
     # Distinct audio per call so a wrong concatenation order would fail the test.

@@ -95,9 +95,9 @@ async def test_patch_config_valid(tmp_path):
 async def test_patch_config_invalid_returns_422(tmp_path):
     client, _svc_ = await _client(tmp_path)
     try:
-        # vad.aggressiveness has le=3; 9 fails core validation -> ValidationError -> 422.
+        # vad.trim_start_ms has ge=0; -1 fails core validation -> ValidationError -> 422.
         resp = await client.patch("/api/config",
-                                  json={"core": {"vad": {"aggressiveness": 9}}})
+                                  json={"core": {"vad": {"trim_start_ms": -1}}})
         assert resp.status == 422
         body = await resp.json()
         assert "error" in body and "detail" in body
@@ -119,13 +119,13 @@ async def test_patch_config_bad_json_returns_400(tmp_path):
 async def test_patch_config_invalid_leaves_config_unchanged(tmp_path):
     client, svc = await _client(tmp_path)
     try:
-        # aggressiveness defaults to 2; an invalid patch must NOT persist anything.
-        assert svc.document()["core"]["vad"]["aggressiveness"] == 2
+        # trim_start_ms defaults to 200; an invalid patch must NOT persist anything.
+        assert svc.document()["core"]["vad"]["trim_start_ms"] == 200
         resp = await client.patch("/api/config",
-                                  json={"core": {"vad": {"aggressiveness": 9}}})
+                                  json={"core": {"vad": {"trim_start_ms": -1}}})
         assert resp.status == 422
         # On-disk/in-memory config kept the old value.
-        assert svc.document()["core"]["vad"]["aggressiveness"] == 2
+        assert svc.document()["core"]["vad"]["trim_start_ms"] == 200
     finally:
         await client.close()
 
@@ -138,7 +138,7 @@ async def test_patch_config_non_object_body_returns_400(tmp_path):
             assert resp.status == 400
             assert "error" in await resp.json()
         # Nothing was applied: config document is untouched.
-        assert svc.document()["core"]["vad"]["aggressiveness"] == 2
+        assert svc.document()["core"]["vad"]["trim_start_ms"] == 200
     finally:
         await client.close()
 
@@ -647,10 +647,13 @@ def _seed_runs(tmp_path):
     })
     store.insert({
         "ts": now, "device": "bedroom", "result": "error", "reason": "endpoint",
-        "stt_text": "сломайся", "llm_text": "Ошибка: boom", "model": None, "tokens": None,
+        # error_text carries the RAW stage error (StageError message), llm_text the
+        # spoken fallback phrase — mirrors what pipeline records since the R1 contract.
+        "stt_text": "сломайся", "llm_text": "Что-то сломалось, попробуй ещё раз попозже.",
+        "model": None, "tokens": None,
         "t_vad": 1000, "t_stt": 200, "t_llm": 300, "t_ruaccent": 0, "t_tts": 0,
         "t_total": 1500, "audio_ms": None, "audio_bytes": None, "audio_fmt": None,
-        "error_stage": "LLM", "error_text": "Ошибка: boom", "rounds": [],
+        "error_stage": "LLM", "error_text": "boom", "rounds": [],
     })
     return store
 

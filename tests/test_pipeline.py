@@ -3,26 +3,28 @@ import wave
 
 import numpy as np
 import pytest
-from aioesphomeapi import VoiceAssistantEventType as VAET
 
+from src.audio_prep import (
+    highpass,
+    normalize_peak,
+    pcm_to_wav_bytes,
+    trim_start_pcm,
+)
 from src.core_config import AckConfig, AudioConfig, ContextConfig, CoreConfig
 from src.pipeline import (
     SAMPLE_RATE,
     CaptureBusyError,
     CaptureEmptyError,
     Pipeline,
-    _highpass,
-    _normalize_peak,
-    _pcm_to_wav_bytes,
-    _trim_start_pcm,
-    _vad_boost,
     contains_stt_hallucination,
-    is_slow_tool,
 )
+from src.llm_text import clean_llm_output
+from src.pipeline_events import StageEvent
 from src.plugins.llm.base import LlmConfig
+from src.plugins.vad.webrtc import WebRtcVadBackend
 from src.runs_store import _LIST_COLS
 from src.runtime import Runtime
-from src.text import processing_response
+from src.stage_errors import StageError
 
 PUBLIC_BASE_URL = "http://10.0.0.10:8200"
 
@@ -103,8 +105,20 @@ class FakeRunEvents:
         self.broadcasts.append(payload)
 
 
+class FakeToolHub:
+    """ToolHub double for the filler policy: is_slow() is membership in a fixed set
+    of slow tool names (mirrors the real hub, where the owning source declares it)."""
+
+    def __init__(self, slow_tools=()):
+        self.slow_tools = set(slow_tools)
+
+    def is_slow(self, name):
+        return name in self.slow_tools
+
+
 def make_pipeline(tmp_path, monkeypatch, name="dev", stt_text="распознанный текст",
-                  tts_backend=None, runs_store=None, run_events=None, ack=False):
+                  stt_backend=None, tts_backend=None, runs_store=None,
+                  run_events=None, ack=False, hub=None):
     # The data dir is hardcoded in config_store; the pipeline reads it as a module
     # attribute, so isolate per-test context files by monkeypatching DATA_DIR to
     # tmp_path BEFORE the pipeline (and its _context_path) is built.
@@ -120,10 +134,15 @@ def make_pipeline(tmp_path, monkeypatch, name="dev", stt_text="распозна�
     )
     rt = Runtime(
         FakeSvc(core, LlmConfig()),
-        stt_backend=FakeSttBackend(stt_text),
+        # Real WebRTC backend by default: tests that need scripted frame-level
+        # speech/silence decisions swap it via install_fake_vad() before on_start.
+        vad_backend=WebRtcVadBackend(),
+        stt_backend=stt_backend or FakeSttBackend(stt_text),
         llm_backend=object(),
         tts_backend=tts_backend or FakeTtsBackend(),
-        hub=object(),
+        # Default hub double: the filler tests' slow tools are slow, everything
+        # else (set_light, ...) is fast — the same shape the real ToolHub exposes.
+        hub=hub or FakeToolHub(slow_tools={"search_events", "google", "get_current_weather"}),
         audio_server=audio_server,
         runs_store=runs_store,
         run_events=run_events,
@@ -154,6 +173,14 @@ class FakeVad:
         return val
 
 
+def install_fake_vad(pipeline, script):
+    """Swap in a real WebRtcVadBackend whose webrtcvad.Vad object is a scripted
+    FakeVad, preserving frame-level control over the speech/silence decisions.
+    The pipeline opens its session from rt.vad_backend in on_start, so this must
+    run BEFORE on_start (it does in every test)."""
+    pipeline.rt.vad_backend = WebRtcVadBackend(vad_factory=lambda: FakeVad(script))
+
+
 def set_small_vad_thresholds(pipeline):
     """Shrink VAD thresholds so end-pointing fires after only a few 20 ms frames.
 
@@ -166,10 +193,14 @@ def set_small_vad_thresholds(pipeline):
     vad.no_speech_timeout_ms = 200  # 10 frames with no speech -> finalize
 
 
-def patch_llm(monkeypatch, reply="ответ"):
-    """Stub the whole LLM call. STT is injected as a fake backend, not patched."""
+def patch_llm(monkeypatch, reply="ответ", error=None):
+    """Stub the whole LLM call. STT is injected as a fake backend, not patched.
+
+    When `error` is given (a StageError), the stub raises it instead of replying."""
 
     async def fake(llm_backend, hub, text, **kwargs):
+        if error is not None:
+            raise error
         return reply
 
     monkeypatch.setattr("src.llm.call_llm_api", fake)
@@ -195,20 +226,20 @@ async def test_happy_path(tmp_path, monkeypatch):
     await pipeline.on_stop(False)
 
     assert types_of(events) == [
-        VAET.VOICE_ASSISTANT_RUN_START,
-        VAET.VOICE_ASSISTANT_STT_START,
-        VAET.VOICE_ASSISTANT_STT_END,
-        VAET.VOICE_ASSISTANT_INTENT_START,
-        VAET.VOICE_ASSISTANT_INTENT_END,
-        VAET.VOICE_ASSISTANT_TTS_START,
-        VAET.VOICE_ASSISTANT_TTS_END,
-        VAET.VOICE_ASSISTANT_RUN_END,
+        StageEvent.RUN_START,
+        StageEvent.STT_START,
+        StageEvent.STT_END,
+        StageEvent.INTENT_START,
+        StageEvent.INTENT_END,
+        StageEvent.TTS_START,
+        StageEvent.TTS_END,
+        StageEvent.RUN_END,
     ]
 
     data = dict(events)
-    assert data[VAET.VOICE_ASSISTANT_STT_END] == {"text": "включи свет"}
-    assert data[VAET.VOICE_ASSISTANT_TTS_START] == {"text": "готово"}
-    url = data[VAET.VOICE_ASSISTANT_TTS_END]["url"]
+    assert data[StageEvent.STT_END] == {"text": "включи свет"}
+    assert data[StageEvent.TTS_START] == {"text": "готово"}
+    url = data[StageEvent.TTS_END]["url"]
     assert url.endswith("/tts/abc123.mp3")
     assert url.startswith(PUBLIC_BASE_URL)
     # MP3 backend -> audio_server stored the audio/mpeg mime.
@@ -230,7 +261,7 @@ async def test_happy_path_wav_extension(tmp_path, monkeypatch):
     await pipeline.on_stop(False)
 
     data = dict(events)
-    url = data[VAET.VOICE_ASSISTANT_TTS_END]["url"]
+    url = data[StageEvent.TTS_END]["url"]
     assert url.endswith("/tts/abc123.wav")
     assert pipeline.audio_server.calls == [(b"RIFF....", "audio/wav")]
     assert_all_str(events)
@@ -244,9 +275,9 @@ async def test_empty_audio(tmp_path, monkeypatch):
     await pipeline.on_stop(False)
 
     assert types_of(events) == [
-        VAET.VOICE_ASSISTANT_RUN_START,
-        VAET.VOICE_ASSISTANT_STT_START,
-        VAET.VOICE_ASSISTANT_RUN_END,
+        StageEvent.RUN_START,
+        StageEvent.STT_START,
+        StageEvent.RUN_END,
     ]
     assert_all_str(events)
 
@@ -260,13 +291,13 @@ async def test_empty_stt(tmp_path, monkeypatch):
     await pipeline.on_stop(False)
 
     assert types_of(events) == [
-        VAET.VOICE_ASSISTANT_RUN_START,
-        VAET.VOICE_ASSISTANT_STT_START,
-        VAET.VOICE_ASSISTANT_STT_END,
-        VAET.VOICE_ASSISTANT_RUN_END,
+        StageEvent.RUN_START,
+        StageEvent.STT_START,
+        StageEvent.STT_END,
+        StageEvent.RUN_END,
     ]
     data = dict(events)
-    assert data[VAET.VOICE_ASSISTANT_STT_END] == {"text": ""}
+    assert data[StageEvent.STT_END] == {"text": ""}
     assert_all_str(events)
 
 
@@ -277,77 +308,8 @@ def test_contains_stt_hallucination():
     assert not contains_stt_hallucination("включи свет")
 
 
-# --- _vad_boost (VAD-only makeup gain for the quiet less-processed channel) ----
-
-def test_vad_boost_lifts_quiet_frame_toward_target():
-    # A frame whose own samples are small, with a representative running utterance
-    # peak (~3000), is scaled by min(target/peak, max_gain) so quiet speech reaches
-    # WebRTC VAD's range. With target ~23197 and peak 3000 the gain is ~7.7 (well below
-    # the max_gain cap, so the cap is irrelevant here).
-    from src.pipeline import _VAD_BOOST_TARGET
-    peak = 3000
-    gain = _VAD_BOOST_TARGET / peak
-    samples = np.array([100, -200, 300, -50] * 80, dtype="<i2")  # 320 samples = 640 B
-    frame = samples.tobytes()
-    out = _vad_boost(frame, peak)
-    out_samples = np.frombuffer(out, dtype="<i2")
-    expected = np.clip(samples.astype(np.float32) * gain, -32768, 32767).astype("<i2")
-    assert np.array_equal(out_samples, expected)
-    # Sanity: the frame really was amplified (gain > 1).
-    assert gain > 1.0
-    assert np.max(np.abs(out_samples)) > np.max(np.abs(samples))
-
-
-def test_vad_boost_below_floor_is_identity():
-    # peak below _VAD_BOOST_FLOOR (30) -> treated as pre-roll silence -> frame unchanged.
-    frame = (np.array([10, -20, 30, -40] * 80, dtype="<i2")).tobytes()
-    assert _vad_boost(frame, 20) == frame
-
-
-def test_vad_boost_caps_at_max_gain():
-    # A peak just above the floor gives a target/peak ratio above the max_gain cap
-    # (128); the cap must clamp it. peak=40 -> target/40 ≈ 145 > 128, so the gain is 128.
-    from src.pipeline import _VAD_BOOST_TARGET
-    peak = 40
-    assert _VAD_BOOST_TARGET / peak > 128.0  # uncapped ratio really does exceed the cap
-    samples = np.array([5, -6, 7, -8] * 80, dtype="<i2")  # small -> no clipping at 128x
-    frame = samples.tobytes()
-    out = np.frombuffer(_vad_boost(frame, peak), dtype="<i2")
-    expected = np.clip(samples.astype(np.float32) * 128.0, -32768, 32767).astype("<i2")
-    assert np.array_equal(out, expected)
-
-
-def test_vad_boost_handles_empty_and_odd_length():
-    # Empty frame -> unchanged. Odd-length (a stray trailing byte) -> still safe; the
-    # whole-sample prefix is boosted and no exception is raised.
-    assert _vad_boost(b"", 3000) == b""
-    odd = (np.array([100, -200], dtype="<i2")).tobytes() + b"\x07"  # 5 bytes
-    out = _vad_boost(odd, 3000)
-    assert isinstance(out, bytes)
-    # A single-byte frame has no whole int16 sample -> returned unchanged.
-    assert _vad_boost(b"\x01", 3000) == b"\x01"
-
-
-async def test_vad_peak_tracked_when_normalize_on(tmp_path, monkeypatch):
-    # With mic_normalize on, on_audio tracks the running utterance peak so the VAD
-    # frame boost can lift the quiet channel. FakeVad ignores frame content, so this
-    # only checks the peak bookkeeping.
-    pipeline, _ = make_pipeline(tmp_path, monkeypatch)
-    pipeline._vad = FakeVad([False])
-    pipeline.core.vad.mic_normalize = True
-    await pipeline.on_start("cid", 0, None, None)
-    await pipeline.on_audio(np.full(320, 8000, "<i2").tobytes())
-    assert pipeline._vad_peak >= 8000
-
-
-async def test_vad_peak_not_tracked_when_normalize_off(tmp_path, monkeypatch):
-    # With mic_normalize off, the running peak stays 0 (no boost path engaged).
-    pipeline, _ = make_pipeline(tmp_path, monkeypatch)
-    pipeline._vad = FakeVad([False])
-    assert pipeline.core.vad.mic_normalize is False
-    await pipeline.on_start("cid", 0, None, None)
-    await pipeline.on_audio(np.full(320, 8000, "<i2").tobytes())
-    assert pipeline._vad_peak == 0
+# The VAD-decision boost (auto_gain) is the webrtc plugin's concern now; its unit
+# tests live in tests/test_vad_webrtc.py against the session/backend directly.
 
 
 async def test_stt_hallucination_discarded(tmp_path, monkeypatch):
@@ -363,13 +325,13 @@ async def test_stt_hallucination_discarded(tmp_path, monkeypatch):
     await pipeline.on_stop(False)
 
     assert types_of(events) == [
-        VAET.VOICE_ASSISTANT_RUN_START,
-        VAET.VOICE_ASSISTANT_STT_START,
-        VAET.VOICE_ASSISTANT_STT_END,
-        VAET.VOICE_ASSISTANT_RUN_END,
+        StageEvent.RUN_START,
+        StageEvent.STT_START,
+        StageEvent.STT_END,
+        StageEvent.RUN_END,
     ]
     data = dict(events)
-    assert data[VAET.VOICE_ASSISTANT_STT_END] == {"text": ""}
+    assert data[StageEvent.STT_END] == {"text": ""}
     assert_all_str(events)
 
 
@@ -412,14 +374,14 @@ async def test_pipelines_are_independent(tmp_path, monkeypatch):
 FRAME = b"\x00" * 640
 
 FULL_SEQUENCE = [
-    VAET.VOICE_ASSISTANT_RUN_START,
-    VAET.VOICE_ASSISTANT_STT_START,
-    VAET.VOICE_ASSISTANT_STT_END,
-    VAET.VOICE_ASSISTANT_INTENT_START,
-    VAET.VOICE_ASSISTANT_INTENT_END,
-    VAET.VOICE_ASSISTANT_TTS_START,
-    VAET.VOICE_ASSISTANT_TTS_END,
-    VAET.VOICE_ASSISTANT_RUN_END,
+    StageEvent.RUN_START,
+    StageEvent.STT_START,
+    StageEvent.STT_END,
+    StageEvent.INTENT_START,
+    StageEvent.INTENT_END,
+    StageEvent.TTS_START,
+    StageEvent.TTS_END,
+    StageEvent.RUN_END,
 ]
 
 
@@ -428,7 +390,7 @@ async def test_vad_endpoint_finalize(tmp_path, monkeypatch):
     pipeline, events = make_pipeline(tmp_path, monkeypatch, stt_text="включи свет")
     set_small_vad_thresholds(pipeline)
     # 3 speech frames (>= 40 ms min) then 6 silence frames (>= 100 ms) -> endpoint.
-    pipeline._vad = FakeVad([True, True, True, False, False, False, False, False, False])
+    install_fake_vad(pipeline, [True, True, True, False, False, False, False, False, False])
 
     await pipeline.on_start("cid", 0, None, None)
     # 9 frames in one chunk so all are processed in a single on_audio call.
@@ -449,14 +411,14 @@ async def test_vad_maxlen_finalize(tmp_path, monkeypatch):
     pipeline, events = make_pipeline(tmp_path, monkeypatch, stt_text="команда")
     set_small_vad_thresholds(pipeline)
     # Always speech: no trailing silence, so only the max-length cap can finalize.
-    pipeline._vad = FakeVad([True])
+    install_fake_vad(pipeline, [True])
 
     await pipeline.on_start("cid", 0, None, None)
     # max_utterance_ms=400 -> 20 frames; feed 21 to cross the cap.
     await pipeline.on_audio(FRAME * 21)
 
     assert pipeline._finalized is True
-    assert VAET.VOICE_ASSISTANT_RUN_END in types_of(events)
+    assert StageEvent.RUN_END in types_of(events)
     # Full happy path because STT returned text.
     assert types_of(events) == FULL_SEQUENCE
 
@@ -473,7 +435,7 @@ async def test_vad_no_speech_finalize(tmp_path, monkeypatch):
     pipeline, events = make_pipeline(tmp_path, monkeypatch, stt_text="   ")
     set_small_vad_thresholds(pipeline)
     # Never any speech: only the no-speech timeout can finalize.
-    pipeline._vad = FakeVad([False])
+    install_fake_vad(pipeline, [False])
 
     # Spy on transcribe to assert it is never called on a no-speech run.
     stt_calls = []
@@ -494,13 +456,13 @@ async def test_vad_no_speech_finalize(tmp_path, monkeypatch):
     assert stt_calls == []
     # STT_START (from on_start) is balanced by an empty STT_END; no intent/TTS.
     assert types_of(events) == [
-        VAET.VOICE_ASSISTANT_RUN_START,
-        VAET.VOICE_ASSISTANT_STT_START,
-        VAET.VOICE_ASSISTANT_STT_END,
-        VAET.VOICE_ASSISTANT_RUN_END,
+        StageEvent.RUN_START,
+        StageEvent.STT_START,
+        StageEvent.STT_END,
+        StageEvent.RUN_END,
     ]
     data = dict(events)
-    assert data[VAET.VOICE_ASSISTANT_STT_END] == {"text": ""}
+    assert data[StageEvent.STT_END] == {"text": ""}
     assert_all_str(events)
 
 
@@ -512,7 +474,7 @@ async def test_no_speech_run_is_recorded_as_empty(tmp_path, monkeypatch):
     pipeline, _ = make_pipeline(tmp_path, monkeypatch, stt_text="   ", runs_store=store)
     set_small_vad_thresholds(pipeline)
     # Never any speech: only the no-speech timeout can finalize.
-    pipeline._vad = FakeVad([False])
+    install_fake_vad(pipeline, [False])
 
     stt_calls = []
     orig_transcribe = pipeline.stt_backend.transcribe
@@ -549,7 +511,7 @@ async def test_run_broadcast_on_no_speech(tmp_path, monkeypatch):
     )
     set_small_vad_thresholds(pipeline)
     # Never any speech: only the no-speech timeout can finalize.
-    pipeline._vad = FakeVad([False])
+    install_fake_vad(pipeline, [False])
 
     await pipeline.on_start("cid", 0, None, None)
     # no_speech_timeout_ms=200 -> 10 frames; feed 11 to cross it.
@@ -563,26 +525,31 @@ async def test_run_broadcast_on_no_speech(tmp_path, monkeypatch):
     assert hub.broadcasts[0]["run"]["result"] == "empty"
 
 
-async def test_on_start_rebuilds_vad_when_aggressiveness_changed(tmp_path, monkeypatch):
-    # webrtcvad.Vad bakes the aggressiveness in at construction, so on_start must rebuild
-    # the real Vad object when rt.core.vad.aggressiveness changed since it was last built,
-    # and leave it untouched (same object) when the value is unchanged.
+async def test_vad_backend_hot_swap_applies_on_next_run(tmp_path, monkeypatch):
+    # The pipeline opens one VadSession per run from rt.vad_backend, so swapping the
+    # backend on the runtime (what the reconfigurator does on a vad.* change) takes
+    # effect on the NEXT on_start without rebuilding the pipeline. This replaces the
+    # old "on_start rebuilds webrtcvad.Vad when aggressiveness changed" hack.
     pipeline, _ = make_pipeline(tmp_path, monkeypatch)
-    initial_vad = pipeline._vad
-    initial_aggr = pipeline._vad_aggressiveness
 
-    # Change to a different valid value (0..3) and start: the Vad object is rebuilt.
-    new_aggr = (initial_aggr + 1) % 4
-    pipeline.rt.core.vad.aggressiveness = new_aggr
-    await pipeline.on_start("cid", 0, None, None)
-    assert pipeline._vad is not initial_vad            # rebuilt (new object)
-    assert pipeline._vad_aggressiveness == new_aggr     # tracked value updated
+    class RecordingBackend(WebRtcVadBackend):
+        def __init__(self):
+            super().__init__(vad_factory=lambda: FakeVad([False]))
+            self.opened = 0
 
-    # A second start with the SAME aggressiveness is a no-op: the object is not replaced.
-    same_vad = pipeline._vad
+        def open(self, policy):
+            self.opened += 1
+            return super().open(policy)
+
+    first, second = RecordingBackend(), RecordingBackend()
+    pipeline.rt.vad_backend = first
     await pipeline.on_start("cid", 0, None, None)
-    assert pipeline._vad is same_vad                    # unchanged -> not rebuilt
-    assert pipeline._vad_aggressiveness == new_aggr
+    assert (first.opened, second.opened) == (1, 0)
+
+    # Hot-swap: the next run opens its session from the NEW backend.
+    pipeline.rt.vad_backend = second
+    await pipeline.on_start("cid", 0, None, None)
+    assert (first.opened, second.opened) == (1, 1)
 
 
 async def test_finalize_once_race(tmp_path, monkeypatch):
@@ -597,12 +564,12 @@ async def test_finalize_once_race(tmp_path, monkeypatch):
     await pipeline._run("a", pcm, pipeline._conversation_id)
     after_first = list(types_of(events))
     assert after_first == [
-        VAET.VOICE_ASSISTANT_STT_END,
-        VAET.VOICE_ASSISTANT_INTENT_START,
-        VAET.VOICE_ASSISTANT_INTENT_END,
-        VAET.VOICE_ASSISTANT_TTS_START,
-        VAET.VOICE_ASSISTANT_TTS_END,
-        VAET.VOICE_ASSISTANT_RUN_END,
+        StageEvent.STT_END,
+        StageEvent.INTENT_START,
+        StageEvent.INTENT_END,
+        StageEvent.TTS_START,
+        StageEvent.TTS_END,
+        StageEvent.RUN_END,
     ]
 
     # A second claim is a no-op: already finalized -> returns None, so no second
@@ -718,7 +685,7 @@ async def test_utterance_audio_stored_on_no_speech_run(tmp_path, monkeypatch):
     pipeline, _ = make_pipeline(tmp_path, monkeypatch, stt_text="   ", runs_store=store)
     set_small_vad_thresholds(pipeline)
     # Never any speech: only the no-speech timeout can finalize.
-    pipeline._vad = FakeVad([False])
+    install_fake_vad(pipeline, [False])
 
     await pipeline.on_start("cid", 0, None, None)
     # no_speech_timeout_ms=200 -> 10 frames; feed 11 to cross it.
@@ -820,7 +787,7 @@ async def test_no_live_partial_on_no_speech(tmp_path, monkeypatch):
     )
     set_small_vad_thresholds(pipeline)
     # Never any speech: only the no-speech timeout can finalize.
-    pipeline._vad = FakeVad([False])
+    install_fake_vad(pipeline, [False])
 
     await pipeline.on_start("cid", 0, None, None)
     # no_speech_timeout_ms=200 -> 10 frames; feed 11 to cross it.
@@ -907,10 +874,10 @@ class RaisingTtsBackend:
 
 
 async def test_llm_error_then_tts_fail_keeps_error_stage_llm(tmp_path, monkeypatch):
-    # When the LLM reply is an "Ошибка:" string the run is classified as an
-    # LLM error but still continues into TTS. If TTS then fails, the TTS except
-    # must NOT clobber the already-set LLM root cause.
-    patch_llm(monkeypatch, reply="Ошибка: модель недоступна")
+    # When the LLM raises a StageError the run is classified as an LLM error
+    # but still continues into TTS with the configured fallback phrase. If TTS
+    # then fails, the TTS except must NOT clobber the already-set LLM root cause.
+    patch_llm(monkeypatch, error=StageError("llm", "модель недоступна"))
     store = FakeRunsStore()
     pipeline, _ = make_pipeline(
         tmp_path, monkeypatch,
@@ -928,7 +895,111 @@ async def test_llm_error_then_tts_fail_keeps_error_stage_llm(tmp_path, monkeypat
     assert rec["result"] == "error"
     # LLM stage/text preserved despite the later TTS failure.
     assert rec["error_stage"] == "LLM"
-    assert rec["error_text"] == "Ошибка: модель недоступна"
+    assert rec["error_text"] == "модель недоступна"
+
+
+async def test_llm_stage_error_speaks_reply_error(tmp_path, monkeypatch):
+    # A generic LLM StageError: the run is recorded as an LLM error, but the user
+    # hears the configured reply_error phrase (never the raw API error text).
+    patch_llm(monkeypatch, error=StageError("llm", "boom from API"))
+    store = FakeRunsStore()
+    pipeline, events = make_pipeline(
+        tmp_path, monkeypatch, stt_text="включи свет", runs_store=store,
+    )
+
+    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_audio(b"\x01\x02" * 100)
+    await pipeline.on_stop(False)
+
+    assert types_of(events) == [
+        StageEvent.RUN_START,
+        StageEvent.STT_START,
+        StageEvent.STT_END,
+        StageEvent.INTENT_START,
+        StageEvent.INTENT_END,
+        StageEvent.TTS_START,
+        StageEvent.TTS_END,
+        StageEvent.RUN_END,
+    ]
+    data = dict(events)
+    assert data[StageEvent.TTS_START] == {"text": LlmConfig().reply_error}
+    rec = store.records[0]
+    assert rec["result"] == "error"
+    assert rec["error_stage"] == "LLM"
+    assert rec["error_text"] == "boom from API"
+    # The spoken fallback is what was sent to TTS, recorded as llm_text.
+    assert rec["llm_text"] == LlmConfig().reply_error
+
+
+async def test_llm_rate_limit_speaks_reply_rate_limit(tmp_path, monkeypatch):
+    # kind="rate_limit" maps to the dedicated rate-limit phrase.
+    patch_llm(monkeypatch, error=StageError("llm", "rate limited", kind="rate_limit"))
+    store = FakeRunsStore()
+    pipeline, events = make_pipeline(
+        tmp_path, monkeypatch, stt_text="привет", runs_store=store,
+    )
+
+    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_audio(b"\x01\x02" * 100)
+    await pipeline.on_stop(False)
+
+    data = dict(events)
+    assert data[StageEvent.TTS_START] == {"text": LlmConfig().reply_rate_limit}
+    rec = store.records[0]
+    assert rec["result"] == "error"
+    assert rec["error_stage"] == "LLM"
+    assert rec["error_text"] == "rate limited"
+
+
+async def test_llm_stage_error_does_not_append_context(tmp_path, monkeypatch):
+    # A failed LLM turn is not a conversation turn: nothing is appended to the
+    # context history (the next run must not see the fallback phrase as a reply).
+    from src import context
+
+    appended = []
+    monkeypatch.setattr(
+        context, "append_context",
+        lambda *a, **k: appended.append(a),
+    )
+    patch_llm(monkeypatch, error=StageError("llm", "boom"))
+    pipeline, _ = make_pipeline(tmp_path, monkeypatch, stt_text="привет")
+
+    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_audio(b"\x01\x02" * 100)
+    await pipeline.on_stop(False)
+
+    assert appended == []
+
+
+async def test_stt_stage_error_records_error_and_stays_silent(tmp_path, monkeypatch):
+    # An STT failure ends the run silently (no LLM/TTS), but the record now says
+    # error/STT instead of lying with result="empty". RaisingSttBackend (defined
+    # below for the top-level-exception test) is reused with a StageError here.
+    patch_llm(monkeypatch, reply="не должно быть произнесено")
+    store = FakeRunsStore()
+    pipeline, events = make_pipeline(
+        tmp_path, monkeypatch,
+        stt_backend=RaisingSttBackend(StageError("stt", "groq down")),
+        runs_store=store,
+    )
+
+    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_audio(b"\x01\x02" * 100)
+    await pipeline.on_stop(False)
+
+    # STT_END balances STT_START; RUN_END closes the run; no TTS events at all.
+    assert types_of(events) == [
+        StageEvent.RUN_START,
+        StageEvent.STT_START,
+        StageEvent.STT_END,
+        StageEvent.RUN_END,
+    ]
+    assert dict(events)[StageEvent.STT_END] == {"text": ""}
+    assert pipeline.audio_server.calls == []  # nothing synthesized/served
+    rec = store.records[0]
+    assert rec["result"] == "error"
+    assert rec["error_stage"] == "STT"
+    assert rec["error_text"] == "groq down"
 
 
 async def test_raw_capture_writes_wav_when_enabled(tmp_path, monkeypatch):
@@ -1028,8 +1099,8 @@ async def test_capture_run_returns_wav_bytes_and_skips_pipeline(tmp_path, monkey
 
     # Only the capture-only event pair, NO STT/INTENT/TTS events.
     assert types_of(events) == [
-        VAET.VOICE_ASSISTANT_RUN_START,
-        VAET.VOICE_ASSISTANT_RUN_END,
+        StageEvent.RUN_START,
+        StageEvent.RUN_END,
     ]
     assert stt_calls == [] and llm_calls == []
     # No run recorded: capture-only never touches the runs store.
@@ -1063,8 +1134,8 @@ async def test_capture_run_ends_on_deadline(tmp_path, monkeypatch):
 
     assert pipeline._capture_run is False
     assert types_of(events) == [
-        VAET.VOICE_ASSISTANT_RUN_START,
-        VAET.VOICE_ASSISTANT_RUN_END,
+        StageEvent.RUN_START,
+        StageEvent.RUN_END,
     ]
     assert future.done()
     _nch, _sw, _fr, _n, frames = _read_wav_bytes(future.result())
@@ -1127,7 +1198,7 @@ async def test_normal_run_hard_cap_truncates_at_60s(tmp_path, monkeypatch):
     # This test asserts the HARD_CAP length reaches STT; disable the lead-in trim so
     # it stays a pure cap regression guard and is not coupled to trim_start_ms.
     pipeline.rt.core.vad.trim_start_ms = 0
-    pipeline._vad = FakeVad([True])  # always speech: only the cap can finalize
+    install_fake_vad(pipeline, [True])  # always speech: only the cap can finalize
 
     orig_transcribe = pipeline.stt_backend.transcribe
 
@@ -1142,7 +1213,7 @@ async def test_normal_run_hard_cap_truncates_at_60s(tmp_path, monkeypatch):
     await pipeline.on_audio(b"\x07\x08" * (SAMPLE_RATE * 65))
 
     assert pipeline._finalized is True
-    assert VAET.VOICE_ASSISTANT_RUN_END in types_of(events)
+    assert StageEvent.RUN_END in types_of(events)
     # The transcribed PCM was capped at exactly the 60 s HARD_CAP_BYTES.
     assert captured["len"] == HARD_CAP_BYTES
 
@@ -1187,8 +1258,8 @@ async def test_capture_run_after_normal_run_is_isolated(tmp_path, monkeypatch):
     await pipeline.on_audio(pcm)
     await pipeline.on_stop(False)
     assert types_of(events) == [
-        VAET.VOICE_ASSISTANT_RUN_START,
-        VAET.VOICE_ASSISTANT_RUN_END,
+        StageEvent.RUN_START,
+        StageEvent.RUN_END,
     ]
     # Capture returns WAV bytes via the Future; nothing is written to disk.
     assert future.done()
@@ -1259,8 +1330,8 @@ async def test_wake_word_run_while_armed_keeps_flag_for_manual_start(tmp_path, m
     await pipeline.on_stop(False)
 
     assert types_of(events) == [
-        VAET.VOICE_ASSISTANT_RUN_START,
-        VAET.VOICE_ASSISTANT_RUN_END,
+        StageEvent.RUN_START,
+        StageEvent.RUN_END,
     ]
     # The capture resolved its Future with WAV bytes; nothing on disk.
     assert future.done()
@@ -1298,8 +1369,8 @@ async def test_second_concurrent_capture_is_rejected_first_still_completes(
     await pipeline.on_stop(False)
 
     assert types_of(events) == [
-        VAET.VOICE_ASSISTANT_RUN_START,
-        VAET.VOICE_ASSISTANT_RUN_END,
+        StageEvent.RUN_START,
+        StageEvent.RUN_END,
     ]
     assert first.done()
     _nch, _sw, _fr, _n, frames = _read_wav_bytes(first.result())
@@ -1328,8 +1399,8 @@ async def test_capture_empty_audio_fails_future_with_capture_empty_error(
     with pytest.raises(CaptureEmptyError):
         future.result()
     assert types_of(events) == [
-        VAET.VOICE_ASSISTANT_RUN_START,
-        VAET.VOICE_ASSISTANT_RUN_END,
+        StageEvent.RUN_START,
+        StageEvent.RUN_END,
     ]
     assert pipeline._capture_run is False
 
@@ -1363,14 +1434,14 @@ def test_trim_start_pcm_trims_normal_buffer():
     # 10 ms @ 16 kHz / 16-bit = 320 bytes off the front of a 1000-byte buffer.
     pcm = bytes(range(256)) * 4  # 1024 bytes; slice the first 1000 for a known size
     pcm = pcm[:1000]
-    out = _trim_start_pcm(pcm, 10)
+    out = trim_start_pcm(pcm, 10)
     assert out == pcm[320:]
     assert len(out) == 680
 
 
 def test_trim_start_pcm_zero_returns_unchanged():
     pcm = b"\x01\x02" * 100
-    out = _trim_start_pcm(pcm, 0)
+    out = trim_start_pcm(pcm, 0)
     assert out == pcm
 
 
@@ -1378,20 +1449,20 @@ def test_trim_start_pcm_trim_exceeds_buffer_returns_unchanged():
     # 200 ms -> 6400 bytes, far larger than the 100-byte buffer: keep it intact so
     # we never hand empty audio to STT.
     pcm = b"\x01\x02" * 50  # 100 bytes
-    out = _trim_start_pcm(pcm, 200)
+    out = trim_start_pcm(pcm, 200)
     assert out == pcm
 
 
 def test_trim_start_pcm_negative_returns_unchanged():
     pcm = b"\x01\x02" * 100
-    out = _trim_start_pcm(pcm, -5)
+    out = trim_start_pcm(pcm, -5)
     assert out == pcm
 
 
 def test_trim_start_pcm_200ms_byte_count():
     # Sanity: 200 ms maps to exactly 6400 bytes when the buffer is long enough.
     pcm = b"\x00" * 10000
-    out = _trim_start_pcm(pcm, 200)
+    out = trim_start_pcm(pcm, 200)
     assert len(pcm) - len(out) == 6400
     assert out == pcm[6400:]
 
@@ -1418,7 +1489,7 @@ async def test_stt_receives_trimmed_pcm(tmp_path, monkeypatch):
     await pipeline.on_stop(False)
 
     assert len(stt_calls) == 1
-    assert stt_calls[0] == _trim_start_pcm(fed, 10)
+    assert stt_calls[0] == trim_start_pcm(fed, 10)
     assert len(stt_calls[0]) == 800 - 320 == 480
 
 
@@ -1475,7 +1546,7 @@ async def test_trim_applies_to_record_and_stored_audio(tmp_path, monkeypatch):
 
     # The stored diagnostic audio is the WAV built from the trimmed pcm. The first
     # insert returns run_id 1.
-    assert store.get_audio(1) == _pcm_to_wav_bytes(_trim_start_pcm(fed, 10))
+    assert store.get_audio(1) == pcm_to_wav_bytes(trim_start_pcm(fed, 10))
 
 
 # --- failure isolation: the run must always finalize cleanly ---------------------
@@ -1508,12 +1579,12 @@ async def test_run_top_level_exception_is_recorded_and_run_ends(tmp_path, monkey
 
     types = types_of(events)
     # The error event is emitted before RUN_END, and RUN_END still fires.
-    assert VAET.VOICE_ASSISTANT_ERROR in types
-    assert VAET.VOICE_ASSISTANT_RUN_END in types
-    assert types.index(VAET.VOICE_ASSISTANT_ERROR) < types.index(VAET.VOICE_ASSISTANT_RUN_END)
+    assert StageEvent.ERROR in types
+    assert StageEvent.RUN_END in types
+    assert types.index(StageEvent.ERROR) < types.index(StageEvent.RUN_END)
     data = dict(events)
-    assert data[VAET.VOICE_ASSISTANT_ERROR]["code"] == "server_error"
-    assert "boom" in data[VAET.VOICE_ASSISTANT_ERROR]["message"]
+    assert data[StageEvent.ERROR]["code"] == "server_error"
+    assert "boom" in data[StageEvent.ERROR]["message"]
     assert_all_str(events)
 
     # The run is recorded once as a pipeline-stage error carrying the message.
@@ -1578,7 +1649,7 @@ async def test_put_audio_failure_is_isolated(tmp_path, monkeypatch):
     await pipeline.on_audio(b"\x01\x02" * 100)
     await pipeline.on_stop(False)  # must not raise
 
-    assert VAET.VOICE_ASSISTANT_RUN_END in types_of(events)
+    assert StageEvent.RUN_END in types_of(events)
     # Recorded exactly once despite the audio-store failure.
     assert len(store.records) == 1
     # The finalized broadcast (last one, after the live partials) still fires, but
@@ -1611,7 +1682,7 @@ async def test_broadcast_failure_is_isolated(tmp_path, monkeypatch):
     await pipeline.on_audio(b"\x01\x02" * 100)
     await pipeline.on_stop(False)  # must not raise
 
-    assert VAET.VOICE_ASSISTANT_RUN_END in types_of(events)
+    assert StageEvent.RUN_END in types_of(events)
     assert len(store.records) == 1
     # Broadcasts (live partials + the finalized one) were attempted and each raised,
     # but none broke the run.
@@ -1630,7 +1701,7 @@ async def test_raw_capture_to_disk_failure_is_isolated(tmp_path, monkeypatch):
     def boom(path, pcm):
         raise OSError("disk write boom")
 
-    monkeypatch.setattr("src.pipeline._write_wav", boom)
+    monkeypatch.setattr("src.pipeline.write_wav", boom)
 
     await pipeline.on_start("cid", 0, None, None)
     await pipeline.on_audio(b"\x01\x02" * 100)
@@ -1685,14 +1756,14 @@ async def test_capture_maxlen_finalize_ignores_late_chunk(tmp_path, monkeypatch)
     # The capture truncated the buffer to exactly the cap (maxlen branch).
     assert len(pipeline._buffer) <= cap
     buffer_after_finalize = len(pipeline._buffer)
-    runend_count = types_of(events).count(VAET.VOICE_ASSISTANT_RUN_END)
+    runend_count = types_of(events).count(StageEvent.RUN_END)
     result_before = future.result()
 
     # A SECOND chunk after finalize is ignored: no second finalize, Future unchanged,
     # the buffer is not re-grown.
     await pipeline.on_audio(b"\xff\xff" * cap)
 
-    assert types_of(events).count(VAET.VOICE_ASSISTANT_RUN_END) == runend_count
+    assert types_of(events).count(StageEvent.RUN_END) == runend_count
     assert future.result() == result_before
     assert len(pipeline._buffer) == buffer_after_finalize <= cap
 
@@ -1700,17 +1771,24 @@ async def test_capture_maxlen_finalize_ignores_late_chunk(tmp_path, monkeypatch)
 # --- early "filler" line (slow-tool placeholder via the announce channel) --------
 
 
-def test_is_slow_tool():
-    # Slow (network/think) tools trigger the early filler.
-    assert is_slow_tool("google")
-    assert is_slow_tool("search_events")
-    assert is_slow_tool("get_current_weather")
-    assert is_slow_tool("get_today_events")
-    # Instant smart-home actions do NOT.
-    assert not is_slow_tool("set_light")
-    assert not is_slow_tool("set_scene")
-    assert not is_slow_tool("set_reminder")
-    assert not is_slow_tool("list_reminders")
+async def test_filler_fires_when_any_tool_in_round_is_slow(tmp_path, monkeypatch):
+    # The pipeline asks the HUB which tools are slow (the owning source declares
+    # it; no name guessing here). A round mixing a fast and a slow tool still
+    # fires the filler — any slow tool in the batch makes the user wait.
+    patch_llm_with_filler(
+        monkeypatch, tool_names=["set_light", "search_events"],
+        content="Секунду…", reply="готово",
+    )
+    pipeline, _ = make_pipeline(tmp_path, monkeypatch, stt_text="свет и календарь")
+    announcer = FakeAnnouncer()
+    pipeline.send_announcement = announcer
+
+    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_audio(b"\x01\x02" * 100)
+    await pipeline.on_stop(False)
+    await _drain_filler_tasks(pipeline)
+
+    assert len(announcer.calls) == 1
 
 
 class FakeAnnouncer:
@@ -1721,6 +1799,53 @@ class FakeAnnouncer:
 
     async def __call__(self, **kwargs):
         self.calls.append(kwargs)
+
+
+# --- pipeline.speak() (public proactive-speech entry) -------------------------
+
+async def test_speak_synthesizes_serves_and_announces(tmp_path, monkeypatch):
+    # speak() is the single text->speaker path: synthesize via the current tts
+    # stage, serve the clip on the shared audio cache, announce the served URL.
+    class _RecordingTts(FakeTtsBackend):
+        def __init__(self):
+            super().__init__(mime="audio/mpeg", audio=b"MP3")
+            self.calls = []  # (text, lang)
+
+        async def synthesize(self, text, lang="ru"):
+            self.calls.append((text, lang))
+            return await super().synthesize(text, lang)
+
+    tts = _RecordingTts()
+    pipeline, _ = make_pipeline(tmp_path, monkeypatch, tts_backend=tts)
+    announcer = FakeAnnouncer()
+    pipeline.send_announcement = announcer
+
+    await pipeline.speak("привет")
+
+    assert tts.calls == [("привет", "ru")]
+    assert pipeline.audio_server.calls == [(b"MP3", "audio/mpeg")]
+    assert announcer.calls == [{
+        "media_id": f"{PUBLIC_BASE_URL}/tts/abc123.mp3",
+        "timeout": 30.0,
+        "text": "привет",
+    }]
+
+
+async def test_speak_propagates_synthesis_errors(tmp_path, monkeypatch):
+    # speak() raises on failure — isolation is the CALLER's job (the filler wraps
+    # it in try/except; DeviceClient.announce lets it surface to the API caller).
+    class _BoomTts:
+        async def synthesize(self, text, lang="ru"):
+            raise RuntimeError("tts down")
+
+    pipeline, _ = make_pipeline(tmp_path, monkeypatch, tts_backend=_BoomTts())
+    announcer = FakeAnnouncer()
+    pipeline.send_announcement = announcer
+    with pytest.raises(RuntimeError, match="tts down"):
+        await pipeline.speak("hi")
+    # Nothing served, nothing announced.
+    assert pipeline.audio_server.calls == []
+    assert announcer.calls == []
 
 
 def patch_llm_with_filler(monkeypatch, *, tool_names, content, reply="готово", times=1):
@@ -1772,11 +1897,11 @@ async def test_filler_announced_for_slow_tool(tmp_path, monkeypatch):
     call = announcer.calls[0]
     assert call["media_id"].endswith("/tts/abc123.mp3")
     assert call["media_id"].startswith(PUBLIC_BASE_URL)
-    assert call["text"] == processing_response("Щас гляну…")
+    assert call["text"] == clean_llm_output("Щас гляну…")
     # The run record captured the filler.
     assert len(store.records) == 1
     rec = store.records[0]
-    assert rec["filler_text"] == processing_response("Щас гляну…")
+    assert rec["filler_text"] == clean_llm_output("Щас гляну…")
     assert rec["t_filler"] is not None and rec["t_filler"] >= 0
 
 
@@ -1843,7 +1968,7 @@ async def test_no_filler_when_send_announcement_none(tmp_path, monkeypatch):
 
 
 async def test_no_filler_when_content_blank_after_processing(tmp_path, monkeypatch):
-    # Content that reduces to empty after processing_response (whitespace / stripped
+    # Content that reduces to empty after clean_llm_output (whitespace / stripped
     # tags) -> no announcement even for a slow tool.
     patch_llm_with_filler(
         monkeypatch, tool_names=["search_events"], content="   ", reply="готово",
@@ -2039,7 +2164,7 @@ def test_normalize_peak_boosts_quiet_signal_to_target():
     # A quiet signal (peak 1000) is scaled up so its peak reaches the -3 dBFS target
     # (32767 * 10**(-3/20) ≈ 23197), within a loose tolerance.
     pcm = np.array([1000, -1000], dtype="<i2").tobytes()
-    out = np.frombuffer(_normalize_peak(pcm), "<i2")
+    out = np.frombuffer(normalize_peak(pcm), "<i2")
     target = 32767.0 * (10.0 ** (-3.0 / 20.0))
     assert abs(int(np.max(np.abs(out))) - target) < 200
 
@@ -2047,30 +2172,30 @@ def test_normalize_peak_boosts_quiet_signal_to_target():
 def test_normalize_peak_scales_down_loud_signal():
     # A near-full-scale signal must be scaled DOWN to the target peak, not left alone.
     pcm = np.array([32000, -32000], dtype="<i2").tobytes()
-    out = np.frombuffer(_normalize_peak(pcm), "<i2")
+    out = np.frombuffer(normalize_peak(pcm), "<i2")
     assert int(np.max(np.abs(out))) < 32000
 
 
 def test_normalize_peak_silence_is_identity():
     pcm = np.zeros(8, dtype="<i2").tobytes()
-    assert _normalize_peak(pcm) == pcm
+    assert normalize_peak(pcm) == pcm
 
 
 def test_normalize_peak_empty_safe():
-    assert _normalize_peak(b"") == b""
+    assert normalize_peak(b"") == b""
 
 
 def test_normalize_peak_max_gain_caps_boost():
     # A very quiet signal (peak 10) can't be boosted past input * max_gain (30).
     pcm = np.array([10, -10], dtype="<i2").tobytes()
-    out = np.frombuffer(_normalize_peak(pcm), "<i2")
+    out = np.frombuffer(normalize_peak(pcm), "<i2")
     assert int(np.max(np.abs(out))) <= 10 * 30
 
 
 def test_highpass_drives_dc_to_zero():
     # A pure DC offset (constant signal) has its mean driven to ~0 after the high-pass.
     pcm = np.full(2048, 5000, dtype="<i2").tobytes()
-    out = np.frombuffer(_highpass(pcm), "<i2").astype(np.float32)
+    out = np.frombuffer(highpass(pcm), "<i2").astype(np.float32)
     assert abs(float(np.mean(out))) < 500  # much smaller than the 5000 DC offset
 
 
@@ -2080,13 +2205,13 @@ def test_highpass_preserves_midband_tone():
     sig = (10000 * np.sin(2 * np.pi * 1000 * t)).astype("<i2")
     pcm = sig.tobytes()
     rms_before = float(np.sqrt(np.mean(sig.astype(np.float32) ** 2)))
-    out = np.frombuffer(_highpass(pcm), "<i2").astype(np.float32)
+    out = np.frombuffer(highpass(pcm), "<i2").astype(np.float32)
     rms_after = float(np.sqrt(np.mean(out ** 2)))
     assert rms_after > rms_before * 0.7  # most of the energy survives
 
 
 def test_highpass_empty_safe():
-    assert _highpass(b"") == b""
+    assert highpass(b"") == b""
 
 
 async def test_mic_channel1_uses_second_stream(tmp_path, monkeypatch):
@@ -2122,7 +2247,7 @@ def _parse_wav(data):
 def test_pcm_to_wav_bytes_mono_without_second_channel():
     # No second arg -> the WAV stays mono, exactly as before (manual capture path).
     pcm = np.array([1, -2, 3, -4], dtype="<i2").tobytes()
-    nch, nframes, frames = _parse_wav(_pcm_to_wav_bytes(pcm))
+    nch, nframes, frames = _parse_wav(pcm_to_wav_bytes(pcm))
     assert nch == 1
     assert nframes == 4
     assert frames == pcm
@@ -2132,7 +2257,7 @@ def test_pcm_to_wav_bytes_stereo_interleaves_channels():
     # Equal-length channels -> 2-channel WAV with left == pcm, right == pcm2.
     left = np.array([100, -200, 300, -400], dtype="<i2")
     right = np.array([5, -6, 7, -8], dtype="<i2")
-    nch, nframes, frames = _parse_wav(_pcm_to_wav_bytes(left.tobytes(), right.tobytes()))
+    nch, nframes, frames = _parse_wav(pcm_to_wav_bytes(left.tobytes(), right.tobytes()))
     assert nch == 2
     assert nframes == 4
     samples = np.frombuffer(frames, dtype="<i2").reshape(-1, 2)
@@ -2145,7 +2270,7 @@ def test_pcm_to_wav_bytes_stereo_pads_shorter_channel():
     # matches the LONGER channel's sample count.
     left = np.array([1, 2, 3, 4], dtype="<i2")
     right = np.array([9, 8], dtype="<i2")
-    nch, nframes, frames = _parse_wav(_pcm_to_wav_bytes(left.tobytes(), right.tobytes()))
+    nch, nframes, frames = _parse_wav(pcm_to_wav_bytes(left.tobytes(), right.tobytes()))
     assert nch == 2
     assert nframes == 4
     samples = np.frombuffer(frames, dtype="<i2").reshape(-1, 2)

@@ -11,8 +11,9 @@ import httpx
 from loguru import logger
 
 from src.prompt import build_system_prompt
+from src.llm_text import clean_llm_output
 from src.run_context import current_device
-from src.text import processing_response
+from src.stage_errors import StageError
 
 
 async def call_llm_api(
@@ -56,8 +57,9 @@ async def call_llm_api(
     round run. It never affects the return value or control flow.
 
     Runs an agentic loop: model -> tool_calls -> execute via the hub -> feed results
-    back -> final text. On success returns the assistant text. On error returns a
-    human-readable string starting with "Ошибка: ".
+    back -> final text. On success returns the assistant text. On failure raises
+    StageError("llm", ...) (kind="rate_limit" for HTTP 429); the orchestrator maps
+    it to a configured spoken phrase.
     """
     token = current_device.set(device)
     try:
@@ -90,23 +92,26 @@ async def call_llm_api(
             try:
                 data = await llm_backend.complete(messages, hub.tools or None)
             except httpx.HTTPStatusError as e:
-                # Log full status + body for diagnostics (the returned string is spoken via TTS).
+                # Log full status + body for diagnostics; the orchestrator decides
+                # what (if anything) is spoken to the user.
                 logger.error(f"LLM API error: {e.response.status_code} - {e.response.text}")
                 if e.response.status_code == 429:
-                    return llm_cfg.reply_rate_limit
+                    raise StageError(
+                        "llm", f"rate limited: {e.response.text}", kind="rate_limit"
+                    ) from e
                 try:
                     reason = e.response.json().get("error", {}).get("message")
                 except Exception:
                     reason = None
-                return f"Ошибка: {reason or e}"
+                raise StageError("llm", str(reason or e)) from e
             except httpx.HTTPError as e:
                 logger.error(f"LLM request failed: {e}")
-                return f"Ошибка: {e}"
+                raise StageError("llm", str(e)) from e
 
             choices = data.get("choices")
             if not choices:
                 logger.error("No choices found in LLM response")
-                return "Ошибка: не найден ответ от модели"
+                raise StageError("llm", "no choices in LLM response")
 
             message = choices[0]["message"]
             usage = data.get("usage", {})
@@ -138,7 +143,7 @@ async def call_llm_api(
                         "content": last_content,
                         "calls": [],
                     })
-                reply = processing_response(last_content)
+                reply = clean_llm_output(last_content)
                 if reply:
                     return reply
                 return llm_cfg.reply_empty_after_tools if tool_executed else llm_cfg.reply_empty
@@ -191,7 +196,7 @@ async def call_llm_api(
         # Rounds exhausted: the model kept asking for tools without a final reply.
         logger.warning(f"Tool-calling loop exhausted after {llm_cfg.max_tool_rounds} rounds")
         if last_content:
-            return processing_response(last_content)
-        return "Ошибка: слишком много вызовов инструментов"
+            return clean_llm_output(last_content)
+        raise StageError("llm", "tool-calling rounds exhausted", kind="tool_rounds")
     finally:
         current_device.reset(token)

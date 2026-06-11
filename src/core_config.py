@@ -23,25 +23,11 @@ class AudioConfig(BaseModel):
 
 
 class VadConfig(BaseModel):
-    aggressiveness: int = Field(
-        2, ge=0, le=3,
-        title="Speech detection strictness",
-        # Rendered as a labeled segment control (see SchemaForm.ScaleSeg): each level
-        # gets a word label, the extremes get pole captions, and the numeric value is
-        # shown small for debugging. The "stricter = cuts sooner" explanation lives in
-        # those labels, so the description stays short.
-        json_schema_extra={
-            "choices": [
-                {"value": 0, "label": "Lenient"},
-                {"value": 1, "label": "Balanced"},
-                {"value": 2, "label": "Strict"},
-                {"value": 3, "label": "Strictest"},
-            ],
-            "poles": ["waits longest", "cuts off soonest"],
-            "readout": True,
-        },
-        description="How strictly WebRTC VAD decides that speech has ended.",
-    )
+    """Engine-independent voice-capture policy: end-pointing thresholds plus the
+    mic channel selection and pre-STT conditioning toggles. The speech classifier
+    itself (e.g. WebRTC aggressiveness, decision-only auto gain) is the swappable
+    vad stage plugin (src/plugins/vad/*), configured under the `vad` slot."""
+
     silence_ms: int = Field(
         800,
         title="End-of-phrase pause",
@@ -113,6 +99,11 @@ class McpServerConfig(BaseModel):
     token: str = ""
     transport: Literal["auto", "streamable_http", "sse"] = "auto"
     prompt: str = ""
+    slow: bool = Field(
+        False,
+        title="Slow tools",
+        description="Mark this server's tools as slow (web search, long lookups). The assistant speaks a short filler line before calling a slow tool so the user is not left waiting in silence.",
+    )
 
 
 class CalendarConfig(BaseModel):

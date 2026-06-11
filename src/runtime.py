@@ -9,10 +9,11 @@ rebuilding the pipelines.
 
 
 class Runtime:
-    def __init__(self, svc, *, stt_backend, llm_backend, tts_backend,
+    def __init__(self, svc, *, vad_backend, stt_backend, llm_backend, tts_backend,
                  hub, audio_server, runs_store=None, run_events=None):
         self.svc = svc
         # Swappable runtime objects (rebuilt by the reconfigurator in later tiers).
+        self.vad_backend = vad_backend
         self.stt_backend = stt_backend
         self.llm_backend = llm_backend
         self.tts_backend = tts_backend

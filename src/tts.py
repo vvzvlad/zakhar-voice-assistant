@@ -12,19 +12,15 @@ from urllib.parse import quote
 import httpx
 from loguru import logger
 
-
-# Yandex SpeechKit marks word stress with "+" BEFORE the stressed vowel (e.g.
-# "прив+ет"). The pipeline's text post-processing (src/text.py) has already turned
-# the model's "+vowel" notation into "vowel" + combining acute accent (U+0301)
-# placed AFTER the vowel, for espeak/Piper. Translate it back to Yandex's "+vowel"
-# form here, and drop any orphan accents. Pure and unit-testable.
-_ACUTE = "́"
-_VOWEL_ACUTE_RE = re.compile(r"([аеёиоуыэюяАЕЁИОУЫЭЮЯ])́")
-
-
-def yandex_stress_markup(text: str) -> str:
-    text = _VOWEL_ACUTE_RE.sub(r"+\1", text)   # "приве́т" -> "прив+ет"
-    return text.replace(_ACUTE, "")            # remove any leftover orphan accents
+# The canonical LLM->TTS text is the model's own notation: plain text with "+"
+# before the stressed vowel (e.g. "прив+ет"). Each backend below adapts that
+# canon to its engine via the shared opt-in helpers.
+from src.plugins.tts._ru_text import (
+    expand_units,
+    phonetic_ru,
+    sanitize_plus_stress,
+    stress_to_acute,
+)
 
 
 # Yandex SpeechKit v3 utteranceSynthesis rejects requests whose text exceeds 250
@@ -117,6 +113,9 @@ class TeraTtsHttpBackend(TtsBackend):
         self.timeout = timeout
 
     async def synthesize(self, text: str, lang: str = "ru") -> tuple[str, bytes]:
+        # Same adaptation chain as Piper: TeraTTS historically received
+        # Piper-style processed text, so this preserves its behavior.
+        text = phonetic_ru(expand_units(stress_to_acute(text)))
         url = f"{self.base_url.rstrip('/')}/synthesize/{quote(text, safe='')}"
         resp = await self.client.get(url, timeout=self.timeout)
         resp.raise_for_status()
@@ -220,6 +219,10 @@ class PiperTtsBackend(TtsBackend):
         return cls(voice=voice, sentence_silence=sentence_silence)
 
     def _synth(self, text: str) -> bytes:
+        # Adapt the canonical "+vowel" text to the engine: combining acute for
+        # stress (espeak-ng notation), spelled-out units, phonetic hacks.
+        # Stress conversion must run before phonetic_ru (see _ru_text).
+        text = phonetic_ru(expand_units(stress_to_acute(text)))
         sentences = split_sentences(text)
         pcm = bytearray()
         framerate = channels = sampwidth = None
@@ -292,8 +295,10 @@ class YandexTtsBackend(TtsBackend):
     server-streaming: the response is a stream of JSON objects, each carrying a
     base64-encoded MP3 chunk; the chunks are decoded and concatenated into a valid
     MP3 (audio/mpeg), so no transcoding is needed. Auth uses an API key bound to a
-    service account (`Authorization: Api-Key <key>`). Russian stress marks are
-    converted to Yandex's "+vowel" notation via yandex_stress_markup()."""
+    service account (`Authorization: Api-Key <key>`). The input text already
+    arrives in Yandex's native "+vowel" stress notation (the canonical LLM->TTS
+    contract), so no stress conversion is needed — only unit expansion and
+    dropping stray '+' signs."""
 
     def __init__(self, client, *, api_key, voice, role, speed, url, timeout):
         if not api_key:
@@ -307,9 +312,10 @@ class YandexTtsBackend(TtsBackend):
         self.timeout = timeout
 
     async def synthesize(self, text: str, lang: str = "ru") -> tuple[str, bytes]:
-        # v3 caps each request at YANDEX_V3_TEXT_LIMIT chars; mark stresses once, then
-        # split into bounded chunks, synthesize each, and concatenate the MP3 audio.
-        marked = yandex_stress_markup(text)
+        # v3 caps each request at YANDEX_V3_TEXT_LIMIT chars; adapt the canonical
+        # "+vowel" text once (expand units, drop stray '+'), then split into
+        # bounded chunks, synthesize each, and concatenate the MP3 audio.
+        marked = sanitize_plus_stress(expand_units(text))
         chunks = _chunk_for_v3(marked, YANDEX_V3_TEXT_LIMIT)
         # Nothing pronounceable (empty / punctuation-only) -> serve no audio, don't POST.
         audio = bytearray()
@@ -318,8 +324,8 @@ class YandexTtsBackend(TtsBackend):
         return ("audio/mpeg", bytes(audio))
 
     async def _synthesize_chunk(self, text: str) -> bytes:
-        # `text` is already stress-marked and within the length limit, so it must NOT
-        # be passed through yandex_stress_markup again (that would corrupt the markup).
+        # `text` is already adapted (units expanded, stray '+' dropped) and within
+        # the length limit; it carries Yandex-native "+vowel" stress markup as-is.
         # v3 carries voice/role/speed as "hints"; the role hint is sent only when a
         # role is configured (voices without an amplua reject an empty role).
         hints = [{"voice": self.voice}, {"speed": self.speed}]

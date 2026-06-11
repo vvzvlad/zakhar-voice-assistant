@@ -1,9 +1,11 @@
 import httpx
+import pytest
 
 from src.core_config import CoreConfig, OpenWeatherMapConfig, PromptConfig
 from src.llm import call_llm_api
 from src.plugins.llm.base import LlmConfig
-from src.text import processing_response
+from src.llm_text import clean_llm_output
+from src.stage_errors import StageError
 from src.tool_hub import ToolHub
 
 MAX_TOOL_ROUNDS = 5
@@ -161,8 +163,8 @@ async def test_tool_path(tmp_path):
     assert hub.calls == [
         ("set_light", {"device_id": "bright_room_light", "state": "on"})
     ]
-    # processing_response is applied to the final content.
-    assert result == processing_response("Готово.")
+    # clean_llm_output is applied to the final content.
+    assert result == clean_llm_output("Готово.")
 
 
 async def test_tool_path_through_real_tool_hub(tmp_path):
@@ -187,7 +189,7 @@ async def test_tool_path_through_real_tool_hub(tmp_path):
     assert source.calls == [
         ("set_light", {"device_id": "bright_room_light", "state": "on"})
     ]
-    assert result == processing_response("Готово.")
+    assert result == clean_llm_output("Готово.")
 
 
 async def test_no_tool_path(tmp_path):
@@ -197,45 +199,57 @@ async def test_no_tool_path(tmp_path):
     result = await _call(backend, hub, "привет", _core(tmp_path))
 
     assert hub.calls == []
-    assert result == processing_response("Привет, мясной мешок.")
+    assert result == clean_llm_output("Привет, мясной мешок.")
 
 
-async def test_rate_limit_path(tmp_path):
+async def test_rate_limit_raises_stage_error(tmp_path):
+    # HTTP 429 -> StageError(kind="rate_limit"); the pipeline maps it to the
+    # configured reply_rate_limit phrase (tested at the pipeline level).
     hub = StubHub(tools=[])
     backend = FakeLlmBackend([_http_status_error(429)])
 
-    result = await _call(backend, hub, "привет", _core(tmp_path))
+    with pytest.raises(StageError) as ei:
+        await _call(backend, hub, "привет", _core(tmp_path))
 
-    assert result == LlmConfig().reply_rate_limit
+    assert ei.value.stage == "llm"
+    assert ei.value.kind == "rate_limit"
 
 
-async def test_non_2xx_returns_error_message(tmp_path):
+async def test_non_2xx_raises_stage_error_with_reason(tmp_path):
     hub = StubHub(tools=[])
     backend = FakeLlmBackend([_http_status_error(500, {"error": {"message": "boom"}})])
 
-    result = await _call(backend, hub, "привет", _core(tmp_path))
+    with pytest.raises(StageError) as ei:
+        await _call(backend, hub, "привет", _core(tmp_path))
 
-    assert result == "Ошибка: boom"
+    assert ei.value.stage == "llm"
+    assert ei.value.kind == "error"
+    # The JSON error message is extracted as the StageError text.
+    assert str(ei.value) == "boom"
 
 
-async def test_httpx_error_returns_error_prefix(tmp_path):
+async def test_httpx_error_raises_stage_error(tmp_path):
     hub = StubHub(tools=[])
     backend = FakeLlmBackend([httpx.ConnectError("down")])
 
-    result = await _call(backend, hub, "привет", _core(tmp_path))
+    with pytest.raises(StageError) as ei:
+        await _call(backend, hub, "привет", _core(tmp_path))
 
-    assert result.startswith("Ошибка:")
+    assert ei.value.stage == "llm"
+    assert ei.value.kind == "error"
 
 
-async def test_max_tool_rounds_exhausted(tmp_path):
+async def test_max_tool_rounds_exhausted_raises_stage_error(tmp_path):
     hub = StubHub(tools=[SET_LIGHT_TOOL])
     backend = FakeLlmBackend([
         _tool_call("set_light", "{}") for _ in range(MAX_TOOL_ROUNDS + 1)
     ])
 
-    result = await _call(backend, hub, "включи свет", _core(tmp_path))
+    with pytest.raises(StageError) as ei:
+        await _call(backend, hub, "включи свет", _core(tmp_path))
 
-    assert result == "Ошибка: слишком много вызовов инструментов"
+    assert ei.value.stage == "llm"
+    assert ei.value.kind == "tool_rounds"
 
 
 async def test_empty_final_reply_uses_fallback(tmp_path):
@@ -323,7 +337,7 @@ async def test_trace_is_populated(tmp_path):
         core=_core(tmp_path), llm_cfg=LlmConfig(max_tool_rounds=MAX_TOOL_ROUNDS),
         trace=trace,
     )
-    assert result == processing_response("Готово.")
+    assert result == clean_llm_output("Готово.")
 
     # model = last seen; tokens summed across rounds.
     assert trace["model"] == "m-final"
@@ -348,7 +362,7 @@ async def test_trace_is_populated(tmp_path):
     assert final_round["round"] == 2
     assert final_round["calls"] == []
     # Each round carries the RAW model content (the final spoken reply is
-    # processing_response("Готово."), but the stored content is the raw "Готово.").
+    # clean_llm_output("Готово."), but the stored content is the raw "Готово.").
     assert final_round["content"] == "Готово."
     assert "content" in tool_round
 
@@ -358,15 +372,17 @@ async def test_trace_none_is_a_noop(tmp_path):
     hub = StubHub(tools=[])
     backend = FakeLlmBackend([_final("ответ")])
     result = await _call(backend, hub, "привет", _core(tmp_path))
-    assert result == processing_response("ответ")
+    assert result == clean_llm_output("ответ")
 
 
-async def test_no_choices_returns_error(tmp_path):
-    # Provider returned a response with no choices -> user-facing error, no KeyError.
+async def test_no_choices_raises_stage_error(tmp_path):
+    # Provider returned a response with no choices -> StageError, no KeyError.
     hub = StubHub(tools=[])
     backend = FakeLlmBackend([{"model": "x", "usage": {}}])  # no "choices"
-    result = await _call(backend, hub, "привет", _core(tmp_path))
-    assert result == "Ошибка: не найден ответ от модели"
+    with pytest.raises(StageError) as ei:
+        await _call(backend, hub, "привет", _core(tmp_path))
+    assert ei.value.stage == "llm"
+    assert ei.value.kind == "error"
 
 
 async def test_malformed_tool_args_degrade_to_empty_dict(tmp_path):
@@ -379,7 +395,7 @@ async def test_malformed_tool_args_degrade_to_empty_dict(tmp_path):
     ])
     result = await _call(backend, hub, "включи свет", _core(tmp_path))
     assert hub.calls == [("set_light", {})]
-    assert result == processing_response("Готово.")
+    assert result == clean_llm_output("Готово.")
 
 
 async def test_on_filler_called_for_round_with_content_and_tool_calls(tmp_path):
@@ -403,7 +419,7 @@ async def test_on_filler_called_for_round_with_content_and_tool_calls(tmp_path):
     )
 
     assert seen == [("Щас гляну…", ["set_light"])]
-    assert result == processing_response("Готово.")
+    assert result == clean_llm_output("Готово.")
 
 
 async def test_on_filler_not_called_without_tool_calls(tmp_path):
@@ -423,7 +439,7 @@ async def test_on_filler_not_called_without_tool_calls(tmp_path):
     )
 
     assert seen == []
-    assert result == processing_response("Привет, мясной мешок.")
+    assert result == clean_llm_output("Привет, мясной мешок.")
 
 
 async def test_on_filler_not_called_when_content_empty(tmp_path):
@@ -446,7 +462,7 @@ async def test_on_filler_not_called_when_content_empty(tmp_path):
     )
 
     assert seen == []
-    assert result == processing_response("Готово.")
+    assert result == clean_llm_output("Готово.")
 
 
 async def test_on_filler_failure_does_not_break_loop(tmp_path):
@@ -468,4 +484,4 @@ async def test_on_filler_failure_does_not_break_loop(tmp_path):
     )
 
     assert hub.calls == [("set_light", {})]
-    assert result == processing_response("Готово.")
+    assert result == clean_llm_output("Готово.")

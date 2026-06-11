@@ -34,3 +34,6 @@ class LlmConfig(BaseModel):
     )
     reply_empty_after_tools: str = "Готово."
     reply_empty: str = "Я тебя не расслышала, повтори."
+    # Spoken when the LLM stage fails for any reason other than a rate limit; the
+    # raw error text goes to the run log, never to the user.
+    reply_error: str = "Что-то сломалось, попробуй ещё раз попозже."

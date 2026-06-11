@@ -9,6 +9,8 @@ from abc import ABC, abstractmethod
 import httpx
 from loguru import logger
 
+from src.stage_errors import StageError
+
 GROQ_STT_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
 
 # Groq rejects transcription prompts longer than this many characters (HTTP 400).
@@ -33,7 +35,8 @@ def pcm_to_wav(
 class SttBackend(ABC):
     """Abstract STT backend: raw 16 kHz/16-bit/mono PCM -> transcript.
 
-    Returns the transcript on success, "" on empty input/failure.
+    Returns the transcript on success, "" when there is nothing to transcribe
+    or no speech was recognized. Raises StageError("stt", ...) on failure.
     """
 
     @abstractmethod
@@ -65,8 +68,9 @@ class GroqSttBackend(SttBackend):
     async def transcribe(self, pcm: bytes) -> str:
         """Transcribe raw 16 kHz/16-bit mono PCM via Groq Whisper.
 
-        Returns the recognized text on success. On empty input, non-200 response
-        or any httpx error returns "" (graceful degradation).
+        Returns the recognized text on success; "" on empty input (nothing to
+        transcribe) or a 200 with empty text (no speech recognized). Raises
+        StageError("stt", ...) on a non-200 response or any httpx error.
         """
         if not pcm:
             return ""
@@ -100,10 +104,10 @@ class GroqSttBackend(SttBackend):
             if resp.status_code == 200:
                 return resp.json().get("text", "").strip()
             logger.error(f"Groq STT error: {resp.status_code} - {resp.text}")
-            return ""
+            raise StageError("stt", f"Groq STT error: {resp.status_code} - {resp.text}")
         except httpx.HTTPError as e:
             logger.error(f"Groq STT request failed: {str(e)}")
-            return ""
+            raise StageError("stt", f"Groq STT request failed: {e}") from e
 
 
 class VoskSttBackend(SttBackend):

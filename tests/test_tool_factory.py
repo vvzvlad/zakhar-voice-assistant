@@ -111,3 +111,35 @@ def test_build_sources_combined_order_matches_boot():
     )
     sources = build_sources(core, http_cloud=object(), scheduler=object())
     assert _ids(sources) == ["home", "openweathermap", "reminders"]
+
+
+# --- slow declarations: the source factory bakes in who is slow ---------------
+
+
+def _slow(sources):
+    return {s.id: s.slow for s in sources}
+
+
+def test_build_sources_builtin_slow_flags():
+    # Weather and calendar do network round-trips -> slow (filler fires); the
+    # reminders store is in-process -> fast (explicitly slow=False).
+    core = CoreConfig(
+        openweathermap={"api_key": "k", "city": "Moscow"},
+        calendar={"url": "https://dav.example/cal", "username": "u", "password": "p"},
+    )
+    sources = build_sources(core, http_cloud=object(), scheduler=object())
+    assert _slow(sources) == {
+        "openweathermap": True,
+        "calendar": True,
+        "reminders": False,
+    }
+
+
+def test_build_sources_external_slow_from_config():
+    # External servers pick up McpServerConfig.slow; the default is fast.
+    core = CoreConfig(mcp_servers=[
+        {"name": "home", "url": "http://home/mcp"},
+        {"name": "websearch", "url": "http://search/mcp", "slow": True},
+    ])
+    sources = build_sources(core, http_cloud=object(), scheduler=None)
+    assert _slow(sources) == {"home": False, "websearch": True}

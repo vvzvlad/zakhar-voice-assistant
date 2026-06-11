@@ -5,6 +5,7 @@ import httpx
 import pytest
 import respx
 
+from src.stage_errors import StageError
 from src.stt import (
     GROQ_STT_URL,
     GroqSttBackend,
@@ -77,12 +78,24 @@ async def test_groq_backend_default_language_and_temperature():
 
 
 @respx.mock
-async def test_groq_backend_returns_empty_on_error():
+async def test_groq_backend_raises_stage_error_on_non_200():
     respx.post(GROQ_STT_URL).mock(return_value=httpx.Response(500, text="boom"))
     async with httpx.AsyncClient(verify=False) as client:
         backend = GroqSttBackend(client, api_key="test-key", model="whisper-large-v3-turbo")
-        result = await backend.transcribe(b"\x01\x02" * 100)
-    assert result == ""
+        with pytest.raises(StageError) as ei:
+            await backend.transcribe(b"\x01\x02" * 100)
+    assert ei.value.stage == "stt"
+    assert "500" in str(ei.value)
+
+
+@respx.mock
+async def test_groq_backend_raises_stage_error_on_transport_error():
+    respx.post(GROQ_STT_URL).mock(side_effect=httpx.ConnectError("down"))
+    async with httpx.AsyncClient(verify=False) as client:
+        backend = GroqSttBackend(client, api_key="test-key", model="whisper-large-v3-turbo")
+        with pytest.raises(StageError) as ei:
+            await backend.transcribe(b"\x01\x02" * 100)
+    assert ei.value.stage == "stt"
 
 
 @respx.mock

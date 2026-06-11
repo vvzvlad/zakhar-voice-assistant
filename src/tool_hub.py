@@ -30,6 +30,9 @@ class ToolSource:
     # Coarse source category surfaced to the admin panel ("http" external MCP,
     # "builtin" in-process MCP). The base default is a generic "tool".
     kind: str = "tool"
+    # Whether this source's tools are "slow" (network round-trips / second
+    # LLM rounds) and warrant an early spoken filler while they run.
+    slow: bool = False
 
     async def start(self) -> None:
         """Initial load of this source's tools."""
@@ -58,8 +61,9 @@ class HttpMcpSource(ToolSource):
 
     kind = "http"
 
-    def __init__(self, id: str, hub: McpToolHub):
+    def __init__(self, id: str, hub: McpToolHub, slow: bool = False):
         self.id = id
+        self.slow = slow
         self._hub = hub
 
     async def start(self) -> None:
@@ -88,8 +92,9 @@ class BuiltinMcpSource(ToolSource):
 
     kind = "builtin"
 
-    def __init__(self, id: str, server: FastMCP):
+    def __init__(self, id: str, server: FastMCP, slow: bool = False):
         self.id = id
+        self.slow = slow
         self._server = server
         self._tools: list[dict] = []
 
@@ -220,8 +225,13 @@ class ToolHub:
     def tools(self) -> list:
         return self._advertised or []
 
+    def is_slow(self, name: str) -> bool:
+        """True when the tool's owning source declares its tools slow."""
+        source = self._routes.get(name)
+        return bool(source is not None and source.slow)
+
     def describe(self) -> list[dict]:
-        """Snapshot of each source for the admin panel: id, kind, online, tools.
+        """Snapshot of each source for the admin panel: id, kind, online, slow, tools.
 
         `online` is a PROXY for reachability: it is True only when the source
         currently advertises at least one tool. A configured-but-unreachable
@@ -236,6 +246,8 @@ class ToolHub:
                 "id": source.id,
                 "kind": getattr(source, "kind", "tool"),
                 "online": bool(raw),
+                # Whether the source declared its tools slow (drives the filler).
+                "slow": bool(getattr(source, "slow", False)),
                 "tools": [
                     {
                         "name": t["function"]["name"],

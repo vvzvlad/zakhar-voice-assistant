@@ -6,12 +6,26 @@ drive its voice_assistant, and route events through a per-device Pipeline.
 
 import asyncio
 
-from aioesphomeapi import APIClient, ReconnectLogic
+from aioesphomeapi import APIClient, ReconnectLogic, VoiceAssistantEventType
 from loguru import logger
 
-from src.audio_server import tts_url
 from src.core_config import DeviceConfig
 from src.pipeline import CAPTURE_MAX_SECONDS, Pipeline, build_ack_clip
+from src.pipeline_events import StageEvent
+
+# The ONLY place that knows how pipeline stage events map onto the
+# ESPHome voice-assistant protocol.
+_EVENT_TO_VAET = {
+    StageEvent.RUN_START: VoiceAssistantEventType.VOICE_ASSISTANT_RUN_START,
+    StageEvent.STT_START: VoiceAssistantEventType.VOICE_ASSISTANT_STT_START,
+    StageEvent.STT_END: VoiceAssistantEventType.VOICE_ASSISTANT_STT_END,
+    StageEvent.INTENT_START: VoiceAssistantEventType.VOICE_ASSISTANT_INTENT_START,
+    StageEvent.INTENT_END: VoiceAssistantEventType.VOICE_ASSISTANT_INTENT_END,
+    StageEvent.TTS_START: VoiceAssistantEventType.VOICE_ASSISTANT_TTS_START,
+    StageEvent.TTS_END: VoiceAssistantEventType.VOICE_ASSISTANT_TTS_END,
+    StageEvent.ERROR: VoiceAssistantEventType.VOICE_ASSISTANT_ERROR,
+    StageEvent.RUN_END: VoiceAssistantEventType.VOICE_ASSISTANT_RUN_END,
+}
 
 # Extra wall-clock margin on top of the requested capture seconds when waiting for
 # the recorded WAV: covers the press -> voice_assistant.start round-trip plus the
@@ -96,8 +110,9 @@ class DeviceClient:
         except Exception as e:
             logger.warning(f"{self.cfg.name}: device_info/list_entities failed: {e}")
 
-        # Bind the pipeline's emitters to this live connection.
-        self.pipeline.send_event = self.cli.send_voice_assistant_event
+        # Bind the pipeline's emitters to this live connection. Stage events are
+        # transport-neutral; _send_stage_event translates them to VAET for the wire.
+        self.pipeline.send_event = self._send_stage_event
         self.pipeline.send_audio = self.cli.send_voice_assistant_audio
         # Early-filler announcements (see Pipeline._deliver_filler) use the same
         # assist-satellite announce path as DeviceClient.announce(): it ducks current
@@ -119,6 +134,10 @@ class DeviceClient:
         # The states subscription dies with the connection too; re-made on reconnect.
         self._states_unsub = None
         self.online = False
+
+    def _send_stage_event(self, event, data):
+        """Translate a transport-neutral StageEvent to the ESPHome VAET wire enum."""
+        self.cli.send_voice_assistant_event(_EVENT_TO_VAET[event], data)
 
     async def _handle_start(self, conversation_id, flags, audio_settings, wake_word_phrase):
         return await self.pipeline.on_start(
@@ -291,15 +310,11 @@ class DeviceClient:
         """Proactively speak `text` on this speaker via the assist-satellite announce path."""
         if not self.online:
             raise RuntimeError(f"{self.cfg.name} is offline")
-        # Synthesize at fire time so the audio-cache TTL never matters (URL is fresh).
-        mime, audio = await self.pipeline.tts_backend.synthesize(text, "ru")
-        audio_id = self.pipeline.audio_server.put(audio, mime)
-        _ext, url = tts_url(self.pipeline.public_base_url, audio_id, mime)
-        logger.info(f"{self.cfg.name}: 🔔 announce: {text!r} -> {url}")
-        # Assist-satellite announce ducks any current audio and plays while idle.
-        await self.cli.send_voice_assistant_announcement_await_response(
-            media_id=url, timeout=30.0, text=text,
-        )
+        # The pipeline's public speak() owns the whole text->speaker path: it
+        # synthesizes at fire time (so the audio-cache TTL never matters), serves
+        # the clip, logs the announce, and plays it through the announcement
+        # channel bound to this live connection on connect.
+        await self.pipeline.speak(text)
 
     async def play_media(self, audio: bytes, mime: str) -> None:
         """Play a ready audio clip on this speaker via the assist-satellite announce path.
@@ -309,8 +324,7 @@ class DeviceClient:
         """
         if not self.online:
             raise RuntimeError(f"{self.cfg.name} is offline")
-        audio_id = self.pipeline.audio_server.put(audio, mime)
-        _ext, url = tts_url(self.pipeline.public_base_url, audio_id, mime)
+        _ext, url = self.pipeline.serve_audio(mime, audio)
         logger.info(f"{self.cfg.name}: 🔔 play media -> {url}")
         await self.cli.send_voice_assistant_announcement_await_response(
             media_id=url, timeout=30.0, text="",
