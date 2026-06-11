@@ -7,7 +7,11 @@ import SchemaForm from "../components/SchemaForm.jsx";
 import { useAppData } from "../appData.jsx";
 import { useStageForm, errorLines } from "../useStageForm.js";
 import { deref } from "../schema.js";
-import { getPrompt, putPrompt, getTools, startCapture, getCaptureStatus, downloadCaptureResult, getDeviceControls, setDeviceControl } from "../api.js";
+import {
+  getPromptProfiles, getPromptProfile, createPromptProfile, updatePromptProfile,
+  deletePromptProfile, activatePromptProfile,
+  getTools, startCapture, getCaptureStatus, downloadCaptureResult, getDeviceControls, setDeviceControl,
+} from "../api.js";
 import { deviceVersion } from "../format.js";
 
 function Card({ title, sub, children, foot, right }) {
@@ -237,18 +241,63 @@ export function MCP() {
 }
 
 // ── System prompt ─────────────────────────────────────────────────────────
+// Small name-entry modal shared by the New / Rename profile actions.
+function ProfileNameModal({ title, initial, onSave, onClose, busyErr }) {
+  const [name, setName] = useState(initial || "");
+  const valid = !!name.trim();
+  return <Modal title={title} onClose={onClose}
+    footer={<><button className="z-btn g" onClick={onClose}>Cancel</button>
+      <button className="z-btn p" disabled={!valid} onClick={() => onSave(name.trim())}>Save</button></>}>
+    <Field label="Name" hint="Unique profile name.">
+      <div className="z-inp"><input value={name} placeholder="e.g. concise" autoFocus
+        onChange={(e) => setName(e.target.value)}
+        onKeyDown={(e) => { if (e.key === "Enter" && valid) onSave(name.trim()); }} /></div>
+      {busyErr && <div className="z-fh" style={{ color: "#b91c1c" }}>{errorLines(busyErr).join(" · ")}</div>}
+    </Field>
+  </Modal>;
+}
+
 export function Prompt() {
+  // Named prompt profiles: the list (summaries + active_id) drives the selector;
+  // `selected` is the full profile whose text sits in the editor. The ACTIVE
+  // profile is what the pipeline uses — selecting/editing never switches it,
+  // only the explicit Activate button does.
+  const [profiles, setProfiles] = useState(null);  // null = loading
+  const [activeId, setActiveId] = useState(null);
+  const [selected, setSelected] = useState(null);  // {id,name,...} of the editor's profile
   const [text, setText] = useState(null);
   const [loaded, setLoaded] = useState("");
-  const [path, setPath] = useState("");
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState(null);
+  const [modal, setModal] = useState(null);        // {mode:'new'|'rename'} | null
+  const [modalErr, setModalErr] = useState(null);
+  const [profileBusy, setProfileBusy] = useState(false);
 
-  const load = () => {
-    getPrompt().then((r) => { setText(r.text); setLoaded(r.text); setPath(r.path); setErr(null); })
+  const refreshProfiles = useCallback(async () => {
+    const r = await getPromptProfiles();
+    setProfiles(r.profiles || []);
+    setActiveId(r.active_id);
+    return r;
+  }, []);
+
+  const openProfile = useCallback(async (id) => {
+    const p = await getPromptProfile(id);
+    setSelected(p); setText(p.text); setLoaded(p.text);
+  }, []);
+
+  // Initial load + Reload: refresh the list, then open `preferId` when it still
+  // exists, otherwise the active profile.
+  const load = useCallback((preferId = null) => {
+    refreshProfiles()
+      .then((r) => {
+        const keep = preferId != null && (r.profiles || []).some((p) => p.id === preferId);
+        const id = keep ? preferId : r.active_id;
+        return id != null ? openProfile(id) : null;
+      })
+      .then(() => setErr(null))
       .catch((e) => setErr(e));
-  };
-  useEffect(() => { load(); }, []);
+  }, [refreshProfiles, openProfile]);
+  useEffect(() => { load(); }, [load]);
 
   // Resize the editor textarea to fit its content so the whole prompt is visible
   // without an inner scrollbar. Reset to "auto" first so scrollHeight reflects the
@@ -271,11 +320,74 @@ export function Prompt() {
   }, [autoGrow]);
 
   const dirty = text != null && text !== loaded;
+  // Save persists the SELECTED profile's text (not necessarily the active one),
+  // then refreshes the list so the char counts stay current.
   const save = async () => {
+    if (!selected) return;
     setSaving(true); setErr(null);
-    try { await putPrompt(text); setLoaded(text); }
-    catch (e) { setErr(e); }
+    try {
+      await updatePromptProfile(selected.id, { text });
+      setLoaded(text);
+      await refreshProfiles();
+    } catch (e) { setErr(e); }
     finally { setSaving(false); }
+  };
+
+  // --- profile bar actions ---------------------------------------------------
+  const confirmDiscard = () =>
+    !dirty || window.confirm("Discard unsaved changes to the current profile?");
+
+  const selectProfile = async (id) => {
+    if (!selected || id === selected.id) return;
+    if (!confirmDiscard()) return;
+    try { await openProfile(id); setErr(null); }
+    catch (e) { setErr(e); }
+  };
+
+  const doActivate = async () => {
+    if (!selected) return;
+    setProfileBusy(true);
+    try {
+      await activatePromptProfile(selected.id);
+      await refreshProfiles();
+      setErr(null);
+    } catch (e) { setErr(e); }
+    finally { setProfileBusy(false); }
+  };
+
+  // New: text omitted -> the server copies the ACTIVE profile's text; the new
+  // profile is then selected into the editor.
+  const doCreate = async (name) => {
+    setModalErr(null);
+    try {
+      const p = await createPromptProfile({ name });
+      setModal(null);
+      setSelected(p); setText(p.text); setLoaded(p.text);
+      await refreshProfiles();
+      setErr(null);
+    } catch (e) { setModalErr(e); }
+  };
+
+  const doRename = async (name) => {
+    setModalErr(null);
+    try {
+      const p = await updatePromptProfile(selected.id, { name });
+      setModal(null);
+      setSelected((prev) => ({ ...prev, name: p.name }));
+      await refreshProfiles();
+      setErr(null);
+    } catch (e) { setModalErr(e); }
+  };
+
+  const doDelete = async () => {
+    if (!selected || selected.id === activeId) return; // the active profile is undeletable
+    if (!window.confirm(`Delete profile "${selected.name}"?`)) return;
+    setProfileBusy(true);
+    try {
+      await deletePromptProfile(selected.id);
+      load(); // falls back to the active profile
+    } catch (e) { setErr(e); }
+    finally { setProfileBusy(false); }
   };
 
   // Dialog context (core.context) — an independent save form rendered in the aside.
@@ -295,17 +407,47 @@ export function Prompt() {
     await Promise.all([dirty ? save() : null, ctxDirty ? ctxSave() : null].filter(Boolean));
   };
 
-  if (text == null) return <div className="z-page"><div className="z-card"><Loading /></div></div>;
+  if (text == null || profiles == null) {
+    if (err) {
+      // Surface a load failure (e.g. prompt store unavailable) instead of an
+      // endless spinner.
+      return <div className="z-page"><div className="z-card"><div className="z-card-b">
+        <div className="z-fh" style={{ color: "#b91c1c", padding: "10px 0" }}>{errorLines(err).join(" · ")}</div>
+      </div></div></div>;
+    }
+    return <div className="z-page"><div className="z-card"><Loading /></div></div>;
+  }
+
+  // Selector options: the active profile is visibly marked.
+  const isActive = selected?.id === activeId;
+  const profileOptions = profiles.map((p) => ({
+    value: p.id,
+    label: p.id === activeId ? `● ${p.name} (active)` : p.name,
+  }));
 
   return <div className="z-page">
     <PageHeader title="System prompt" crumb="Pipeline"
-      desc="Zahar's character, rules and answer format. The placeholder is replaced with live date/time at request time."
+      desc="Zahar's character, rules and answer format. Keep several named profiles and activate the one the assistant should use. The placeholder is replaced with live date/time at request time."
       actions={<>
-        <button className="z-btn g" onClick={load}>Reload</button>
+        <button className="z-btn g" onClick={() => { if (confirmDiscard()) load(selected?.id); }}>Reload</button>
         <button className="z-btn p" disabled={!anyDirty || busy} onClick={saveAll}>{busy ? "Saving…" : "Save"}</button>
       </>} />
+    {/* Profile bar: pick a profile to edit; Activate switches what the pipeline uses. */}
+    <div className="z-card" style={{ marginBottom: 14 }}>
+      <div className="z-card-b" style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", padding: "10px 14px" }}>
+        <Select w={260} value={selected?.id} options={profileOptions} onChange={selectProfile} />
+        <button className="z-btn p" disabled={isActive || profileBusy} onClick={doActivate}
+          title={isActive ? "This profile is already active" : "Make this profile the one the assistant uses"}>Activate</button>
+        <div style={{ display: "flex", gap: 6, marginLeft: "auto" }}>
+          <button className="z-btn g" onClick={() => { if (confirmDiscard()) { setModalErr(null); setModal({ mode: "new" }); } }}><Ic n="add" w={14} />New</button>
+          <button className="z-btn g" onClick={() => { setModalErr(null); setModal({ mode: "rename" }); }}>Rename</button>
+          <button className="z-btn d" disabled={isActive || profileBusy} onClick={doDelete}
+            title={isActive ? "The active profile cannot be deleted" : ""}>Delete</button>
+        </div>
+      </div>
+    </div>
     <div className="z-cols wide">
-      <Card right={<span className="sub" style={{ marginLeft: "auto" }}>{text.length} chars · {path}</span>} title="Editor"
+      <Card right={<span className="sub" style={{ marginLeft: "auto" }}>{selected?.name} · {text.length} chars</span>} title="Editor"
         foot={err ? <div className="z-foot"><span className="z-dirty" style={{ color: "#b91c1c" }}>{errorLines(err).join(" · ")}</span></div> : undefined}>
         <div style={{ padding: "8px 0" }}>
           <textarea ref={taRef} value={text} onChange={(e) => setText(e.target.value)} spellCheck={false}
@@ -332,6 +474,10 @@ export function Prompt() {
         </Card>
       </div>
     </div>
+    {modal?.mode === "new" && <ProfileNameModal title="New profile (copy of the active prompt)"
+      onSave={doCreate} onClose={() => setModal(null)} busyErr={modalErr} />}
+    {modal?.mode === "rename" && <ProfileNameModal title="Rename profile" initial={selected?.name}
+      onSave={doRename} onClose={() => setModal(null)} busyErr={modalErr} />}
   </div>;
 }
 

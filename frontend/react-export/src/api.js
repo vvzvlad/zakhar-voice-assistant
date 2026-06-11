@@ -61,8 +61,23 @@ export const playChime = (soundPath, device) =>
     method: "POST",
     body: { sound_path: soundPath ?? "", ...(device ? { device } : {}) },
   });
+// Back-compat prompt endpoints: GET returns the ACTIVE profile {id,name,text},
+// PUT updates the active profile's text.
 export const getPrompt = () => request("/api/prompt");
 export const putPrompt = (text) => request("/api/prompt", { method: "PUT", body: { text } });
+// Named system-prompt profiles: list (summaries + active_id), full read, CRUD and
+// quick activation. createPromptProfile with `text` omitted copies the active
+// profile's text server-side (duplicate-friendly default).
+export const getPromptProfiles = () => request("/api/prompt/profiles");
+export const getPromptProfile = (id) => request(`/api/prompt/profiles/${encodeURIComponent(id)}`);
+export const createPromptProfile = (body) =>
+  request("/api/prompt/profiles", { method: "POST", body });
+export const updatePromptProfile = (id, body) =>
+  request(`/api/prompt/profiles/${encodeURIComponent(id)}`, { method: "PUT", body });
+export const deletePromptProfile = (id) =>
+  request(`/api/prompt/profiles/${encodeURIComponent(id)}`, { method: "DELETE" });
+export const activatePromptProfile = (id) =>
+  request(`/api/prompt/profiles/${encodeURIComponent(id)}/activate`, { method: "POST" });
 export const getSystem = () => request("/api/system");
 export const getDevices = () => request("/api/devices");
 

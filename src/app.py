@@ -17,6 +17,7 @@ from src.config_service import ConfigDoc, ConfigService
 from src.esphome_client import DeviceManager
 from src.panel_api import PanelServer
 from src.plugins.base import Deps
+from src.prompt_store import PromptStore
 from src.reconfig import Reconfigurator
 from src.run_events import RunEventsHub
 from src.runs_store import RunsStore
@@ -177,6 +178,15 @@ async def main() -> None:
         runs_store = RunsStore(os.path.join(config_store.DATA_DIR, "runs.db"))
         runs_store.prune(now=time.time(), retention_days=core.runs.retention_days)
 
+    # Named system-prompt profiles (always on — the pipeline reads the active
+    # profile's text as the LLM system prompt). On first boot the empty DB is
+    # seeded from the legacy data/system_prompt.md file (kept as a backup) or,
+    # absent that, from the committed default template.
+    prompt_store = PromptStore(
+        os.path.join(config_store.DATA_DIR, "prompts.db"),
+        seed_path=core.prompt.system_prompt_path,
+    )
+
     # Live run stream: a broadcast hub shared by the pipeline (producer) and the
     # panel WebSocket endpoint (consumers). Cheap; always created.
     run_events = RunEventsHub()
@@ -219,6 +229,7 @@ async def main() -> None:
         stt_backend=stt_backend, llm_backend=llm_backend, tts_backend=tts_backend,
         hub=hub, audio_server=audio_server,
         runs_store=runs_store, run_events=run_events,
+        prompt_store=prompt_store,
     )
 
     zc = zeroconf.Zeroconf()
@@ -268,6 +279,7 @@ async def main() -> None:
             runs_store=runs_store,
             tool_sources=hub.describe,
             run_events=run_events,
+            prompt_store=prompt_store,
         )
         # Back-ref so the Reconfigurator can re-point the panel's runs-store at a
         # hot-swapped store. Set before the reconfig loop can run.
@@ -307,6 +319,7 @@ async def main() -> None:
         await deps.http_local.aclose()
         if runs_store is not None:
             runs_store.close()
+        prompt_store.close()
         if rt.reminders_store is not None:
             rt.reminders_store.close()
         zc.close()

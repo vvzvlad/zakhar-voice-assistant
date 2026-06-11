@@ -28,6 +28,7 @@ from src.llm_text import clean_llm_output
 from src.pipeline_events import StageEvent
 from src.plugins.llm.base import LlmConfig
 from src.plugins.vad.webrtc import WebRtcVadBackend
+from src.prompt_store import PromptStore
 from src.runs_store import _LIST_COLS
 from src.runtime import Runtime
 from src.stage_errors import StageError
@@ -134,9 +135,11 @@ def make_pipeline(tmp_path, monkeypatch, name="dev", stt_text="распозна�
     # announce channel that the filler tests inspect; default it OFF here so existing
     # tests see only the announcements they assert on, and let ack tests opt in (ack=True).
     # The pipeline now assembles the system prompt itself (build_system_prompt in
-    # _run does file IO), so point it at a tmp prompt file to keep tests hermetic.
+    # _run reads the active PromptStore profile), so seed a tmp store from a tmp
+    # legacy prompt file to keep tests hermetic.
     prompt_path = tmp_path / "system_prompt.md"
     prompt_path.write_text("PROMPT BODY <<<<<TDW>>>>>", encoding="utf-8")
+    prompt_store = PromptStore(str(tmp_path / "prompts.db"), seed_path=str(prompt_path))
     core = CoreConfig(
         audio=AudioConfig(public_base_url=PUBLIC_BASE_URL),
         context=ContextConfig(),
@@ -157,6 +160,7 @@ def make_pipeline(tmp_path, monkeypatch, name="dev", stt_text="распозна�
         audio_server=audio_server,
         runs_store=runs_store,
         run_events=run_events,
+        prompt_store=prompt_store,
     )
     pipeline = Pipeline(name, rt)
     events = []
@@ -2630,7 +2634,7 @@ async def test_llm_reply_reaches_tts_verbatim(tmp_path, monkeypatch):
 
 async def test_llm_request_carries_assembled_prompt_and_device(tmp_path, monkeypatch):
     # The orchestrator assembles the system prompt (build_system_prompt over the
-    # configured prompt file) and names the originating device on the LlmRequest.
+    # active PromptStore profile) and names the originating device on the LlmRequest.
     # Catches: an empty/missing system prompt silently stripping the assistant of
     # all of its instructions.
     seen = []  # the LlmRequest of each respond() call

@@ -19,7 +19,7 @@ configured under `core.mcp_servers` in `data/config.json`.
   `reconfig.action_for` classifies each changed path and the `Reconfigurator` hot-reconfigures
   the running process (backends/tools/audio/devices/reminders) without a restart.
 - `tests/` — pytest
-- `data/` — runtime state: `config.json`, per-device context files, cached prompt (gitignored, docker volume)
+- `data/` — runtime state: `config.json`, per-device context files, `prompts.db` (SQLite store of named system-prompt profiles; seeded once from the legacy `system_prompt.md`) (gitignored, docker volume)
 - `templates/` — committed reference assets seeded into `data/` on first boot (`default_prompt.md`, `default_config.json`)
 - `main.py` — thin entry point over `src/`
 

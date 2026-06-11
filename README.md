@@ -54,7 +54,8 @@ Shape (see `templates/default_config.json` for the full default):
   `openweathermap` (api_key / city), `mcp_servers` (list of
   `{name, url, token, transport, prompt, slow}` — marking a server `slow` makes the
   assistant speak a short filler line before calling its tools),
-  `calendar` (url / username / password / calendar), `esphome.port`, `prompt.system_prompt_path`,
+  `calendar` (url / username / password / calendar), `esphome.port`, `prompt.system_prompt_path`
+  (legacy seed only — prompts now live as named profiles in `data/prompts.db`),
   `runs` (enabled / retention_days),
   `reminders` (enabled), `devices` (list of `{name, host, psk}`), `tts_timeout`, `log_level`.
 
@@ -68,7 +69,7 @@ gitignored, so `config.json` and its keys never get committed.
 | `Makefile` | Single entry point for repeated actions: `install`, `test`, `run`. Run `make help`. |
 | `src/` | Application code. Config core: `config_store.py` + `config_service.py`; providers under `src/plugins/`. |
 | `tests/` | pytest suite (runs in CI before the image is built). |
-| `data/` | Runtime state: `config.json`, per-device context, cached prompt. Gitignored, mounted as a volume. |
+| `data/` | Runtime state: `config.json`, per-device context, `prompts.db` (named system-prompt profiles). Gitignored, mounted as a volume. |
 | `templates/` | Committed reference assets (`default_prompt.md`, `default_config.json`) seeded into `data/` on first boot. |
 | `Dockerfile` | Slim single-stage build; deps cached before code; no `EXPOSE`. |
 | `docker-compose.yml` | Deploy template — image from `ghcr.io`, volume, audio port published to LAN, watchtower label. |

@@ -19,6 +19,7 @@ from aiohttp.test_utils import TestClient, TestServer
 from src.config_service import ConfigService
 from src.panel_api import PanelServer
 from src.plugins.base import Deps
+from src.prompt_store import PromptStore
 from src.run_events import RunEventsHub
 from src.runs_store import RunsStore
 
@@ -56,6 +57,14 @@ async def _client(tmp_path, **kw):
     client = TestClient(TestServer(srv.build_app()))
     await client.start_server()
     return client, svc
+
+
+def _prompt_store(tmp_path, text="seed prompt"):
+    """A PromptStore on tmp_path seeded from a legacy file holding `text`, so the
+    'default' profile's text matches what _svc's config used to point at."""
+    seed = tmp_path / "system_prompt.md"
+    seed.write_text(text, encoding="utf-8")
+    return PromptStore(str(tmp_path / "prompts.db"), seed_path=str(seed))
 
 
 async def test_get_catalog(tmp_path):
@@ -252,40 +261,50 @@ async def test_options_unknown_plugin_returns_404(tmp_path):
 
 
 async def test_prompt_round_trip(tmp_path):
-    client, svc = await _client(tmp_path)
+    # Back-compat endpoints: GET /api/prompt returns the ACTIVE profile
+    # {"id","name","text"} (no "path" anymore); PUT updates its text.
+    store = _prompt_store(tmp_path)
+    client, _svc_ = await _client(tmp_path, prompt_store=store)
     try:
         resp = await client.get("/api/prompt")
         assert resp.status == 200
         body = await resp.json()
         assert body["text"] == "seed prompt"
-        assert body["path"] == svc.core.prompt.system_prompt_path
+        assert body["name"] == "default"
+        assert isinstance(body["id"], int)
+        assert "path" not in body
 
         put = await client.put("/api/prompt", json={"text": "updated prompt"})
         assert put.status == 200
         assert (await put.json()) == {"ok": True}
 
-        # Re-read reflects the new text.
+        # Re-read reflects the new text, and the store agrees.
         again = await (await client.get("/api/prompt")).json()
         assert again["text"] == "updated prompt"
+        assert store.active_text() == "updated prompt"
     finally:
         await client.close()
+        store.close()
 
 
 async def test_put_prompt_non_object_returns_400(tmp_path):
-    client, svc = await _client(tmp_path)
+    store = _prompt_store(tmp_path)
+    client, _svc_ = await _client(tmp_path, prompt_store=store)
     try:
         resp = await client.put("/api/prompt", json="x")
         assert resp.status == 400
         assert "error" in await resp.json()
-        # The prompt on disk was NOT clobbered.
+        # The stored prompt was NOT clobbered.
         again = await (await client.get("/api/prompt")).json()
         assert again["text"] == "seed prompt"
     finally:
         await client.close()
+        store.close()
 
 
 async def test_put_prompt_missing_text_returns_400(tmp_path):
-    client, _svc_ = await _client(tmp_path)
+    store = _prompt_store(tmp_path)
+    client, _svc_ = await _client(tmp_path, prompt_store=store)
     try:
         resp = await client.put("/api/prompt", json={})
         assert resp.status == 400
@@ -294,6 +313,189 @@ async def test_put_prompt_missing_text_returns_400(tmp_path):
         assert again["text"] == "seed prompt"
     finally:
         await client.close()
+        store.close()
+
+
+# --- prompt profiles (CRUD + activate) -----------------------------------------
+
+async def test_prompt_endpoints_without_store_return_503(tmp_path):
+    # No prompt_store wired -> every /api/prompt* endpoint returns 503, like the
+    # other optional subsystems.
+    client, _svc_ = await _client(tmp_path)
+    try:
+        assert (await client.get("/api/prompt")).status == 503
+        assert (await client.put("/api/prompt", json={"text": "x"})).status == 503
+        assert (await client.get("/api/prompt/profiles")).status == 503
+        assert (await client.post("/api/prompt/profiles", json={"name": "x"})).status == 503
+        assert (await client.get("/api/prompt/profiles/1")).status == 503
+        assert (await client.put("/api/prompt/profiles/1", json={"text": "x"})).status == 503
+        assert (await client.delete("/api/prompt/profiles/1")).status == 503
+        assert (await client.post("/api/prompt/profiles/1/activate")).status == 503
+    finally:
+        await client.close()
+
+
+async def test_prompt_profiles_list(tmp_path):
+    store = _prompt_store(tmp_path)
+    client, _svc_ = await _client(tmp_path, prompt_store=store)
+    try:
+        resp = await client.get("/api/prompt/profiles")
+        assert resp.status == 200
+        body = await resp.json()
+        assert [p["name"] for p in body["profiles"]] == ["default"]
+        prof = body["profiles"][0]
+        assert prof["is_active"] is True
+        assert prof["chars"] == len("seed prompt")
+        assert "text" not in prof  # summaries never carry the full text
+        assert body["active_id"] == prof["id"]
+    finally:
+        await client.close()
+        store.close()
+
+
+async def test_prompt_profile_create_with_text_and_get(tmp_path):
+    store = _prompt_store(tmp_path)
+    client, _svc_ = await _client(tmp_path, prompt_store=store)
+    try:
+        resp = await client.post("/api/prompt/profiles",
+                                 json={"name": "work", "text": "work prompt"})
+        assert resp.status == 200
+        created = await resp.json()
+        assert created["name"] == "work"
+        assert created["text"] == "work prompt"
+        assert created["is_active"] is False
+
+        got = await client.get(f"/api/prompt/profiles/{created['id']}")
+        assert got.status == 200
+        assert (await got.json()) == created
+    finally:
+        await client.close()
+        store.close()
+
+
+async def test_prompt_profile_create_without_text_copies_active(tmp_path):
+    # Omitting "text" duplicates the CURRENT ACTIVE profile's text.
+    store = _prompt_store(tmp_path)
+    client, _svc_ = await _client(tmp_path, prompt_store=store)
+    try:
+        resp = await client.post("/api/prompt/profiles", json={"name": "copy"})
+        assert resp.status == 200
+        created = await resp.json()
+        assert created["text"] == "seed prompt"
+    finally:
+        await client.close()
+        store.close()
+
+
+async def test_prompt_profile_create_validation_and_duplicate(tmp_path):
+    store = _prompt_store(tmp_path)
+    client, _svc_ = await _client(tmp_path, prompt_store=store)
+    try:
+        # Bad bodies: missing/empty/non-string name, non-string text, non-object.
+        for body in ({}, {"name": ""}, {"name": "  "}, {"name": 5},
+                     {"name": "x", "text": 5}):
+            resp = await client.post("/api/prompt/profiles", json=body)
+            assert resp.status == 400, body
+        assert (await client.post("/api/prompt/profiles", json=[1])).status == 400
+
+        # Duplicate name -> 409 with an error message.
+        dup = await client.post("/api/prompt/profiles", json={"name": "default"})
+        assert dup.status == 409
+        assert "error" in await dup.json()
+    finally:
+        await client.close()
+        store.close()
+
+
+async def test_prompt_profile_update_rename_and_text(tmp_path):
+    store = _prompt_store(tmp_path)
+    client, _svc_ = await _client(tmp_path, prompt_store=store)
+    try:
+        created = await (await client.post(
+            "/api/prompt/profiles", json={"name": "work", "text": "v1"})).json()
+        pid = created["id"]
+
+        resp = await client.put(f"/api/prompt/profiles/{pid}",
+                                json={"name": "job", "text": "v2"})
+        assert resp.status == 200
+        body = await resp.json()
+        assert body["name"] == "job" and body["text"] == "v2"
+
+        # 400: empty body / wrong types; 404 unknown id; 409 duplicate name.
+        assert (await client.put(f"/api/prompt/profiles/{pid}", json={})).status == 400
+        assert (await client.put(f"/api/prompt/profiles/{pid}",
+                                 json={"name": ""})).status == 400
+        assert (await client.put(f"/api/prompt/profiles/{pid}",
+                                 json={"text": 5})).status == 400
+        assert (await client.put("/api/prompt/profiles/9999",
+                                 json={"text": "x"})).status == 404
+        assert (await client.put(f"/api/prompt/profiles/{pid}",
+                                 json={"name": "default"})).status == 409
+    finally:
+        await client.close()
+        store.close()
+
+
+async def test_prompt_profile_delete(tmp_path):
+    store = _prompt_store(tmp_path)
+    client, _svc_ = await _client(tmp_path, prompt_store=store)
+    try:
+        created = await (await client.post(
+            "/api/prompt/profiles", json={"name": "tmp"})).json()
+        resp = await client.delete(f"/api/prompt/profiles/{created['id']}")
+        assert resp.status == 200
+        assert (await resp.json()) == {"ok": True}
+
+        # Already gone -> 404; the ACTIVE profile is refused -> 409.
+        assert (await client.delete(f"/api/prompt/profiles/{created['id']}")).status == 404
+        active = await (await client.get("/api/prompt")).json()
+        refused = await client.delete(f"/api/prompt/profiles/{active['id']}")
+        assert refused.status == 409
+        assert "active" in (await refused.json())["error"]
+    finally:
+        await client.close()
+        store.close()
+
+
+async def test_prompt_profile_activate_switches_what_get_prompt_returns(tmp_path):
+    store = _prompt_store(tmp_path)
+    client, _svc_ = await _client(tmp_path, prompt_store=store)
+    try:
+        created = await (await client.post(
+            "/api/prompt/profiles", json={"name": "work", "text": "WORK"})).json()
+        pid = created["id"]
+
+        resp = await client.post(f"/api/prompt/profiles/{pid}/activate")
+        assert resp.status == 200
+        assert (await resp.json()) == {"ok": True, "active_id": pid}
+
+        # The list reflects the switch and GET /api/prompt now serves the new text.
+        listing = await (await client.get("/api/prompt/profiles")).json()
+        assert listing["active_id"] == pid
+        assert sum(1 for p in listing["profiles"] if p["is_active"]) == 1
+        active = await (await client.get("/api/prompt")).json()
+        assert active["id"] == pid and active["text"] == "WORK"
+
+        # Unknown id -> 404.
+        assert (await client.post("/api/prompt/profiles/9999/activate")).status == 404
+    finally:
+        await client.close()
+        store.close()
+
+
+async def test_prompt_profile_non_numeric_id_returns_400(tmp_path):
+    # Non-numeric {id} segments are rejected with 400 "invalid id" consistently.
+    store = _prompt_store(tmp_path)
+    client, _svc_ = await _client(tmp_path, prompt_store=store)
+    try:
+        assert (await client.get("/api/prompt/profiles/abc")).status == 400
+        assert (await client.put("/api/prompt/profiles/abc",
+                                 json={"text": "x"})).status == 400
+        assert (await client.delete("/api/prompt/profiles/abc")).status == 400
+        assert (await client.post("/api/prompt/profiles/abc/activate")).status == 400
+    finally:
+        await client.close()
+        store.close()
 
 
 async def test_cors_header_present_on_error_response(tmp_path):

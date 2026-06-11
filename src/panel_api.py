@@ -2,8 +2,8 @@
 
 Runs in a TRUSTED zone — there is NO authentication. The panel is driven entirely
 by ConfigService, so it carries no provider-specific knowledge: it exposes the
-catalog, the raw config document, generic patch/options endpoints, the system
-prompt file, system/version info and live device status.
+catalog, the raw config document, generic patch/options endpoints, the named
+system-prompt profiles, system/version info and live device status.
 
 Start/stop mirror AudioServer (AppRunner + TCPSite). CORS is restricted to the
 hardcoded `_ALLOWED_ORIGINS` allowlist (empty — see below); it never reflects a
@@ -30,11 +30,10 @@ from pydantic import ValidationError
 from src import config_store
 from src.capture_jobs import CaptureJobManager
 from src.pipeline import CAPTURE_MAX_SECONDS, CaptureBusyError
-from src.prompt import load_system_prompt, save_system_prompt
 from src.runs_store import db_file_size
 
 # HTTP methods the API exposes (used by the CORS preflight headers).
-_ALLOW_METHODS = "GET, POST, PATCH, PUT, OPTIONS"
+_ALLOW_METHODS = "GET, POST, PATCH, PUT, DELETE, OPTIONS"
 
 # Browser origins allowed cross-origin access to the (unauthenticated) panel API.
 # Hardcoded empty: there is no cross-origin reflection. The prod frontend is
@@ -150,7 +149,8 @@ class PanelServer:
                  device_status=None, device_capture=None, device_play=None,
                  device_controls_get=None, device_controls_set=None,
                  static_dir=None, runs_store=None, tool_sources=None,
-                 run_events=None, heartbeat_interval: float = 1.0):
+                 run_events=None, prompt_store=None,
+                 heartbeat_interval: float = 1.0):
         # svc: ConfigService; started_at: float (time.time())
         # device_status: optional callable -> list[dict]; static_dir: optional path to built frontend
         # device_capture: optional async callable (device_name, seconds) -> bytes that records a
@@ -161,6 +161,8 @@ class PanelServer:
         # runs_store: optional RunsStore for the observability endpoints (None -> empty/zeros)
         # tool_sources: optional zero-arg callable -> list[dict] (ToolHub.describe()), None -> []
         # run_events: optional RunEventsHub for the live WS run stream (None -> WS closes)
+        # prompt_store: optional PromptStore (named system-prompt profiles); None ->
+        #   every /api/prompt* endpoint returns 503
         self.svc = svc
         self.host = host
         self.port = port
@@ -187,6 +189,7 @@ class PanelServer:
         self.runs_store = runs_store
         self.tool_sources = tool_sources
         self.run_events = run_events
+        self.prompt_store = prompt_store
         # Period (seconds) of the WS system heartbeat used as the panel liveness signal.
         self.heartbeat_interval = heartbeat_interval
         self._heartbeat_task = None
@@ -277,20 +280,150 @@ class PanelServer:
             return web.json_response({"error": str(e)}, status=404)
         return web.json_response(result)
 
+    # --- system prompt (named profiles over PromptStore) ----------------------
+    def _profile_id(self, request: web.Request) -> int | None:
+        """Parse the {id} match-info segment as int; None on a non-numeric id."""
+        try:
+            return int(request.match_info["id"])
+        except (TypeError, ValueError):
+            return None
+
     async def _get_prompt(self, request: web.Request) -> web.Response:
-        path = self.svc.core.prompt.system_prompt_path
-        return web.json_response({"path": path, "text": load_system_prompt(path)})
+        """Back-compat: the ACTIVE profile as {"id", "name", "text"}."""
+        if self.prompt_store is None:
+            return web.json_response({"error": "prompt store not available"}, status=503)
+        active = await asyncio.to_thread(self.prompt_store.active)
+        if active is None:
+            return web.json_response({"error": "no active profile"}, status=404)
+        return web.json_response(
+            {"id": active["id"], "name": active["name"], "text": active["text"]}
+        )
 
     async def _put_prompt(self, request: web.Request) -> web.Response:
+        """Back-compat: {"text"} updates the ACTIVE profile's text."""
+        if self.prompt_store is None:
+            return web.json_response({"error": "prompt store not available"}, status=503)
         body = await _read_json(request)
         if not isinstance(body, dict) or not isinstance(body.get("text"), str):
             return web.json_response(
                 {"error": 'field "text" (string) is required'}, status=400
             )
-        text = body["text"]
-        path = self.svc.core.prompt.system_prompt_path
-        save_system_prompt(path, text)
+        active = await asyncio.to_thread(self.prompt_store.active)
+        if active is None:
+            return web.json_response({"error": "no active profile"}, status=404)
+        await asyncio.to_thread(
+            self.prompt_store.update, active["id"], text=body["text"]
+        )
         return web.json_response({"ok": True})
+
+    async def _get_prompt_profiles(self, request: web.Request) -> web.Response:
+        """All profiles (summaries, no text) plus the active profile's id."""
+        if self.prompt_store is None:
+            return web.json_response({"error": "prompt store not available"}, status=503)
+        profiles = await asyncio.to_thread(self.prompt_store.list_profiles)
+        active_id = next((p["id"] for p in profiles if p["is_active"]), None)
+        return web.json_response({"profiles": profiles, "active_id": active_id})
+
+    async def _post_prompt_profile(self, request: web.Request) -> web.Response:
+        """Create a profile. Body: {name, text?}; a missing/None text copies the
+        CURRENT ACTIVE profile's text (duplicate-friendly default)."""
+        if self.prompt_store is None:
+            return web.json_response({"error": "prompt store not available"}, status=503)
+        body = await _read_json(request)
+        if not isinstance(body, dict):
+            return web.json_response({"error": "body must be a JSON object"}, status=400)
+        name = body.get("name")
+        if not isinstance(name, str) or not name.strip():
+            return web.json_response(
+                {"error": 'field "name" (non-empty string) is required'}, status=400
+            )
+        text = body.get("text")
+        if text is not None and not isinstance(text, str):
+            return web.json_response(
+                {"error": 'field "text" must be a string'}, status=400
+            )
+        if text is None:
+            active = await asyncio.to_thread(self.prompt_store.active)
+            text = active["text"] if active is not None else ""
+        try:
+            profile = await asyncio.to_thread(self.prompt_store.create, name.strip(), text)
+        except ValueError as e:  # duplicate name
+            return web.json_response({"error": str(e)}, status=409)
+        return web.json_response(profile)
+
+    async def _get_prompt_profile(self, request: web.Request) -> web.Response:
+        """Full profile (incl. text) by id."""
+        if self.prompt_store is None:
+            return web.json_response({"error": "prompt store not available"}, status=503)
+        pid = self._profile_id(request)
+        if pid is None:
+            return web.json_response({"error": "invalid id"}, status=400)
+        profile = await asyncio.to_thread(self.prompt_store.get, pid)
+        if profile is None:
+            return web.json_response({"error": "not found"}, status=404)
+        return web.json_response(profile)
+
+    async def _put_prompt_profile(self, request: web.Request) -> web.Response:
+        """Partial update. Body: {name?, text?} — at least one is required."""
+        if self.prompt_store is None:
+            return web.json_response({"error": "prompt store not available"}, status=503)
+        pid = self._profile_id(request)
+        if pid is None:
+            return web.json_response({"error": "invalid id"}, status=400)
+        body = await _read_json(request)
+        if not isinstance(body, dict):
+            return web.json_response({"error": "body must be a JSON object"}, status=400)
+        name = body.get("name")
+        text = body.get("text")
+        if name is None and text is None:
+            return web.json_response(
+                {"error": 'at least one of "name" / "text" is required'}, status=400
+            )
+        if name is not None and (not isinstance(name, str) or not name.strip()):
+            return web.json_response(
+                {"error": 'field "name" must be a non-empty string'}, status=400
+            )
+        if text is not None and not isinstance(text, str):
+            return web.json_response(
+                {"error": 'field "text" must be a string'}, status=400
+            )
+        try:
+            profile = await asyncio.to_thread(
+                self.prompt_store.update, pid,
+                name=name.strip() if name is not None else None, text=text,
+            )
+        except ValueError as e:  # duplicate name
+            return web.json_response({"error": str(e)}, status=409)
+        if profile is None:
+            return web.json_response({"error": "not found"}, status=404)
+        return web.json_response(profile)
+
+    async def _delete_prompt_profile(self, request: web.Request) -> web.Response:
+        """Delete a profile; the active one is refused (409)."""
+        if self.prompt_store is None:
+            return web.json_response({"error": "prompt store not available"}, status=503)
+        pid = self._profile_id(request)
+        if pid is None:
+            return web.json_response({"error": "invalid id"}, status=400)
+        try:
+            existed = await asyncio.to_thread(self.prompt_store.delete, pid)
+        except ValueError as e:  # the active profile
+            return web.json_response({"error": str(e)}, status=409)
+        if not existed:
+            return web.json_response({"error": "not found"}, status=404)
+        return web.json_response({"ok": True})
+
+    async def _activate_prompt_profile(self, request: web.Request) -> web.Response:
+        """Make one profile the active one (what the pipeline uses from now on)."""
+        if self.prompt_store is None:
+            return web.json_response({"error": "prompt store not available"}, status=503)
+        pid = self._profile_id(request)
+        if pid is None:
+            return web.json_response({"error": "invalid id"}, status=400)
+        ok = await asyncio.to_thread(self.prompt_store.activate, pid)
+        if not ok:
+            return web.json_response({"error": "not found"}, status=404)
+        return web.json_response({"ok": True, "active_id": pid})
 
     def _system_snapshot(self) -> dict:
         # Lightweight system/liveness payload shared by /api/system and the WS
@@ -574,6 +707,12 @@ class PanelServer:
             web.post("/api/chimes/play", self._post_play_chime),
             web.get("/api/prompt", self._get_prompt),
             web.put("/api/prompt", self._put_prompt),
+            web.get("/api/prompt/profiles", self._get_prompt_profiles),
+            web.post("/api/prompt/profiles", self._post_prompt_profile),
+            web.get("/api/prompt/profiles/{id}", self._get_prompt_profile),
+            web.put("/api/prompt/profiles/{id}", self._put_prompt_profile),
+            web.delete("/api/prompt/profiles/{id}", self._delete_prompt_profile),
+            web.post("/api/prompt/profiles/{id}/activate", self._activate_prompt_profile),
             web.get("/api/system", self._get_system),
             web.get("/api/devices", self._get_devices),
             web.get("/api/device/controls", self._get_device_controls),

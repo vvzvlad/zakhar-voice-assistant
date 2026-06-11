@@ -187,6 +187,10 @@ class Pipeline:
         return self.rt.runs_store
 
     @property
+    def prompt_store(self):
+        return self.rt.prompt_store
+
+    @property
     def run_events(self):
         return self.rt.run_events
 
@@ -735,11 +739,11 @@ class Pipeline:
                     llm_failed = False
                     try:
                         # The orchestrator prepares the stage input: the assembled
-                        # system prompt (file IO; same blocking profile as before,
-                        # when it ran inside the LLM stage on the event loop) plus
-                        # history/user text/device. The stage is constructed per run
-                        # so a hot-swapped backend/config applies naturally.
-                        system_prompt = build_system_prompt(self.core)
+                        # system prompt (a SQLite read of the active profile; same
+                        # blocking profile as the old file IO) plus history/user
+                        # text/device. The stage is constructed per run so a
+                        # hot-swapped backend/config applies naturally.
+                        system_prompt = build_system_prompt(self.core, self.prompt_store)
                         stage = llm.LlmStage(self.llm_backend, self.hub, self.llm_cfg)
                         result = await stage.respond(
                             llm.LlmRequest(
