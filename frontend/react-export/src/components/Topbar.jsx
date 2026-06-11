@@ -5,7 +5,11 @@ import { fmtUptime } from "../format.js";
 
 export function Topbar({ active }) {
   const { system, connected } = useAppData();
-  const grp = NAV.find((g) => g.items.some(([i]) => i === active));
+  // Match both top-level item ids and nested children ids so nested
+  // sections (e.g. mcp/prompt under llm) keep their group breadcrumb.
+  const grp = NAV.find((g) =>
+    g.items.some(([i, , kids]) => i === active || (kids || []).some(([ci]) => ci === active)),
+  );
 
   return <div className="z-top">
     <div className="z-bcrumb"><s>{grp ? grp.grp + " / " : ""}</s>{TITLES[active] || active}</div>

@@ -298,7 +298,7 @@ export function Prompt() {
   if (text == null) return <div className="z-page"><div className="z-card"><Loading /></div></div>;
 
   return <div className="z-page">
-    <PageHeader title="System prompt" crumb="Integrations"
+    <PageHeader title="System prompt" crumb="Pipeline"
       desc="Zahar's character, rules and answer format. The placeholder is replaced with live date/time at request time."
       actions={<>
         <button className="z-btn g" onClick={load}>Reload</button>

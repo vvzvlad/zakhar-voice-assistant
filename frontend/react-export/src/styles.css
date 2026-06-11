@@ -39,6 +39,7 @@ button{font-family:inherit;}
 .z-navi.on svg{color:var(--acc);}
 .z-navi.on .badge{background:#d3ece9;color:var(--acc-ink);}
 .z-navi .dot{margin-left:auto;width:7px;height:7px;border-radius:50%;}
+.z-navi.sub{margin-left:14px;padding-left:12px;border-left:1px solid var(--line2);border-radius:0 7px 7px 0;}
 .z-side-foot{border-top:1px solid var(--line);padding:11px 14px;display:flex;align-items:center;gap:9px;font-size:11px;color:var(--mut);}
 .z-pulse{width:7px;height:7px;border-radius:50%;background:var(--good);box-shadow:0 0 0 3px rgba(22,163,74,.18);flex:0 0 auto;}
 .z-pulse.off{background:var(--bad);box-shadow:0 0 0 3px rgba(220,38,38,.18);}
