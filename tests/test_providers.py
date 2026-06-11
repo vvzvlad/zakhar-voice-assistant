@@ -11,7 +11,10 @@ from src.plugins.llm._openai_compat import OpenAICompatLlmBackend
 from src.plugins.llm.base import LlmConfig
 from src.plugins.llm.groq import GROQ_API_URL, GROQ_MODELS_URL, GroqLlmConfig
 from src.plugins.llm.openrouter import OPENROUTER_API_URL, OPENROUTER_MODELS_URL
+from src.plugins.stt import groq as stt_groq_mod
+from src.plugins.stt import openrouter as stt_openrouter_mod
 from src.plugins.stt.groq import GroqSttConfig
+from src.plugins.stt.openrouter import OPENROUTER_STT_MODELS_URL, OpenRouterSttConfig
 from src.plugins.stt.vosk import VoskSttConfig
 from src.plugins.tts.piper import PiperConfig
 from src.plugins.tts.teratts import TeraTtsConfig
@@ -219,6 +222,137 @@ async def test_groq_options_model_cache_is_keyed_by_api_key(_reset_model_caches)
         assert route.call_count == 1
         # A different key must NOT be served the list fetched with the old key.
         await prov.options("model", GroqLlmConfig(api_key="gsk-2"), deps)
+        assert route.call_count == 2
+        assert route.calls.last.request.headers["Authorization"] == "Bearer gsk-2"
+
+
+# --- STT model-list options() (network-backed, TTL-cached) -------------------
+
+@pytest.fixture
+def _reset_stt_model_caches():
+    """STT model lists are TTL-cached at module level (own caches, never shared
+    with the LLM providers); reset before AND after each test so order never matters."""
+    def reset():
+        stt_openrouter_mod._models_cache.update({"at": 0.0, "data": None})
+        stt_groq_mod._models_cache.update({"at": 0.0, "api_key": None, "data": None})
+    reset()
+    yield
+    reset()
+
+
+def test_stt_model_field_schema_is_dynamic_freeform_select():
+    # Both STT configs carry the shared MODEL_FIELD_EXTRA annotation on `model`.
+    for model_cls in (GroqSttConfig, OpenRouterSttConfig):
+        prop = model_cls.model_json_schema()["properties"]["model"]
+        assert prop["widget"] == "select"
+        assert prop["options"] == "dynamic"
+        assert prop["freeform"] is True
+
+
+def test_stt_options_unknown_field_returns_none():
+    deps = _deps()
+    assert get_provider("stt", "openrouter").options("nope", OpenRouterSttConfig(), deps) is None
+    assert get_provider("stt", "groq").options("nope", GroqSttConfig(), deps) is None
+
+
+@respx.mock
+async def test_openrouter_stt_options_model_returns_sorted_value_label_list(_reset_stt_model_caches):
+    respx.get(OPENROUTER_STT_MODELS_URL).mock(return_value=httpx.Response(200, json={"data": [
+        {"id": "z/whisper-z", "name": "Zeta Whisper"},
+        {"id": "a/whisper-a", "name": "alpha Whisper"},
+        {"id": "m/whisper-m"},  # no "name" -> id doubles as the label
+    ]}))
+    prov = get_provider("stt", "openrouter")
+    deps = _deps()
+    async with deps.http_cloud:
+        out = await prov.options("model", OpenRouterSttConfig(), deps)
+    # Sorted case-insensitively by label.
+    assert out == [
+        {"value": "a/whisper-a", "label": "alpha Whisper"},
+        {"value": "m/whisper-m", "label": "m/whisper-m"},
+        {"value": "z/whisper-z", "label": "Zeta Whisper"},
+    ]
+
+
+@respx.mock
+async def test_openrouter_stt_options_model_cache_hit_skips_second_fetch(_reset_stt_model_caches):
+    route = respx.get(OPENROUTER_STT_MODELS_URL).mock(
+        return_value=httpx.Response(200, json={"data": [{"id": "a/x", "name": "X"}]})
+    )
+    prov = get_provider("stt", "openrouter")
+    deps = _deps()
+    async with deps.http_cloud:
+        first = await prov.options("model", OpenRouterSttConfig(), deps)
+        second = await prov.options("model", OpenRouterSttConfig(), deps)
+    assert first == second == [{"value": "a/x", "label": "X"}]
+    assert route.call_count == 1
+
+
+@respx.mock
+async def test_openrouter_stt_options_model_failure_is_not_cached(_reset_stt_model_caches):
+    route = respx.get(OPENROUTER_STT_MODELS_URL)
+    route.side_effect = [
+        httpx.Response(500),
+        httpx.Response(200, json={"data": [{"id": "a/x", "name": "X"}]}),
+    ]
+    prov = get_provider("stt", "openrouter")
+    deps = _deps()
+    async with deps.http_cloud:
+        with pytest.raises(httpx.HTTPStatusError):
+            await prov.options("model", OpenRouterSttConfig(), deps)
+        # The failed attempt left no cache entry; the retry refetches and succeeds.
+        out = await prov.options("model", OpenRouterSttConfig(), deps)
+    assert out == [{"value": "a/x", "label": "X"}]
+    assert route.call_count == 2
+
+
+@respx.mock
+async def test_groq_stt_options_model_empty_api_key_returns_empty_without_request(_reset_stt_model_caches):
+    route = respx.get(stt_groq_mod.GROQ_MODELS_URL).mock(
+        return_value=httpx.Response(200, json={"data": []})
+    )
+    prov = get_provider("stt", "groq")
+    deps = _deps()
+    async with deps.http_cloud:
+        out = await prov.options("model", GroqSttConfig(), deps)
+    assert out == []
+    assert route.call_count == 0  # the endpoint requires auth; no request was made
+
+
+@respx.mock
+async def test_groq_stt_options_model_filters_to_whisper_sorted(_reset_stt_model_caches):
+    # Groq serves LLMs and whisper models in one list; only whisper ids
+    # (case-insensitive substring) are valid for the transcriptions endpoint.
+    route = respx.get(stt_groq_mod.GROQ_MODELS_URL).mock(return_value=httpx.Response(200, json={
+        "object": "list",
+        "data": [
+            {"id": "llama-3.3-70b-versatile"},
+            {"id": "whisper-large-v3-turbo"},
+            {"id": "Whisper-large-v3"},
+            {"id": "gemma2-9b-it"},
+        ],
+    }))
+    prov = get_provider("stt", "groq")
+    deps = _deps()
+    async with deps.http_cloud:
+        out = await prov.options("model", GroqSttConfig(api_key="gsk-1"), deps)
+    assert out == ["Whisper-large-v3", "whisper-large-v3-turbo"]  # whisper only, ci-sorted
+    assert route.calls.last.request.headers["Authorization"] == "Bearer gsk-1"
+
+
+@respx.mock
+async def test_groq_stt_options_model_cache_is_keyed_by_api_key(_reset_stt_model_caches):
+    route = respx.get(stt_groq_mod.GROQ_MODELS_URL).mock(
+        return_value=httpx.Response(200, json={"data": [{"id": "whisper-1"}]})
+    )
+    prov = get_provider("stt", "groq")
+    deps = _deps()
+    async with deps.http_cloud:
+        await prov.options("model", GroqSttConfig(api_key="gsk-1"), deps)
+        await prov.options("model", GroqSttConfig(api_key="gsk-1"), deps)  # cache hit
+        assert route.call_count == 1
+        # A different key must NOT be served the list fetched with the old key.
+        await prov.options("model", GroqSttConfig(api_key="gsk-2"), deps)
         assert route.call_count == 2
         assert route.calls.last.request.headers["Authorization"] == "Bearer gsk-2"
 
