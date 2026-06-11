@@ -2,7 +2,7 @@
 // so it is exercised through the exported `getCatalog` GET wrapper; `getRuns` is
 // tested directly for its query-string builder. global.fetch is stubbed per test.
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { ApiError, getCatalog, getRuns } from "../api.js";
+import { ApiError, getCatalog, getRuns, runAudioUrl } from "../api.js";
 
 // Build a minimal Response-like stub for the request() body-reading path.
 function mockResponse({ ok = true, status = 200, text = "" }) {
@@ -106,5 +106,16 @@ describe("getRuns query builder", () => {
     await getRuns({ search: "a & b" });
     // '&' -> %26, space -> '+'.
     expect(urls[0]).toBe("/api/runs?search=a+%26+b");
+  });
+});
+
+describe("runAudioUrl", () => {
+  it("builds the plain audio URL without a channel (the Download path)", () => {
+    expect(runAudioUrl(7)).toBe("/api/runs/7/audio");
+  });
+
+  it("appends ?channel= for the per-channel players", () => {
+    expect(runAudioUrl(7, "stt")).toBe("/api/runs/7/audio?channel=stt");
+    expect(runAudioUrl(7, "raw")).toBe("/api/runs/7/audio?channel=raw");
   });
 });

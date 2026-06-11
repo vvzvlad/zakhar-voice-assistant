@@ -145,8 +145,10 @@ class RunsConfig(BaseModel):
     # to skip recording entirely; retention_days=0 keeps rows forever.
     enabled: bool = True
     retention_days: int = Field(30, ge=0)
-    # Rolling window of recent utterance audio (the exact PCM sent to STT), kept in
-    # runs.db so operators can download/play it from the log to diagnose mis-triggers.
+    # Rolling window of recent utterance audio, kept in runs.db so operators can
+    # download/play it from the log to diagnose mis-triggers. Stereo when the device
+    # streams both mic channels: left = the pipeline/STT channel exactly as STT
+    # received it, right = the other raw mic channel; mono when only one stream is sent.
     store_audio: bool = True
     audio_keep: int = Field(
         100, ge=1,

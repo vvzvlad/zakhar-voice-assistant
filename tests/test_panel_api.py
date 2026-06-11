@@ -306,17 +306,26 @@ async def test_get_devices_default_empty(tmp_path):
         await client.close()
 
 
-def _wav_bytes(pcm=b"\x01\x02" * 16):
-    """Build a tiny valid 16k/mono/16-bit WAV for the capture-download assertions."""
+def _wav_bytes(pcm=b"\x01\x02" * 16, channels=1):
+    """Build a tiny valid 16k/16-bit WAV (mono by default) for audio assertions."""
     import io
     import wave
     buf = io.BytesIO()
     with wave.open(buf, "wb") as w:
-        w.setnchannels(1)
+        w.setnchannels(channels)
         w.setsampwidth(2)
         w.setframerate(16000)
         w.writeframes(pcm)
     return buf.getvalue()
+
+
+def _wav_params_and_pcm(body):
+    """Parse WAV bytes -> ((nchannels, sampwidth, framerate), raw PCM frames)."""
+    import io
+    import wave
+    with wave.open(io.BytesIO(body)) as w:
+        return (w.getnchannels(), w.getsampwidth(), w.getframerate()), \
+            w.readframes(w.getnframes())
 
 
 async def _poll_state(client, device, want, *, tries=200):
@@ -692,6 +701,82 @@ async def test_get_run_audio_returns_wav_inline(tmp_path):
             'inline; filename="zakhar_run_1.wav"'
         body = await resp.read()
         assert body == wav
+    finally:
+        await client.close()
+        store.close()
+
+
+async def test_get_run_audio_channel_split_on_stereo(tmp_path):
+    # A stored stereo WAV: ?channel=stt serves channel 0 (left) and ?channel=raw
+    # channel 1 (right), each as a standalone mono WAV; no param stays the
+    # byte-identical full stereo file (the Download path).
+    store = _seed_runs(tmp_path)
+    left = b"\x01\x00" * 16   # int16 samples 1
+    right = b"\x02\x00" * 16  # int16 samples 2
+    interleaved = b"".join(left[i:i + 2] + right[i:i + 2] for i in range(0, len(left), 2))
+    stereo = _wav_bytes(pcm=interleaved, channels=2)
+    store.put_audio(1, stereo, keep=100)
+    client, _svc_ = await _client(tmp_path, runs_store=store)
+    try:
+        # Left = STT channel.
+        resp = await client.get("/api/runs/1/audio", params={"channel": "stt"})
+        assert resp.status == 200
+        assert resp.headers["Content-Type"] == "audio/wav"
+        assert resp.headers["Content-Disposition"] == \
+            'inline; filename="zakhar_run_1_stt.wav"'
+        params, pcm = _wav_params_and_pcm(await resp.read())
+        assert params == (1, 2, 16000)
+        assert pcm == left
+
+        # Right = raw channel.
+        resp = await client.get("/api/runs/1/audio", params={"channel": "raw"})
+        assert resp.status == 200
+        assert resp.headers["Content-Disposition"] == \
+            'inline; filename="zakhar_run_1_raw.wav"'
+        params, pcm = _wav_params_and_pcm(await resp.read())
+        assert params == (1, 2, 16000)
+        assert pcm == right
+
+        # No param -> the exact stored stereo bytes.
+        resp = await client.get("/api/runs/1/audio")
+        assert resp.status == 200
+        assert await resp.read() == stereo
+
+        # Run detail exposes the channel count for the panel.
+        detail = await (await client.get("/api/runs/1")).json()
+        assert detail["audio_channels"] == 2
+    finally:
+        await client.close()
+        store.close()
+
+
+async def test_get_run_audio_channel_on_mono_and_bad_channel(tmp_path):
+    # On a MONO stored WAV ?channel=raw is a 404 (no such channel) while the
+    # detail payload reports audio_channels == 1; an unknown channel name is a
+    # 400; a run without audio reports audio_channels None.
+    store = _seed_runs(tmp_path)
+    mono = _wav_bytes()
+    store.put_audio(1, mono, keep=100)
+    client, _svc_ = await _client(tmp_path, runs_store=store)
+    try:
+        resp = await client.get("/api/runs/1/audio", params={"channel": "raw"})
+        assert resp.status == 404
+        assert (await resp.json()) == {"error": "channel not available"}
+
+        # channel=stt on mono serves the original mono bytes.
+        resp = await client.get("/api/runs/1/audio", params={"channel": "stt"})
+        assert resp.status == 200
+        assert await resp.read() == mono
+
+        resp = await client.get("/api/runs/1/audio", params={"channel": "bogus"})
+        assert resp.status == 400
+        assert (await resp.json()) == {"error": 'channel must be "stt" or "raw"'}
+
+        detail = await (await client.get("/api/runs/1")).json()
+        assert detail["audio_channels"] == 1
+        # Run 2 has no stored audio -> null channel count.
+        detail2 = await (await client.get("/api/runs/2")).json()
+        assert detail2["audio_channels"] is None
     finally:
         await client.close()
         store.close()

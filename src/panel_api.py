@@ -14,10 +14,13 @@ same-origin and the dev Vite server proxies /api, so neither needs CORS.
 
 import asyncio
 import contextlib
+import io
 import os
 import time
+import wave
 from datetime import datetime, timezone
 
+import numpy as np
 from aiohttp import web
 from loguru import logger
 from pydantic import ValidationError
@@ -97,6 +100,38 @@ def _make_cors_middleware(allowed_origins):
             _add_cors(ex, request, allowed_origins)
             raise
     return _cors_middleware
+
+
+def _extract_wav_channel(wav: bytes, idx: int) -> bytes | None:
+    """Extract one channel of a 16-bit PCM WAV as a standalone mono WAV.
+
+    Returns the original bytes unchanged when the file is already mono and
+    channel 0 is requested; None when the requested channel does not exist or
+    the input is not a parseable WAV. Used by the run-audio endpoint to serve
+    the STT (left) and raw (right) channels of a stored stereo utterance.
+    """
+    try:
+        with wave.open(io.BytesIO(wav)) as src:
+            nch = src.getnchannels()
+            if idx >= nch:
+                return None  # no such channel
+            if nch == 1:
+                return wav  # already mono, serve as is
+            framerate = src.getframerate()
+            frames = src.readframes(src.getnframes())
+    except (wave.Error, EOFError):
+        return None
+    # Deinterleave: int16 samples are laid out [ch0, ch1, ...] per frame. Trim a
+    # trailing partial frame so the reshape is always valid.
+    usable = len(frames) - len(frames) % (2 * nch)
+    mono = np.frombuffer(frames[:usable], dtype="<i2").reshape(-1, nch)[:, idx]
+    out = io.BytesIO()
+    with wave.open(out, "wb") as dst:
+        dst.setnchannels(1)
+        dst.setsampwidth(2)
+        dst.setframerate(framerate)
+        dst.writeframes(mono.tobytes())
+    return out.getvalue()
 
 
 async def _read_json(request: web.Request):
@@ -442,17 +477,34 @@ class PanelServer:
         return web.json_response(run)
 
     async def _get_run_audio(self, request: web.Request) -> web.Response:
-        """Serve the stored utterance WAV for one run (inline, playable/downloadable)."""
+        """Serve the stored utterance WAV for one run (inline, playable/downloadable).
+
+        Without a `channel` query param the original stored file is served as is
+        (mono or stereo — this is what Download uses). `channel=stt` extracts
+        channel 0 (left, what STT received) and `channel=raw` channel 1 (right,
+        the other mic channel) as standalone mono WAVs, split on the fly.
+        """
         if self.runs_store is None:
             return web.json_response({"error": "not found"}, status=404)
         try:
             run_id = int(request.match_info["id"])
         except (TypeError, ValueError):
             return web.json_response({"error": "invalid id"}, status=400)
+        channel = request.query.get("channel")
+        if channel:
+            idx = {"stt": 0, "raw": 1}.get(channel)
+            if idx is None:
+                return web.json_response(
+                    {"error": 'channel must be "stt" or "raw"'}, status=400)
         wav = await asyncio.to_thread(self.runs_store.get_audio, run_id)
         if wav is None:
             return web.json_response({"error": "not found"}, status=404)
         filename = f"zakhar_run_{run_id}.wav"
+        if channel:
+            wav = await asyncio.to_thread(_extract_wav_channel, wav, idx)
+            if wav is None:
+                return web.json_response({"error": "channel not available"}, status=404)
+            filename = f"zakhar_run_{run_id}_{channel}.wav"
         return web.Response(
             body=wav,
             content_type="audio/wav",

@@ -127,18 +127,34 @@ def _write_wav(path: str, pcm: bytes) -> None:
         w.writeframes(pcm)
 
 
-def _pcm_to_wav_bytes(pcm: bytes) -> bytes:
-    """Build a 16 kHz / mono / 16-bit WAV container from PCM, fully in memory.
+def _pcm_to_wav_bytes(pcm: bytes, pcm2: bytes = b"") -> bytes:
+    """Build a 16 kHz / 16-bit WAV container from PCM, fully in memory.
 
-    Used by the manual (ephemeral) capture path: the bytes are handed straight
-    back to the API caller, so nothing is ever written to disk.
+    With only `pcm`, builds a mono WAV — used by the manual (ephemeral) capture
+    path, where the bytes are handed straight back to the API caller. With a
+    non-empty `pcm2`, builds a STEREO WAV for the stored per-run diagnostic
+    audio: LEFT = `pcm` (the pipeline/STT channel, exactly what STT received),
+    RIGHT = `pcm2` (the other raw mic channel, for channel comparison). The
+    shorter channel is zero-padded to the longer one; a trailing odd byte is
+    dropped (acceptable for diagnostic audio).
     """
     buf = io.BytesIO()
     with wave.open(buf, "wb") as w:
-        w.setnchannels(1)
         w.setsampwidth(2)
         w.setframerate(SAMPLE_RATE)
-        w.writeframes(pcm)
+        if not pcm2:
+            w.setnchannels(1)
+            w.writeframes(pcm)
+        else:
+            left = np.frombuffer(pcm[: len(pcm) - len(pcm) % 2], dtype="<i2")
+            right = np.frombuffer(pcm2[: len(pcm2) - len(pcm2) % 2], dtype="<i2")
+            n = max(left.size, right.size)
+            if left.size < n:
+                left = np.pad(left, (0, n - left.size))
+            if right.size < n:
+                right = np.pad(right, (0, n - right.size))
+            w.setnchannels(2)
+            w.writeframes(np.column_stack([left, right]).astype("<i2").tobytes())
     return buf.getvalue()
 
 
@@ -288,6 +304,9 @@ class Pipeline:
         # per request (no frozen copies), so reconfiguration takes effect live.
         self.rt = runtime
         self._buffer = bytearray()
+        # The other (non-selected) mic channel, buffered only for the stored
+        # stereo diagnostic WAV — never fed to VAD/STT.
+        self._buffer2 = bytearray()
         self._lock = asyncio.Lock()
         self._conversation_id = ""
 
@@ -501,6 +520,7 @@ class Pipeline:
             self._vad_aggressiveness = aggr
         self._conversation_id = conversation_id or ""
         self._buffer.clear()
+        self._buffer2.clear()
         self._frame_rem.clear()
         self._speech_ms = 0
         self._silence_ms = 0
@@ -569,6 +589,9 @@ class Pipeline:
         peak-normalization conditioning (`core.vad.mic_highpass` / `mic_normalize`) is
         applied LATER, once to the WHOLE utterance, in `_run` before STT — never per
         chunk (per-chunk normalization would destroy dynamics and amplify silence).
+        The NON-selected channel is buffered separately (`_buffer2`) only so the
+        stored diagnostic WAV can carry both channels in stereo — it never reaches
+        VAD or STT.
 
         The speaker streams continuously and never signals end-of-speech, so we
         detect it here: VAD over the PCM finalizes the utterance once speech is
@@ -588,15 +611,18 @@ class Pipeline:
         # and warn once per run. Read live off self.core, so panel changes take effect
         # on the next utterance. Any high-pass / normalize conditioning happens later,
         # once on the whole utterance in _run (never per chunk).
+        other = None  # the non-selected channel, kept only for the stored diagnostic WAV
         if self.core.vad.mic_channel == 1:
             if data2:
-                data = data2
+                data, other = data2, data
             elif not self._mic_fallback_logged:
                 self._mic_fallback_logged = True
                 logger.debug(
                     f"{self.name}: mic_channel=1 but device sent no second channel; "
                     f"using channel 0"
                 )
+        else:
+            other = data2  # may be None when the device streams a single channel
 
         # Manual capture-only mode: accumulate PCM, run NO VAD/STT/LLM/TTS. End on the
         # device stop (on_stop) or when the server-side deadline (seconds + margin) is
@@ -625,6 +651,13 @@ class Pipeline:
         # The full utterance audio (everything streamed, silence included) is what
         # we send to STT.
         self._buffer.extend(data)
+        if other:
+            self._buffer2.extend(other)
+        elif self._buffer2:
+            # Keep channels time-aligned if the second stream drops out mid-run.
+            self._buffer2.extend(b"\x00" * len(data))
+        if len(self._buffer2) >= HARD_CAP_BYTES:
+            del self._buffer2[HARD_CAP_BYTES:]
         reason = None
         if len(self._buffer) >= HARD_CAP_BYTES:
             del self._buffer[HARD_CAP_BYTES:]
@@ -692,24 +725,29 @@ class Pipeline:
         # _claim() is synchronous and happens-before any await, so it's atomic
         # relative to other eager on_audio tasks — no audio loss, no double finalize.
         if reason is not None:
-            pcm = self._claim()
-            if pcm is not None:
+            claimed = self._claim()
+            if claimed is not None:
                 # Snapshot the conversation id synchronously with the claim so a
                 # re-triggered wake word can't relabel this run's events.
-                await self._run(reason, pcm, self._conversation_id)
+                await self._run(reason, claimed[0], self._conversation_id, pcm2=claimed[1])
 
-    def _claim(self) -> bytes | None:
+    def _claim(self) -> tuple[bytes, bytes] | None:
         """Atomically claim this run for finalization and snapshot the audio.
 
         Runs with no await, so concurrent eager on_audio tasks can't double-claim
-        or lose audio. Returns the PCM to process, or None if already finalized.
+        or lose audio. Returns (pcm, pcm2) — the selected-channel PCM to process
+        and the other-channel PCM kept for the stored stereo diagnostic WAV
+        (empty when the device streamed a single channel) — or None if already
+        finalized.
         """
         if self._finalized:
             return None
         self._finalized = True
         pcm = bytes(self._buffer)
+        pcm2 = bytes(self._buffer2)
         self._buffer.clear()
-        return pcm
+        self._buffer2.clear()
+        return pcm, pcm2
 
     def _emit_live(self, record) -> None:
         """Schedule a best-effort broadcast of the current in-progress run snapshot.
@@ -743,7 +781,7 @@ class Pipeline:
 
         self._live_send_tail = asyncio.create_task(_send())
 
-    async def _run(self, reason, pcm, conversation_id) -> None:
+    async def _run(self, reason, pcm, conversation_id, pcm2: bytes = b"") -> None:
         """Run STT -> LLM -> TTS -> events on the already-claimed audio, once.
 
         The caller claims the run via _claim() (which sets _finalized, snapshots
@@ -800,6 +838,10 @@ class Pipeline:
                             f"(~{trim_ms} ms) off sample start"
                         )
                     pcm = trimmed
+                    # Trim the other (non-selected) channel by the same amount so
+                    # the two channels of the stored stereo WAV stay time-aligned.
+                    if pcm2:
+                        pcm2 = _trim_start_pcm(pcm2, trim_ms)
 
                 # Optional pre-STT conditioning of the FULL utterance (read live off
                 # core.vad, so the toggles hot-apply). High-pass first to strip
@@ -807,6 +849,8 @@ class Pipeline:
                 # reaches a consistent level without clipping. Applied ONCE to the whole
                 # sample (never per chunk), so the capture WAV, the stored diagnostic
                 # audio and STT all get the exact audio Whisper sees.
+                # `pcm2` (the other channel) is deliberately kept raw here, so the
+                # stored stereo WAV allows comparing conditioned vs raw channels.
                 if self.core.vad.mic_highpass:
                     pcm = _highpass(pcm)
                 if self.core.vad.mic_normalize:
@@ -1045,17 +1089,19 @@ class Pipeline:
                         except Exception as e:
                             logger.error(f"{self.name}: run record failed: {e}")
                         else:
-                            # Store the finalized utterance audio (the captured sample after
-                            # the core.vad.trim_start_ms lead-in trim — exactly what STT
-                            # received) in a rolling window of the last runs.audio_keep, so
-                            # it can be downloaded/played from the log to diagnose
-                            # mis-triggers (e.g. a wake-word tail reaching STT). Best-effort:
-                            # a storage failure must never break the run or swallow the
-                            # broadcast.
+                            # Store the finalized utterance audio in a rolling window of
+                            # the last runs.audio_keep, so it can be downloaded/played from
+                            # the log to diagnose mis-triggers (e.g. a wake-word tail
+                            # reaching STT). When the device streamed both mic channels the
+                            # WAV is STEREO: left = the pipeline/STT channel (trimmed +
+                            # conditioned — exactly what STT received), right = the other
+                            # raw channel (same trim, no conditioning); mono when the
+                            # device streams a single channel. Best-effort: a storage
+                            # failure must never break the run or swallow the broadcast.
                             stored_audio = False
                             if self.core.runs.store_audio and pcm:
                                 try:
-                                    wav = _pcm_to_wav_bytes(pcm)
+                                    wav = _pcm_to_wav_bytes(pcm, pcm2)
                                     await asyncio.to_thread(
                                         self.runs_store.put_audio,
                                         run_id, wav, self.core.runs.audio_keep,
@@ -1176,9 +1222,11 @@ class Pipeline:
         empty WAV). Always emits RUN_END so the device returns to idle, and clears
         the per-run capture flag.
         """
-        pcm = self._claim()
-        if pcm is None:
+        claimed = self._claim()
+        if claimed is None:
             return  # Already finalized by a concurrent path.
+        # Manual capture stays MONO: the second channel is discarded.
+        pcm = claimed[0]
         self._capture_run = False
         logger.info(
             f"{self.name}: ⏺️ capture ended ({len(pcm)} bytes, "
@@ -1210,6 +1258,6 @@ class Pipeline:
         if self._capture_run:
             await self._finish_capture("device_stop")
             return
-        pcm = self._claim()
-        if pcm is not None:
-            await self._run("device_stop", pcm, self._conversation_id)
+        claimed = self._claim()
+        if claimed is not None:
+            await self._run("device_stop", claimed[0], self._conversation_id, pcm2=claimed[1])

@@ -136,6 +136,22 @@ class RunsStore:
             ).fetchone()
         return bytes(row["wav"]) if row is not None else None
 
+    def audio_channels(self, run_id: int) -> int | None:
+        """Channel count of the stored WAV for one run, or None when not stored.
+
+        Reads only the first bytes of the blob (SQLite substr is 1-based and works
+        on BLOBs) and parses the RIFF header, so the whole WAV is never loaded.
+        Used by the panel to decide whether to render per-channel players.
+        """
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT substr(wav, 1, 64) AS head FROM run_audio WHERE run_id = ?",
+                (run_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return _wav_channels(bytes(row["head"]))
+
     def db_size_bytes(self) -> int:
         """On-disk size of this store's SQLite file (+ WAL/SHM sidecars), in bytes."""
         return db_file_size(self._path)
@@ -205,6 +221,10 @@ class RunsStore:
             rec["request"] = json.loads(raw_req) if raw_req else None
         except (ValueError, json.JSONDecodeError):
             rec["request"] = None
+        # Channel count of the stored utterance WAV (panel renders per-channel
+        # players for stereo). Called OUTSIDE the lock block above: audio_channels
+        # re-acquires self._lock itself and the lock is not reentrant.
+        rec["audio_channels"] = self.audio_channels(run_id) if rec.get("has_audio") else None
         return rec
 
     def metrics(self, *, now: float) -> dict:
@@ -263,6 +283,30 @@ class RunsStore:
         # _rebuild_runs disables runs while a concurrent DB op is still running.
         with self._lock:
             self._conn.close()
+
+
+def _wav_channels(header: bytes) -> int | None:
+    """Channel count parsed from a WAV header prefix, or None when malformed.
+
+    `header` is only the first bytes of the file (a prefix), not the whole WAV.
+    Walks the RIFF chunk list looking for the "fmt " chunk instead of assuming a
+    fixed layout, so files with extra chunks before "fmt " still parse as long as
+    the chunk fits into the prefix.
+    """
+    if len(header) < 12 or header[0:4] != b"RIFF" or header[8:12] != b"WAVE":
+        return None
+    pos = 12
+    # Each chunk: 4-byte id + 4-byte LE size + payload.
+    while pos + 8 <= len(header):
+        chunk_id = header[pos:pos + 4]
+        size = int.from_bytes(header[pos + 4:pos + 8], "little")
+        if chunk_id == b"fmt ":
+            # Channel count is the LE uint16 at payload offset 2.
+            if pos + 8 + 4 > len(header):
+                return None  # fmt chunk truncated by the prefix
+            return int.from_bytes(header[pos + 10:pos + 12], "little")
+        pos += 8 + size + (size & 1)  # chunks are word-aligned
+    return None
 
 
 def db_file_size(path: str) -> int:

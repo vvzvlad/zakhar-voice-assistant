@@ -1,14 +1,27 @@
 """Unit tests for the SQLite run log (src.runs_store.RunsStore)."""
 
 import asyncio
+import io
 import sqlite3
 import time
+import wave
 
-from src.runs_store import RunsStore, _LIST_COLS, live_row, summary_row
+from src.runs_store import RunsStore, _LIST_COLS, _wav_channels, live_row, summary_row
 
 
 def _store(tmp_path):
     return RunsStore(str(tmp_path / "runs.db"))
+
+
+def _wav(channels=1, pcm=b"\x01\x02" * 32):
+    """Build a tiny valid 16k/16-bit WAV with the given channel count."""
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(channels)
+        w.setsampwidth(2)
+        w.setframerate(16000)
+        w.writeframes(pcm)
+    return buf.getvalue()
 
 
 def _rec(**kw):
@@ -452,6 +465,46 @@ def test_get_includes_has_audio(tmp_path):
     assert store.get(with_audio)["has_audio"] == 1
     assert store.get(without_audio)["has_audio"] == 0
     store.close()
+
+
+def test_audio_channels_counts_from_header(tmp_path):
+    # audio_channels reads only the blob's header prefix: 2 for a stored stereo
+    # WAV, 1 for mono, None when the run has no audio row.
+    store = _store(tmp_path)
+    stereo = store.insert(_rec())
+    mono = store.insert(_rec())
+    none = store.insert(_rec())
+    store.put_audio(stereo, _wav(channels=2), keep=100)
+    store.put_audio(mono, _wav(channels=1), keep=100)
+
+    assert store.audio_channels(stereo) == 2
+    assert store.audio_channels(mono) == 1
+    assert store.audio_channels(none) is None
+    store.close()
+
+
+def test_get_includes_audio_channels(tmp_path):
+    # get() exposes the channel count on the detail payload; None without audio.
+    store = _store(tmp_path)
+    stereo = store.insert(_rec())
+    without = store.insert(_rec())
+    store.put_audio(stereo, _wav(channels=2), keep=100)
+
+    assert store.get(stereo)["audio_channels"] == 2
+    assert store.get(without)["audio_channels"] is None
+    store.close()
+
+
+def test_wav_channels_malformed_input_returns_none():
+    # Not a RIFF/WAVE header, truncated input, or no fmt chunk in the prefix.
+    assert _wav_channels(b"") is None
+    assert _wav_channels(b"RIFF") is None
+    assert _wav_channels(b"RIFF\x00\x00\x00\x00JUNK" + b"\x00" * 32) is None
+    assert _wav_channels(b"not-a-wav-at-all-just-some-bytes") is None
+    # Valid prelude but the fmt chunk never appears within the prefix.
+    assert _wav_channels(b"RIFF\x00\x00\x00\x00WAVE" + b"LIST\xff\xff\x00\x00") is None
+    # Sanity: a real header parses (channel count lives in the fmt chunk).
+    assert _wav_channels(_wav(channels=2)[:64]) == 2
 
 
 def test_prune_deletes_orphaned_audio(tmp_path):

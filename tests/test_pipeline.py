@@ -1,3 +1,6 @@
+import io
+import wave
+
 import numpy as np
 import pytest
 from aioesphomeapi import VoiceAssistantEventType as VAET
@@ -2107,3 +2110,107 @@ async def test_mic_channel1_falls_back_to_first_when_no_second_stream(tmp_path, 
     await pipeline.on_start("cid", 0, None, None)
     await pipeline.on_audio(b"\x22\x22", None)  # device sent only one channel
     assert bytes(pipeline._buffer) == b"\x22\x22"
+
+
+# --- stereo diagnostic WAV (stored run audio carries both mic channels) ---
+
+def _parse_wav(data):
+    with wave.open(io.BytesIO(data)) as w:
+        return w.getnchannels(), w.getnframes(), w.readframes(w.getnframes())
+
+
+def test_pcm_to_wav_bytes_mono_without_second_channel():
+    # No second arg -> the WAV stays mono, exactly as before (manual capture path).
+    pcm = np.array([1, -2, 3, -4], dtype="<i2").tobytes()
+    nch, nframes, frames = _parse_wav(_pcm_to_wav_bytes(pcm))
+    assert nch == 1
+    assert nframes == 4
+    assert frames == pcm
+
+
+def test_pcm_to_wav_bytes_stereo_interleaves_channels():
+    # Equal-length channels -> 2-channel WAV with left == pcm, right == pcm2.
+    left = np.array([100, -200, 300, -400], dtype="<i2")
+    right = np.array([5, -6, 7, -8], dtype="<i2")
+    nch, nframes, frames = _parse_wav(_pcm_to_wav_bytes(left.tobytes(), right.tobytes()))
+    assert nch == 2
+    assert nframes == 4
+    samples = np.frombuffer(frames, dtype="<i2").reshape(-1, 2)
+    assert (samples[:, 0] == left).all()
+    assert (samples[:, 1] == right).all()
+
+
+def test_pcm_to_wav_bytes_stereo_pads_shorter_channel():
+    # Unequal lengths -> the shorter channel is zero-padded; the frame count
+    # matches the LONGER channel's sample count.
+    left = np.array([1, 2, 3, 4], dtype="<i2")
+    right = np.array([9, 8], dtype="<i2")
+    nch, nframes, frames = _parse_wav(_pcm_to_wav_bytes(left.tobytes(), right.tobytes()))
+    assert nch == 2
+    assert nframes == 4
+    samples = np.frombuffer(frames, dtype="<i2").reshape(-1, 2)
+    assert (samples[:, 0] == left).all()
+    assert (samples[:, 1] == [9, 8, 0, 0]).all()
+
+
+async def test_on_audio_buffers_other_channel_for_mic_channel0(tmp_path, monkeypatch):
+    # With mic_channel=0 the pipeline buffer gets ch0 and the diagnostic buffer ch1.
+    pipeline, _ = make_pipeline(tmp_path, monkeypatch)  # default channel 0
+    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_audio(b"\x22\x22", b"\x11\x11")
+    assert bytes(pipeline._buffer) == b"\x22\x22"
+    assert bytes(pipeline._buffer2) == b"\x11\x11"
+
+
+async def test_on_audio_buffers_other_channel_for_mic_channel1(tmp_path, monkeypatch):
+    # With mic_channel=1 the channels swap: buffer gets ch1, the diagnostic buffer ch0.
+    pipeline, _ = make_pipeline(tmp_path, monkeypatch)
+    pipeline.core.vad.mic_channel = 1
+    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_audio(b"\x22\x22", b"\x11\x11")
+    assert bytes(pipeline._buffer) == b"\x11\x11"
+    assert bytes(pipeline._buffer2) == b"\x22\x22"
+
+
+async def test_on_audio_no_second_stream_leaves_buffer2_empty(tmp_path, monkeypatch):
+    pipeline, _ = make_pipeline(tmp_path, monkeypatch)
+    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_audio(b"\x22\x22", None)
+    assert bytes(pipeline._buffer) == b"\x22\x22"
+    assert bytes(pipeline._buffer2) == b""
+
+
+async def test_stored_run_audio_is_stereo_when_second_channel_streamed(tmp_path, monkeypatch):
+    # An end-to-end run with both mic streams stores a STEREO diagnostic WAV:
+    # left = the selected (STT) channel, right = the other raw channel.
+    patch_llm(monkeypatch, reply="готово")
+    store = FakeRunsStore()
+    pipeline, _ = make_pipeline(tmp_path, monkeypatch, stt_text="включи свет", runs_store=store)
+
+    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_audio(b"\x01\x02" * 100, b"\x03\x04" * 100)
+    await pipeline.on_stop(False)
+
+    assert len(store.audio_calls) == 1
+    nch, nframes, frames = _parse_wav(store.audio_calls[0][1])
+    assert nch == 2
+    assert nframes == 100
+    samples = np.frombuffer(frames, dtype="<i2").reshape(-1, 2)
+    assert samples[:, 0].tobytes() == b"\x01\x02" * 100  # left: what STT received
+    assert samples[:, 1].tobytes() == b"\x03\x04" * 100  # right: the other raw channel
+
+
+async def test_stored_run_audio_stays_mono_without_second_channel(tmp_path, monkeypatch):
+    patch_llm(monkeypatch, reply="готово")
+    store = FakeRunsStore()
+    pipeline, _ = make_pipeline(tmp_path, monkeypatch, stt_text="включи свет", runs_store=store)
+
+    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_audio(b"\x01\x02" * 100)
+    await pipeline.on_stop(False)
+
+    assert len(store.audio_calls) == 1
+    nch, nframes, frames = _parse_wav(store.audio_calls[0][1])
+    assert nch == 1
+    assert nframes == 100
+    assert frames == b"\x01\x02" * 100

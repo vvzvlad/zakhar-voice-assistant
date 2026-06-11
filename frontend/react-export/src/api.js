@@ -139,8 +139,10 @@ export const getRuns = (params = {}) => {
 export const getRun = (id) => request(`/api/runs/${encodeURIComponent(id)}`);
 
 // Absolute URL of a run's stored utterance WAV (for an <audio> src). BASE is "" in
-// prod (same origin) or an absolute base in dev.
-export const runAudioUrl = (id) => `${BASE}/api/runs/${encodeURIComponent(id)}/audio`;
+// prod (same origin) or an absolute base in dev. Optional channel ("stt" | "raw")
+// asks the backend to split that channel out of a stereo recording as mono.
+export const runAudioUrl = (id, channel) =>
+  `${BASE}/api/runs/${encodeURIComponent(id)}/audio${channel ? `?channel=${encodeURIComponent(channel)}` : ""}`;
 
 // Fetch a run's stored utterance WAV as a blob and trigger a browser download.
 export async function downloadRunAudio(id) {

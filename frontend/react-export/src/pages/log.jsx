@@ -107,10 +107,23 @@ function Drawer({ r, loading, error, onClose }) {
 
           {r.has_audio ? <>
             <div className="z-sl">Utterance audio</div>
-            <div className="z-card"><div style={{ padding: "12px 17px", display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-              <audio controls preload="none" src={runAudioUrl(r.id)} style={{ height: 34, flex: 1, minWidth: 220 }} />
-              <button className="z-btn" onClick={() => downloadRunAudio(r.id)}>Download WAV</button>
-            </div></div>
+            {r.audio_channels === 2
+              ? <div className="z-card"><div style={{ padding: "12px 17px", display: "flex", flexDirection: "column", gap: 10 }}>
+                  {/* Stereo recording: channel 0 (left) is what STT received, channel 1
+                      (right) is the other raw mic channel. Each player streams a mono
+                      WAV split server-side; Download keeps the full stereo file. */}
+                  {[["stt", "STT channel"], ["raw", "Raw channel"]].map(([ch, label]) => (
+                    <div key={ch} style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                      <b style={{ width: 90, flex: "none", color: "var(--mut)", fontWeight: 600, fontSize: 11, textTransform: "uppercase", letterSpacing: ".04em" }}>{label}</b>
+                      <audio controls preload="none" src={runAudioUrl(r.id, ch)} style={{ height: 34, flex: 1, minWidth: 220 }} />
+                    </div>
+                  ))}
+                  <div><button className="z-btn" onClick={() => downloadRunAudio(r.id)}>Download WAV</button></div>
+                </div></div>
+              : <div className="z-card"><div style={{ padding: "12px 17px", display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+                  <audio controls preload="none" src={runAudioUrl(r.id)} style={{ height: 34, flex: 1, minWidth: 220 }} />
+                  <button className="z-btn" onClick={() => downloadRunAudio(r.id)}>Download WAV</button>
+                </div></div>}
           </> : null}
 
           {((r.rounds && r.rounds.length > 0) || r.request) && <>
