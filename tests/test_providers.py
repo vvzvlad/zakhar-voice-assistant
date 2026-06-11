@@ -16,6 +16,8 @@ from src.plugins.stt import openrouter as stt_openrouter_mod
 from src.plugins.stt.groq import GroqSttConfig
 from src.plugins.stt.openrouter import OPENROUTER_STT_MODELS_URL, OpenRouterSttConfig
 from src.plugins.stt.vosk import VoskSttConfig
+from src.plugins.tts import fishaudio as fishaudio_mod
+from src.plugins.tts.fishaudio import FISH_MODELS_URL, FishAudioTtsConfig
 from src.plugins.tts.piper import PiperConfig
 from src.plugins.tts.teratts import TeraTtsConfig
 from src.plugins.tts.yandex import YandexTtsConfig
@@ -443,3 +445,210 @@ async def test_openai_compat_raises_on_non_2xx():
         )
         with pytest.raises(httpx.HTTPStatusError):
             await backend.complete([{"role": "user", "content": "hi"}], None)
+
+
+# --- TTS fishaudio: config, options() and the voice catalog ------------------
+
+@pytest.fixture
+def _reset_fishaudio_voices_cache():
+    """The voice catalog is TTL-cached at module level, keyed by api_key; clear
+    before AND after each test so test order never matters."""
+    fishaudio_mod._voices_cache.clear()
+    yield
+    fishaudio_mod._voices_cache.clear()
+
+
+def test_fishaudio_config_defaults():
+    cfg = FishAudioTtsConfig()
+    assert cfg.api_key == ""
+    assert cfg.reference_id == ""
+    assert cfg.model == "s2-pro"
+    assert cfg.speed == 1.0
+
+
+def test_fishaudio_speed_range_enforced():
+    FishAudioTtsConfig(speed=2.0)             # in range, OK
+    FishAudioTtsConfig(speed=0.5)             # in range, OK
+    with pytest.raises(ValidationError):
+        FishAudioTtsConfig(speed=2.1)         # > 2.0
+    with pytest.raises(ValidationError):
+        FishAudioTtsConfig(speed=0.4)         # < 0.5
+
+
+def test_fishaudio_options_model_returns_static_list():
+    prov = get_provider("tts", "fishaudio")
+    assert prov.options("model", FishAudioTtsConfig(), _deps()) == ["s1", "s2-pro"]
+
+
+def test_fishaudio_options_unknown_field_returns_none():
+    prov = get_provider("tts", "fishaudio")
+    assert prov.options("nope", FishAudioTtsConfig(), _deps()) is None
+
+
+def test_fishaudio_options_reference_id_empty_api_key_returns_empty_sync():
+    # The catalog requires auth: with no api_key the option list is [] and no
+    # coroutine (hence no network call) is produced.
+    prov = get_provider("tts", "fishaudio")
+    out = prov.options("reference_id", FishAudioTtsConfig(), _deps())
+    assert out == []
+
+
+@respx.mock
+async def test_fishaudio_options_reference_id_merges_own_and_popular_voices(
+        _reset_fishaudio_voices_cache):
+    import inspect
+
+    # Two GETs against the same catalog URL: own voices (self=true) first, then
+    # the popular list; the merge keeps own-first order and dedups by _id.
+    route = respx.get(FISH_MODELS_URL)
+    route.side_effect = [
+        httpx.Response(200, json={"total": 2, "items": [
+            {"_id": "own-1", "title": "My Voice", "languages": ["ru", "en"]},
+            {"_id": "own-2", "title": "", "languages": []},  # no title -> _id is the label
+        ]}),
+        httpx.Response(200, json={"total": 2, "items": [
+            {"_id": "own-1", "title": "My Voice", "languages": ["ru", "en"]},  # dup, dropped
+            {"_id": "pop-1", "title": "Popular Voice", "languages": ["en"]},
+        ]}),
+    ]
+    prov = get_provider("tts", "fishaudio")
+    deps = _deps()
+    async with deps.http_cloud:
+        coro = prov.options("reference_id", FishAudioTtsConfig(api_key="fk-1"), deps)
+        assert inspect.isawaitable(coro)  # options() stays sync, returns a coroutine
+        out = await coro
+    assert out == [
+        {"value": "own-1", "label": "My Voice [ru,en]"},
+        {"value": "own-2", "label": "own-2"},
+        {"value": "pop-1", "label": "Popular Voice [en]"},
+    ]
+    assert route.call_count == 2
+    first, second = route.calls[0].request, route.calls[1].request
+    assert first.headers["Authorization"] == "Bearer fk-1"
+    assert second.headers["Authorization"] == "Bearer fk-1"
+    assert first.url.params["self"] == "true"
+    assert second.url.params["sort_by"] == "task_count"
+
+
+@respx.mock
+async def test_fishaudio_options_reference_id_cache_is_keyed_by_api_key(
+        _reset_fishaudio_voices_cache):
+    route = respx.get(FISH_MODELS_URL).mock(
+        return_value=httpx.Response(200, json={"total": 1, "items": [
+            {"_id": "v1", "title": "V1", "languages": []},
+        ]}))
+    prov = get_provider("tts", "fishaudio")
+    deps = _deps()
+    async with deps.http_cloud:
+        await prov.options("reference_id", FishAudioTtsConfig(api_key="fk-1"), deps)
+        await prov.options("reference_id", FishAudioTtsConfig(api_key="fk-1"), deps)  # cache hit
+        assert route.call_count == 2  # two catalog GETs once, none on the cache hit
+        # A different key must NOT be served the list fetched with the old key.
+        await prov.options("reference_id", FishAudioTtsConfig(api_key="fk-2"), deps)
+        assert route.call_count == 4
+        assert route.calls.last.request.headers["Authorization"] == "Bearer fk-2"
+
+
+@respx.mock
+async def test_fishaudio_options_reference_id_failure_is_not_cached(
+        _reset_fishaudio_voices_cache):
+    route = respx.get(FISH_MODELS_URL)
+    route.side_effect = [
+        httpx.Response(500),  # own-voices request fails -> nothing cached
+        httpx.Response(200, json={"total": 1, "items": [{"_id": "v1", "title": "V1"}]}),
+        httpx.Response(200, json={"total": 0, "items": []}),
+    ]
+    prov = get_provider("tts", "fishaudio")
+    deps = _deps()
+    async with deps.http_cloud:
+        with pytest.raises(httpx.HTTPStatusError):
+            await prov.options("reference_id", FishAudioTtsConfig(api_key="fk-1"), deps)
+        # The failed attempt left no cache entry; the retry refetches and succeeds.
+        out = await prov.options("reference_id", FishAudioTtsConfig(api_key="fk-1"), deps)
+    assert out == [{"value": "v1", "label": "V1"}]
+    assert route.call_count == 3
+
+
+def test_fishaudio_create_returns_backend():
+    prov = get_provider("tts", "fishaudio")
+    backend = prov.create(FishAudioTtsConfig(api_key="k"), _deps())
+    assert backend.__class__.__name__ == "FishAudioTtsBackend"
+
+
+# --- TTS fishaudio: server-side voice search (query=...) ----------------------
+
+def test_fishaudio_reference_id_schema_carries_remote_search_flag():
+    # The frontend keys server-side search off this json_schema_extra flag.
+    props = FishAudioTtsConfig.model_json_schema()["properties"]
+    assert props["reference_id"]["search"] == "remote"
+
+
+@respx.mock
+async def test_fishaudio_options_reference_id_search_queries_catalog_by_title(
+        _reset_fishaudio_voices_cache):
+    import inspect
+
+    route = respx.get(FISH_MODELS_URL).mock(
+        return_value=httpx.Response(200, json={"total": 2, "items": [
+            {"_id": "s-1", "title": "Anna RU", "languages": ["ru"]},
+            {"_id": "s-2", "title": "", "languages": []},  # no title -> _id is the label
+        ]}))
+    prov = get_provider("tts", "fishaudio")
+    deps = _deps()
+    async with deps.http_cloud:
+        coro = prov.options("reference_id", FishAudioTtsConfig(api_key="fk-1"), deps, query="anna")
+        assert inspect.isawaitable(coro)  # options() stays sync, returns a coroutine
+        out = await coro
+    assert out == [
+        {"value": "s-1", "label": "Anna RU [ru]"},
+        {"value": "s-2", "label": "s-2"},
+    ]
+    # Exactly ONE catalog GET (no own/popular pair), filtered server-side.
+    assert route.call_count == 1
+    req = route.calls.last.request
+    assert req.headers["Authorization"] == "Bearer fk-1"
+    assert req.url.params["title"] == "anna"
+    assert req.url.params["page_size"] == "30"
+
+
+@respx.mock
+async def test_fishaudio_search_results_are_not_cached(_reset_fishaudio_voices_cache):
+    # User-triggered searches are never cached: the same query twice issues two
+    # HTTP requests.
+    route = respx.get(FISH_MODELS_URL).mock(
+        return_value=httpx.Response(200, json={"total": 1, "items": [
+            {"_id": "s-1", "title": "Anna RU", "languages": ["ru"]},
+        ]}))
+    prov = get_provider("tts", "fishaudio")
+    deps = _deps()
+    async with deps.http_cloud:
+        await prov.options("reference_id", FishAudioTtsConfig(api_key="fk-1"), deps, query="anna")
+        await prov.options("reference_id", FishAudioTtsConfig(api_key="fk-1"), deps, query="anna")
+    assert route.call_count == 2
+
+
+@respx.mock
+async def test_fishaudio_options_reference_id_empty_query_keeps_baseline_path(
+        _reset_fishaudio_voices_cache):
+    # An explicit empty query is the no-search baseline: the merged own+popular
+    # pair of requests, exactly as without the `query` argument.
+    route = respx.get(FISH_MODELS_URL)
+    route.side_effect = [
+        httpx.Response(200, json={"total": 1, "items": [
+            {"_id": "own-1", "title": "My Voice", "languages": ["ru"]},
+        ]}),
+        httpx.Response(200, json={"total": 1, "items": [
+            {"_id": "pop-1", "title": "Popular Voice", "languages": ["en"]},
+        ]}),
+    ]
+    prov = get_provider("tts", "fishaudio")
+    deps = _deps()
+    async with deps.http_cloud:
+        out = await prov.options("reference_id", FishAudioTtsConfig(api_key="fk-1"), deps, query="")
+    assert out == [
+        {"value": "own-1", "label": "My Voice [ru]"},
+        {"value": "pop-1", "label": "Popular Voice [en]"},
+    ]
+    assert route.call_count == 2
+    assert route.calls[0].request.url.params["self"] == "true"
+    assert route.calls[1].request.url.params["sort_by"] == "task_count"

@@ -228,6 +228,35 @@ async def test_get_options_upstream_http_error_returns_502(
         await client.close()
 
 
+@respx.mock
+async def test_get_options_passes_search_query_to_provider(tmp_path):
+    # The `q` query param must reach the provider as the server-side search
+    # string: fishaudio's remote-searchable reference_id turns it into a single
+    # title-filtered catalog GET.
+    from src.plugins.tts.fishaudio import FISH_MODELS_URL
+    route = respx.get(FISH_MODELS_URL).mock(
+        return_value=httpx.Response(200, json={"total": 1, "items": [
+            {"_id": "v1", "title": "Anna", "languages": ["ru"]},
+        ]}))
+    client, _svc_ = await _client(tmp_path)
+    try:
+        # Give fishaudio an api_key first — without it the catalog is never hit.
+        resp = await client.patch(
+            "/api/config",
+            json={"tts": {"instances": {"fishaudio": {"api_key": "fk-1"}}}})
+        assert resp.status == 200
+        resp = await client.get("/api/options",
+                                params={"category": "tts", "plugin": "fishaudio",
+                                        "field": "reference_id", "q": "anna"})
+        assert resp.status == 200
+        body = await resp.json()
+        assert body["options"] == [{"value": "v1", "label": "Anna [ru]"}]
+        assert route.call_count == 1
+        assert route.calls.last.request.url.params["title"] == "anna"
+    finally:
+        await client.close()
+
+
 async def test_options_unknown_field_returns_empty_list(tmp_path):
     client, _svc_ = await _client(tmp_path)
     try:

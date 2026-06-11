@@ -8,6 +8,7 @@ import respx
 from src.audio_codec import to_playable, wav_to_mp3
 from src.chime import build_ack_clip, make_ack_chime_mp3
 from src.plugins.tts._ru_text import expand_units, sanitize_plus_stress
+from src.plugins.tts.fishaudio import FISH_TTS_URL, FishAudioTtsBackend
 from src.plugins.tts.piper import PiperTtsBackend
 from src.plugins.tts.teratts import TeraTtsHttpBackend
 from src.plugins.tts.yandex import (
@@ -731,3 +732,103 @@ def test_decode_v3_audio_json_array_of_objects_accepted():
         {"result": {"audioChunk": {"data": base64.b64encode(b).decode()}}},
     ])
     assert _decode_v3_audio(body) == a + b
+
+
+# --- Fish Audio backend -------------------------------------------------------
+
+
+def test_fishaudio_backend_requires_api_key():
+    with pytest.raises(ValueError):
+        FishAudioTtsBackend(None, api_key="", reference_id="", model="s2-pro",
+                            speed=1.0, timeout=5)
+
+
+@respx.mock
+async def test_fishaudio_synthesize_posts_json_and_returns_audio():
+    import json
+
+    audio_bytes = b"\xff\xf3fish-mp3"
+    route = respx.post(FISH_TTS_URL).mock(
+        return_value=httpx.Response(200, content=audio_bytes,
+                                    headers={"Content-Type": "audio/mpeg"}))
+    async with httpx.AsyncClient() as client:
+        backend = FishAudioTtsBackend(client, api_key="k", reference_id="ref-1",
+                                      model="s2-pro", speed=1.2, timeout=10)
+        mime, audio = await backend.synthesize("привет", "ru")
+    assert mime == "audio/mpeg"
+    assert audio == audio_bytes
+    req = route.calls.last.request
+    # Auth is a Bearer key; the TTS model generation travels as a `model` header.
+    assert req.headers["Authorization"] == "Bearer k"
+    assert req.headers["model"] == "s2-pro"
+    sent = json.loads(req.content)
+    assert sent["text"] == "привет"
+    assert sent["format"] == "mp3"
+    assert sent["prosody"]["speed"] == 1.2
+    assert sent["reference_id"] == "ref-1"
+
+
+@respx.mock
+async def test_fishaudio_synthesize_omits_reference_id_when_empty():
+    import json
+
+    route = respx.post(FISH_TTS_URL).mock(
+        return_value=httpx.Response(200, content=b"\xff\xf3mp3"))
+    async with httpx.AsyncClient() as client:
+        backend = FishAudioTtsBackend(client, api_key="k", reference_id="",
+                                      model="s2-pro", speed=1.0, timeout=10)
+        await backend.synthesize("привет", "ru")
+    assert route.called
+    sent = json.loads(route.calls.last.request.content)
+    # Empty reference_id -> the field is omitted entirely (fish.audio then uses
+    # its default voice), not sent as "".
+    assert "reference_id" not in sent
+
+
+@respx.mock
+async def test_fishaudio_synthesize_adapts_text():
+    import json
+
+    # Fish Audio takes plain text: units expand and the "+vowel" stress markup
+    # is stripped entirely (a literal '+' could be voiced).
+    route = respx.post(FISH_TTS_URL).mock(
+        return_value=httpx.Response(200, content=b"\xff\xf3mp3"))
+    async with httpx.AsyncClient() as client:
+        backend = FishAudioTtsBackend(client, api_key="k", reference_id="",
+                                      model="s2-pro", speed=1.0, timeout=10)
+        await backend.synthesize("прив+ет, 25°С", "ru")
+    assert route.called
+    sent_text = json.loads(route.calls.last.request.content)["text"]
+    assert sent_text == "привет, 25градусов"
+    assert "+" not in sent_text
+    assert "привет" in sent_text          # stress markup stripped, plain vowel kept
+    assert "градусов" in sent_text        # "°С" expanded
+
+
+@respx.mock
+async def test_fishaudio_synthesize_unvoiceable_input_makes_no_request():
+    # Punctuation-only / empty input has nothing pronounceable: the backend must
+    # serve empty audio WITHOUT POSTing to Fish Audio.
+    route = respx.post(FISH_TTS_URL).mock(
+        return_value=httpx.Response(200, content=b"\xff\xf3mp3"))
+    async with httpx.AsyncClient() as client:
+        backend = FishAudioTtsBackend(client, api_key="k", reference_id="",
+                                      model="s2-pro", speed=1.0, timeout=10)
+        for text in ("...", "…", ""):
+            mime, audio = await backend.synthesize(text, "ru")
+            assert (mime, audio) == ("audio/mpeg", b"")
+    assert not route.called
+
+
+@respx.mock
+async def test_fishaudio_synthesize_surfaces_error_body():
+    route = respx.post(FISH_TTS_URL).mock(
+        return_value=httpx.Response(402, text='{"message":"insufficient credit"}'))
+    async with httpx.AsyncClient() as client:
+        backend = FishAudioTtsBackend(client, api_key="k", reference_id="",
+                                      model="s2-pro", speed=1.0, timeout=10)
+        with pytest.raises(RuntimeError) as exc:
+            await backend.synthesize("привет", "ru")
+    assert route.called
+    assert "402" in str(exc.value)
+    assert "insufficient credit" in str(exc.value)

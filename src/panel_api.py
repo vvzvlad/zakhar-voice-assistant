@@ -226,10 +226,13 @@ class PanelServer:
             return web.json_response(
                 {"error": "category, plugin and field are required"}, status=400
             )
+        # Optional user-typed search string for providers with server-side
+        # catalog search (fields marked "search": "remote").
+        q = (request.query.get("q") or "").strip()
         try:
             # ValueError (unknown plugin) is raised by get_provider BEFORE any
             # coroutine is created, so nothing is left un-awaited on that path.
-            options = self.svc.options(category, plugin, field)
+            options = self.svc.options(category, plugin, field, q)
         except ValueError as e:
             return web.json_response({"error": str(e)}, status=404)
         # Network-backed lists (provider model catalogs) come back as an awaitable.

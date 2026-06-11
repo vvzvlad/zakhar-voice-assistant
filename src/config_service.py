@@ -122,10 +122,10 @@ class ConfigService:
         """Return the selected provider instance for a category (for runtime reconfig)."""
         return get_provider(category, self._slot(category).selected)
 
-    def options(self, category, plugin, field):
+    def options(self, category, plugin, field, query: str = ""):
         prov = get_provider(category, plugin)
         cfg = prov.ConfigModel(**self._slot(category).instances.get(plugin, {}))
-        return prov.options(field, cfg, self._deps)
+        return prov.options(field, cfg, self._deps, query)
 
     def catalog(self) -> dict:
         """Everything the panel needs: per-category providers + JSON Schema +

@@ -243,7 +243,7 @@ class YandexTtsProvider(Provider):
             timeout=deps.tts_timeout,
         )
 
-    def options(self, field: str, cfg: YandexTtsConfig, deps: Deps):
+    def options(self, field: str, cfg: YandexTtsConfig, deps: Deps, query: str = ""):
         if field == "voice":
             return list(YANDEX_V3_VOICES.keys())
         if field == "role":

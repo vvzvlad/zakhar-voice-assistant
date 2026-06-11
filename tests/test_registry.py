@@ -5,7 +5,7 @@ from src.plugins.base import REGISTRY, Provider, get_provider, providers, regist
 
 
 def test_tts_ids_registered():
-    assert set(providers("tts")) == {"teratts", "piper", "yandex"}
+    assert set(providers("tts")) == {"teratts", "piper", "yandex", "fishaudio"}
 
 
 def test_stt_ids_registered():

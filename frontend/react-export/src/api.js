@@ -49,8 +49,10 @@ async function request(path, { method = "GET", body } = {}) {
 export const getCatalog = () => request("/api/catalog");
 export const getConfig = () => request("/api/config");
 export const patchConfig = (patch) => request("/api/config", { method: "PATCH", body: patch });
-export const getOptions = (category, plugin, field) =>
-  request(`/api/options?category=${encodeURIComponent(category)}&plugin=${encodeURIComponent(plugin)}&field=${encodeURIComponent(field)}`);
+// `q` is an optional server-side search string for fields with remote catalog
+// search ("search": "remote"); omitted/empty -> the provider's baseline list.
+export const getOptions = (category, plugin, field, q) =>
+  request(`/api/options?category=${encodeURIComponent(category)}&plugin=${encodeURIComponent(plugin)}&field=${encodeURIComponent(field)}${q ? `&q=${encodeURIComponent(q)}` : ""}`);
 // Bundled end-of-phrase chime files for the ack sound_path selector.
 export const getChimes = () => request("/api/chimes");
 // Play the selected end-of-phrase chime on the speaker(s) for an operator preview.

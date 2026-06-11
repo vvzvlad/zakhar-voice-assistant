@@ -57,8 +57,10 @@ function ProviderStage({ cat, title, crumb, desc }) {
     try { await patch({ [cat]: { selected: newId } }); } catch { /* surfaced elsewhere */ }
   };
 
-  const optionsFor = async (field) => {
-    const r = await getOptions(cat, selected, field);
+  // `q` (optional) is the server-side search string for remote-search fields;
+  // forwarded only when present so plain fields keep the legacy call shape.
+  const optionsFor = async (field, q) => {
+    const r = await (q ? getOptions(cat, selected, field, q) : getOptions(cat, selected, field));
     return r.options;
   };
 
@@ -114,8 +116,10 @@ function ProviderCard({ cat, sub }) {
     try { await patch({ [cat]: { selected: newId } }); } catch { /* surfaced elsewhere */ }
   };
 
-  const optionsFor = async (field) => {
-    const r = await getOptions(cat, selected, field);
+  // `q` (optional) is the server-side search string for remote-search fields;
+  // forwarded only when present so plain fields keep the legacy call shape.
+  const optionsFor = async (field, q) => {
+    const r = await (q ? getOptions(cat, selected, field, q) : getOptions(cat, selected, field));
     return r.options;
   };
 

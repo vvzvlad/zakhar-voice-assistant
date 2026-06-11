@@ -121,29 +121,36 @@ export function Stepper({ value, onChange, min = -Infinity, max = Infinity, step
     {unit && <span style={{ fontSize: 11.5, color: "var(--mut)" }}>{unit}</span>}
   </div>;
 }
-export function Select({ value, options, onChange, w, itemAction, itemActionBusy, searchable, allowCustom }) {
+export function Select({ value, options, onChange, w, itemAction, itemActionBusy, searchable, allowCustom, onQuery }) {
   const [open, setOpen] = useState(false);
   const [up, setUp] = useState(false); // open upward when the trigger sits near the viewport bottom
   const [query, setQuery] = useState("");
   const ref = useRef(null);
   useEffect(() => { const h = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); }; document.addEventListener("pointerdown", h); return () => document.removeEventListener("pointerdown", h); }, []);
   // The search query never survives an open/close cycle: reopening starts clean.
-  useEffect(() => { setQuery(""); }, [open]);
+  // In external-search mode the parent's option list mirrors the query, so it
+  // must be told about the reset too — otherwise reopening would show an empty
+  // input over stale search results. Harmless no-op when the list is already
+  // the baseline (or the parent has nothing cached yet).
+  useEffect(() => { setQuery(""); if (onQuery) onQuery(""); }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
   // Options may be plain strings/numbers OR {value, label} objects (label is shown,
   // value is stored/emitted). Normalize so the rest is uniform; plain arrays keep their
   // existing behavior (value === label).
   const opts = (options || []).map((o) => (o && typeof o === "object" ? o : { value: o, label: String(o) }));
   const selected = opts.find((o) => o.value === value);
-  // The search input (and the whole search/custom machinery) renders when EITHER
-  // prop is set: `searchable` opts into filtering long lists, while `allowCustom`
+  // The search input (and the whole search/custom machinery) renders when ANY
+  // prop is set: `searchable` opts into filtering long lists, `allowCustom`
   // alone still needs the input as the only way to type an arbitrary value —
-  // otherwise short/empty fetched lists would make custom values unreachable.
-  // With neither prop the Select stays a plain dropdown (strict no-op).
-  const hasSearch = !!(searchable || allowCustom);
+  // otherwise short/empty fetched lists would make custom values unreachable —
+  // and `onQuery` (external-search mode) needs it to type the server query.
+  // With none of them the Select stays a plain dropdown (strict no-op).
+  const hasSearch = !!(searchable || allowCustom || onQuery);
   // Case-insensitive filter on label OR value; without the input (or an empty
-  // query) the full list renders as before.
+  // query) the full list renders as before. In external-search mode (`onQuery`)
+  // the options arrive already filtered by the server, so no local filtering —
+  // the query still feeds the freeform customRow logic below.
   const q = hasSearch ? query.trim().toLowerCase() : "";
-  const shown = q ? opts.filter((o) => o.label.toLowerCase().includes(q) || String(o.value).toLowerCase().includes(q)) : opts;
+  const shown = onQuery ? opts : (q ? opts.filter((o) => o.label.toLowerCase().includes(q) || String(o.value).toLowerCase().includes(q)) : opts);
   // Freeform escape hatch: a typed query that matches no option value exactly gets a
   // synthetic "Use ..." row emitting the raw query as the value. The query can only
   // be non-empty when the input is rendered, so no extra hasSearch guard is needed.
@@ -174,7 +181,7 @@ export function Select({ value, options, onChange, w, itemAction, itemActionBusy
           autoFocus
           value={query}
           placeholder="Search…"
-          onChange={(e) => setQuery(e.target.value)}
+          onChange={(e) => { setQuery(e.target.value); if (onQuery) onQuery(e.target.value); }}
           onKeyDown={(e) => {
             if (e.key === "Enter") {
               e.preventDefault();

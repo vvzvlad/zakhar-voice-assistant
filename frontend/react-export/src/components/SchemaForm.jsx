@@ -4,42 +4,87 @@
 //                  by the caller, or with $defs available on `root`)
 //   values       — current field values (plain dict)
 //   onChange(f,v)— called with (fieldName, newValue)
-//   optionsFor(f)— optional async (field) => string[]  for dynamic lists
+//   optionsFor(f,q?)— optional async (field, query?) => string[]  for dynamic lists;
+//                  `query` is only passed for fields with `search: "remote"`
+//                  (server-side catalog search), otherwise the full baseline
+//                  list is loaded once and filtered client-side
 //   root         — schema document that holds $defs (defaults to `schema`)
 //   skip         — optional array of property names to not render
 //
 // Field → widget mapping follows settings-storage-design: enum→Seg/Select,
 // options:"dynamic"→Select(fetched), slider numbers→Slider, other numbers→Stepper,
 // boolean→Toggle, secret-looking strings→masked key input, else text input.
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { Field, KeyInput, ScaleSeg, Seg, Select, Slider, Stepper, Toggle } from "./primitives.jsx";
 import { resolve, enumOf, isSecret, humanize } from "../schema.js";
 
-function DynamicSelect({ value, onChange, load, itemAction, itemActionBusy, allowCustom }) {
+function DynamicSelect({ value, onChange, load, itemAction, itemActionBusy, allowCustom, remoteSearch }) {
   const norm = (o) => (o && typeof o === "object" ? o : { value: o, label: String(o) });
   const [opts, setOpts] = useState(value != null ? [norm(value)] : []);
-  useEffect(() => {
-    let alive = true;
-    load()
+  // Monotonic request counter: only the LATEST load() result may replace the
+  // option list, so a slow earlier search can never clobber a faster later one.
+  // Bumped (without a request) on unmount to drop any in-flight response.
+  const seqRef = useRef(0);
+  const debounceRef = useRef(null);
+  // Cache of the most recent BASELINE option list (the resolved result of any
+  // load with an empty/absent query, i.e. what the backend returns when not
+  // searching — own + popular voices, full model catalog, …). Stored as the
+  // raw normalized list, BEFORE the keep-current-value merge. An emptied
+  // search query means "back to the baseline", so it is restored from this
+  // cache instead of refetching on every dropdown close.
+  const baselineRef = useRef(null);
+  // Re-apply the keep-current-value merge: the current value stays selectable
+  // even if the list omits it.
+  const withCurrent = (normalized) => {
+    const has = value != null && normalized.some((o) => o.value === value);
+    return value != null && !has ? [norm(value), ...normalized] : normalized;
+  };
+  const run = (q) => {
+    const seq = ++seqRef.current;
+    load(q)
       .then((list) => {
-        if (!alive || !Array.isArray(list)) return;
+        if (seq !== seqRef.current || !Array.isArray(list)) return;
         const normalized = list.map(norm);
-        // Keep the current value selectable even if the fetched list omits it.
-        const has = value != null && normalized.some((o) => o.value === value);
-        const merged = value != null && !has ? [norm(value), ...normalized] : normalized;
-        setOpts(merged);
+        if (!q) baselineRef.current = normalized; // remember the no-query list
+        setOpts(withCurrent(normalized));
       })
-      .catch(() => { /* keep current single-option fallback */ });
-    return () => { alive = false; };
+      .catch(() => { /* keep current options on failure */ });
+  };
+  useEffect(() => {
+    run(); // baseline list (no query) on mount — unchanged for all fields
+    return () => {
+      seqRef.current += 1; // invalidate in-flight responses
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+  // Remote-search fields: debounced (300 ms) server-side catalog search on each
+  // query change. An emptied query (typed clear OR the dropdown closing, which
+  // resets the visual query) restores the baseline synchronously from the local
+  // cache — no network call, the backend would just return the same list.
+  const onQuery = (q) => {
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    if (!q || !q.trim()) {
+      // Restore from cache: bump the seq so an in-flight search response can
+      // never clobber the restored baseline. If nothing is cached yet, do
+      // nothing (and keep the seq!) — the mount-time baseline load is still
+      // pending and will populate both the list and the cache.
+      if (baselineRef.current) {
+        seqRef.current += 1;
+        setOpts(withCurrent(baselineRef.current));
+      }
+      return;
+    }
+    debounceRef.current = setTimeout(() => run(q), 300);
+  };
   // Auto-enable in-dropdown search for long lists (provider model catalogs);
   // short lists (chimes/voices) keep the plain dropdown. Freeform fields
   // (allowCustom) get the search input regardless of list length inside Select —
   // it is the only way to type an arbitrary value when the fetched list is
-  // short or empty (e.g. a provider with no api_key returns []).
+  // short or empty (e.g. a provider with no api_key returns []). Remote-search
+  // fields get the input via `onQuery`, which forces it inside Select.
   return <Select value={value} options={opts} onChange={onChange} itemAction={itemAction} itemActionBusy={itemActionBusy}
-    searchable={opts.length > 10} allowCustom={allowCustom} />;
+    searchable={opts.length > 10} allowCustom={allowCustom} onQuery={remoteSearch ? onQuery : undefined} />;
 }
 
 // One property → one <Field> with the right widget.
@@ -64,11 +109,14 @@ function SchemaField({ name, node, root, value, onChange, optionsFor, itemAction
   // `freeform` marks a dynamic select that also accepts arbitrary typed values
   // (e.g. an LLM model id missing from the provider's catalog).
   const freeform = !!(node.freeform || r.freeform);
+  // `search: "remote"` marks a dynamic select whose catalog is searched
+  // server-side: typing re-queries the provider instead of filtering locally.
+  const remoteSearch = (node.search || r.search) === "remote";
 
   let control;
   if (dynamic && optionsFor) {
     const itemAction = itemActionFor ? itemActionFor(name) : null;
-    control = <DynamicSelect value={value} onChange={set} load={() => optionsFor(name)} itemAction={itemAction || undefined} itemActionBusy={itemActionBusy} allowCustom={freeform} />;
+    control = <DynamicSelect value={value} onChange={set} load={(q) => optionsFor(name, q)} itemAction={itemAction || undefined} itemActionBusy={itemActionBusy} allowCustom={freeform} remoteSearch={remoteSearch} />;
   } else if (segOptions) {
     control = <ScaleSeg
       options={segOptions} value={value} onChange={set}

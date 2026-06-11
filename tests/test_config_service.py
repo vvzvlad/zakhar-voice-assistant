@@ -165,6 +165,23 @@ def test_catalog_injects_apply_class_per_field(tmp_path):
     assert core_props["log_level"]["apply"] != "restart"
 
 
+def test_options_forwards_search_query_to_provider(tmp_path, monkeypatch):
+    # svc.options(cat, plugin, field, query) hands the user-typed search string
+    # through to the provider's options() unchanged.
+    from src.plugins.base import get_provider
+    svc = _service(tmp_path)
+    seen = {}
+    prov = get_provider("tts", "yandex")
+
+    def fake_options(field, cfg, deps, query=""):
+        seen["field"], seen["query"] = field, query
+        return ["ok"]
+
+    monkeypatch.setattr(prov, "options", fake_options)
+    assert svc.options("tts", "yandex", "voice", "zzz") == ["ok"]
+    assert seen == {"field": "voice", "query": "zzz"}
+
+
 def test_options_proxies_provider(tmp_path):
     svc = _service(tmp_path)
     assert "zahar" in svc.options("tts", "yandex", "voice")

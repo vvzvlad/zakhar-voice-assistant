@@ -31,6 +31,15 @@ def sanitize_plus_stress(text: str) -> str:
     return _DOUBLE_SPACE_RE.sub(" ", text)
 
 
+def drop_plus_stress(text: str) -> str:
+    """Remove "+vowel" stress markup entirely (plain vowel remains) and any
+    stray '+', for engines that take unannotated plain text; collapse double
+    spaces."""
+    text = _PLUS_VOWEL_RE.sub(r"\1", text)
+    text = text.replace("+", "")
+    return _DOUBLE_SPACE_RE.sub(" ", text)
+
+
 def expand_units(text: str) -> str:
     """Spell out units: "°С"->"градусов", "%"->"процентов", "м/с"->"метров в секунду"."""
     text = text.replace("°С", "градусов")

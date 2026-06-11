@@ -152,7 +152,7 @@ class GroqSttProvider(Provider):
             timeout=cfg.timeout,
         )
 
-    def options(self, field: str, cfg: GroqSttConfig, deps: Deps):
+    def options(self, field: str, cfg: GroqSttConfig, deps: Deps, query: str = ""):
         # `options` stays sync; the model list is network-backed, so return a
         # coroutine — the caller (panel_api) awaits it (see Provider.options).
         if field == "model":

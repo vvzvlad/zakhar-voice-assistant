@@ -42,13 +42,18 @@ class Provider:
     def create(self, cfg: BaseModel, deps: Deps):
         raise NotImplementedError
 
-    def options(self, field: str, cfg: BaseModel, deps: Deps):
+    def options(self, field: str, cfg: BaseModel, deps: Deps, query: str = ""):
         """Optional dynamic option lists (voices/models) for a config field.
 
         May return a list (or None for "no dynamic options for this field"), OR an
         awaitable resolving to such a list for network-backed catalogs (e.g. model
         lists fetched from the provider's API). Callers that may receive a
-        network-backed list must check `inspect.isawaitable` and await it."""
+        network-backed list must check `inspect.isawaitable` and await it.
+
+        `query` is an optional user-typed search string for provider catalogs that
+        support server-side search (fields marked `"search": "remote"` in their
+        json_schema_extra); providers without server-side search ignore it (their
+        full list is filtered client-side)."""
         return None
 
 

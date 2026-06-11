@@ -1,6 +1,7 @@
 """Tests for the shared Russian TTS text helpers (src/plugins/tts/_ru_text.py)."""
 
 from src.plugins.tts._ru_text import (
+    drop_plus_stress,
     expand_units,
     phonetic_ru,
     sanitize_plus_stress,
@@ -50,6 +51,24 @@ def test_sanitize_plus_stress_drops_stray_plus():
 
 def test_sanitize_plus_stress_passthrough():
     assert sanitize_plus_stress("просто текст") == "просто текст"
+
+
+# --- drop_plus_stress (plain-text engines, e.g. Fish Audio) ------------------
+
+def test_drop_plus_stress_removes_vowel_markup():
+    # The "+vowel" pair loses its '+' entirely; the plain vowel remains.
+    assert drop_plus_stress("прив+ет") == "привет"
+    assert drop_plus_stress("больш+ая к+омната") == "большая комната"
+
+
+def test_drop_plus_stress_drops_stray_plus_and_collapses_spaces():
+    out = drop_plus_stress("два + два")
+    assert "+" not in out
+    assert out == "два два"  # double space collapsed
+
+
+def test_drop_plus_stress_passthrough():
+    assert drop_plus_stress("просто текст") == "просто текст"
 
 
 # --- expand_units -------------------------------------------------------------

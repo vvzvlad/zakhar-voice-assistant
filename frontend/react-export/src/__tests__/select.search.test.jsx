@@ -77,6 +77,32 @@ describe("Select searchable", () => {
   });
 });
 
+describe("Select external search (onQuery)", () => {
+  it("forces the search input even for a short list without searchable/allowCustom", () => {
+    const { container } = openSelect({ onQuery: () => {} });
+    expect(searchInput(container)).toBeTruthy();
+  });
+
+  it("calls onQuery with the typed text and does NOT locally filter the options", () => {
+    const onQuery = vi.fn();
+    const { container } = openSelect({ onQuery });
+    fireEvent.change(searchInput(container), { target: { value: "ga" } });
+    expect(onQuery).toHaveBeenCalledWith("ga");
+    // The server is the filter in external mode: the rendered list stays as-is.
+    expect(screen.getAllByRole("option")).toHaveLength(OPTS.length);
+  });
+
+  it("Enter in the search input still picks the first option and closes", () => {
+    const onChange = vi.fn();
+    const { container } = openSelect({ onQuery: () => {}, onChange });
+    const input = searchInput(container);
+    fireEvent.change(input, { target: { value: "whatever" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(onChange).toHaveBeenCalledWith("alpha");
+    expect(container.querySelector('[role="listbox"]')).toBeNull();
+  });
+});
+
 describe("Select allowCustom", () => {
   it("offers a 'Use \"<query>\"' row for an unmatched query and emits the raw query", () => {
     const onChange = vi.fn();
@@ -109,6 +135,14 @@ describe("Select allowCustom", () => {
     fireEvent.keyDown(input, { key: "Enter" });
     expect(onChange).toHaveBeenCalledWith("my/own-model");
     expect(container.querySelector('[role="listbox"]')).toBeNull();
+  });
+
+  it("external-search mode (onQuery) keeps the freeform 'Use ...' row working", () => {
+    const onChange = vi.fn();
+    const { container } = openSelect({ onQuery: () => {}, allowCustom: true, onChange });
+    fireEvent.change(searchInput(container), { target: { value: "my/own-model" } });
+    fireEvent.click(screen.getByText('Use "my/own-model"'));
+    expect(onChange).toHaveBeenCalledWith("my/own-model");
   });
 
   it("allowCustom ALONE (no searchable) renders the input even for a short list", () => {
