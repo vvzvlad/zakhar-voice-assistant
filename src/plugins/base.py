@@ -22,6 +22,14 @@ class Deps:
     tts_timeout: int = 30
 
 
+# Shared schema annotation for the `model` field: rendered as a dynamic select
+# (option list fetched from the provider's model-list API) that still accepts an
+# arbitrary, not-listed model id (`freeform` is consumed by the frontend).
+# Subclasses overriding `model` must re-attach this dict explicitly — pydantic
+# does NOT inherit Field metadata on overridden fields.
+MODEL_FIELD_EXTRA: dict = {"widget": "select", "options": "dynamic", "freeform": True}
+
+
 class Provider:
     """Base for all stage providers. Subclasses set the class attrs and implement create()."""
 

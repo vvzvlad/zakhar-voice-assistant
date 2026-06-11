@@ -1,4 +1,6 @@
+import base64
 import io
+import json
 import wave
 
 import httpx
@@ -12,6 +14,11 @@ from src.plugins.stt.groq import (
     GroqSttBackend,
     GroqSttConfig,
     contains_stt_hallucination,
+)
+from src.plugins.stt.openrouter import (
+    OPENROUTER_STT_URL,
+    OpenRouterSttBackend,
+    OpenRouterSttConfig,
 )
 from src.plugins.stt.vosk import VoskSttBackend
 from src.stage_errors import StageError
@@ -376,3 +383,158 @@ async def test_vosk_malformed_final_result_raises_stage_error():
         await backend.transcribe(b"\x01\x02" * 100)
 
     assert ei.value.stage == "stt"
+
+
+# --- OpenRouter STT backend ----------------------------------------------------
+
+
+@respx.mock
+async def test_openrouter_stt_backend_posts_base64_wav_json():
+    route = respx.post(OPENROUTER_STT_URL).mock(
+        return_value=httpx.Response(200, json={"text": "привет мир"})
+    )
+    pcm = b"\x01\x02" * 100
+    async with httpx.AsyncClient(verify=False) as client:
+        backend = OpenRouterSttBackend(
+            client,
+            api_key="or-key",
+            model="openai/whisper-large-v3-turbo",
+            language="ru",
+            temperature=0.3,
+            timeout=42,
+        )
+        result = await backend.transcribe(pcm)
+    assert result == "привет мир"
+
+    req = route.calls.last.request
+    # The API key travels as a Bearer Authorization header, plus the app title.
+    assert req.headers["Authorization"] == "Bearer or-key"
+    assert req.headers["X-Title"] == "Zakhar Voice Assistant"
+    # The configured per-request timeout is applied to the POST.
+    assert req.extensions["timeout"]["read"] == 42
+    body = json.loads(req.content)
+    assert body["model"] == "openai/whisper-large-v3-turbo"
+    assert body["input_audio"]["format"] == "wav"
+    # "data" is plain base64 (not a data URI) of the WAV-wrapped PCM.
+    wav_bytes = base64.b64decode(body["input_audio"]["data"], validate=True)
+    assert wav_bytes == pcm_to_wav(pcm)
+    assert body["language"] == "ru"
+    assert body["temperature"] == 0.3
+
+
+@respx.mock
+async def test_openrouter_stt_backend_omits_empty_language():
+    # `language` is optional on the endpoint; a falsy config value must not be sent.
+    route = respx.post(OPENROUTER_STT_URL).mock(
+        return_value=httpx.Response(200, json={"text": "ok"})
+    )
+    async with httpx.AsyncClient(verify=False) as client:
+        backend = OpenRouterSttBackend(
+            client, api_key="k", model="openai/whisper-large-v3-turbo", language=""
+        )
+        await backend.transcribe(b"\x01\x02" * 100)
+    body = json.loads(route.calls.last.request.content)
+    assert "language" not in body
+
+
+@respx.mock
+async def test_openrouter_stt_backend_empty_pcm_skips_http():
+    route = respx.post(OPENROUTER_STT_URL).mock(
+        return_value=httpx.Response(200, json={"text": "x"})
+    )
+    async with httpx.AsyncClient(verify=False) as client:
+        backend = OpenRouterSttBackend(
+            client, api_key="k", model="openai/whisper-large-v3-turbo"
+        )
+        result = await backend.transcribe(b"")
+    assert result == ""
+    assert not route.called
+
+
+@respx.mock
+@pytest.mark.parametrize("payload", [{}, {"text": "   "}])
+async def test_openrouter_stt_backend_missing_or_blank_text_returns_empty(payload):
+    # A 200 without "text" (or with whitespace-only text) is "no speech
+    # recognized" -> transcribe returns "".
+    respx.post(OPENROUTER_STT_URL).mock(return_value=httpx.Response(200, json=payload))
+    async with httpx.AsyncClient(verify=False) as client:
+        backend = OpenRouterSttBackend(
+            client, api_key="k", model="openai/whisper-large-v3-turbo"
+        )
+        result = await backend.transcribe(b"\x01\x02" * 100)
+    assert result == ""
+
+
+@respx.mock
+async def test_openrouter_stt_backend_discards_hallucination_as_empty():
+    # The OpenRouter catalog is whisper-family heavy, so the same subtitle-credit
+    # artifacts apply: a 200 carrying a known hallucination marker is discarded
+    # and transcribe returns "" — the "no speech recognized" contract.
+    respx.post(OPENROUTER_STT_URL).mock(
+        return_value=httpx.Response(200, json={"text": "Субтитры создавал DimaTorzok"})
+    )
+    async with httpx.AsyncClient(verify=False) as client:
+        backend = OpenRouterSttBackend(
+            client, api_key="k", model="openai/whisper-large-v3-turbo"
+        )
+        result = await backend.transcribe(b"\x01\x02" * 100)
+    assert result == ""
+
+
+@respx.mock
+async def test_openrouter_stt_backend_raises_stage_error_on_non_200():
+    respx.post(OPENROUTER_STT_URL).mock(return_value=httpx.Response(500, text="boom"))
+    async with httpx.AsyncClient(verify=False) as client:
+        backend = OpenRouterSttBackend(
+            client, api_key="k", model="openai/whisper-large-v3-turbo"
+        )
+        with pytest.raises(StageError) as ei:
+            await backend.transcribe(b"\x01\x02" * 100)
+    assert ei.value.stage == "stt"
+    assert "500" in str(ei.value)
+
+
+@respx.mock
+async def test_openrouter_stt_backend_raises_stage_error_on_transport_error():
+    respx.post(OPENROUTER_STT_URL).mock(side_effect=httpx.ConnectError("down"))
+    async with httpx.AsyncClient(verify=False) as client:
+        backend = OpenRouterSttBackend(
+            client, api_key="k", model="openai/whisper-large-v3-turbo"
+        )
+        with pytest.raises(StageError) as ei:
+            await backend.transcribe(b"\x01\x02" * 100)
+    assert ei.value.stage == "stt"
+
+
+@respx.mock
+async def test_openrouter_stt_backend_malformed_200_body_raises_stage_error():
+    # A 200 whose body is not JSON makes resp.json() raise json.JSONDecodeError
+    # (a ValueError, NOT an httpx.HTTPError). It must surface as
+    # StageError("stt", ...) per the SttBackend contract, not leak raw.
+    respx.post(OPENROUTER_STT_URL).mock(
+        return_value=httpx.Response(200, text="not json at all")
+    )
+    async with httpx.AsyncClient(verify=False) as client:
+        backend = OpenRouterSttBackend(
+            client, api_key="k", model="openai/whisper-large-v3-turbo"
+        )
+        with pytest.raises(StageError) as ei:
+            await backend.transcribe(b"\x01\x02" * 100)
+    assert ei.value.stage == "stt"
+    assert "malformed" in str(ei.value)
+    # The original decode error is chained for debuggability.
+    assert isinstance(ei.value.__cause__, ValueError)
+
+
+async def test_registry_openrouter_stt_provider_creates_backend():
+    # REGISTRY-based construction: the openrouter STT provider's create() returns
+    # an OpenRouterSttBackend wired to the cloud HTTP client.
+    async with httpx.AsyncClient(verify=False) as cloud, httpx.AsyncClient(verify=False) as local:
+        deps = Deps(http_cloud=cloud, http_local=local)
+        backend = get_provider("stt", "openrouter").create(
+            OpenRouterSttConfig(api_key="k"), deps
+        )
+        assert isinstance(backend, OpenRouterSttBackend)
+        assert backend.client is cloud
+        assert backend.api_key == "k"
+        assert backend.model == "openai/whisper-large-v3-turbo"

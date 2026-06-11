@@ -8,20 +8,17 @@ from abc import ABC, abstractmethod
 
 from pydantic import BaseModel, Field
 
+# MODEL_FIELD_EXTRA now lives in src.plugins.base (shared across categories);
+# re-exported here so existing `from src.plugins.llm.base import MODEL_FIELD_EXTRA`
+# imports keep working.
+from src.plugins.base import MODEL_FIELD_EXTRA  # noqa: F401
+
 
 class LlmBackend(ABC):
     @abstractmethod
     async def complete(self, messages: list, tools: list | None) -> dict:
         """One chat-completions round-trip. Returns the raw provider JSON
         (with 'choices'/'usage'/'model'). Raises httpx.HTTPStatusError on non-2xx."""
-
-
-# Shared schema annotation for the `model` field: rendered as a dynamic select
-# (option list fetched from the provider's model-list API) that still accepts an
-# arbitrary, not-listed model id (`freeform` is consumed by the frontend).
-# Subclasses overriding `model` must re-attach this dict explicitly — pydantic
-# does NOT inherit Field metadata on overridden fields.
-MODEL_FIELD_EXTRA: dict = {"widget": "select", "options": "dynamic", "freeform": True}
 
 
 class LlmConfig(BaseModel):

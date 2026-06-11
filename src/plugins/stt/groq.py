@@ -1,38 +1,36 @@
 """Groq Whisper STT brick: config schema, backend and Whisper-specific hacks."""
 
+import time
+
 import httpx
 from loguru import logger
 from pydantic import BaseModel, Field
 
-from src.plugins.base import Deps, Provider, register
+from src.plugins.base import MODEL_FIELD_EXTRA, Deps, Provider, register
 from src.stage_errors import StageError
-from src.stt import SttBackend, pcm_to_wav
+# The hallucination filter now lives in src.stt (shared pure helpers); re-exported
+# here so existing `from src.plugins.stt.groq import ...` imports keep working.
+from src.stt import (  # noqa: F401
+    STT_HALLUCINATION_MARKERS,
+    SttBackend,
+    contains_stt_hallucination,
+    pcm_to_wav,
+)
 
 GROQ_STT_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
+# OpenAI-style model listing; REQUIRES a Bearer api_key (401 otherwise).
+GROQ_MODELS_URL = "https://api.groq.com/openai/v1/models"
 
 # Groq rejects transcription prompts longer than this many characters (HTTP 400).
 # Truncate locally so an over-long vocabulary hint degrades gracefully instead of
 # failing the whole utterance.
 GROQ_PROMPT_MAX_CHARS = 896
 
-# Known Whisper STT hallucination markers (lowercase). Whisper tends to emit
-# leftover subtitle-credit / stock phrases (training-data artifacts) on
-# silence/noise: "DimaTorzok" is one such credit string and "Продолжение
-# следует..." ("to be continued") is a recurring stock caption. When a
-# transcription contains one of these (substring, case-insensitive), we treat
-# the run as if nothing was said and drop it.
-STT_HALLUCINATION_MARKERS = ("dimatorzok", "продолжение следует")
-
-
-def contains_stt_hallucination(text: str) -> bool:
-    """Return True if the STT text contains a known Whisper hallucination marker.
-
-    These are known STT (Whisper) hallucinations — subtitle-credit artifacts that
-    surface on silence/noise — and are dropped as if nothing was said. The check is
-    case-insensitive (Whisper varies the casing of the artifact).
-    """
-    folded = text.casefold()
-    return any(marker in folded for marker in STT_HALLUCINATION_MARKERS)
+# Module-level TTL cache for the model list. Keyed by the api_key that fetched it,
+# so changing the key never serves a list obtained with another key. Failures are
+# never cached. Own cache for this module — never shared with the Groq LLM provider.
+_MODELS_CACHE_TTL = 300.0
+_models_cache: dict = {"at": 0.0, "api_key": None, "data": None}
 
 
 class GroqSttBackend(SttBackend):
@@ -121,7 +119,9 @@ class GroqSttBackend(SttBackend):
 
 class GroqSttConfig(BaseModel):
     api_key: str = ""
-    model: str = "whisper-large-v3-turbo"
+    # Dynamic select: the option list is fetched from Groq's model-list API
+    # (see MODEL_FIELD_EXTRA in src/plugins/base.py).
+    model: str = Field("whisper-large-v3-turbo", json_schema_extra=MODEL_FIELD_EXTRA)
     language: str = "ru"
     temperature: float = 0.0
     timeout: int = 60
@@ -151,3 +151,36 @@ class GroqSttProvider(Provider):
             prompt=cfg.prompt,
             timeout=cfg.timeout,
         )
+
+    def options(self, field: str, cfg: GroqSttConfig, deps: Deps):
+        # `options` stays sync; the model list is network-backed, so return a
+        # coroutine — the caller (panel_api) awaits it (see Provider.options).
+        if field == "model":
+            return self._fetch_models(cfg.api_key, deps)
+        return None
+
+    async def _fetch_models(self, api_key: str, deps: Deps):
+        """Fetch Groq whisper model ids (plain strings, sorted), TTL-cached per api_key."""
+        if not api_key:
+            return []  # the endpoint requires auth; don't even try
+        now = time.monotonic()
+        if (
+            _models_cache["data"] is not None
+            and _models_cache["api_key"] == api_key
+            and now - _models_cache["at"] < _MODELS_CACHE_TTL
+        ):
+            return _models_cache["data"]
+        resp = await deps.http_cloud.get(
+            GROQ_MODELS_URL, headers={"Authorization": f"Bearer {api_key}"}
+        )
+        resp.raise_for_status()
+        models = resp.json().get("data") or []
+        # Groq serves LLMs AND whisper models in one list; only whisper models are
+        # valid for the transcriptions endpoint, so filter the rest out.
+        options = sorted(
+            (m["id"] for m in models if "whisper" in m["id"].lower()), key=str.lower
+        )
+        _models_cache["at"] = now
+        _models_cache["api_key"] = api_key
+        _models_cache["data"] = options
+        return options

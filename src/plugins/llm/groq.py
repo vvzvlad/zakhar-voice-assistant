@@ -22,7 +22,7 @@ _models_cache: dict = {"at": 0.0, "api_key": None, "data": None}
 class GroqLlmConfig(LlmConfig):
     # Groq serves open-weight models; default to a fast, capable one.
     # The json_schema_extra must be re-attached: pydantic does not inherit Field
-    # metadata on overridden fields (see MODEL_FIELD_EXTRA in llm/base.py).
+    # metadata on overridden fields (see MODEL_FIELD_EXTRA in src/plugins/base.py).
     model: str = Field("llama-3.3-70b-versatile", json_schema_extra=MODEL_FIELD_EXTRA)
 
 
