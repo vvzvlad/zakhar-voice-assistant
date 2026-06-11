@@ -27,10 +27,15 @@ function detailFor(stage, catalog, config) {
   if (stage.cat === "tts") return v.voice ? `voice · ${v.voice}` : (prov?.label || cat.selected);
   return prov?.label || cat.selected;
 }
-function providerOf(stage, catalog, config) {
-  if (stage.key === "vad") return "WebRTC";
+function providerOf(stage, catalog) {
   const cat = catalog.categories.find((c) => c.id === stage.cat);
-  return cat ? cat.selected : "—";
+  if (!cat) return "—";
+  // vad shows the human provider label ("WebRTC VAD"); stt/llm/tts keep the id.
+  if (stage.key === "vad") {
+    const prov = cat.providers.find((p) => p.id === cat.selected);
+    return prov?.label || cat.selected || "—";
+  }
+  return cat.selected || "—";
 }
 
 function Dashboard() {

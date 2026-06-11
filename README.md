@@ -42,6 +42,8 @@ are applied at process start.
 Shape (see `templates/default_config.json` for the full default):
 
 - **Stage providers** — for each stage you pick one provider and configure it:
+  - `vad`: `webrtc` (WebRTC VAD) — aggressiveness / auto_gain; the end-pointing
+    thresholds stay in `core.vad`.
   - `stt`: `groq` (cloud Whisper) | `vosk` (offline) — `selected` + per-provider `instances`.
   - `llm`: `openrouter` | `groq` — model, api_key, temperature, max_tokens, max_tool_rounds.
   - `tts`: `teratts` (HTTP) | `piper` (offline) | `yandex` (SpeechKit) — voice/key/etc. per provider.
@@ -49,7 +51,9 @@ Shape (see `templates/default_config.json` for the full default):
   provider is one file, no changes to the config core.
 - **`core`** — non-provider settings: `context` (max_turns / ttl_seconds / dir), `audio`
   (host / port / ttl / public_base_url), `vad` thresholds, `network.external_proxy`,
-  `openweathermap` (api_key / city), `mcp_servers` (list of `{name, url, token, transport, prompt}`),
+  `openweathermap` (api_key / city), `mcp_servers` (list of
+  `{name, url, token, transport, prompt, slow}` — marking a server `slow` makes the
+  assistant speak a short filler line before calling its tools),
   `calendar` (url / username / password / calendar), `esphome.port`, `prompt.system_prompt_path`,
   `runs` (enabled / retention_days),
   `reminders` (enabled), `devices` (list of `{name, host, psk}`), `tts_timeout`, `log_level`.

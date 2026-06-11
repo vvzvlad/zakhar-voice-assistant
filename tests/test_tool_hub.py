@@ -510,3 +510,57 @@ async def test_set_sources_isolates_old_source_stop_failure():
     assert await hub.call("old_a", {}) == "error: unknown tool old_a"
     # The surviving old source (after the raising one) was still stopped.
     assert old_healthy.stopped is True
+
+
+# --- is_slow(): hot-swap, collisions, and duck-typed sources ------------------
+
+
+async def test_is_slow_follows_hot_swap():
+    # The slow classification tracks the CURRENT owning source across set_sources()
+    # swaps, and clears (no stale True) once the tool stops being advertised at all.
+    fast = FakeSource("fast", ["t"])
+    hub = ToolHub([fast])
+    await hub.start()
+    assert hub.is_slow("t") is False
+
+    # Swap to a slow source owning the same tool name: classification flips to True.
+    slow = FakeSource("slow", ["t"], slow=True)
+    await hub.set_sources([slow])
+    assert hub.is_slow("t") is True
+
+    # Swap to a source set that no longer exposes "t": not slow (and not stale True).
+    other = FakeSource("other", ["unrelated"], slow=True)
+    await hub.set_sources([other])
+    assert hub.is_slow("t") is False
+
+
+async def test_is_slow_under_name_collision_follows_first_source():
+    # Collision: classification must follow the FIRST source — the same winner that
+    # call() routes to — regardless of the loser's slow flag.
+    fast_first = FakeSource("fast", ["foo"])
+    slow_second = FakeSource("slow", ["foo"], slow=True)
+    hub = ToolHub([fast_first, slow_second])
+    await hub.start()
+    # call() routes "foo" to the fast first source, so it is not slow.
+    assert await hub.call("foo", {}) == "fast:foo"
+    assert hub.is_slow("foo") is False
+
+    # Mirror order: the slow source registered first wins, so the tool IS slow.
+    slow_first = FakeSource("slow", ["foo"], slow=True)
+    fast_second = FakeSource("fast", ["foo"])
+    hub2 = ToolHub([slow_first, fast_second])
+    await hub2.start()
+    assert await hub2.call("foo", {}) == "slow:foo"
+    assert hub2.is_slow("foo") is True
+
+
+async def test_is_slow_duck_typed_source_without_slow_attribute():
+    # A duck-typed source that never declared `slow` (NoStopSource has no such
+    # attribute) must classify as not-slow WITHOUT raising AttributeError —
+    # is_slow feeds the pipeline's filler gate, which must never blow up.
+    duck = NoStopSource("duck", ["quack"])
+    assert not hasattr(duck, "slow")
+    hub = ToolHub([duck])
+    await hub.start()
+
+    assert hub.is_slow("quack") is False

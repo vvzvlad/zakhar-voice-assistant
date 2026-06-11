@@ -45,11 +45,12 @@ make run               # runs .venv/bin/python main.py
 All config lives in `data/config.json` (created on first boot from
 `templates/default_config.json`). There is no `.env` / environment-based config.
 
-- Per stage (`stt`/`llm`/`tts`) the doc holds `{selected, instances}`; each provider
+- Per stage (`vad`/`stt`/`llm`/`tts`) the doc holds `{selected, instances}`; each provider
   defines its own settings via a pydantic `ConfigModel` in `src/plugins/<stage>/<id>.py`.
   The config core (`ConfigService`/`config_store`) is provider-agnostic — it never names a
   provider's fields. Adding a provider = one new plugin file; zero changes to the core.
-- `core.*` holds non-provider settings (context, audio, vad, network, openweathermap, mcp_servers,
+- `core.*` holds non-provider settings (context, audio, vad — end-pointing thresholds +
+  mic conditioning, network, openweathermap, mcp_servers,
   calendar, esphome, prompt, panel, runs, reminders, devices, tts_timeout, log_level) as plain
   `CoreConfig` pydantic sections.
 - API keys are plain string fields in the JSON (trusted-LAN service, no masking). `data/`

@@ -13,9 +13,11 @@ export const STAGE_ORDER = ["vad", "stt", "llm", "tts"];
 export const FILLER_COLOR = "#f59e0b";
 
 // Pipeline stages shown in the dashboard service-map and the stage page sub-nav.
-// `cat` links a stage to a catalog category (vad has none — it's a core section).
+// `cat` links a stage to a catalog category. All four stages are catalog
+// categories now; the VAD page additionally edits core.vad sections
+// (end-pointing thresholds, mic conditioning).
 export const STAGES = [
-  { key: "vad", name: "VAD", role: "Voice capture", cat: null },
+  { key: "vad", name: "VAD", role: "Voice capture", cat: "vad" },
   { key: "stt", name: "STT", role: "Speech → text", cat: "stt" },
   { key: "llm", name: "LLM", role: "Reasoning + tools", cat: "llm" },
   { key: "tts", name: "TTS", role: "Text → speech", cat: "tts" },

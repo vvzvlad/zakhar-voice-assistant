@@ -90,10 +90,47 @@ export function TTS() {
     desc="Synthesize the reply to audio served to the speakers." />;
 }
 
-// ── VAD (core sub-section) ────────────────────────────────────────────────
+// ── VAD (catalog category + core sub-sections) ────────────────────────────
+
+// Embeddable provider card for one catalog category: selector + schema form +
+// save bar — same mechanics as ProviderStage, minus the PageHeader. Render it
+// only when the category exists in the catalog.
+function ProviderCard({ cat, sub }) {
+  const { catalog, patch } = useAppData();
+  const category = catalog.categories.find((c) => c.id === cat);
+  const selected = category.selected;
+  const prov = category.providers.find((p) => p.id === selected) || category.providers[0];
+
+  const buildPatch = (draft) => ({ [cat]: { selected, instances: { [selected]: draft } } });
+  const { draft, onChange, dirty, saving, err, save } = useStageForm(prov.values, buildPatch, patch);
+
+  const switchProvider = async (newId) => {
+    if (newId === selected) return;
+    try { await patch({ [cat]: { selected: newId } }); } catch { /* surfaced elsewhere */ }
+  };
+
+  const optionsFor = async (field) => {
+    const r = await getOptions(cat, selected, field);
+    return r.options;
+  };
+
+  return <Card title={prov.label} sub={sub} foot={<FormSaveBar dirty={dirty} saving={saving} onSave={save} errors={errorLines(err)} />}>
+    <Selector
+      label="Provider"
+      options={category.providers.map((p) => p.id)}
+      value={selected}
+      onChange={switchProvider}
+      caption={prov.label}
+    />
+    <SchemaForm schema={prov.schema} values={draft} onChange={onChange} optionsFor={optionsFor} />
+  </Card>;
+}
 
 export function VAD() {
   const { catalog, patch } = useAppData();
+  // VAD is a catalog category since R2 (webrtc provider: aggressiveness, auto_gain).
+  // Tolerate an older backend without it — render the core.vad cards only.
+  const vadCat = catalog.categories.find((c) => c.id === "vad");
   const coreSchema = catalog.core.schema;
   // vad prop is a $ref to $defs.VadConfig — resolve to the object schema.
   const vadSchema = coreSchema.$defs ? coreSchema.$defs.VadConfig : null;
@@ -152,11 +189,15 @@ export function VAD() {
   return <div className="z-page">
     <PageHeader title="VAD · Voice capture" crumb="Pipeline / Stage 01"
       desc="The speaker streams audio continuously and never signals end-of-phrase — we detect it with WebRTC VAD. Tune sensitivity to pauses here." />
-    {/* Two equal columns: VAD tuning on the left, mic + chime cards stacked on the right */}
+    {/* Two equal columns: VAD provider + end-pointing on the left, mic + chime cards stacked on the right */}
     <div className="z-cols even">
-      <Card title="Advanced parameters" foot={<FormSaveBar dirty={dirty} saving={saving} onSave={save} errors={errorLines(err)} />}>
-        <SchemaForm schema={{ ...vadSchema, $defs: coreSchema.$defs }} root={{ ...vadSchema, $defs: coreSchema.$defs }} values={draft} onChange={onChange} skip={["mic_channel", "mic_normalize", "mic_highpass"]} />
-      </Card>
+      <div className="z-grid">
+        {vadCat && <ProviderCard cat="vad" sub="speech/no-speech classifier" />}
+        <Card title="End-pointing thresholds" sub="when a phrase is considered started / finished"
+          foot={<FormSaveBar dirty={dirty} saving={saving} onSave={save} errors={errorLines(err)} />}>
+          <SchemaForm schema={{ ...vadSchema, $defs: coreSchema.$defs }} root={{ ...vadSchema, $defs: coreSchema.$defs }} values={draft} onChange={onChange} skip={["mic_channel", "mic_normalize", "mic_highpass"]} />
+        </Card>
+      </div>
       {(micSchema || ackSchema) && <div className="z-grid">
         {micSchema && <Card title="Microphone input & conditioning" sub="which device mic stream feeds the pipeline · pre-STT conditioning"
           foot={<FormSaveBar dirty={micDirty} saving={micSaving} onSave={micSave} errors={errorLines(micErr)} />}>

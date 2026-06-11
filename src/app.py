@@ -52,6 +52,54 @@ def migrate_vad_plugin(doc: dict) -> bool:
     return True
 
 
+# Markers from the removed SLOW_TOOL_MARKERS runtime heuristic (dropped by R6 in
+# favor of the explicit McpServerConfig.slow flag). Kept ONLY to seed the one-time
+# migrate_mcp_slow migration below; nothing at runtime matches names anymore.
+_LEGACY_SLOW_MARKERS = ("google", "search", "web", "browse", "weather", "погод",
+                        "event", "calendar", "календар", "wiki")
+
+
+def migrate_mcp_slow(doc: dict) -> bool:
+    """One-time migration: write an explicit "slow" flag on every core.mcp_servers
+    entry that lacks one. Returns True when the doc was modified.
+
+    R6 replaced the SLOW_TOOL_MARKERS name heuristic with the declarative
+    McpServerConfig.slow flag (default False). A pre-R6 config has no "slow" key,
+    so without this migration every external server would silently become "fast"
+    and lose the spoken filler the heuristic used to trigger. The flag is seeded
+    from the legacy markers and written explicitly, so entries that carry the key
+    are never touched again (one-time). NOTE: the old heuristic matched TOOL
+    names, but only the server NAME is available here — the seed is a best-effort
+    approximation, hence the per-server log line and the operator warning.
+    """
+    core = doc.get("core")
+    servers = core.get("mcp_servers") if isinstance(core, dict) else None
+    if not isinstance(servers, list):
+        return False
+    changed = False
+    any_false = False
+    for srv in servers:
+        if not isinstance(srv, dict) or "slow" in srv:
+            continue
+        name = str(srv.get("name") or "")
+        slow = any(marker in name.lower() for marker in _LEGACY_SLOW_MARKERS)
+        srv["slow"] = slow
+        changed = True
+        any_false = any_false or not slow
+        logger.info(
+            f"config: mcp server '{name}': slow={'true' if slow else 'false'} "
+            f"(migrated; was name-heuristic)"
+        )
+    if any_false:
+        logger.warning(
+            "config: some mcp_servers were migrated with slow=false — the legacy "
+            "heuristic matched tool names, so this server-name guess may be wrong. "
+            "Enable 'Slow tools' in the panel for servers exposing slow tools "
+            "(web search etc.) to keep the spoken filler."
+        )
+    return changed
+
+
 def load_or_create_config() -> dict:
     """Return the config document, creating data/config.json from the template on first boot."""
     doc = config_store.load()
@@ -66,6 +114,9 @@ def load_or_create_config() -> dict:
             "config migrated: core.vad.aggressiveness (and the mic_normalize VAD-boost "
             "half as auto_gain) moved to the vad/webrtc plugin instance"
         )
+    if migrate_mcp_slow(doc):
+        config_store.save(doc, config_store.DEFAULT_PATH)
+        logger.info("config migrated: explicit 'slow' flags written to core.mcp_servers")
     return doc
 
 
