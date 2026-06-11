@@ -5,7 +5,7 @@ microWakeWord (INT8 streaming TFLite, ESP32-S3 / Home Assistant Voice PE, ESPHom
 `micro_wake_word`). Каталог способов и вердиктов — [v10/HYPOTHESIS_REGISTRY.md](v10/HYPOTHESIS_REGISTRY.md).
 
 ## Деплой: v8 (v11 откатан — недодетект в поле)
-- В проде/[../esphome/zakhar-voice.yaml](../esphome/zakhar-voice.yaml) стоит **[v8/model/](v8/model/)**
+- В проде/[../esphome/zakhar-voice-preroll.yaml](../esphome/zakhar-voice-preroll.yaml) стоит **[v8/model/](v8/model/)**
   на рабочей точке **`probability_cutoff 0.80`** (окно по умолчанию = 3, VAD on) — это
   заведомо-рабочий operating point v8 (device FRR 4.6%, FAPH 0 с VAD). Прежние 0.95+окно5
   (поднимали против ложных в тишине) передушили модель — «захааар» вообще перестал
