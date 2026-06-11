@@ -6,9 +6,11 @@ import { shouldNotify, toastFromRun, pushToast } from "../toastModel.js";
 
 const TOAST_TTL_MS = 6000; // auto-dismiss delay per toast
 
-// Popup notifications for finalized runs, shown only while the user is away
-// from the pages that already display live runs (Dashboard / Request Log).
-// Clicking a toast deep-links to that run in the Log page.
+// Popup notifications for pipeline runs: live in-progress snapshots are shown
+// too, upserted per device, and the finalized frame replaces the live toast.
+// Suppressed while the user is on the pages that already display live runs
+// (Dashboard / Request Log). Clicking a toast deep-links to that run in the
+// Log page (finalized runs only — live ones have no id yet).
 export function Toasts({ active }) {
   const { subscribeRuns } = useAppData();
   const [toasts, setToasts] = useState([]);
@@ -23,12 +25,18 @@ export function Toasts({ active }) {
       if (!shouldNotify(run, activeRef.current)) return;
       const toast = toastFromRun(run);
       setToasts((prev) => pushToast(prev, toast));
-      // (Re)arm this toast's auto-dismiss timer.
       const timers = timersRef.current;
-      if (timers.has(toast.id)) clearTimeout(timers.get(toast.id));
-      timers.set(toast.id, setTimeout(() => {
-        timers.delete(toast.id);
-        setToasts((prev) => prev.filter((t) => t.id !== toast.id));
+      // A finalized toast supersedes the device's live toast — retire its timer too.
+      if (!toast.live) {
+        const liveKey = "live:" + toast.device;
+        if (timers.has(liveKey)) { clearTimeout(timers.get(liveKey)); timers.delete(liveKey); }
+      }
+      // (Re)arm this key's auto-dismiss timer on every frame, so a live toast
+      // survives while frames keep arriving and expires after the last one.
+      if (timers.has(toast.key)) clearTimeout(timers.get(toast.key));
+      timers.set(toast.key, setTimeout(() => {
+        timers.delete(toast.key);
+        setToasts((prev) => prev.filter((t) => t.key !== toast.key));
       }, TOAST_TTL_MS));
     });
     return () => {
@@ -38,22 +46,26 @@ export function Toasts({ active }) {
     };
   }, [subscribeRuns]);
 
-  const dismiss = (id) => {
+  const dismiss = (key) => {
     const timers = timersRef.current;
-    if (timers.has(id)) { clearTimeout(timers.get(id)); timers.delete(id); }
-    setToasts((prev) => prev.filter((t) => t.id !== id));
+    if (timers.has(key)) { clearTimeout(timers.get(key)); timers.delete(key); }
+    setToasts((prev) => prev.filter((t) => t.key !== key));
   };
 
-  const open = (id) => {
-    try { localStorage.setItem("z-openreq", String(id)); } catch { /* ignore */ }
-    dismiss(id);
+  const open = (t) => {
+    // Live toasts have no DB id yet, so there is nothing to deep-link to —
+    // just go to the Log page where the live row is visible.
+    if (t.id != null) {
+      try { localStorage.setItem("z-openreq", String(t.id)); } catch { /* ignore */ }
+    }
+    dismiss(t.key);
     nav("log");
   };
 
   if (!toasts.length) return null;
   return <div className="z-toasts">
     {toasts.map((t) => (
-      <div key={t.id} className="z-toast" role="status" onClick={() => open(t.id)}>
+      <div key={t.key} className="z-toast" role="status" onClick={() => open(t)}>
         <span className={"z-dot " + (t.tone === "good" ? "ok" : t.tone === "bad" ? "error" : "off")} />
         <div className="z-toast-body">
           <div className="z-toast-head">
@@ -64,7 +76,7 @@ export function Toasts({ active }) {
           <div className="z-toast-text">{t.text}</div>
         </div>
         <button className="z-toast-x" aria-label="Dismiss"
-          onClick={(e) => { e.stopPropagation(); dismiss(t.id); }}>×</button>
+          onClick={(e) => { e.stopPropagation(); dismiss(t.key); }}>×</button>
       </div>
     ))}
   </div>;
