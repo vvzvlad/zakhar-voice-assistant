@@ -2,7 +2,7 @@
   "version": 1,
   "vad": {"selected": "webrtc", "instances": {"webrtc": {"aggressiveness": 2, "auto_gain": false}}},
   "stt": {"selected": "groq", "instances": {"groq": {"api_key": "", "model": "whisper-large-v3-turbo", "language": "ru", "temperature": 0.0, "timeout": 60}}},
-  "llm": {"selected": "openrouter", "instances": {"openrouter": {"api_key": "", "model": "anthropic/claude-haiku-4.5", "timeout": 300, "reply_rate_limit": "У меня кончились ресурсы на вас, мясных мешков. Я занимаюсь своими делами, обратитесь позже, и может быть, я вас обслужу, раз вы сами не в состоянии", "reply_empty_after_tools": "Готово.", "reply_empty": "Я тебя не расслышала, повтори."}}},
+  "llm": {"selected": "openrouter", "instances": {"openrouter": {"api_key": "", "model": "anthropic/claude-haiku-4.5", "timeout": 300, "reply_rate_limit": "Лимит запросов исчерпан. Попробуй ещё раз чуть позже.", "reply_empty_after_tools": "Готово.", "reply_empty": "Я тебя не расслышал, повтори."}}},
   "tts": {"selected": "teratts", "instances": {"teratts": {"base_url": ""}}},
   "core": {
     "context": {"max_turns": 5, "ttl_seconds": 300},

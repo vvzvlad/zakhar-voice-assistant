@@ -55,11 +55,8 @@ def test_llm_config_new_fields_defaults():
     assert cfg.timeout == 300
     assert isinstance(cfg.timeout, int)
     assert cfg.reply_empty_after_tools == "Готово."
-    assert cfg.reply_empty == "Я тебя не расслышала, повтори."
-    assert cfg.reply_rate_limit == (
-        "У меня кончились ресурсы на вас, мясных мешков. Я занимаюсь своими делами, "
-        "обратитесь позже, и может быть, я вас обслужу, раз вы сами не в состоянии"
-    )
+    assert cfg.reply_empty == "Я тебя не расслышал, повтори."
+    assert cfg.reply_rate_limit == "Лимит запросов исчерпан. Попробуй ещё раз чуть позже."
 
 
 def test_yandex_speed_range_enforced():

@@ -37,11 +37,9 @@ class LlmConfig(BaseModel):
     timeout: int = 300
     # Spoken fallbacks (read per request). Never let an empty/null model reply or a
     # rate-limit reach TTS as "".
-    reply_rate_limit: str = (
-        "У меня кончились ресурсы на вас, мясных мешков. Я занимаюсь своими делами, обратитесь позже, и может быть, я вас обслужу, раз вы сами не в состоянии"
-    )
+    reply_rate_limit: str = "Лимит запросов исчерпан. Попробуй ещё раз чуть позже."
     reply_empty_after_tools: str = "Готово."
-    reply_empty: str = "Я тебя не расслышала, повтори."
+    reply_empty: str = "Я тебя не расслышал, повтори."
     # Spoken when the LLM stage fails for any reason other than a rate limit; the
     # raw error text goes to the run log, never to the user.
     reply_error: str = "Что-то сломалось, попробуй ещё раз попозже."
