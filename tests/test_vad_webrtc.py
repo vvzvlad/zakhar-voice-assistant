@@ -5,6 +5,8 @@ framing across odd chunk sizes, the end-pointing decisions against an
 EndpointPolicy, and the decision-only auto_gain boost.
 """
 
+import os
+
 import numpy as np
 import pytest
 from pydantic import ValidationError
@@ -372,7 +374,13 @@ def test_vad_provider_contract(provider_id):
     # or a known finalize reason, debug_state() returns a dict. Shape-only checks so
     # new providers pass without snapshotting their internals.
     prov = providers("vad")[provider_id]
-    backend = prov.create(prov.ConfigModel(), deps=None)
+    cfg = prov.ConfigModel()
+    # Model-backed providers (e.g. silero) fail fast in create() when the model
+    # file isn't downloaded; skip them rather than require models in CI.
+    model_path = getattr(cfg, "model_path", None)
+    if model_path and not os.path.exists(model_path):
+        pytest.skip(f"model file not present: {model_path}")
+    backend = prov.create(cfg, deps=None)
     assert isinstance(backend, VadBackend)
     session = backend.open(EndpointPolicy(
         silence_ms=100, min_speech_ms=40,

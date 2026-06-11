@@ -7,6 +7,7 @@ webrtcvad-wheels==2.0.14
 numpy==2.4.6
 vosk==0.3.44
 piper-tts==1.4.2
+onnxruntime==1.26.0
 lameenc==1.8.2
 mcp==1.27.2
 caldav==3.2.1

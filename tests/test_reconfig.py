@@ -98,6 +98,7 @@ def test_action_for_representative_paths():
         "stt.instances.groq.api_key": "rebuild_backends",
         "vad.instances.webrtc.aggressiveness": "rebuild_backends",
         "vad.instances.webrtc.auto_gain": "rebuild_backends",
+        "vad.instances.silero.threshold": "rebuild_backends",
         "vad.selected": "rebuild_backends",
         "something.unknown.path": "restart",
     }
