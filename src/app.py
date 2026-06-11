@@ -26,6 +26,32 @@ from src.tool_hub import ToolHub
 from src.version import __version__
 
 
+def migrate_vad_plugin(doc: dict) -> bool:
+    """One-time migration: move the WebRTC-specific VAD knobs out of core.vad into
+    the vad/webrtc stage instance. Returns True when the doc was modified.
+
+    Old docs carried `core.vad.aggressiveness` (every pre-migration save wrote the
+    full core.vad section, so its presence is the reliable old-doc marker). Its value
+    moves to vad.instances.webrtc.aggressiveness and the core key is DELETED. In the
+    same pass, a true `core.vad.mic_normalize` is COPIED (not moved) to
+    vad.instances.webrtc.auto_gain: both the pre-STT normalization (still gated by
+    mic_normalize) and the VAD decision boost (now the plugin's auto_gain) used to be
+    gated by that one toggle, so copying keeps the old behavior intact. The copy is
+    gated on the aggressiveness marker so a later panel change to auto_gain is never
+    overwritten on a subsequent boot.
+    """
+    core = doc.get("core")
+    core_vad = core.get("vad") if isinstance(core, dict) else None
+    if not isinstance(core_vad, dict) or "aggressiveness" not in core_vad:
+        return False
+    slot = doc.setdefault("vad", {"selected": "webrtc", "instances": {}})
+    inst = slot.setdefault("instances", {}).setdefault("webrtc", {})
+    inst["aggressiveness"] = core_vad.pop("aggressiveness")
+    if core_vad.get("mic_normalize"):
+        inst["auto_gain"] = True
+    return True
+
+
 def load_or_create_config() -> dict:
     """Return the config document, creating data/config.json from the template on first boot."""
     doc = config_store.load()
@@ -34,6 +60,12 @@ def load_or_create_config() -> dict:
             doc = json.load(f)
         config_store.save(doc, config_store.DEFAULT_PATH)
         logger.info("created default config at data/config.json")
+    if migrate_vad_plugin(doc):
+        config_store.save(doc, config_store.DEFAULT_PATH)
+        logger.info(
+            "config migrated: core.vad.aggressiveness (and the mic_normalize VAD-boost "
+            "half as auto_gain) moved to the vad/webrtc plugin instance"
+        )
     return doc
 
 
@@ -82,6 +114,7 @@ async def main() -> None:
 
     svc = ConfigService(doc, deps)
     core = svc.core
+    vad_backend = svc.create("vad")
     stt_backend = svc.create("stt")
     tts_backend = svc.create("tts")
     llm_backend = svc.create("llm")
@@ -131,6 +164,7 @@ async def main() -> None:
     # later hot-reload tiers. Built once hub/audio_server exist, before the manager.
     rt = Runtime(
         svc,
+        vad_backend=vad_backend,
         stt_backend=stt_backend, llm_backend=llm_backend, tts_backend=tts_backend,
         hub=hub, audio_server=audio_server,
         runs_store=runs_store, run_events=run_events,

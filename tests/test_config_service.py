@@ -67,12 +67,33 @@ def test_constructor_validates_selected_instances(tmp_path):
 def test_catalog_lists_all_categories_with_schemas(tmp_path):
     cat = _service(tmp_path).catalog()
     ids = {c["id"] for c in cat["categories"]}
-    assert ids == {"stt", "llm", "tts"}
+    assert ids == {"vad", "stt", "llm", "tts"}
     for c in cat["categories"]:
         for prov in c["providers"]:
             assert "schema" in prov and "properties" in prov["schema"]
             assert "values" in prov
     assert "schema" in cat["core"] and "values" in cat["core"]
+
+
+def test_old_doc_without_vad_slot_gets_webrtc_defaults(tmp_path):
+    # Backward compat: a config written before the VAD stage existed (no "vad" key —
+    # see _doc()) must still parse, defaulting the slot to the webrtc provider with
+    # its own field defaults. Unlike stt/llm/tts, the vad slot has a default.
+    svc = _service(tmp_path)
+    vad_cfg = svc.get("vad")
+    assert vad_cfg.__class__.__name__ == "WebRtcVadConfig"
+    assert vad_cfg.aggressiveness == 2
+    assert vad_cfg.auto_gain is False
+    backend = svc.create("vad")
+    assert backend.__class__.__name__ == "WebRtcVadBackend"
+    # The catalog exposes the vad category with the webrtc provider selected.
+    cat = svc.catalog()
+    vad = next(c for c in cat["categories"] if c["id"] == "vad")
+    assert vad["selected"] == "webrtc"
+    webrtc = next(p for p in vad["providers"] if p["id"] == "webrtc")
+    # vad provider fields are stage-instance paths -> rebuild_backends apply class.
+    assert webrtc["schema"]["properties"]["aggressiveness"]["apply"] == "rebuild_backends"
+    assert webrtc["schema"]["properties"]["auto_gain"]["apply"] == "rebuild_backends"
 
 
 def test_catalog_exposes_values_plainly(tmp_path):

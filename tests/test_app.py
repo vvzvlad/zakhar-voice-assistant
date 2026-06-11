@@ -90,6 +90,84 @@ def test_load_or_create_config_existing_config(monkeypatch):
     assert result is existing
 
 
+# --- migrate_vad_plugin ------------------------------------------------------
+
+
+def test_migrate_vad_plugin_moves_aggressiveness_and_copies_auto_gain():
+    # Old doc: core.vad.aggressiveness present, mic_normalize on, no vad slot.
+    doc = {
+        "version": 1,
+        "core": {"vad": {"aggressiveness": 3, "mic_normalize": True, "silence_ms": 800}},
+    }
+    assert app.migrate_vad_plugin(doc) is True
+    # aggressiveness MOVED into the new vad/webrtc instance; core key deleted.
+    assert doc["vad"] == {
+        "selected": "webrtc",
+        "instances": {"webrtc": {"aggressiveness": 3, "auto_gain": True}},
+    }
+    assert "aggressiveness" not in doc["core"]["vad"]
+    # mic_normalize was COPIED, not moved: it still gates the pre-STT normalization.
+    assert doc["core"]["vad"]["mic_normalize"] is True
+    # Untouched policy fields survive.
+    assert doc["core"]["vad"]["silence_ms"] == 800
+
+
+def test_migrate_vad_plugin_without_mic_normalize_leaves_auto_gain_unset():
+    doc = {"core": {"vad": {"aggressiveness": 1, "mic_normalize": False}}}
+    assert app.migrate_vad_plugin(doc) is True
+    assert doc["vad"]["instances"]["webrtc"] == {"aggressiveness": 1}
+
+
+def test_migrate_vad_plugin_noop_on_already_migrated_doc():
+    # A doc that already carries the vad slot and no core aggressiveness must be
+    # left alone — in particular a panel-disabled auto_gain is NOT re-enabled even
+    # though mic_normalize is still on (the copy is one-time).
+    doc = {
+        "vad": {"selected": "webrtc", "instances": {"webrtc": {"auto_gain": False}}},
+        "core": {"vad": {"mic_normalize": True, "silence_ms": 800}},
+    }
+    assert app.migrate_vad_plugin(doc) is False
+    assert doc["vad"]["instances"]["webrtc"] == {"auto_gain": False}
+
+
+def test_migrate_vad_plugin_noop_without_core_vad():
+    doc = {"version": 1, "core": {"audio": {"port": 8200}}}
+    assert app.migrate_vad_plugin(doc) is False
+    assert "vad" not in doc
+
+
+def test_migrate_vad_plugin_merges_into_existing_slot():
+    # An existing vad slot (e.g. operator pre-created it) is reused, not clobbered:
+    # selected and unrelated instance fields survive, aggressiveness lands inside.
+    doc = {
+        "vad": {"selected": "webrtc", "instances": {"webrtc": {"auto_gain": True}}},
+        "core": {"vad": {"aggressiveness": 0}},
+    }
+    assert app.migrate_vad_plugin(doc) is True
+    assert doc["vad"]["selected"] == "webrtc"
+    assert doc["vad"]["instances"]["webrtc"] == {"auto_gain": True, "aggressiveness": 0}
+
+
+def test_load_or_create_config_saves_migrated_doc(monkeypatch):
+    # An existing OLD config triggers the migration and is saved back exactly once.
+    existing = {
+        "version": 1,
+        "core": {"vad": {"aggressiveness": 2, "mic_normalize": False}},
+    }
+    saved = []
+    monkeypatch.setattr(config_store, "load", lambda *a, **k: existing)
+    monkeypatch.setattr(config_store, "save", lambda doc, path: saved.append((doc, path)))
+
+    with capture_logs() as records:
+        result = app.load_or_create_config()
+
+    assert result["vad"]["instances"]["webrtc"]["aggressiveness"] == 2
+    assert len(saved) == 1
+    assert saved[0][0] is result
+    assert saved[0][1] == config_store.DEFAULT_PATH
+    assert any("config migrated" in r for r in records)
+
+
 # --- warn_legacy_mcp -------------------------------------------------------
 
 

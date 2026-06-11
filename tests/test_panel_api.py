@@ -95,9 +95,9 @@ async def test_patch_config_valid(tmp_path):
 async def test_patch_config_invalid_returns_422(tmp_path):
     client, _svc_ = await _client(tmp_path)
     try:
-        # vad.aggressiveness has le=3; 9 fails core validation -> ValidationError -> 422.
+        # vad.trim_start_ms has ge=0; -1 fails core validation -> ValidationError -> 422.
         resp = await client.patch("/api/config",
-                                  json={"core": {"vad": {"aggressiveness": 9}}})
+                                  json={"core": {"vad": {"trim_start_ms": -1}}})
         assert resp.status == 422
         body = await resp.json()
         assert "error" in body and "detail" in body
@@ -119,13 +119,13 @@ async def test_patch_config_bad_json_returns_400(tmp_path):
 async def test_patch_config_invalid_leaves_config_unchanged(tmp_path):
     client, svc = await _client(tmp_path)
     try:
-        # aggressiveness defaults to 2; an invalid patch must NOT persist anything.
-        assert svc.document()["core"]["vad"]["aggressiveness"] == 2
+        # trim_start_ms defaults to 200; an invalid patch must NOT persist anything.
+        assert svc.document()["core"]["vad"]["trim_start_ms"] == 200
         resp = await client.patch("/api/config",
-                                  json={"core": {"vad": {"aggressiveness": 9}}})
+                                  json={"core": {"vad": {"trim_start_ms": -1}}})
         assert resp.status == 422
         # On-disk/in-memory config kept the old value.
-        assert svc.document()["core"]["vad"]["aggressiveness"] == 2
+        assert svc.document()["core"]["vad"]["trim_start_ms"] == 200
     finally:
         await client.close()
 
@@ -138,7 +138,7 @@ async def test_patch_config_non_object_body_returns_400(tmp_path):
             assert resp.status == 400
             assert "error" in await resp.json()
         # Nothing was applied: config document is untouched.
-        assert svc.document()["core"]["vad"]["aggressiveness"] == 2
+        assert svc.document()["core"]["vad"]["trim_start_ms"] == 200
     finally:
         await client.close()
 

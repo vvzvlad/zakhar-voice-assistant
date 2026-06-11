@@ -9,37 +9,38 @@ Server-side VAD end-pointing
 The HA Voice PE speaker fires its wake word on-device and then streams mic PCM
 to us continuously (silence included). It NEVER signals end-of-speech, so the
 device's handle_stop is effectively never called. To know when the user has
-finished speaking we run WebRTC VAD over the incoming PCM ourselves and finalize
-the utterance once we've seen speech followed by enough trailing silence (or a
-hard max length, or a no-speech timeout). The explicit device-stop path still
-finalizes too — both routes funnel through a synchronous _claim() (which atomically
+finished speaking we run the configured VAD stage backend over the incoming PCM
+(one VadSession per run, see src/vad.py) and finalize the utterance once it
+reports an endpoint (speech followed by enough trailing silence), a hard max
+length, or a no-speech timeout. The explicit device-stop path still finalizes
+too — both routes funnel through a synchronous _claim() (which atomically
 marks the run finalized and snapshots the audio) followed by the async _run(), so a
 run is finalized exactly once even under concurrent eager on_audio tasks.
 """
 
 import asyncio
-import io
 import os
 import time
-import wave
 
-import numpy as np
-import webrtcvad
 from loguru import logger
 
 from src import config_store, context, llm
+from src.audio_prep import (
+    highpass,
+    normalize_peak,
+    pcm_to_wav_bytes,
+    trim_start_pcm,
+    write_wav,
+)
 from src.audio_server import tts_url
 from src.pipeline_events import StageEvent
 from src.llm_text import clean_llm_output
 from src.runs_store import live_row, summary_row
 from src.stage_errors import StageError
 from src.tts import make_ack_chime_mp3, wav_to_mp3
-
-# WebRTC VAD requires mono 16-bit PCM frames of exactly 10/20/30 ms at 16 kHz.
-# We use 20 ms frames = 16000 * 2 * 20/1000 = 640 bytes.
-SAMPLE_RATE = 16000
-FRAME_MS = 20
-FRAME_BYTES = 640  # 16-bit mono, 20 ms @ 16 kHz
+# SAMPLE_RATE now lives in the VAD stage contract module; re-exported here so the
+# many existing `from src.pipeline import SAMPLE_RATE` users keep working.
+from src.vad import SAMPLE_RATE, EndpointPolicy  # noqa: F401  (SAMPLE_RATE re-export)
 
 # Generous hard memory cap (~60s of 16 kHz / 16-bit mono PCM). VAD should end the
 # utterance long before this; the cap only guards against unbounded growth if VAD
@@ -98,151 +99,6 @@ class CaptureEmptyError(Exception):
     """
 
 
-def _write_wav(path: str, pcm: bytes) -> None:
-    """Write 16 kHz / mono / 16-bit PCM to a WAV file at `path`."""
-    with wave.open(path, "wb") as w:
-        w.setnchannels(1)
-        w.setsampwidth(2)
-        w.setframerate(SAMPLE_RATE)
-        w.writeframes(pcm)
-
-
-def _pcm_to_wav_bytes(pcm: bytes, pcm2: bytes = b"") -> bytes:
-    """Build a 16 kHz / 16-bit WAV container from PCM, fully in memory.
-
-    With only `pcm`, builds a mono WAV — used by the manual (ephemeral) capture
-    path, where the bytes are handed straight back to the API caller. With a
-    non-empty `pcm2`, builds a STEREO WAV for the stored per-run diagnostic
-    audio: LEFT = `pcm` (the pipeline/STT channel, exactly what STT received),
-    RIGHT = `pcm2` (the other raw mic channel, for channel comparison). The
-    shorter channel is zero-padded to the longer one; a trailing odd byte is
-    dropped (acceptable for diagnostic audio).
-    """
-    buf = io.BytesIO()
-    with wave.open(buf, "wb") as w:
-        w.setsampwidth(2)
-        w.setframerate(SAMPLE_RATE)
-        if not pcm2:
-            w.setnchannels(1)
-            w.writeframes(pcm)
-        else:
-            left = np.frombuffer(pcm[: len(pcm) - len(pcm) % 2], dtype="<i2")
-            right = np.frombuffer(pcm2[: len(pcm2) - len(pcm2) % 2], dtype="<i2")
-            n = max(left.size, right.size)
-            if left.size < n:
-                left = np.pad(left, (0, n - left.size))
-            if right.size < n:
-                right = np.pad(right, (0, n - right.size))
-            w.setnchannels(2)
-            w.writeframes(np.column_stack([left, right]).astype("<i2").tobytes())
-    return buf.getvalue()
-
-
-def _highpass(pcm: bytes, cutoff_hz: float = 80.0, sample_rate: int = SAMPLE_RATE) -> bytes:
-    """High-pass-filter 16-bit mono PCM via a numpy rFFT (no SciPy).
-
-    Removes DC offset and low-frequency rumble (table thumps, HVAC) below ~cutoff_hz
-    that carry no speech and skew normalization / hurt STT. The whole utterance is
-    filtered at once with a smooth raised-cosine transition band (0 below 0.5*cutoff,
-    1 above cutoff), so there is no per-chunk state and no SciPy dependency. Empty /
-    too-short input is returned unchanged; a trailing odd byte is preserved.
-    """
-    if not pcm:
-        return pcm
-    n = len(pcm) - (len(pcm) % 2)  # whole int16 samples only
-    if n < 4:
-        return pcm
-    x = np.frombuffer(pcm[:n], dtype="<i2").astype(np.float32)
-    spec = np.fft.rfft(x)
-    freqs = np.fft.rfftfreq(x.size, d=1.0 / sample_rate)
-    lo = cutoff_hz * 0.5
-    ramp = np.clip((freqs - lo) / (cutoff_hz - lo), 0.0, 1.0)
-    mask = 0.5 - 0.5 * np.cos(np.pi * ramp)  # raised-cosine 0->1 across [lo, cutoff_hz]
-    y = np.fft.irfft(spec * mask, n=x.size)
-    filtered = np.clip(y, -32768, 32767).astype("<i2").tobytes()
-    return filtered + pcm[n:]  # keep any trailing odd byte unchanged
-
-
-def _normalize_peak(pcm: bytes, target_dbfs: float = -3.0, max_gain: float = 30.0) -> bytes:
-    """Peak-normalize 16-bit mono PCM so its loudest sample hits ``target_dbfs``.
-
-    A per-utterance adaptive replacement for a fixed gain: the quiet less-processed
-    mic channel is brought to a consistent level without clipping, while already-loud
-    samples scale down. ``max_gain`` caps the boost so a near-silent clip does not blow
-    up the noise floor. Empty / near-silent input is returned unchanged; a trailing odd
-    byte is preserved.
-    """
-    if not pcm:
-        return pcm
-    n = len(pcm) - (len(pcm) % 2)
-    if n == 0:
-        return pcm
-    x = np.frombuffer(pcm[:n], dtype="<i2").astype(np.float32)
-    peak = float(np.max(np.abs(x))) if x.size else 0.0
-    if peak < 1.0:
-        return pcm  # silence — leave untouched
-    target = 32767.0 * (10.0 ** (target_dbfs / 20.0))
-    gain = min(target / peak, max_gain)
-    boosted = np.clip(x * gain, -32768, 32767).astype("<i2").tobytes()
-    return boosted + pcm[n:]
-
-
-# Target peak (~-3 dBFS) the VAD makeup gain lifts quiet audio toward, and the floor
-# below which the running utterance peak is treated as "no real signal yet" (so leading
-# pre-roll silence is NOT amplified into false speech).
-# Target int16 peak the boost lifts the quiet channel's SPEECH toward. Deliberately
-# MODERATE (~-15 dBFS, not full-scale): a higher target needs a larger gain, which also
-# amplifies the channel's (clean, quiet) trailing silence enough that WebRTC VAD reads
-# it as speech and never end-points (the utterance runs to max-length). At -15 dBFS the
-# quiet channel's speech (peak ~50) reaches ~5800 (clearly speech) while its silence
-# (peak ~5) stays ~600 (clearly non-speech), so the pause is still detected → fast end-point.
-_VAD_BOOST_TARGET = 5824.0    # 32767 * 10**(-15/20)
-# int16 peak below which we treat the (very clean) less-processed channel as pre-roll
-# silence and don't boost — keeps leading noise from being amplified into false speech.
-# Must sit BELOW the real speech level of the quiet channel (measured ~50-80) and ABOVE
-# its silence floor (~1-5), so the boost engages once the wake word is heard.
-_VAD_BOOST_FLOOR = 30
-
-
-def _vad_boost(frame: bytes, peak: int, max_gain: float = 128.0) -> bytes:
-    """Lift a 16-bit mono PCM frame toward _VAD_BOOST_TARGET for the VAD decision only.
-
-    `peak` is the running peak of the WHOLE utterance so far (not this frame), so the
-    gain (target/peak) is the same for every frame once the loud wake word has set the
-    peak — this preserves the speech-vs-silence energy ratio (silence stays detectable)
-    while bringing the quiet less-processed channel into WebRTC VAD's range. Returns the
-    frame unchanged until a real signal has been seen (peak < floor) or when no boost is
-    needed (gain <= 1). Used ONLY for the is_speech() decision — never stored.
-    """
-    if peak < _VAD_BOOST_FLOOR:
-        return frame
-    gain = min(_VAD_BOOST_TARGET / peak, max_gain)
-    if gain <= 1.0:
-        return frame
-    n = len(frame) - (len(frame) % 2)
-    if n == 0:
-        return frame
-    s = np.frombuffer(frame[:n], dtype="<i2").astype(np.float32) * gain
-    return np.clip(s, -32768, 32767).astype("<i2").tobytes()
-
-
-def _trim_start_pcm(pcm: bytes, trim_ms: int) -> bytes:
-    """Drop the first ``trim_ms`` of 16 kHz / mono / 16-bit PCM from an utterance.
-
-    Used to cut the wake-word tail / button-press lead-in off the captured sample
-    before STT, so it does not pollute the transcription. The cut is sample-aligned
-    (SAMPLE_RATE * 2 / 1000 = 32 bytes/ms is always even). If the trim would consume
-    the whole sample (or more), the PCM is returned unchanged so we never hand empty
-    audio to STT.
-    """
-    if trim_ms <= 0:
-        return pcm
-    trim_bytes = int(trim_ms * SAMPLE_RATE * 2 / 1000)
-    if trim_bytes <= 0 or trim_bytes >= len(pcm):
-        return pcm
-    return pcm[trim_bytes:]
-
-
 def build_ack_clip(sound_path: str, *, name: str = "") -> tuple[str, bytes]:
     """Build the end-of-phrase ack clip (mime, audio) from a sound_path.
 
@@ -290,21 +146,11 @@ class Pipeline:
         self._lock = asyncio.Lock()
         self._conversation_id = ""
 
-        # VAD aggressiveness is baked into the webrtcvad.Vad object, so the object
-        # must be rebuilt when it changes (handled in on_start). Keep _vad a plain
-        # instance attr so tests can monkeypatch it with a fake exposing
-        # is_speech(frame, rate) -> bool. The other VAD thresholds are read live in
-        # on_audio straight off self.rt.core.vad, so they are NOT copied here.
-        self._vad_aggressiveness = self.rt.core.vad.aggressiveness
-        self._vad = webrtcvad.Vad(self._vad_aggressiveness)
-
-        # Per-run VAD state (reset in on_start).
-        self._frame_rem = bytearray()  # leftover bytes between non-640-aligned chunks
-        self._speech_ms = 0
-        self._silence_ms = 0
-        self._speech_detected = False
-        self._elapsed_ms = 0
-        self._vad_peak = 0              # running peak of the utterance (for VAD frame boost)
+        # Per-run VAD session, opened in on_start (normal runs only) from the
+        # swappable vad stage backend (self.rt.vad_backend). The session owns ALL
+        # end-pointing state (framing, counters, the optional decision-only gain);
+        # the pipeline only feeds it chunks and acts on the returned reason.
+        self._vad_session = None
         self._finalized = False
         # Logging-only flag: log "receiving audio" once per run, not per chunk.
         self._audio_logged = False
@@ -492,21 +338,10 @@ class Pipeline:
         self, conversation_id, flags, audio_settings, wake_word_phrase
     ) -> int:
         """Handle voice_assistant start: reset ALL per-run state, announce run."""
-        # webrtcvad.Vad bakes the aggressiveness in at construction, so rebuild the
-        # object when the live config value has changed since we last built it.
-        aggr = self.rt.core.vad.aggressiveness
-        if aggr != self._vad_aggressiveness:
-            self._vad = webrtcvad.Vad(aggr)
-            self._vad_aggressiveness = aggr
         self._conversation_id = conversation_id or ""
         self._buffer.clear()
         self._buffer2.clear()
-        self._frame_rem.clear()
-        self._speech_ms = 0
-        self._silence_ms = 0
-        self._speech_detected = False
-        self._elapsed_ms = 0
-        self._vad_peak = 0
+        self._vad_session = None
         self._finalized = False
         self._audio_logged = False
         self._mic_fallback_logged = False
@@ -553,6 +388,18 @@ class Pipeline:
             )
             self._emit(StageEvent.RUN_START, {})
             return 0  # Capture-only: no STT_START, no VAD/STT/LLM/TTS.
+        # Open the per-run VAD session. The end-pointing POLICY (generic thresholds)
+        # is read live off core.vad here, while the speech classifier itself is the
+        # swappable vad stage backend. One session per run, so a hot-swapped backend
+        # or a changed policy applies on the next run. Capture runs returned above
+        # and never open a session (no VAD in capture mode).
+        vad_cfg = self.core.vad
+        self._vad_session = self.rt.vad_backend.open(EndpointPolicy(
+            silence_ms=vad_cfg.silence_ms,
+            min_speech_ms=vad_cfg.min_speech_ms,
+            max_utterance_ms=vad_cfg.max_utterance_ms,
+            no_speech_timeout_ms=vad_cfg.no_speech_timeout_ms,
+        ))
         logger.info(f"{self.name}: ▶️ run started (cid={conversation_id})")
         self._emit(StageEvent.RUN_START, {})
         self._emit(StageEvent.STT_START, {})
@@ -642,63 +489,22 @@ class Pipeline:
         if len(self._buffer) >= HARD_CAP_BYTES:
             del self._buffer[HARD_CAP_BYTES:]
             reason = "maxlen"
-
-        # Feed the VAD frame by frame. Device chunks aren't 640-aligned, so we keep
-        # leftover bytes in _frame_rem and consume whole 640-byte frames only.
-        # Skip the loop when HARD_CAP already set reason="maxlen": we're about to
-        # finalize this chunk anyway, and the buffer was truncated, so there's no
-        # point feeding (possibly truncated) bytes into the VAD counters.
-        self._frame_rem.extend(data)
-        # When mic_normalize is on, track the running peak of the (selected-channel)
-        # utterance so the VAD frame boost below can lift this quiet channel into
-        # WebRTC VAD's range. The buffer/STT path is unaffected (it normalizes per
-        # utterance in _run).
-        if self.core.vad.mic_normalize and data:
-            m = len(data) - (len(data) % 2)
-            if m:
-                self._vad_peak = max(
-                    self._vad_peak,
-                    int(np.abs(np.frombuffer(data[:m], dtype="<i2")).max()),
-                )
-        if reason is None:
-            while len(self._frame_rem) >= FRAME_BYTES:
-                frame = bytes(self._frame_rem[:FRAME_BYTES])
-                del self._frame_rem[:FRAME_BYTES]
-                vad = self.rt.core.vad
-                # Boost the frame for the speech/silence decision only (not the stored
-                # buffer) so WebRTC VAD can detect the quiet less-processed channel.
-                vframe = _vad_boost(frame, self._vad_peak) if vad.mic_normalize else frame
-                speech = self._vad.is_speech(vframe, SAMPLE_RATE)
-                self._elapsed_ms += FRAME_MS
-                if speech:
-                    self._speech_ms += FRAME_MS
-                    self._silence_ms = 0
-                    if self._speech_ms >= vad.min_speech_ms:
-                        self._speech_detected = True
-                else:
-                    # Trailing silence only counts once real speech has been observed.
-                    if self._speech_detected:
-                        self._silence_ms += FRAME_MS
-
-        # Decide end-of-utterance (reason or None). The HARD_CAP "maxlen" set above
-        # takes precedence; otherwise check VAD endpoint, max length, no-speech.
-        if reason is None:
-            vad = self.rt.core.vad
-            if self._speech_detected and self._silence_ms >= vad.silence_ms:
-                reason = "endpoint"
-            elif self._elapsed_ms >= vad.max_utterance_ms:
-                reason = "maxlen"
-            elif (
-                not self._speech_detected
-                and self._elapsed_ms >= vad.no_speech_timeout_ms
-            ):
-                reason = "no_speech"
+        elif self._vad_session is not None:
+            # Feed the SELECTED channel — the same bytes that went into the buffer —
+            # to the per-run VAD session. The session does its own framing/counters
+            # and returns a finalize reason ("endpoint" | "maxlen" | "no_speech") or
+            # None to keep listening. feed() is SYNCHRONOUS, so the claim logic's
+            # atomicity guarantees hold (no await before _claim below). When HARD_CAP
+            # already set reason="maxlen" above, the session is NOT fed: we're about
+            # to finalize this chunk anyway, and the buffer was truncated, so there's
+            # no point feeding (possibly truncated) bytes into the VAD counters.
+            reason = self._vad_session.feed(data)
 
         if reason is not None:
+            state = self._vad_session.debug_state() if self._vad_session else {}
             logger.debug(
-                f"{self.name}: VAD finalize reason={reason} speech_ms={self._speech_ms} "
-                f"silence_ms={self._silence_ms} elapsed_ms={self._elapsed_ms} "
-                f"speech_detected={self._speech_detected} vad_peak={self._vad_peak}"
+                f"{self.name}: VAD finalize reason={reason} "
+                + " ".join(f"{k}={v}" for k, v in state.items())
             )
 
         # All synchronous state is updated above; claim+run last (the only await).
@@ -813,12 +619,12 @@ class Pipeline:
                 # start of the captured sample. The trim is applied ONCE here, so every
                 # downstream consumer in this run uses the trimmed sample: STT, the t_vad
                 # metric, the capture-session WAV and the stored diagnostic audio. Read live
-                # off core.vad so it hot-applies. _trim_start_pcm never returns empty audio,
+                # off core.vad so it hot-applies. trim_start_pcm never returns empty audio,
                 # so the non-empty guard above still holds afterwards. The manual
                 # "record N seconds" capture-only path bypasses _run and is unaffected.
                 trim_ms = self.core.vad.trim_start_ms
                 if trim_ms > 0:
-                    trimmed = _trim_start_pcm(pcm, trim_ms)
+                    trimmed = trim_start_pcm(pcm, trim_ms)
                     if len(trimmed) != len(pcm):
                         logger.info(
                             f"{self.name}: ✂️ trimmed {len(pcm) - len(trimmed)} bytes "
@@ -828,7 +634,7 @@ class Pipeline:
                     # Trim the other (non-selected) channel by the same amount so
                     # the two channels of the stored stereo WAV stay time-aligned.
                     if pcm2:
-                        pcm2 = _trim_start_pcm(pcm2, trim_ms)
+                        pcm2 = trim_start_pcm(pcm2, trim_ms)
 
                 # Optional pre-STT conditioning of the FULL utterance (read live off
                 # core.vad, so the toggles hot-apply). High-pass first to strip
@@ -838,10 +644,13 @@ class Pipeline:
                 # audio and STT all get the exact audio Whisper sees.
                 # `pcm2` (the other channel) is deliberately kept raw here, so the
                 # stored stereo WAV allows comparing conditioned vs raw channels.
+                # NOTE: mic_normalize gates ONLY this pre-STT normalization now; the
+                # VAD-decision boost it used to also gate is the vad/webrtc plugin's
+                # own `auto_gain` setting.
                 if self.core.vad.mic_highpass:
-                    pcm = _highpass(pcm)
+                    pcm = highpass(pcm)
                 if self.core.vad.mic_normalize:
-                    pcm = _normalize_peak(pcm)
+                    pcm = normalize_peak(pcm)
 
                 # Optional raw audio capture: save the finalized utterance PCM (already
                 # trimmed by core.vad.trim_start_ms above) as a 16 kHz / mono / 16-bit WAV.
@@ -859,7 +668,7 @@ class Pipeline:
 
                         def _capture(d=capture_dir, p=out_path, data=pcm):
                             os.makedirs(d, exist_ok=True)
-                            _write_wav(p, data)
+                            write_wav(p, data)
 
                         await asyncio.to_thread(_capture)
                         logger.info(
@@ -1113,7 +922,7 @@ class Pipeline:
                             stored_audio = False
                             if self.core.runs.store_audio and pcm:
                                 try:
-                                    wav = _pcm_to_wav_bytes(pcm, pcm2)
+                                    wav = pcm_to_wav_bytes(pcm, pcm2)
                                     await asyncio.to_thread(
                                         self.runs_store.put_audio,
                                         run_id, wav, self.core.runs.audio_keep,
@@ -1269,7 +1078,7 @@ class Pipeline:
         if pcm:
             # Build the WAV container in memory (cheap, no disk) and hand it to the
             # awaiting caller. Resolve on the loop thread — this coroutine runs there.
-            wav = _pcm_to_wav_bytes(pcm)
+            wav = pcm_to_wav_bytes(pcm)
             if fut is not None and not fut.done():
                 fut.set_result(wav)
             logger.info(
