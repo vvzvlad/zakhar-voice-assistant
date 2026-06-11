@@ -34,8 +34,8 @@ substitutions:
   # verify which config is actually flashed (catches a stale / wrong-file flash).
   config_version: "v13_preroll"
   # micro_wake_word model version flashed; keep in sync with the model path in
-  # packages.zakhar_wake_word below (currently microWakeWord/v8).
-  model_version: "zakhar_v8"
+  # packages.zakhar_wake_word below
+  model_version: "zakhar_v16"
 
 # --- Pre-roll fork: overrides the built-in voice_assistant with the patched copy ---
 external_components:
@@ -54,29 +54,32 @@ packages:
   zakhar_wake_word:
     micro_wake_word:
       models:
-        # Local path to the model already committed in this repo. ESPHome resolves
-        # the manifest's relative "model": "zakhar.tflite" against this file's dir,
-        # so both .json and .tflite are read straight from microWakeWord/v8/model/.
+        # Local path to the model committed in this repo. ESPHome resolves the
+        # manifest's relative "model": "zakhar.tflite" against this file's dir, so
+        # both .json and .tflite are read straight from microWakeWord/v16/model/.
         # (A remote github:// / raw URL fails here: ESPHome can't resolve the
         # relative .tflite inside a manifest fetched that way.)
         #
-        # v8 = current best, validated on a leakage-safe DEVICE eval (audio recorded
-        # through this exact Voice PE): on-device false-reject 18% (v5) -> ~5% (v8).
-        # Trained on clean (STT-filtered) synthetics + real device-tract captures, so
-        # it generalizes to what the mic + XMOS/NS-AGC pipeline actually feeds it. Its
-        # low music false-accept rate relies on the VAD pre-gate — which the stock HA
-        # Voice PE firmware ALREADY enables (`vad:` in its own micro_wake_word block,
-        # inherited here), so continuous instrumental music stays ~0 false-accepts.
-        - model: ../microWakeWord/v8/model/zakhar.json
+        # v16 = current best single-model, validated on the honest leakage-safe DEVICE
+        # eval (audio recorded through this exact Voice PE). v8 recipe + REAL device-tract
+        # positives + 4 real negative classes (silence/music/speech/vacuum, all recorded
+        # through the device). STRICTLY BETTER than v8 — same recall (~21% device FRR @0.9)
+        # but FAPH 0 across ALL classes with the VAD pre-gate, where v8 false-fired
+        # ~12.5/h in real silence. So v16 fixes the field silence false-fire bug at no
+        # recall cost. The ~21% recall floor is fundamental this round: the model keys on
+        # the «заха» ONSET, not vowel duration (../microWakeWord/v16/DURATION_CAUSALITY.md),
+        # so it is NOT duration-aware — next recall lever is angular+verifier as a true
+        # 2-stage (../microWakeWord/v19) or short-«захар» hard-negatives in a future retrain.
+        # Music false-accepts stay ~0 via the stock VAD pre-gate (inherited here).
+        - model: ../microWakeWord/v16/model/zakhar.json
           id: zakhar
-          # v8 KNOWN-GOOD operating point: cutoff 0.80 (device FRR 4.6%, FAPH 0 with
-          # VAD) — the point at which v8 actually detects «захааар» reliably (commit
-          # e7ec0dd). The later 0.95 + window-5 tightening (to fight silence false-fires)
-          # OVER-suppressed the model: real «захааар» peaks below 0.95, so it stopped
-          # detecting at all. Detection matters more than the silence FAPH, and the VAD
-          # pre-gate already masks most silence false-accepts. Window override removed ->
-          # manifest default (3). Tune live from the panel (Wake Probability Cutoff,
-          # below) — raise toward 0.90 only if silence false-fires get annoying.
+          # Operating point: cutoff 0.80 — kept at v8's KNOWN-GOOD field point because
+          # v16 keys on the SAME onset, so real «захааар» still peaks low; detection
+          # matters more than silence FAPH, which the VAD pre-gate + v16's far better
+          # FAPH curve already keep low. (v16's eval FAPH-0 was measured at 0.90; the
+          # sliding window defaults to v16's manifest value = 5.) Tune live from the
+          # panel (Wake Probability Cutoff, below) — raise toward 0.90 if silence
+          # false-fires get annoying (v16 tolerates 0.90 at FAPH 0).
           probability_cutoff: 80%
 
   # Official Home Assistant Voice PE firmware, pinned to a release tag.

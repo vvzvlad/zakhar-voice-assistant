@@ -2,8 +2,9 @@
 
 Takes control of a **Home Assistant Voice PE** (ESP32-S3) and runs the custom
 on-device wake word **«Захар»**. The stock firmware is pulled unchanged from the
-official Nabu Casa repo as a remote package — only the device name, Wi-Fi/API
-credentials and the `micro_wake_word` model list are overridden in
+official Nabu Casa repo as a remote package — we override the device name, Wi-Fi/API
+credentials, the `micro_wake_word` model, and the `voice_assistant` component (a
+**pre-roll fork**, so «Захар <команда>» streams as one continuous utterance) in
 [`zakhar-voice-preroll.yaml`](zakhar-voice-preroll.yaml).
 
 ## What's here
@@ -14,7 +15,7 @@ credentials and the `micro_wake_word` model list are overridden in
 | `secrets.yaml` | Wi-Fi creds + API key (gitignored). **Edit the two Wi-Fi lines.** |
 | `.gitignore` | Keeps `secrets.yaml` and `.esphome/` out of git. |
 
-The model is referenced by a **local path** — `../microWakeWord/v8/model/zakhar.json`
+The model is referenced by a **local path** — `../microWakeWord/v16/model/zakhar.json`
 — so `zakhar.json` and `zakhar.tflite` are read straight from this repo at build
 time (no network, no push needed). A remote `github://` / raw URL does **not**
 work for this model: ESPHome can't resolve the manifest's relative
@@ -56,13 +57,18 @@ flashing it.
 
 ## Tuning (no retrain needed)
 
-- `probability_cutoff` defaults to `80%` in `zakhar-voice-preroll.yaml` — v8's
-  known-good operating point (device FRR 4.6%, FAPH 0 with VAD), the point at which
-  «захааар» actually detects reliably. An earlier `95%` + `sliding_window_size: 5`
-  tightening (to fight silence false-fires) over-suppressed the model and it stopped
-  detecting at all, so it was reverted. The `vad:` gate from the stock config stays on
-  and already suppresses most silence/music false-accepts. Raise toward `90%` only if
-  silence false-fires get annoying.
+- The current model is **v16** (v8 recipe + real device-tract positives + 4 real
+  negative classes: silence/music/speech/vacuum, all recorded through the device). On
+  the honest leakage-safe device eval it matches v8's recall (~21% FRR) but with **FAPH
+  0 across all classes** under the VAD pre-gate, where v8 false-fired ~12.5/h in real
+  silence — so it fixes the field silence false-fire bug at no recall cost.
+- `probability_cutoff` defaults to `80%` in `zakhar-voice-preroll.yaml`, kept at v8's
+  known-good field point: v16 keys on the same «заха» onset as v8, so real «захааар»
+  still peaks low and detection matters more than silence FAPH. (v16's FAPH-0 was
+  measured at `90%`; raise toward `90%` if silence false-fires get annoying — v16
+  tolerates it at FAPH 0.) The `vad:` gate from the stock config stays on. The ~21%
+  recall floor is fundamental this round — the model keys on the onset, not vowel
+  duration (see [`../microWakeWord/v16/DURATION_CAUSALITY.md`](../microWakeWord/v16/DURATION_CAUSALITY.md)).
 - Both the **wake cutoff** and the **speaker volume** are now adjustable **live from
   the panel's Devices page** (the **Wake Probability Cutoff** and **Speaker Volume**
   numbers, 0–100) with NO re-flash; the cutoff value persists across reboots.
