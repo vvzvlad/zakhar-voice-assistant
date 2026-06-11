@@ -12,7 +12,7 @@ import webrtcvad
 from pydantic import BaseModel, Field
 
 from src.plugins.base import Deps, Provider, register
-from src.vad import SAMPLE_RATE, EndpointPolicy, VadBackend, VadSession
+from src.vad import SAMPLE_RATE, EndpointPolicy, EndpointTracker, VadBackend, VadSession
 
 # WebRTC VAD requires mono 16-bit PCM frames of exactly 10/20/30 ms at 16 kHz.
 # We use 20 ms frames = 16000 * 2 * 20/1000 = 640 bytes.
@@ -59,25 +59,21 @@ def _vad_boost(frame: bytes, peak: int, max_gain: float = 128.0) -> bytes:
 
 
 class WebRtcVadSession(VadSession):
-    """One utterance's WebRTC end-pointing state machine.
+    """One utterance's WebRTC VAD session.
 
     feed() consumes arbitrary-size PCM chunks: device chunks aren't 640-aligned,
     so leftover bytes are kept in a remainder buffer and only whole 640-byte
-    frames reach webrtcvad. Counters and the finalize decision mirror the
-    pipeline's original inline logic exactly (speech accumulation, trailing
-    silence counted only after real speech, min_speech_ms gate, then
-    endpoint / maxlen / no_speech checks in that precedence order).
+    frames reach webrtcvad. The session owns only the WebRTC engine specifics
+    (framing, the Vad object, the decision-only auto_gain boost and its peak
+    tracking); the speech/silence counters and the endpoint / maxlen / no_speech
+    decision live in the shared EndpointTracker, driven one 20 ms frame at a time.
     """
 
     def __init__(self, vad, policy: EndpointPolicy, *, auto_gain: bool = False):
         self._vad = vad                # exposes is_speech(frame, rate) -> bool
-        self._policy = policy
+        self._tracker = EndpointTracker(policy)
         self._auto_gain = auto_gain
         self._rem = bytearray()        # leftover bytes between non-640-aligned chunks
-        self._speech_ms = 0
-        self._silence_ms = 0
-        self._speech_detected = False
-        self._elapsed_ms = 0
         self._peak = 0                 # running peak of the utterance (for the frame boost)
 
     def feed(self, chunk: bytes) -> str | None:
@@ -93,6 +89,16 @@ class WebRtcVadSession(VadSession):
                 )
 
         # Consume whole 640-byte frames only; keep the remainder for the next chunk.
+        # Each frame drives the shared tracker; the LAST frame's verdict is the
+        # chunk's verdict — identical to the original decide-after-the-whole-chunk
+        # logic, because update() evaluates the decision on the same counters the
+        # old end-of-chunk check read (so a mid-chunk near-endpoint that speech
+        # later in the chunk cancels still keeps the session listening). Known
+        # boundary: a chunk that completes no frame returns None without
+        # re-checking thresholds — equivalent for any positive policy values
+        # (the panel enforces positive ms thresholds), since frame-less chunks
+        # leave the counters untouched.
+        reason = None
         self._rem.extend(chunk)
         while len(self._rem) >= FRAME_BYTES:
             frame = bytes(self._rem[:FRAME_BYTES])
@@ -101,35 +107,13 @@ class WebRtcVadSession(VadSession):
             # so WebRTC VAD can detect the quiet less-processed channel.
             vframe = _vad_boost(frame, self._peak) if self._auto_gain else frame
             speech = self._vad.is_speech(vframe, SAMPLE_RATE)
-            self._elapsed_ms += FRAME_MS
-            if speech:
-                self._speech_ms += FRAME_MS
-                self._silence_ms = 0
-                if self._speech_ms >= self._policy.min_speech_ms:
-                    self._speech_detected = True
-            else:
-                # Trailing silence only counts once real speech has been observed.
-                if self._speech_detected:
-                    self._silence_ms += FRAME_MS
-
-        # Decide end-of-utterance (reason or None) after the whole chunk's frames,
-        # in the same precedence order as before: endpoint, max length, no-speech.
-        if self._speech_detected and self._silence_ms >= self._policy.silence_ms:
-            return "endpoint"
-        if self._elapsed_ms >= self._policy.max_utterance_ms:
-            return "maxlen"
-        if not self._speech_detected and self._elapsed_ms >= self._policy.no_speech_timeout_ms:
-            return "no_speech"
-        return None
+            reason = self._tracker.update(speech, FRAME_MS)
+        return reason
 
     def debug_state(self) -> dict:
-        return {
-            "speech_ms": self._speech_ms,
-            "silence_ms": self._silence_ms,
-            "elapsed_ms": self._elapsed_ms,
-            "speech_detected": self._speech_detected,
-            "peak": self._peak,
-        }
+        # The shared tracker's counters plus the engine extras (running peak),
+        # keeping key parity with the pipeline's VAD-finalize debug log line.
+        return {**self._tracker.debug_state(), "peak": self._peak}
 
 
 class WebRtcVadBackend(VadBackend):
