@@ -1,3 +1,5 @@
+import asyncio
+
 import pytest
 from loguru import logger
 
@@ -626,4 +628,33 @@ async def test_call_resets_device_even_when_source_raises():
     with pytest.raises(RuntimeError):
         await hub.call("set_light", {}, device="kitchen")
 
+    assert current_device.get() is None
+
+
+async def test_concurrent_calls_keep_device_isolated_per_call():
+    # Two hub.call()s for DIFFERENT devices running concurrently: each call's tool
+    # must see its own ambient device, never the sibling's. The ContextVar set in
+    # hub.call is task-local (gather wraps each call in its own task/context), so
+    # the interleaving forced by the awaits below must not cross-pollute.
+    class AmbientDeviceSource(FakeSource):
+        """Reads the ambient device only AFTER yielding to the event loop, so the
+        two concurrent calls interleave before each reads its ContextVar value."""
+
+        async def call(self, raw_name, args):
+            await asyncio.sleep(0)     # yield: let the sibling call set ITS device
+            await asyncio.sleep(0.01)  # keep both calls in flight simultaneously
+            return f"device={current_device.get()}"
+
+    source = AmbientDeviceSource("home", ["whoami"])
+    hub = ToolHub([source])
+    await hub.start()
+
+    kitchen, bedroom = await asyncio.gather(
+        hub.call("whoami", {}, device="kitchen"),
+        hub.call("whoami", {}, device="bedroom"),
+    )
+
+    assert kitchen == "device=kitchen"
+    assert bedroom == "device=bedroom"
+    # The surrounding context is left at its default after both calls.
     assert current_device.get() is None

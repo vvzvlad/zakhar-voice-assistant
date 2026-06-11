@@ -135,6 +135,122 @@ async def test_groq_backend_discards_hallucination_as_empty():
     assert result == ""
 
 
+def _multipart_field(body: str, name: str) -> str | None:
+    """Extract one multipart form field's value from a decoded request body.
+
+    Returns None when the field is absent. Matches the exact Content-Disposition
+    field-name boundary (name="<name>") rather than a naive substring, so e.g. a
+    prompt VALUE containing the word "prompt" can't confuse the check.
+    """
+    marker = f'name="{name}"\r\n\r\n'
+    idx = body.find(marker)
+    if idx == -1:
+        return None
+    start = idx + len(marker)
+    end = body.find("\r\n--", start)
+    assert end != -1, "multipart field value must be terminated by a boundary"
+    return body[start:end]
+
+
+@respx.mock
+@pytest.mark.parametrize("prompt", ["", "   "])
+async def test_groq_backend_omits_empty_prompt_field(prompt):
+    # Empty / whitespace-only prompt -> NO "prompt" multipart field at all
+    # (never send an empty prompt to the API).
+    route = respx.post(GROQ_STT_URL).mock(
+        return_value=httpx.Response(200, json={"text": "ok"})
+    )
+    async with httpx.AsyncClient(verify=False) as client:
+        backend = GroqSttBackend(
+            client, api_key="k", model="whisper-large-v3-turbo", prompt=prompt
+        )
+        await backend.transcribe(b"\x01\x02" * 100)
+
+    body = route.calls.last.request.content.decode("utf-8", "replace")
+    assert _multipart_field(body, "prompt") is None
+    # Sanity: the parser does see real fields in the same body.
+    assert _multipart_field(body, "language") == "ru"
+
+
+@respx.mock
+async def test_groq_backend_sends_configured_prompt_and_bearer_auth():
+    route = respx.post(GROQ_STT_URL).mock(
+        return_value=httpx.Response(200, json={"text": "ok"})
+    )
+    async with httpx.AsyncClient(verify=False) as client:
+        backend = GroqSttBackend(
+            client, api_key="test-key", model="whisper-large-v3-turbo",
+            prompt="Захар, Wirenboard",
+        )
+        await backend.transcribe(b"\x01\x02" * 100)
+
+    req = route.calls.last.request
+    body = req.content.decode("utf-8", "replace")
+    # The configured vocabulary hint travels as the exact "prompt" field value.
+    assert _multipart_field(body, "prompt") == "Захар, Wirenboard"
+    # The API key travels as a Bearer Authorization header.
+    assert req.headers["Authorization"] == "Bearer test-key"
+
+
+@respx.mock
+async def test_groq_backend_truncates_overlong_prompt_to_896():
+    from src.plugins.stt.groq import GROQ_PROMPT_MAX_CHARS
+
+    # Pin the documented cap so a silent constant change fails this test.
+    assert GROQ_PROMPT_MAX_CHARS == 896
+
+    prompt = "Захар" + "а" * 995  # 1000 chars, distinctive head
+    route = respx.post(GROQ_STT_URL).mock(
+        return_value=httpx.Response(200, json={"text": "ok"})
+    )
+    async with httpx.AsyncClient(verify=False) as client:
+        backend = GroqSttBackend(
+            client, api_key="k", model="whisper-large-v3-turbo", prompt=prompt
+        )
+        await backend.transcribe(b"\x01\x02" * 100)
+
+    body = route.calls.last.request.content.decode("utf-8", "replace")
+    # Exactly the first 896 characters are sent — no more, no less.
+    assert _multipart_field(body, "prompt") == prompt[:896]
+
+
+@respx.mock
+@pytest.mark.parametrize("payload", [{}, {"text": "   "}])
+async def test_groq_backend_missing_or_blank_text_returns_empty(payload):
+    # A 200 without "text" (or with whitespace-only text) is "no speech
+    # recognized" -> transcribe returns "".
+    respx.post(GROQ_STT_URL).mock(return_value=httpx.Response(200, json=payload))
+    async with httpx.AsyncClient(verify=False) as client:
+        backend = GroqSttBackend(client, api_key="k", model="whisper-large-v3-turbo")
+        result = await backend.transcribe(b"\x01\x02" * 100)
+    assert result == ""
+
+
+@respx.mock
+async def test_groq_backend_malformed_200_body_raises_stage_error():
+    # Д1 regression: a 200 whose body is not JSON makes resp.json() raise
+    # json.JSONDecodeError (a ValueError, NOT an httpx.HTTPError). It must
+    # surface as StageError("stt", ...) per the SttBackend contract, not leak raw.
+    respx.post(GROQ_STT_URL).mock(
+        return_value=httpx.Response(200, text="not json at all")
+    )
+    async with httpx.AsyncClient(verify=False) as client:
+        backend = GroqSttBackend(client, api_key="k", model="whisper-large-v3-turbo")
+        with pytest.raises(StageError) as ei:
+            await backend.transcribe(b"\x01\x02" * 100)
+    assert ei.value.stage == "stt"
+    assert "malformed" in str(ei.value)
+    # The original decode error is chained for debuggability.
+    assert isinstance(ei.value.__cause__, ValueError)
+
+
+def test_contains_stt_hallucination_uppercase_cyrillic():
+    # Markers are stored lowercase; matching must survive UPPERCASE Cyrillic
+    # input — pins the casefold() normalization in contains_stt_hallucination.
+    assert contains_stt_hallucination("ПРОДОЛЖЕНИЕ СЛЕДУЕТ...")
+    assert contains_stt_hallucination("DIMATORZOK")
+
+
 async def test_registry_groq_provider_creates_groq_backend():
     # REGISTRY-based construction (the primary path now): the groq STT provider's
     # create() returns a GroqSttBackend wired to the cloud HTTP client.

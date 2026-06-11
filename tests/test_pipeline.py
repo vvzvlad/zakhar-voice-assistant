@@ -2623,3 +2623,167 @@ async def test_llm_reply_reaches_tts_verbatim(tmp_path, monkeypatch):
     assert tts.calls == [(reply, "ru")]
     assert dict(events)[StageEvent.TTS_START] == {"text": reply}
     assert_all_str(events)
+
+
+# --- pipeline <-> LlmStage wiring (R7 contract) -----------------------------------
+
+
+async def test_llm_request_carries_assembled_prompt_and_device(tmp_path, monkeypatch):
+    # The orchestrator assembles the system prompt (build_system_prompt over the
+    # configured prompt file) and names the originating device on the LlmRequest.
+    # Catches: an empty/missing system prompt silently stripping the assistant of
+    # all of its instructions.
+    seen = []  # the LlmRequest of each respond() call
+
+    class CapturingLlmStage:
+        def __init__(self, backend, hub, cfg):
+            pass
+
+        async def respond(self, req, *, on_filler=None):
+            seen.append(req)
+            return make_llm_result("готово")
+
+    monkeypatch.setattr("src.llm.LlmStage", CapturingLlmStage)
+    pipeline, _ = make_pipeline(tmp_path, monkeypatch, stt_text="включи свет")
+
+    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_audio(b"\x01\x02" * 100)
+    await pipeline.on_stop(False)
+
+    assert len(seen) == 1
+    req = seen[0]
+    # The prompt file body written by make_pipeline reached the stage...
+    assert "PROMPT BODY" in req.system_prompt
+    # ...with the date placeholder expanded, not passed through verbatim.
+    assert "<<<<<TDW>>>>>" not in req.system_prompt
+    assert req.device == pipeline.name
+    assert req.user_text == "включи свет"
+
+
+async def test_llm_backend_hot_swap_applies_on_next_run(tmp_path, monkeypatch):
+    # The pipeline constructs a fresh LlmStage per run from rt.llm_backend, so
+    # swapping the backend on the runtime (what the reconfigurator does on an
+    # llm.* change) takes effect on the NEXT run without rebuilding the pipeline
+    # — mirrors test_vad_backend_hot_swap_applies_on_next_run.
+    backends = []  # the backend each constructed stage received
+
+    class RecordingLlmStage:
+        def __init__(self, backend, hub, cfg):
+            backends.append(backend)
+
+        async def respond(self, req, *, on_filler=None):
+            return make_llm_result("готово")
+
+    monkeypatch.setattr("src.llm.LlmStage", RecordingLlmStage)
+    pipeline, _ = make_pipeline(tmp_path, monkeypatch, stt_text="включи свет")
+    old = pipeline.rt.llm_backend
+
+    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_audio(b"\x01\x02" * 100)
+    await pipeline.on_stop(False)
+    assert backends == [old]
+
+    # Hot-swap: the next run's stage is constructed with the NEW backend object.
+    new = object()
+    pipeline.rt.llm_backend = new
+    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_audio(b"\x01\x02" * 100)
+    await pipeline.on_stop(False)
+    assert backends == [old, new]
+
+
+# --- serve_audio edges (the delivery boundary's url/verbatim contract) ------------
+
+
+async def test_serve_audio_flac_served_verbatim_with_flac_url(tmp_path, monkeypatch):
+    # FLAC is natively playable: served verbatim (no transcode), ".flac" url,
+    # nbytes equal to the input size.
+    pipeline, _ = make_pipeline(tmp_path, monkeypatch)
+    data = b"fLaC" + b"\x01\x02\x03" * 20
+
+    ext, url, nbytes = await pipeline.serve_audio("audio/flac", data)
+
+    assert pipeline.audio_server.calls == [(data, "audio/flac")]
+    assert ext == "flac"
+    assert url.endswith(".flac")
+    assert nbytes == len(data)
+
+
+async def test_serve_audio_unknown_mime_served_as_is_with_mp3_url(tmp_path, monkeypatch):
+    # Unknown mimes pass through to_playable untouched and tts_url falls back to
+    # the ".mp3" extension (the real _EXT_FOR_MIME default) — pin that lenient
+    # contract here.
+    pipeline, _ = make_pipeline(tmp_path, monkeypatch)
+    data = b"OggS" + b"\x07" * 40
+
+    ext, url, nbytes = await pipeline.serve_audio("audio/ogg", data)
+
+    # Served verbatim under its own mime; the url extension falls back to .mp3.
+    assert pipeline.audio_server.calls == [(data, "audio/ogg")]
+    assert ext == "mp3"
+    assert url.endswith(".mp3")
+    assert nbytes == len(data)
+
+
+async def test_speak_wav_native_tts_is_transcoded_at_delivery(tmp_path, monkeypatch):
+    # speak() (the announce/filler/reminder path) goes through the same delivery
+    # boundary as the main run: a WAV-native TTS backend (like Piper) must reach
+    # the speaker as MP3, never as raw WAV the firmware can't decode.
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(16000)
+        wf.writeframes(b"\x00\x00" * 160)
+    wav_bytes = buf.getvalue()
+    pipeline, _ = make_pipeline(
+        tmp_path, monkeypatch,
+        tts_backend=FakeTtsBackend(mime="audio/wav", audio=wav_bytes),
+    )
+    announcer = FakeAnnouncer()
+    pipeline.send_announcement = announcer
+
+    await pipeline.speak("привет")
+
+    # The audio cache holds the transcoded MP3 clip, not the backend's native WAV.
+    [(served, mime)] = pipeline.audio_server.calls
+    assert mime == "audio/mpeg"
+    assert served != wav_bytes
+    assert served[0] == 0xFF  # MP3 frame sync byte
+    # The announcement points the speaker at the .mp3 url.
+    assert len(announcer.calls) == 1
+    assert announcer.calls[0]["media_id"].endswith(".mp3")
+    assert announcer.calls[0]["media_id"].startswith(PUBLIC_BASE_URL)
+
+
+async def test_llm_stage_error_without_partial_attribute(tmp_path, monkeypatch):
+    # A StageError WITHOUT .partial set (the attribute is optional on the
+    # contract): the error path must read it defensively (getattr, never
+    # e.partial directly), leave the observability fields at their empty
+    # defaults, and still speak the configured fallback phrase.
+    err = StageError("llm", "boom")
+    assert not hasattr(err, "partial")
+    patch_llm(monkeypatch, error=err)
+    store = FakeRunsStore()
+    pipeline, events = make_pipeline(
+        tmp_path, monkeypatch, stt_text="включи свет", runs_store=store,
+    )
+
+    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_audio(b"\x01\x02" * 100)
+    await pipeline.on_stop(False)
+
+    # The run completed cleanly: RUN_END fired, no raw exception escaped (an
+    # AttributeError on e.partial would land in the top-level ERROR branch).
+    types = types_of(events)
+    assert StageEvent.RUN_END in types
+    assert StageEvent.ERROR not in types
+    # The configured fallback phrase (never the raw error text) went to TTS.
+    assert dict(events)[StageEvent.TTS_START] == {"text": LlmConfig().reply_error}
+    rec = store.records[0]
+    assert rec["result"] == "error"
+    assert rec["error_stage"] == "LLM"
+    assert rec["model"] is None
+    assert rec["tokens"] is None
+    assert rec["rounds"] == []
+    assert rec["request"] is None

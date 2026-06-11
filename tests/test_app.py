@@ -283,6 +283,22 @@ def test_migrate_mcp_slow_second_run_is_noop():
     assert doc["core"]["mcp_servers"] == snapshot
 
 
+def test_migrate_mcp_slow_corrupt_shapes_are_safe():
+    # Hand-broken configs must never crash the boot-time migration (mirrors the
+    # migrate_vad_plugin corrupt-shapes guard): a null core or a non-list
+    # mcp_servers is a quiet no-op.
+    assert app.migrate_mcp_slow({"core": None}) is False
+    assert app.migrate_mcp_slow({"core": {"mcp_servers": "oops"}}) is False
+
+    # A list mixing non-dict garbage with one real entry: the garbage elements are
+    # skipped untouched, the dict entry still gains its explicit flag ("web" hits
+    # a legacy slow marker, so it is seeded slow=true).
+    doc = {"core": {"mcp_servers": [42, "x", {"name": "web"}]}}
+    assert app.migrate_mcp_slow(doc) is True
+    assert doc["core"]["mcp_servers"][:2] == [42, "x"]
+    assert doc["core"]["mcp_servers"][2]["slow"] is True
+
+
 def test_load_or_create_config_saves_mcp_slow_migration(monkeypatch):
     # A pre-R6 config (mcp_servers without "slow") triggers the migration and is
     # saved back via load_or_create_config.

@@ -13,7 +13,8 @@ import { STAGE_COLOR, fmtSec, mapRun, totalMs, statusMeta, applyStreamedRun } fr
 const SC = STAGE_COLOR;
 
 // Pick a short, human "detail" line for a stage from its selected provider values.
-function detailFor(stage, catalog, config) {
+// Exported for unit tests.
+export function detailFor(stage, catalog, config) {
   if (stage.key === "vad") {
     const v = config?.core?.vad;
     return v ? `silence ${v.silence_ms} ms` : "—";
@@ -27,7 +28,8 @@ function detailFor(stage, catalog, config) {
   if (stage.cat === "tts") return v.voice ? `voice · ${v.voice}` : (prov?.label || cat.selected);
   return prov?.label || cat.selected;
 }
-function providerOf(stage, catalog) {
+// Exported for unit tests. Two-argument signature: (stage, catalog).
+export function providerOf(stage, catalog) {
   const cat = catalog.categories.find((c) => c.id === stage.cat);
   if (!cat) return "—";
   // vad shows the human provider label ("WebRTC VAD"); stt/llm/tts keep the id.
@@ -94,7 +96,7 @@ function Dashboard() {
         const avg = stageAvg[s.key];
         return <React.Fragment key={s.key}>
           <div className="z-svc" onClick={() => nav(s.key)}>
-            <div className="z-svc-h"><span className="z-dot ok" /><b>{s.name}</b><span className="prov">{providerOf(s, catalog, config)}</span></div>
+            <div className="z-svc-h"><span className="z-dot ok" /><b>{s.name}</b><span className="prov">{providerOf(s, catalog)}</span></div>
             <div className="mdl">{detailFor(s, catalog, config)}</div>
             <div className="lat">{avg != null
               ? <><b style={{ color: SC[s.key] }}>{(avg / 1000).toFixed(2)}</b><s>s avg</s></>

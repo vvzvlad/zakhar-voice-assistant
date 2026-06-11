@@ -31,8 +31,7 @@ import numpy as np
 # Repo root on the path so we can reuse the project's Yandex v3 helpers/catalog.
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
-from src.plugins.tts.yandex import YANDEX_V3_VOICES  # noqa: E402
-from src.tts import _decode_v3_audio  # noqa: E402
+from src.plugins.tts.yandex import YANDEX_V3_VOICES, _decode_v3_audio  # noqa: E402
 
 V3_URL = "https://tts.api.cloud.yandex.net/tts/v3/utteranceSynthesis"
 # Correct word, stress on the 2nd syllable in Yandex "+vowel" notation (the «+»

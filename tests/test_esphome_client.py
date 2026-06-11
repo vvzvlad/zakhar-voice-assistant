@@ -550,6 +550,72 @@ async def test_manager_announce_none_with_no_online_client_is_noop():
     assert a.announced == [] and b.announced == []
 
 
+# --- DeviceManager.play_chime --------------------------------------------------
+
+class _ChimeClient:
+    """Fake DeviceClient for DeviceManager.play_chime tests, recording play_media."""
+
+    def __init__(self, name, online=True, fail=False):
+        self.cfg = _Cfg(name)
+        self.online = online
+        self.fail = fail
+        self.played = []  # (audio, mime) — positional, matching play_chime's call
+
+    async def play_media(self, audio, mime):
+        if self.fail:
+            raise RuntimeError("play boom")
+        self.played.append((audio, mime))
+
+
+async def test_play_chime_plays_synthesized_chime_on_online_skips_offline():
+    a = _ChimeClient("a")
+    b = _ChimeClient("b")
+    c = _ChimeClient("c", online=False)
+    mgr = _manager([a, b, c])
+    result = await mgr.play_chime("")  # empty path -> synthesized chime
+    assert result == {"played": ["a", "b"], "offline": ["c"]}
+    # Every online client received the same MP3 clip; the offline one nothing.
+    for cl in (a, b):
+        assert len(cl.played) == 1
+        audio, mime = cl.played[0]
+        assert mime == "audio/mpeg"
+        assert audio  # non-empty clip bytes
+    assert c.played == []
+
+
+async def test_play_chime_failing_client_lands_in_offline_others_still_play():
+    ok = _ChimeClient("ok")
+    bad = _ChimeClient("bad", fail=True)
+    mgr = _manager([ok, bad])
+    result = await mgr.play_chime("")
+    # The per-device failure is reported, never raised, and does not block others.
+    assert result == {"played": ["ok"], "offline": ["bad"]}
+    assert len(ok.played) == 1
+
+
+async def test_play_chime_unknown_device_raises_lookup():
+    mgr = _manager([_ChimeClient("a")])
+    with pytest.raises(LookupError):
+        await mgr.play_chime("", device_name="nope")
+
+
+async def test_play_chime_wav_file_is_transcoded_end_to_end(tmp_path):
+    # Seam test: a real on-disk WAV goes through build_ack_clip -> play_media,
+    # so the client must receive MP3 bytes (transcoded), not the raw WAV.
+    wav = _wav_bytes()
+    p = tmp_path / "chime.wav"
+    p.write_bytes(wav)
+    a = _ChimeClient("a")
+    mgr = _manager([a])
+    result = await mgr.play_chime(str(p))
+    assert result == {"played": ["a"], "offline": []}
+    audio, mime = a.played[0]
+    assert mime == "audio/mpeg"
+    assert audio            # non-empty
+    assert audio != wav     # transcoded, not the raw WAV bytes
+    assert audio[0] == 0xFF  # MP3 frame sync byte
+
+
 # --- DeviceClient._on_connect / _on_disconnect -------------------------------
 
 class _ConnectPipeline:

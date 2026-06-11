@@ -108,6 +108,15 @@ class GroqSttBackend(SttBackend):
         except httpx.HTTPError as e:
             logger.error(f"Groq STT request failed: {str(e)}")
             raise StageError("stt", f"Groq STT request failed: {e}") from e
+        except ValueError as e:
+            # resp.json() on a malformed 200 body raises json.JSONDecodeError — a
+            # ValueError subclass, NOT an httpx.HTTPError — so without this clause
+            # it would leak raw out of transcribe(), violating the SttBackend
+            # contract (StageError("stt", ...) on any failure). StageError itself
+            # is a plain Exception (not a ValueError), so the non-200 raise above
+            # still propagates untouched.
+            logger.error(f"Groq STT malformed response: {str(e)}")
+            raise StageError("stt", f"Groq STT malformed response: {e}") from e
 
 
 class GroqSttConfig(BaseModel):

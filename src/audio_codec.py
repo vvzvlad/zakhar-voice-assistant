@@ -29,11 +29,16 @@ def wav_to_mp3(wav_bytes: bytes, bit_rate: int = 64, quality: int = 2) -> bytes:
 
     The speaker firmware can't decode WAV, so Piper output is served as MP3.
     """
-    import lameenc  # local import: only needed when Piper is used
+    import lameenc  # local import: pay the lameenc import cost only when a WAV is actually transcoded
 
     with wave.open(io.BytesIO(wav_bytes), "rb") as wf:
         sample_rate = wf.getframerate()
         channels = wf.getnchannels()
+        sampwidth = wf.getsampwidth()
+        # lameenc assumes 16-bit PCM input; feeding it 24/8-bit samples produces
+        # distorted audio with no error, so make the silent bug loud instead.
+        if sampwidth != 2:
+            raise ValueError(f"wav_to_mp3 expects 16-bit PCM WAV, got {sampwidth * 8}-bit")
         pcm = wf.readframes(wf.getnframes())
     enc = lameenc.Encoder()
     enc.set_in_sample_rate(sample_rate)

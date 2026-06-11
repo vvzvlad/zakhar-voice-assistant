@@ -1,7 +1,10 @@
+import dataclasses
+import inspect
+
 import httpx
 import pytest
 
-from src.llm import LlmRequest, LlmStage
+from src.llm import LlmRequest, LlmResult, LlmStage
 from src.plugins.llm.base import LlmConfig
 from src.llm_text import clean_llm_output
 from src.stage_errors import StageError
@@ -517,4 +520,212 @@ async def test_on_filler_failure_does_not_break_loop():
     result = await _respond(backend, hub, "включи свет", on_filler=boom)
 
     assert hub.calls == [("set_light", {})]
+    assert result.reply == clean_llm_output("Готово.")
+
+
+# --- pipeline <-> LlmStage contract pin -------------------------------------------
+
+
+def test_llm_stage_contract_pin():
+    # Machine pin for the handwritten FakeLlmStage doubles in tests/test_pipeline.py:
+    # they re-implement this exact surface (respond signature + the request/result
+    # dataclass fields) by hand, so any change here must be propagated to those
+    # fakes — update them when this test changes.
+    sig = inspect.signature(LlmStage.respond)
+    params = list(sig.parameters.values())
+    assert [p.name for p in params] == ["self", "req", "on_filler"]
+    assert params[0].kind is inspect.Parameter.POSITIONAL_OR_KEYWORD
+    assert params[1].kind is inspect.Parameter.POSITIONAL_OR_KEYWORD
+    assert params[2].kind is inspect.Parameter.KEYWORD_ONLY
+
+    assert {f.name for f in dataclasses.fields(LlmResult)} == {
+        "reply", "model", "tokens", "rounds", "request_debug", "tool_used",
+    }
+    assert {f.name for f in dataclasses.fields(LlmRequest)} == {
+        "system_prompt", "history", "user_text", "device",
+    }
+
+
+# --- failure-path and multi-tool-round scenarios ----------------------------------
+
+
+async def test_mid_loop_failure_attaches_partial_from_completed_rounds():
+    # Round 1 succeeds (tool call, model m1, 30 tokens), round 2 raises a 500:
+    # the StageError's partial carries everything accumulated before the failure.
+    hub = StubHub(tools=[SET_LIGHT_TOOL])
+    backend = FakeLlmBackend([
+        _tool_call_usage("set_light", "{}", model="m1", total_tokens=30),
+        _http_status_error(500, {"error": {"message": "boom"}}),
+    ])
+
+    with pytest.raises(StageError) as ei:
+        await _respond(backend, hub, "включи свет")
+
+    partial = ei.value.partial
+    assert len(partial["rounds"]) == 1
+    assert partial["rounds"][0]["note"] == "tool call"
+    assert partial["tokens"] == 30
+    assert partial["model"] == "m1"
+
+
+async def test_non_2xx_with_non_json_body_raises_clean_stage_error():
+    # A 502 whose body is plain text ("Bad Gateway"): response.json() fails inside
+    # the reason-extraction try/except, which must degrade to reason=None and still
+    # raise a clean StageError with a non-empty message (no secondary exception).
+    request = httpx.Request("POST", "https://llm.test/chat")
+    response = httpx.Response(502, text="Bad Gateway", request=request)
+    err = httpx.HTTPStatusError("server error", request=request, response=response)
+    hub = StubHub(tools=[])
+    backend = FakeLlmBackend([err])
+
+    with pytest.raises(StageError) as ei:
+        await _respond(backend, hub, "привет")
+
+    assert ei.value.stage == "llm"
+    assert ei.value.kind == "error"
+    assert str(ei.value)  # non-empty message
+
+
+def _multi_tool_call(specs):
+    """One assistant message carrying SEVERAL tool_calls: specs = [(id, name, args_json)]."""
+    return {
+        "choices": [
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": id_,
+                            "type": "function",
+                            "function": {"name": name, "arguments": args_json},
+                        }
+                        for id_, name, args_json in specs
+                    ],
+                }
+            }
+        ],
+        "model": "x",
+        "usage": {},
+    }
+
+
+class PerNameHub(StubHub):
+    """StubHub returning a per-tool result, so tests can pair each appended
+    {"role": "tool"} message with the tool that actually produced it."""
+
+    async def call(self, name, arguments, *, device=None):
+        await super().call(name, arguments, device=device)
+        return f"result:{name}"
+
+
+async def test_multiple_tool_calls_in_one_round_executed_in_order():
+    # One assistant round requesting TWO tools: both execute in order, and the two
+    # appended tool messages pair the correct tool_call_id with the correct result.
+    hub = PerNameHub(tools=[SET_LIGHT_TOOL])
+    backend = FakeLlmBackend([
+        _multi_tool_call([
+            ("c1", "set_light", '{"state":"on"}'),
+            ("c2", "get_current_weather", '{"city":"Moscow"}'),
+        ]),
+        _final("Готово."),
+    ])
+
+    result = await _respond(backend, hub, "свет и погода")
+
+    assert hub.calls == [
+        ("set_light", {"state": "on"}),
+        ("get_current_weather", {"city": "Moscow"}),
+    ]
+    # The second complete() call sees both tool results, each under its own id.
+    messages = backend.seen[1][0]
+    tool_msgs = [m for m in messages if m.get("role") == "tool"]
+    assert tool_msgs == [
+        {"role": "tool", "tool_call_id": "c1", "name": "set_light",
+         "content": "result:set_light"},
+        {"role": "tool", "tool_call_id": "c2", "name": "get_current_weather",
+         "content": "result:get_current_weather"},
+    ]
+    assert result.reply == clean_llm_output("Готово.")
+    assert result.tool_used is True
+
+
+async def test_tool_result_is_fed_back_to_the_model():
+    # The second complete() call must END with the assistant tool-call message
+    # followed by the {"role": "tool"} result — i.e. the tool output actually
+    # reaches the model before it produces the final reply.
+    hub = StubHub(tools=[SET_LIGHT_TOOL])
+    backend = FakeLlmBackend([
+        _tool_call("set_light", "{}"),
+        _final("Готово."),
+    ])
+
+    await _respond(backend, hub, "включи свет")
+
+    assert len(backend.seen) == 2
+    messages = backend.seen[1][0]
+    assistant_msg, tool_msg = messages[-2], messages[-1]
+    assert assistant_msg["role"] == "assistant"
+    assert assistant_msg["tool_calls"][0]["id"] == "c1"
+    assert tool_msg == {
+        "role": "tool", "tool_call_id": "c1", "name": "set_light", "content": "ok",
+    }
+
+
+async def test_on_filler_skipped_for_whitespace_only_content():
+    # A tool-call round whose content is whitespace-only: on_filler is NOT invoked,
+    # but the tool itself still runs.
+    hub = StubHub(tools=[SET_LIGHT_TOOL])
+    backend = FakeLlmBackend([
+        _tool_call_with_content("set_light", "{}", "   "),
+        _final("Готово."),
+    ])
+
+    seen = []
+
+    async def recorder(content, tool_names):
+        seen.append((content, tool_names))
+
+    result = await _respond(backend, hub, "включи свет", on_filler=recorder)
+
+    assert seen == []
+    assert hub.calls == [("set_light", {})]  # the tool still executed
+    assert result.reply == clean_llm_output("Готово.")
+
+
+async def test_on_filler_fires_for_every_qualifying_round():
+    # The stage is policy-free: it forwards EVERY tool-requesting round that carries
+    # content. The at-most-once dedup belongs to the pipeline's callback, not here.
+    hub = StubHub(tools=[SET_LIGHT_TOOL])
+    backend = FakeLlmBackend([
+        _tool_call_with_content("set_light", "{}", "Секунду…"),
+        _tool_call_with_content("set_light", "{}", "Ещё чуть-чуть…"),
+        _final("Готово."),
+    ])
+
+    seen = []
+
+    async def recorder(content, tool_names):
+        seen.append((content, tool_names))
+
+    result = await _respond(backend, hub, "включи свет", on_filler=recorder)
+
+    assert [content for content, _ in seen] == ["Секунду…", "Ещё чуть-чуть…"]
+    assert result.reply == clean_llm_output("Готово.")
+
+
+async def test_tokens_survive_a_usage_less_round():
+    # Round 1 reports total_tokens=30; the final round has NO "usage" key at all.
+    # The sum must keep the 30 (no TypeError, not reset to None).
+    hub = StubHub(tools=[SET_LIGHT_TOOL])
+    final = _final("Готово.")
+    del final["usage"]  # provider omitted usage entirely on the final round
+    backend = FakeLlmBackend([
+        _tool_call_usage("set_light", "{}", model="m1", total_tokens=30),
+        final,
+    ])
+
+    result = await _respond(backend, hub, "включи свет")
+
+    assert result.tokens == 30
     assert result.reply == clean_llm_output("Готово.")

@@ -101,7 +101,7 @@ class LlmStage:
         def _error(message: str, *, kind: str = "error") -> StageError:
             # Build a StageError carrying the partial observability data, so the
             # orchestrator's error path records the same fields it always did
-            # (today's trace dict stayed partially filled after a failure).
+            # (the pre-R7 trace dict stayed partially filled after a failure).
             err = StageError("llm", message, kind=kind)
             err.partial = {
                 "model": model,

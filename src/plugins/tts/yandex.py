@@ -113,7 +113,9 @@ class YandexTtsBackend(TtsBackend):
 
     def __init__(self, client, *, api_key, voice, role, speed, url, timeout):
         if not api_key:
-            raise ValueError("YANDEX_TTS_API_KEY is required when TTS_BACKEND=yandex")
+            raise ValueError(
+                "Yandex TTS api_key is required (set tts.instances.yandex.api_key in data/config.json)"
+            )
         self.client = client
         self.api_key = api_key
         self.voice = voice

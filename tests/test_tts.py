@@ -6,7 +6,7 @@ import pytest
 import respx
 
 from src.audio_codec import to_playable, wav_to_mp3
-from src.chime import make_ack_chime_mp3
+from src.chime import build_ack_clip, make_ack_chime_mp3
 from src.plugins.tts._ru_text import expand_units, sanitize_plus_stress
 from src.plugins.tts.piper import PiperTtsBackend
 from src.plugins.tts.teratts import TeraTtsHttpBackend
@@ -14,6 +14,7 @@ from src.plugins.tts.yandex import (
     YandexTtsBackend,
     _chunk_for_v3,
     _decode_v3_audio,
+    _split_oversized,
 )
 from src.tts import split_sentences
 
@@ -38,6 +39,33 @@ def test_wav_to_mp3_produces_mp3_frame():
     out = wav_to_mp3(wav)
     assert out  # non-empty
     assert out[0] == 0xFF  # MP3 frame sync byte
+
+
+def test_wav_to_mp3_stereo_16bit():
+    out = wav_to_mp3(_make_wav(channels=2))
+    assert out  # non-empty
+    assert out[0] == 0xFF  # MP3 frame sync byte
+
+
+def test_wav_to_mp3_mono_8khz_16bit():
+    out = wav_to_mp3(_make_wav(sample_rate=8000))
+    assert out  # non-empty
+    assert out[0] == 0xFF  # MP3 frame sync byte
+
+
+def test_wav_to_mp3_rejects_24bit_wav():
+    # R-3: lameenc assumes 16-bit PCM; a 24-bit WAV used to be silently
+    # mis-encoded into distorted audio. It must now raise loudly.
+    frames = 100
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(3)  # 24-bit
+        wf.setframerate(16000)
+        wf.writeframes(b"\x00\x00\x00" * frames)
+    with pytest.raises(ValueError) as exc:
+        wav_to_mp3(buf.getvalue())
+    assert "24-bit" in str(exc.value)
 
 
 # --- to_playable (delivery-boundary format adaptation, R8) -------------------
@@ -76,6 +104,70 @@ def test_make_ack_chime_mp3_is_deterministic_mp3():
     assert a  # non-empty
     assert a[0] == 0xFF  # MP3 frame sync byte
     assert a == b        # deterministic: identical bytes on every build
+
+
+def test_make_ack_chime_mp3_edge_short_tone_no_gap():
+    # tone_ms=1 makes n smaller than the default ~8 ms ramps and gap_ms=0 yields a
+    # zero-length gap — pins the edge clamp (edge <= n // 2) and the n <= 0 guard:
+    # must still produce a valid non-empty MP3, not raise.
+    out = make_ack_chime_mp3(tone_ms=1, gap_ms=0)
+    assert out  # non-empty
+    assert out[0] == 0xFF  # MP3 frame sync byte
+
+
+# --- build_ack_clip (file-based chime loading + synthesized fallback) ---------
+
+
+@pytest.mark.parametrize("sound_path", ["", "   ", "/no/such/file.wav"])
+def test_build_ack_clip_empty_or_missing_path_yields_synthesized_chime(sound_path):
+    # make_ack_chime_mp3 is deterministic, so the fallback is byte-comparable.
+    assert build_ack_clip(sound_path) == ("audio/mpeg", make_ack_chime_mp3())
+
+
+def test_build_ack_clip_corrupt_wav_falls_back_to_synthesized_chime(tmp_path):
+    # A .wav file that is not actually a WAV must NOT raise — playback must never
+    # go silent — and falls back to the synthesized chime.
+    bad = tmp_path / "chime.wav"
+    bad.write_bytes(b"garbage")
+    assert build_ack_clip(str(bad)) == ("audio/mpeg", make_ack_chime_mp3())
+
+
+def test_build_ack_clip_wav_is_transcoded_to_mp3(tmp_path):
+    wav = _make_wav()
+    p = tmp_path / "chime.wav"
+    p.write_bytes(wav)
+    mime, audio = build_ack_clip(str(p))
+    assert mime == "audio/mpeg"
+    assert audio  # non-empty
+    assert audio != wav        # transcoded, not served verbatim
+    assert audio[0] == 0xFF    # MP3 frame sync byte
+
+
+def test_build_ack_clip_uppercase_wav_extension_also_transcoded(tmp_path):
+    # Extension matching is case-insensitive: "chime.WAV" is still a WAV.
+    wav = _make_wav()
+    p = tmp_path / "chime.WAV"
+    p.write_bytes(wav)
+    mime, audio = build_ack_clip(str(p))
+    assert mime == "audio/mpeg"
+    assert audio and audio != wav
+    assert audio[0] == 0xFF
+
+
+def test_build_ack_clip_flac_served_verbatim(tmp_path):
+    raw = b"fLaC-not-really-flac"
+    p = tmp_path / "chime.flac"
+    p.write_bytes(raw)
+    assert build_ack_clip(str(p)) == ("audio/flac", raw)
+
+
+@pytest.mark.parametrize("filename", ["chime.mp3", "chime.xyz"])
+def test_build_ack_clip_mp3_and_unknown_ext_served_verbatim(tmp_path, filename):
+    # mp3 (and any unknown extension) is served verbatim as audio/mpeg.
+    raw = b"\xff\xf3raw-bytes"
+    p = tmp_path / filename
+    p.write_bytes(raw)
+    assert build_ack_clip(str(p)) == ("audio/mpeg", raw)
 
 
 def test_split_sentences_basic():
@@ -160,6 +252,64 @@ def test_chunk_for_v3_oversized_single_word_hard_split():
 def test_chunk_for_v3_empty_and_symbol_only():
     assert _chunk_for_v3("") == []
     assert _chunk_for_v3("...") == []
+
+
+def test_chunk_for_v3_sentence_of_exactly_limit_is_one_chunk():
+    # A single sentence of EXACTLY 250 chars must fit in one chunk (the boundary
+    # is inclusive: len(s) > limit splits, len(s) == limit does not).
+    s = "а" * 249 + "."
+    assert len(s) == 250
+    chunks = _chunk_for_v3(s)
+    assert chunks == [s]
+    assert all(len(c) <= 250 for c in chunks)
+
+
+def test_chunk_for_v3_two_sentences_packing_to_exactly_limit_join_into_one_chunk():
+    # Greedy packing joins sentences with a single space; when the joined length
+    # is EXACTLY the limit they still pack into one chunk.
+    s1 = "а" * 149 + "."   # 150 chars
+    s2 = "б" * 98 + "."    # 99 chars; 150 + 1 (space) + 99 == 250
+    assert len(s1) + 1 + len(s2) == 250
+    chunks = _chunk_for_v3(f"{s1} {s2}")
+    assert chunks == [f"{s1} {s2}"]
+    assert all(len(c) <= 250 for c in chunks)
+
+
+def test_chunk_for_v3_packing_one_char_over_limit_splits_into_two_chunks():
+    # Same as above but the joined length would be limit+1 -> the second sentence
+    # starts a new chunk.
+    s1 = "а" * 149 + "."   # 150 chars
+    s2 = "б" * 99 + "."    # 100 chars; 150 + 1 + 100 == 251
+    assert len(s1) + 1 + len(s2) == 251
+    chunks = _chunk_for_v3(f"{s1} {s2}")
+    assert chunks == [s1, s2]
+    assert all(len(c) <= 250 for c in chunks)
+
+
+# --- _split_oversized (word-boundary splitting of over-limit fragments) ------
+
+
+def test_split_oversized_word_of_exactly_limit_kept_whole():
+    limit = 10
+    big = "b" * limit  # exactly the limit -> NOT hard-sliced
+    out = _split_oversized(f"aaa {big} ccc", limit)
+    assert big in out  # the limit-length word survives as one piece
+    assert all(len(p) <= limit for p in out)
+    # No word lost or duplicated: the word sequence reconstructs exactly.
+    assert " ".join(out).split() == ["aaa", big, "ccc"]
+
+
+def test_split_oversized_flushes_around_hard_sliced_word():
+    limit = 10
+    big = "b" * (limit + 3)  # over the limit -> hard-sliced into limit-sized pieces
+    out = _split_oversized(f"aa {big} cc", limit)
+    assert all(len(p) <= limit for p in out)
+    # Flush correctness: character-level reconstruction proves no word (or word
+    # piece) was lost or duplicated across the flush boundaries.
+    assert "".join(p.replace(" ", "") for p in out) == f"aa{big}cc"
+    # The preceding word was flushed BEFORE the slices and the following word
+    # starts a fresh accumulator after them.
+    assert out == ["aa", "b" * limit, "bbb", "cc"]
 
 
 def test_yandex_backend_requires_api_key():
