@@ -22,3 +22,4 @@ models/
 src/_version.txt
 Pipfile.lock
 microWakeWord/samples/
+.coverage
