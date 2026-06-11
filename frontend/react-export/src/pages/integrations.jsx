@@ -19,7 +19,7 @@ function Card({ title, sub, children, foot, right }) {
 }
 
 // ── Tool sources (multi-source view of the ToolHub) ───────────────────────
-// Three integration cards driven by CONFIG (so each shows even before it is
+// Integration cards driven by CONFIG (so each shows even before it is
 // configured), each enriched with LIVE status/tools from GET /api/tools matched
 // by source id. Sources are hot-reloaded — rebuilt live on change (rebuild_tools),
 // so enabling one takes effect immediately, no restart needed.
@@ -39,7 +39,7 @@ function ToolChips({ tools }) {
 
 // One integration source card: header (name + kind badge + status pill), an
 // editable SchemaForm bound to its core.* sub-section, and the live tool chips.
-//   id        — source id matched against /api/tools ("home"/"openweathermap"/"calendar")
+//   id        — source id matched against /api/tools ("home"/"openweathermap"/"calendar"/"reminders")
 //   name      — human title; sub — short caption under it
 //   schema    — resolved JSON sub-schema (from core.schema, $defs available on root)
 //   root      — full core schema (holds $defs for the SchemaForm)
@@ -89,8 +89,8 @@ function SourceCard({ id, name, sub, schema, root, values, buildPatch, configure
 // transport (Literal), prompt (describes the server's tools to the model).
 const TRANSPORTS = ["auto", "streamable_http", "sse"];
 // Built-in ToolHub source ids — an external server may not shadow them, or it
-// would hide the openweathermap/calendar status in /api/tools.
-const RESERVED_NAMES = ["openweathermap", "calendar"];
+// would hide the openweathermap/calendar/reminders status in /api/tools.
+const RESERVED_NAMES = ["openweathermap", "calendar", "reminders"];
 function McpServerModal({ initial, onSave, onClose, title, takenNames }) {
   const [name, setName] = useState(initial?.name || "");
   const [url, setUrl] = useState(initial?.url || "");
@@ -198,7 +198,7 @@ export function MCP() {
   const onDelete = (i) => saveList(servers.filter((_, idx) => idx !== i));
 
   return <div className="z-page narrow">
-    <PageHeader title="Tool sources" desc="Tool sources the model calls: external smart-home MCP servers and built-in weather/calendar. Sources are applied live — rebuilt on save, no restart needed."
+    <PageHeader title="Tool sources" desc="Tool sources the model calls: external smart-home MCP servers and built-in weather/calendar/reminders. Sources are applied live — rebuilt on save, no restart needed."
       actions={<button className="z-btn p" onClick={() => setModal({ mode: "add" })}><Ic n="add" w={14} />Add server</button>} />
     {toolsErr && <div className="z-banner warn" style={{ margin: "0 0 14px" }}>
       <Ic n="restart" w={15} />
@@ -227,6 +227,12 @@ export function MCP() {
           values={coreValues.calendar || { url: "", username: "", password: "", calendar: "" }}
           buildPatch={(d) => ({ core: { calendar: d } })}
           configured={(v) => !!(v && v.url && v.username)} live={liveOf("calendar")} patch={patchAndRefresh} />
+        <SourceCard
+          id="reminders" name="Reminders (built-in)" sub="core.reminders · built-in MCP"
+          schema={sub("reminders")} root={coreSchema}
+          values={coreValues.reminders || { enabled: true }}
+          buildPatch={(d) => ({ core: { reminders: d } })}
+          configured={(v) => !!(v && v.enabled)} live={liveOf("reminders")} patch={patchAndRefresh} />
       </>}
     {modal?.mode === "add" && <McpServerModal title="Add MCP server" onSave={onAdd} onClose={() => setModal(null)}
       takenNames={servers.map((s) => s.name)} />}
