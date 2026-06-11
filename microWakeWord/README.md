@@ -50,7 +50,8 @@ microWakeWord (INT8 streaming TFLite, ESP32-S3 / Home Assistant Voice PE, ESPHom
 | **[v16](v16)** | v8 + реальные позитивы + 4 реальных негатив-класса | **ПРОД: FRR 21%, FAPH 0 (VAD), строго лучше v8** |
 | [v19](v19) | angular + annealing (+ verifier_logreg) | **лучший recall FRR 3%**, но FAPH не single-model; verifier 2-ступень data-limited |
 | v21/v22 | short-«захар» негативы (PoC) | v21 (станд.) ВЫУЧИЛ duration-awareness (short 65%→17%); v22 (angular) НЕТ |
-| v23 | detection-aware loss (noisy-OR) | регресс (FRR 45%); max-pool вариант — открыт |
+| v23 | detection-aware loss (noisy-OR + max-pool) | оба варианта регресс → detection-loss на полку |
+| #E абляция | Yandex-клоны: вредят? voice-safe сплит + a/b/c | **КЛОНЫ ПОМОГАЮТ** (real+yandex FRR 21.7% ≫ только-real 34.8%); **УТЕЧКИ НЕТ** (незнакомые голоса = знакомые) → v11b пересмотрен для device-eval |
 
 ## Recall: два пути, оба упёрлись в ДАННЫЕ
 - **A) Стандартная + РЕАЛЬНЫЕ короткие «захар» негативы** — концепт доказан синтетикой (v21:
@@ -61,14 +62,17 @@ microWakeWord (INT8 streaming TFLite, ESP32-S3 / Home Assistant Voice PE, ESPHom
   Нужно СИЛЬНО больше реальных FA (dense-speech негативы).
 
 ## Данные (в [samples/](samples/), device-tract)
-- `positive_mix_recorded/` — **1044** реальных «захааар» через устройство, 3 громкости
-  (v0.3≈397 / v0.6≈311 / v1.0≈336), ASR-вычитка large-v3 + ручная.
+- `positive_mix_recorded/` — **1220** «захааар» через устройство (3 громкости: v0.3≈397 /
+  v0.6≈406 / v1.0≈417), **435 источников = 92 реальных человеческих (`section_*`) + 343 Yandex-TTS**,
+  ВСЕ проиграны через колонку и записаны микрофоном (device-tract). ASR-вычитка large-v3 + ручная.
+  «mix» в имени = именно эта смесь; Yandex тут — НЕ сырой TTS, а device-tract запись (и она ПОМОГАЕТ, см. #E).
 - `negative_silence_recorded/` **382** · `negative_music_recorded/` **145** ·
   `negative_speech_recorded/` **477** (ТВ-речь) · `negative_noise_vacuum_recorded/` **117** — реальные негативы.
 - `negative_speech_radio_recorded/` — **~10ч+ dense-speech (SOVA radio/public)**, пишется через
   устройство на 2 громкостях (0.6/1.0) → honest FAPH-eval + FA для 2-ступени.
-- `positive_samples_real_people/` (107), `positive_samples_yandex/` (343) — ⚠ НЕ device-tract /
-  синтетика; в обучении НЕ используются (синтетика-позитивы вредят, v11b).
+- `positive_samples_real_people/` (107), `positive_samples_yandex/` (343) — СЫРЫЕ источники
+  (не device-tract); сырыми в обучение НЕ идут — используются только их device-tract версии в
+  `positive_mix_recorded`. (v11b «синтетика вредит» был на НЕ-device eval; device-tract клоны — наоборот, #E.)
 - На ноде .226: чистый STT-набор + device-капчи; артефакты раунда в `~/zakhar-mww/`.
 
 ## Путь дальше
@@ -76,8 +80,7 @@ microWakeWord (INT8 streaming TFLite, ESP32-S3 / Home Assistant Voice PE, ESPHom
    стандартная модель, чинит «палит на короткое имя»).
 2. **Дописать dense-speech radio негативы** (идёт) → honest FAPH на плотной речи + разблокировка
    verifier (путь B).
-3. Переобуч: стандартная + реальные короткие негативы (#A); повтор 2-ступени с бОльшим FA (#B);
-   max-pool detection-loss.
+3. Переобуч: стандартная + реальные короткие негативы (#A); повтор 2-ступени с бОльшим FA (#B).
 4. Открытые device-режимы: barge-in, far-field, шёпот/крик, дети; recall из ДРУГОЙ комнаты
    (текущий eval по одной сессии оптимистичен).
 
