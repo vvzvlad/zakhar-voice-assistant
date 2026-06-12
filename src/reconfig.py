@@ -125,6 +125,13 @@ class Reconfigurator:
         self.rt = runtime
         self.deps = deps
         self.queue = queue          # asyncio.Queue drained by run_loop in the main task
+        self._reloading: set[str] = set()   # categories currently rebuilding
+
+    def reloading(self) -> list[str]:
+        """Backend categories whose rebuild (model load) is in flight right now.
+        Read by the panel's system snapshot to surface a 'loading' state in the UI.
+        Mutated only from the drain task; sorted for a stable payload."""
+        return sorted(self._reloading)
 
     def on_config_change(self, paths) -> None:
         """ConfigService.on_change callback (SYNC, runs on the panel request task).
@@ -218,11 +225,19 @@ class Reconfigurator:
             # Deps bag BEFORE rebuilding so the new backend picks it up.
             self.deps.tts_timeout = self.rt.core.tts_timeout
         for cat in cats:
+            # Mark this category as loading for the duration of the (possibly slow,
+            # e.g. RuAccent model download) create(). The set is mutated ONLY from
+            # this drain task and read from the heartbeat task at its own tick; there
+            # is no await between add() and the to_thread call, and discard() runs in
+            # finally, so the panel never observes a half-updated set.
+            self._reloading.add(cat)   # mark loading for the (possibly slow) create()
             try:
                 backend = await asyncio.to_thread(svc.create, cat)
             except Exception as e:
                 logger.error(f"hot-reload of {cat} backend failed: {e}")
                 continue
+            finally:
+                self._reloading.discard(cat)   # clears on success, on the except-continue, and on cancel
             setattr(self.rt, f"{cat}_backend", backend)
             logger.info(
                 f"hot-reloaded {cat} backend -> "
