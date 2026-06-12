@@ -215,23 +215,53 @@ class FishAudioTtsProvider(Provider):
     async def _fetch_voices(self, cfg: FishAudioTtsConfig, deps: Deps):
         """Fetch the voice catalog as [{"value", "label"}, ...]: the account's
         own voice models first, then the popular public ones, deduped by id.
-        TTL-cached per api_key."""
+        This own+popular baseline is TTL-cached per api_key. Additionally, when
+        the currently-selected `reference_id` is absent from that baseline, it is
+        resolved by id (per-model catalog endpoint) and prepended to the returned
+        list — so the panel shows the saved voice's title rather than its bare id.
+        The resolved entry is NOT cached (the cache is keyed only by api_key, so
+        another instance sharing the key but a different reference_id must not get
+        a polluted list)."""
         now = time.monotonic()
         cached = _voices_cache.get(cfg.api_key)
         if cached is not None and now - cached["at"] < _VOICES_CACHE_TTL:
-            return cached["data"]
+            baseline = cached["data"]
+        else:
+            headers = {"Authorization": f"Bearer {cfg.api_key}"}
+            own_resp = await deps.http_cloud.get(
+                FISH_MODELS_URL, headers=headers, params={"self": "true", "page_size": 100}
+            )
+            own_resp.raise_for_status()
+            popular_resp = await deps.http_cloud.get(
+                FISH_MODELS_URL, headers=headers, params={"sort_by": "task_count", "page_size": 50}
+            )
+            popular_resp.raise_for_status()
+            baseline = _to_options(
+                (own_resp.json().get("items") or []) + (popular_resp.json().get("items") or [])
+            )
+            # Cache only after both requests succeeded — failures are never cached.
+            _voices_cache[cfg.api_key] = {"at": now, "data": baseline}
+        # Prepend the saved voice (resolved by id) when it is not already part of
+        # the own+popular baseline, so its title is shown instead of the bare id.
+        # Best-effort: a failed resolution returns the baseline unchanged. The new
+        # list is built with a spread so the cached baseline is never mutated.
+        if cfg.reference_id and not any(o["value"] == cfg.reference_id for o in baseline):
+            resolved = await self._resolve_voice(cfg, deps, cfg.reference_id)
+            if resolved is not None:
+                return [resolved, *baseline]
+        return baseline
+
+    async def _resolve_voice(self, cfg: FishAudioTtsConfig, deps: Deps, voice_id: str):
+        """Resolve a single voice id to its {"value", "label"} option via the catalog's
+        per-model endpoint, so the panel can show the saved voice's title instead of the
+        bare id when it is not among own/popular. Best-effort and purely cosmetic: any
+        failure (deleted/invalid id -> 404, network error, malformed body) returns None,
+        and the caller falls back to the previous bare-id display."""
         headers = {"Authorization": f"Bearer {cfg.api_key}"}
-        own_resp = await deps.http_cloud.get(
-            FISH_MODELS_URL, headers=headers, params={"self": "true", "page_size": 100}
-        )
-        own_resp.raise_for_status()
-        popular_resp = await deps.http_cloud.get(
-            FISH_MODELS_URL, headers=headers, params={"sort_by": "task_count", "page_size": 50}
-        )
-        popular_resp.raise_for_status()
-        options = _to_options(
-            (own_resp.json().get("items") or []) + (popular_resp.json().get("items") or [])
-        )
-        # Cache only after both requests succeeded — failures are never cached.
-        _voices_cache[cfg.api_key] = {"at": now, "data": options}
-        return options
+        try:
+            resp = await deps.http_cloud.get(f"{FISH_MODELS_URL}/{voice_id}", headers=headers)
+            resp.raise_for_status()
+            options = _to_options([resp.json()])
+        except (httpx.HTTPError, KeyError, ValueError, TypeError):
+            return None
+        return options[0] if options else None
