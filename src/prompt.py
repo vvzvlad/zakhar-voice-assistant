@@ -3,6 +3,7 @@
 from datetime import datetime
 
 from src.core_config import CoreConfig
+from src.voice_marker import strip_voice_marker
 
 
 def build_system_prompt(core: CoreConfig, prompt_store) -> str:
@@ -23,6 +24,8 @@ def build_system_prompt(core: CoreConfig, prompt_store) -> str:
 
     system_prompt = prompt_store.active_text()
     system_prompt = system_prompt.replace("<<<<<TDW>>>>>", prefix)
+    # Drop the per-profile preferred-voice marker so it never reaches the model.
+    system_prompt = strip_voice_marker(system_prompt)
 
     # Append each tool source's non-empty prompt so the model learns what those
     # tools do (one block per source, blank-line separated): external MCP servers

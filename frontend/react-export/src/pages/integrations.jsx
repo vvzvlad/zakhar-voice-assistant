@@ -1,8 +1,9 @@
 import React, { useEffect, useLayoutEffect, useState, useCallback, useRef } from "react";
 import { Ic } from "../components/icons.jsx";
 import {
-  Field, KeyInput, PageHeader, FormSaveBar, StatusPill, Pill, Modal, Stepper, Loading, Select, Slider,
+  Field, KeyInput, PageHeader, FormSaveBar, StatusPill, Pill, Modal, Stepper, Loading, Select, Slider, Toggle,
 } from "../components/primitives.jsx";
+import { parseVoiceMarker, voiceLabel } from "../voiceMarker.js";
 import SchemaForm from "../components/SchemaForm.jsx";
 import { useAppData } from "../appData.jsx";
 import { useStageForm, errorLines } from "../useStageForm.js";
@@ -290,6 +291,9 @@ export function Prompt() {
   const [modal, setModal] = useState(null);        // {mode:'new'|'rename'} | null
   const [modalErr, setModalErr] = useState(null);
   const [profileBusy, setProfileBusy] = useState(false);
+  // Default ON when a marker is present: activating that profile then also applies
+  // its preferred voice (convenient). Hidden entirely when no marker exists.
+  const [applyVoice, setApplyVoice] = useState(true);
 
   const refreshProfiles = useCallback(async () => {
     const r = await getPromptProfiles();
@@ -366,9 +370,19 @@ export function Prompt() {
     if (!selected) return;
     setProfileBusy(true);
     try {
-      await activatePromptProfile(selected.id);
+      // Activation applies the STORED text server-side, so the voice decision is
+      // based on `loaded` (the last-saved text), not the possibly-dirty `text`.
+      const voice = parseVoiceMarker(loaded);
+      const resp = await activatePromptProfile(selected.id, { applyVoice: applyVoice && !!voice });
       await refreshProfiles();
-      setErr(null);
+      if (resp && resp.voice_error) {
+        setErr(new Error(resp.voice_error));
+      } else {
+        setErr(null);
+        // When a voice was applied, refresh the global catalog so the Stages page
+        // reflects the new TTS selection without a manual reload.
+        if (resp && resp.voice_applied) await reload();
+      }
     } catch (e) { setErr(e); }
     finally { setProfileBusy(false); }
   };
@@ -410,7 +424,7 @@ export function Prompt() {
 
   // Dialog context (core.context) — an independent save form rendered in the aside.
   // All hooks must run before the early-return below to satisfy the rules of hooks.
-  const { catalog, patch } = useAppData();
+  const { catalog, patch, reload } = useAppData();
   const ctxSchema = catalog.core.schema.$defs?.ContextConfig;
   const ctxValues = catalog.core.values.context || {};
   const ctxBuildPatch = (d) => ({ core: { context: d } });
@@ -442,6 +456,8 @@ export function Prompt() {
     value: p.id,
     label: p.id === activeId ? `● ${p.name} (active)` : p.name,
   }));
+  // Preferred voice parsed from the SELECTED profile's last-saved text (`loaded`).
+  const voice = parseVoiceMarker(loaded);
 
   return <div className="z-page">
     <PageHeader title="System prompt" crumb="Pipeline"
@@ -456,6 +472,11 @@ export function Prompt() {
         <Select w={260} value={selected?.id} options={profileOptions} onChange={selectProfile} />
         <button className="z-btn p" disabled={isActive || profileBusy} onClick={doActivate}
           title={isActive ? "This profile is already active" : "Make this profile the one the assistant uses"}>Activate</button>
+        {voice && <span style={{ display: "flex", alignItems: "center", gap: 6 }}
+          title="Apply this profile's preferred TTS voice when activating">
+          <Toggle on={applyVoice} onChange={setApplyVoice} sm />
+          <span className="sub">Apply voice: {voiceLabel(voice)}</span>
+        </span>}
         <div style={{ display: "flex", gap: 6, marginLeft: "auto" }}>
           <button className="z-btn g" onClick={() => { if (confirmDiscard()) { setModalErr(null); setModal({ mode: "new" }); } }}><Ic n="add" w={14} />New</button>
           <button className="z-btn g" onClick={() => { setModalErr(null); setModal({ mode: "rename" }); }}>Rename</button>
@@ -485,6 +506,13 @@ export function Prompt() {
         <Card title="The date/time variable">
           <div className="z-info" style={{ padding: "10px 0 12px" }}>
             <span className="z-paramtag" style={{ fontSize: 11 }}>{"<<<<<TDW>>>>>"}</span> is substituted at request time with the current <b>date and time</b>.
+          </div>
+        </Card>
+        <Card title="Preferred voice">
+          <div className="z-info" style={{ padding: "10px 0 12px" }}>
+            A single line <span className="z-paramtag" style={{ fontSize: 11 }}>{"<<<<<VOICE provider=… field=value>>>>>"}</span> records a preferred TTS voice for this profile.
+            The first pair <b>provider=</b> picks the TTS provider; the rest map to its fields (e.g. <span className="z-paramtag" style={{ fontSize: 11 }}>{"<<<<<VOICE provider=yandex voice=zahar>>>>>"}</span>).
+            When you activate the profile with the toggle on, this voice is applied to the TTS config. The marker is <b>stripped</b> from the prompt sent to the model.
           </div>
         </Card>
         <Card title="Notation">
