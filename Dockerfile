@@ -4,9 +4,9 @@
 FROM node:20-slim AS frontend
 WORKDIR /frontend
 # Install deps first (layer cached unless the lockfile changes), then build.
-COPY frontend/react-export/package.json frontend/react-export/package-lock.json ./
+COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci
-COPY frontend/react-export/ ./
+COPY frontend/ ./
 RUN npm run build
 
 # --- Runtime image -----------------------------------------------------------
@@ -34,8 +34,8 @@ COPY templates/ templates/
 COPY main.py .
 
 # Built admin panel from the frontend stage. The backend serves it from this
-# exact relative path (src/app.py: static_dir = "frontend/react-export/dist").
-COPY --from=frontend /frontend/dist frontend/react-export/dist
+# exact relative path (src/app.py: static_dir = "frontend/dist").
+COPY --from=frontend /frontend/dist frontend/dist
 
 # Stamp the version derived from the Git tag at build time. `.git` is not part of
 # the build context (.dockerignore) and the slim image has no git binary, so the

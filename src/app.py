@@ -177,10 +177,10 @@ async def main() -> None:
     rt.reminders_store = reminders_store     # may be None; a hot toggle may swap both
 
     # Admin panel HTTP API. Serves the built frontend if it has been bundled into
-    # frontend/react-export/dist; otherwise runs API-only. Constructed and started
+    # frontend/dist; otherwise runs API-only. Constructed and started
     # INSIDE the try below so a failed start (e.g. port already taken) still runs
     # the finally cleanup for the resources opened above.
-    static_dir = "frontend/react-export/dist"
+    static_dir = "frontend/dist"
     panel = None
     reconfig_task = None
 

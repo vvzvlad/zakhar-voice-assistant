@@ -13,7 +13,7 @@ PYTEST := $(VENV)/bin/pytest
 
 # Frontend (Vite/React admin panel). The backend serves its built output from
 # $(FRONTEND_DIST) (see src/app.py), so the dist must be built before `make run`.
-FRONTEND_DIR  ?= frontend/react-export
+FRONTEND_DIR  ?= frontend
 FRONTEND_DIST := $(FRONTEND_DIR)/dist
 
 .DEFAULT_GOAL := help

@@ -9,5 +9,5 @@ tests/
 .github/
 *.md
 .DS_Store
-frontend/react-export/node_modules/
-frontend/react-export/dist/
+frontend/node_modules/
+frontend/dist/
