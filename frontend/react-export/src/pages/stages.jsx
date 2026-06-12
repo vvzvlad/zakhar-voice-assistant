@@ -4,6 +4,7 @@ import SchemaForm from "../components/SchemaForm.jsx";
 import { useAppData } from "../appData.jsx";
 import { useStageForm, errorLines } from "../useStageForm.js";
 import { getOptions, getChimes, playChime, testTtsVoice } from "../api.js";
+import { buildVoiceMarker } from "../voiceMarker.js";
 
 function Card({ title, sub, children, foot }) {
   return <div className="z-card">
@@ -154,6 +155,73 @@ function VoiceTestCard({ provider, settings }) {
   </Card>;
 }
 
+// Read-only "preferred voice" marker built from the CURRENT (possibly unsaved)
+// TTS draft: the user copies it and pastes it into a system-prompt profile to
+// pin this voice. Mirrors the VoiceTestCard styling; the marker string is built
+// by buildVoiceMarker (same secret-exclusion / whitespace rules as the server).
+function VoiceMarkerCard({ provider, settings }) {
+  const marker = buildVoiceMarker(provider, settings);
+  const [copied, setCopied] = useState(false);
+  const inputRef = useRef(null);
+  const [msg, setMsg] = useState(null); // last error text (success shows on the button)
+  // Guard the transient "Copied" timer so it cannot setState after unmount.
+  const mountedRef = useRef(true);
+  const timerRef = useRef(null);
+  useEffect(() => () => {
+    mountedRef.current = false;
+    if (timerRef.current) clearTimeout(timerRef.current);
+  }, []);
+
+  const copy = async () => {
+    setMsg(null);
+    try {
+      await navigator.clipboard.writeText(marker);
+    } catch {
+      // Clipboard API unavailable (insecure context / older browser): fall back
+      // to selecting the input and the legacy execCommand copy.
+      try {
+        const el = inputRef.current;
+        if (el) {
+          el.focus();
+          el.select();
+          document.execCommand("copy");
+        } else {
+          throw new Error("no input");
+        }
+      } catch {
+        setMsg("Copy failed — select the field and copy manually");
+        return;
+      }
+    }
+    setCopied(true);
+    if (timerRef.current) clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(() => {
+      if (mountedRef.current) setCopied(false);
+    }, 1500);
+  };
+
+  return <Card title="Prompt voice marker" sub="paste into a prompt profile to pin this voice"
+    foot={
+      <div className="z-foot">
+        <button className="z-btn p" onClick={copy}>{copied ? "Copied" : "Copy"}</button>
+        <span className="z-fh" style={{ marginTop: 0 }}>Copy and paste into a prompt profile to pin this voice.</span>
+        <span style={{ flex: 1 }} />
+        {msg && <span className="z-fh" style={{ marginTop: 0, color: "#b91c1c" }}>{msg}</span>}
+      </div>
+    }>
+    <div className="z-f">
+      <div className="z-inp">
+        <input
+          ref={inputRef}
+          value={marker}
+          readOnly
+          onFocus={(e) => e.target.select()}
+        />
+      </div>
+    </div>
+  </Card>;
+}
+
 // ── Generic provider stage (STT / LLM / TTS) ──────────────────────────────
 function ProviderStage({ cat, title, crumb, desc }) {
   const { catalog, patch } = useAppData();
@@ -196,6 +264,8 @@ function ProviderStage({ cat, title, crumb, desc }) {
       </Card>
       {/* TTS only: test the CURRENT (unsaved) draft settings with an in-browser playback. */}
       {cat === "tts" && <VoiceTestCard provider={selected} settings={draft} />}
+      {/* TTS only: ready-to-copy prompt marker built from the same live draft. */}
+      {cat === "tts" && <VoiceMarkerCard provider={selected} settings={draft} />}
     </div>
   </div>;
 }
