@@ -115,7 +115,7 @@ button{font-family:inherit;}
 /* ── Status dots / pills / tags ─────────────────────────── */
 .z-dot{width:7px;height:7px;border-radius:50%;flex:0 0 auto;}
 .z-dot.ok{background:var(--good);}.z-dot.off{background:var(--mut2);}.z-dot.error{background:var(--bad);}.z-dot.warn{background:var(--warn);}
-.z-st{display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:600;}
+.z-st{display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:600;white-space:nowrap;}
 .z-st.good{color:#15803d;}.z-st.bad{color:#b91c1c;}.z-st.muted{color:var(--mut);}.z-st.warn{color:#b45309;}
 .z-pill{display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:600;border-radius:20px;padding:4px 10px;}
 .z-pill.good{background:var(--good-bg);color:#15803d;}
@@ -183,7 +183,9 @@ button{font-family:inherit;}
 /* ── Tables ─────────────────────────────────────────────── */
 .z-tbl{width:100%;border-collapse:collapse;}
 .z-tblwrap{overflow-x:auto;}
-.z-tblwrap .z-tbl{min-width:1040px;}
+/* Fits a standard 1280px viewport (≈1020px card) without overflow; narrower
+   windows still scroll horizontally via .z-tblwrap. */
+.z-tblwrap .z-tbl{min-width:960px;}
 .z-tbl th{text-align:left;font-size:9.5px;letter-spacing:.05em;text-transform:uppercase;color:var(--mut2);font-weight:600;padding:9px 13px;border-bottom:1px solid var(--line);background:var(--panel2);}
 .z-tbl td{padding:0 13px;height:46px;border-bottom:1px solid var(--line2);font-size:12px;vertical-align:middle;}
 .z-tbl tbody tr:last-child td{border-bottom:none;}
@@ -199,7 +201,7 @@ button{font-family:inherit;}
 .z-tfoot{padding:10px 13px;background:var(--panel2);border-top:1px solid var(--line);color:var(--mut2);font-size:11px;font-family:var(--mono);}
 
 /* ── Waterfall ──────────────────────────────────────────── */
-.z-wf{display:flex;flex-direction:column;gap:3px;width:260px;}
+.z-wf{display:flex;flex-direction:column;gap:3px;width:200px;}
 .z-wfbar{display:flex;height:13px;border-radius:3px;overflow:hidden;background:var(--line2);position:relative;}
 .z-wfbar span{height:100%;}
 .z-wfax{display:flex;font-family:var(--mono);font-size:8.5px;line-height:1;font-weight:600;}
