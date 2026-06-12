@@ -1,9 +1,9 @@
-import React, { useState } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { Selector, PageHeader, FormSaveBar } from "../components/primitives.jsx";
 import SchemaForm from "../components/SchemaForm.jsx";
 import { useAppData } from "../appData.jsx";
 import { useStageForm, errorLines } from "../useStageForm.js";
-import { getOptions, getChimes, playChime } from "../api.js";
+import { getOptions, getChimes, playChime, testTtsVoice } from "../api.js";
 
 function Card({ title, sub, children, foot }) {
   return <div className="z-card">
@@ -42,6 +42,118 @@ function useChimePreview() {
   return { busy, msg, play };
 }
 
+// Voice-test phrase persistence (survives page reloads). localStorage can throw
+// in privacy modes, so every access is guarded — the state then lives in memory.
+const TTS_TEST_TEXT_KEY = "zakhar.tts.test_text";
+const TTS_TEST_DEFAULT_TEXT = "Привет! Это проверка голоса: раз, два, три.";
+
+function loadTestText() {
+  try {
+    return localStorage.getItem(TTS_TEST_TEXT_KEY) || TTS_TEST_DEFAULT_TEXT;
+  } catch {
+    return TTS_TEST_DEFAULT_TEXT;
+  }
+}
+
+// Universal TTS voice test: synthesizes the typed phrase with the CURRENT
+// (possibly unsaved) provider form draft via POST /api/tts/test and plays the
+// result in the browser. Provider-agnostic: the draft dict is sent verbatim and
+// validated server-side by the provider's own ConfigModel, so any TTS provider
+// works with zero per-provider code here.
+function VoiceTestCard({ provider, settings }) {
+  const [text, setText] = useState(loadTestText);
+  // Button phase: null (idle) | "synth" (request in flight) | "playing" (clip audible).
+  const [phase, setPhase] = useState(null);
+  const [msg, setMsg] = useState(null); // last error text (success is silent)
+  const audioRef = useRef(null); // currently playing Audio element, if any
+  const urlRef = useRef(null);   // object URL backing it, revoked on cleanup
+
+  const onText = (v) => {
+    setText(v);
+    try { localStorage.setItem(TTS_TEST_TEXT_KEY, v); } catch { /* privacy mode: keep in memory */ }
+  };
+
+  // Stop playback (if any), free the object URL and return to idle. Idempotent
+  // (null refs make a repeat call a no-op), and the "ended"/"error" listeners in
+  // test() only invoke it while their own Audio still owns the refs, so a stale
+  // event from a superseded clip can never touch a newer playback.
+  const cleanup = () => {
+    if (audioRef.current) {
+      try { audioRef.current.pause(); } catch { /* already unloaded — ignore */ }
+      audioRef.current = null;
+    }
+    if (urlRef.current) {
+      URL.revokeObjectURL(urlRef.current);
+      urlRef.current = null;
+    }
+    setPhase(null);
+  };
+
+  const test = async () => {
+    setPhase("synth");
+    setMsg(null);
+    try {
+      const blob = await testTtsVoice(provider, settings, text);
+      const url = URL.createObjectURL(blob);
+      const audio = new Audio(url);
+      audioRef.current = audio;
+      urlRef.current = url;
+      // Guard by instance: a late event from a superseded clip must not touch the
+      // refs, which by then belong to a newer Audio (Stop + quick re-Test race).
+      audio.addEventListener("ended", () => { if (audioRef.current === audio) cleanup(); });
+      audio.addEventListener("error", () => {
+        if (audioRef.current !== audio) return;
+        setMsg("Audio playback failed");
+        cleanup();
+      });
+      await audio.play();
+      // Playback started: the same button now acts as Stop until "ended" fires.
+      setPhase("playing");
+    } catch (e) {
+      setMsg(e.message || "Voice test failed");
+      cleanup();
+    }
+  };
+
+  const stop = () => cleanup(); // pause + revoke + back to idle
+
+  // Stop audio and free the URL if the user navigates away mid-playback.
+  useEffect(() => () => cleanup(), []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const playing = phase === "playing";
+
+  return <Card title="Test voice" sub="hear the draft settings in the browser"
+    foot={
+      // Footer mirrors FormSaveBar: button + hint on the left, error right-aligned
+      // where the save bar shows its "Unsaved" badge.
+      <div className="z-foot">
+        {/* One button, three phases: idle → Synthesizing (disabled) → Stop (danger style). */}
+        <button
+          className={playing ? "z-btn d" : "z-btn p"}
+          disabled={playing ? false : phase === "synth" || !text.trim()}
+          onClick={playing ? stop : test}
+        >
+          {playing ? "Stop" : phase === "synth" ? "Synthesizing…" : "Test voice"}
+        </button>
+        {/* marginTop: 0 cancels .z-fh's 3px top margin so the text centers against the button. */}
+        <span className="z-fh" style={{ marginTop: 0 }}>Speak the phrase with the current (unsaved) settings.</span>
+        <span style={{ flex: 1 }} />
+        {msg && <span className="z-fh" style={{ marginTop: 0, color: "#b91c1c" }}>{msg}</span>}
+      </div>
+    }>
+    {/* .z-f gives the card body the standard field rhythm (vertical padding + gap). */}
+    <div className="z-f">
+      <div className="z-inp">
+        <input
+          value={text}
+          placeholder="Phrase to synthesize"
+          onChange={(e) => onText(e.target.value)}
+        />
+      </div>
+    </div>
+  </Card>;
+}
+
 // ── Generic provider stage (STT / LLM / TTS) ──────────────────────────────
 function ProviderStage({ cat, title, crumb, desc }) {
   const { catalog, patch } = useAppData();
@@ -73,14 +185,18 @@ function ProviderStage({ cat, title, crumb, desc }) {
       onChange={switchProvider}
       caption={prov.label}
     />
-    <Card title={prov.label} foot={<FormSaveBar dirty={dirty} saving={saving} onSave={save} errors={errorLines(err)} />}>
-      {/* key={selected}: dynamic selects fetch their option list once on mount, and
-          providers often share an identical field set, so without the key a provider
-          switch would be reconciled in place and keep the PREVIOUS provider's options
-          (e.g. OpenRouter's model catalog shown under Groq). The key forces a remount
-          so every DynamicSelect refetches for the newly selected provider. */}
-      <SchemaForm key={selected} schema={prov.schema} values={draft} onChange={onChange} optionsFor={optionsFor} />
-    </Card>
+    <div className="z-grid">
+      <Card title={prov.label} foot={<FormSaveBar dirty={dirty} saving={saving} onSave={save} errors={errorLines(err)} />}>
+        {/* key={selected}: dynamic selects fetch their option list once on mount, and
+            providers often share an identical field set, so without the key a provider
+            switch would be reconciled in place and keep the PREVIOUS provider's options
+            (e.g. OpenRouter's model catalog shown under Groq). The key forces a remount
+            so every DynamicSelect refetches for the newly selected provider. */}
+        <SchemaForm key={selected} schema={prov.schema} values={draft} onChange={onChange} optionsFor={optionsFor} />
+      </Card>
+      {/* TTS only: test the CURRENT (unsaved) draft settings with an in-browser playback. */}
+      {cat === "tts" && <VoiceTestCard provider={selected} settings={draft} />}
+    </div>
   </div>;
 }
 

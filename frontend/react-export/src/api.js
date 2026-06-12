@@ -138,6 +138,34 @@ export async function downloadCaptureResult(device) {
     URL.revokeObjectURL(url);
   }
 }
+// Synthesize a short test phrase with the CURRENT (possibly unsaved) TTS form
+// settings and return the audio as a Blob for in-browser playback. request()
+// parses JSON, so this sibling handles the binary success body itself; error
+// responses are shaped into ApiError exactly like request() does.
+export const testTtsVoice = async (provider, settings, text) => {
+  let resp;
+  try {
+    resp = await fetch(BASE + "/api/tts/test", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ provider, settings, text }),
+    });
+  } catch (e) {
+    throw new ApiError("Failed to reach the server: " + e.message, { status: 0 });
+  }
+  if (!resp.ok) {
+    const body = await resp.text();
+    let data = null;
+    if (body) { try { data = JSON.parse(body); } catch { data = body; } }
+    const msg = (data && (data.error || data.detail)) || `HTTP ${resp.status}`;
+    throw new ApiError(
+      typeof msg === "string" ? msg : `HTTP ${resp.status}`,
+      { status: resp.status, detail: data && data.detail, body: data }
+    );
+  }
+  return await resp.blob();
+};
+
 // Live tool sources (external MCP + built-ins) with their advertised tools.
 export const getTools = () => request("/api/tools");
 

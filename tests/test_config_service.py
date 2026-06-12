@@ -51,6 +51,32 @@ def test_create_builds_backend(tmp_path):
     assert backend.__class__.__name__ == "YandexTtsBackend"
 
 
+def test_create_adhoc_builds_backend_from_overrides(tmp_path):
+    # create_adhoc builds a transient backend from caller-supplied settings (the
+    # panel's unsaved draft) for ANY plugin — not just the selected one — without
+    # touching the stored document.
+    svc = _service(tmp_path)
+    backend = svc.create_adhoc("tts", "teratts", {"base_url": "http://x"})
+    assert backend.__class__.__name__ == "TeraTtsHttpBackend"
+    assert backend.base_url == "http://x"
+    # The stored doc is untouched: selection unchanged, no teratts instance created.
+    doc = svc.document()
+    assert doc["tts"]["selected"] == "yandex"
+    assert "teratts" not in doc["tts"]["instances"]
+
+
+def test_create_adhoc_invalid_settings_raise_validation_error(tmp_path):
+    svc = _service(tmp_path)
+    with pytest.raises(ValidationError):
+        svc.create_adhoc("tts", "yandex", {"speed": 9.9})  # out of range
+
+
+def test_create_adhoc_unknown_plugin_raises_value_error(tmp_path):
+    svc = _service(tmp_path)
+    with pytest.raises(ValueError):
+        svc.create_adhoc("tts", "nope", {})
+
+
 def test_core_property_is_core_config(tmp_path):
     svc = _service(tmp_path)
     assert isinstance(svc.core, CoreConfig)

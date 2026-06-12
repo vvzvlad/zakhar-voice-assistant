@@ -33,6 +33,7 @@ from pydantic import ValidationError
 
 from src import config_store
 from src.capture_jobs import CaptureJobManager
+from src.plugins.base import get_provider
 from src.pipeline import CAPTURE_MAX_SECONDS, CaptureBusyError
 from src.runs_store import db_file_size
 
@@ -298,6 +299,73 @@ class PanelServer:
         except LookupError as e:
             return web.json_response({"error": str(e)}, status=404)
         return web.json_response(result)
+
+    async def _post_tts_test(self, request: web.Request) -> web.Response:
+        """Synthesize a short test phrase with caller-supplied TTS settings and return
+        the audio for in-browser playback.
+
+        Body: {"provider": "<tts plugin id>", "settings": {...}, "text": "..."}. The
+        settings are the panel's CURRENT form draft (possibly unsaved): the backend is
+        built ad hoc (ConfigService.create_adhoc) — the stored config and the running
+        pipeline are never touched. Provider-agnostic: the draft dict is validated by
+        the provider's own ConfigModel, so any TTS plugin works with zero per-provider
+        code here.
+
+        Status codes: 200 audio (the provider's native format), 400 bad input,
+        404 unknown provider, 422 invalid settings / empty or too-long text /
+        nothing to synthesize, 502 upstream synthesis failure.
+        """
+        body = await _read_json(request)
+        if not isinstance(body, dict):
+            return web.json_response({"error": "body must be a JSON object"}, status=400)
+        provider = body.get("provider")
+        if not isinstance(provider, str) or not provider:
+            return web.json_response(
+                {"error": 'field "provider" must be a non-empty string'}, status=400
+            )
+        text = body.get("text")
+        if not isinstance(text, str) or not text.strip():
+            return web.json_response(
+                {"error": 'field "text" must be a non-empty string'}, status=422
+            )
+        text = text.strip()
+        # A voice test is a short phrase, and cloud TTS bills per character.
+        if len(text) > 500:
+            return web.json_response({"error": "text too long (max 500 chars)"}, status=422)
+        settings = body.get("settings") or {}
+        if not isinstance(settings, dict):
+            return web.json_response({"error": 'field "settings" must be an object'}, status=400)
+        # Resolve the plugin id first: an unknown provider is a 404, distinct from
+        # the 422 a backend raises for bad settings (both surface as ValueError).
+        try:
+            get_provider("tts", provider)
+        except ValueError as e:
+            return web.json_response({"error": str(e)}, status=404)
+        try:
+            # to_thread is REQUIRED: provider create() is cheap for the cloud bricks,
+            # but the piper brick loads an ONNX model synchronously (PiperVoice.load),
+            # which must not block the event loop.
+            backend = await asyncio.to_thread(self.svc.create_adhoc, "tts", provider, settings)
+        except ValidationError as e:
+            return web.json_response({"error": str(e), "detail": e.errors()}, status=422)
+        except (ValueError, OSError) as e:
+            # Backend init rejected the settings (e.g. a missing api_key). OSError is
+            # included because provider create() may touch the filesystem: piper loads
+            # an ONNX voice from voice_path (PiperVoice.load), so a missing/invalid
+            # path raises FileNotFoundError — a config problem (422), not a server
+            # fault.
+            return web.json_response({"error": str(e)}, status=422)
+        try:
+            mime, audio = await backend.synthesize(text)
+        except (RuntimeError, httpx.HTTPError) as e:
+            return web.json_response({"error": str(e)}, status=502)
+        if not audio:
+            # Unvoiceable text (punctuation-only etc.): the backend served no audio.
+            return web.json_response({"error": "nothing to synthesize"}, status=422)
+        # Serve the backend's NATIVE format: browsers decode both audio/mpeg and
+        # audio/wav, so no transcoding here (audio_codec.to_playable is the speaker
+        # delivery boundary, not this browser preview path).
+        return web.Response(body=audio, content_type=mime)
 
     # --- system prompt (named profiles over PromptStore) ----------------------
     def _profile_id(self, request: web.Request) -> int | None:
@@ -804,6 +872,7 @@ class PanelServer:
             web.get("/api/options", self._get_options),
             web.get("/api/chimes", self._get_chimes),
             web.post("/api/chimes/play", self._post_play_chime),
+            web.post("/api/tts/test", self._post_tts_test),
             web.get("/api/prompt", self._get_prompt),
             web.put("/api/prompt", self._put_prompt),
             web.get("/api/prompt/profiles", self._get_prompt_profiles),

@@ -290,6 +290,158 @@ async def test_options_unknown_plugin_returns_404(tmp_path):
         await client.close()
 
 
+# --- POST /api/tts/test (voice test with unsaved draft settings) --------------
+
+@respx.mock
+async def test_tts_test_synthesizes_with_draft_settings(tmp_path):
+    # The endpoint builds an AD-HOC teratts backend from the request's settings
+    # (NOT the stored config, which selects yandex) and streams back the upstream
+    # audio bytes in the provider's native format.
+    route = respx.get(url__regex=r"http://tts\.test/synthesize/.*").mock(
+        return_value=httpx.Response(
+            200, content=b"MP3-BYTES", headers={"Content-Type": "audio/mpeg"}
+        )
+    )
+    client, svc = await _client(tmp_path)
+    try:
+        resp = await client.post("/api/tts/test", json={
+            "provider": "teratts",
+            "settings": {"base_url": "http://tts.test"},
+            "text": "Привет, проверка голоса",
+        })
+        assert resp.status == 200
+        assert resp.headers["Content-Type"] == "audio/mpeg"
+        assert await resp.read() == b"MP3-BYTES"
+        assert route.call_count == 1
+        # The stored config was never touched by the ad-hoc build.
+        assert svc.document()["tts"]["selected"] == "yandex"
+        assert "teratts" not in svc.document()["tts"]["instances"]
+    finally:
+        await client.close()
+
+
+async def test_tts_test_unknown_provider_returns_404(tmp_path):
+    client, _svc_ = await _client(tmp_path)
+    try:
+        resp = await client.post("/api/tts/test", json={
+            "provider": "nope", "settings": {}, "text": "hi",
+        })
+        assert resp.status == 404
+        assert "error" in await resp.json()
+    finally:
+        await client.close()
+
+
+async def test_tts_test_empty_text_returns_422(tmp_path):
+    client, _svc_ = await _client(tmp_path)
+    try:
+        for bad in ("", "   "):
+            resp = await client.post("/api/tts/test", json={
+                "provider": "teratts", "settings": {"base_url": "http://x"}, "text": bad,
+            })
+            assert resp.status == 422
+            assert "error" in await resp.json()
+    finally:
+        await client.close()
+
+
+async def test_tts_test_too_long_text_returns_422(tmp_path):
+    client, _svc_ = await _client(tmp_path)
+    try:
+        resp = await client.post("/api/tts/test", json={
+            "provider": "teratts", "settings": {"base_url": "http://x"}, "text": "а" * 501,
+        })
+        assert resp.status == 422
+        assert (await resp.json())["error"] == "text too long (max 500 chars)"
+    finally:
+        await client.close()
+
+
+async def test_tts_test_invalid_settings_returns_422(tmp_path):
+    # The fishaudio backend refuses to build without an api_key (ValueError from
+    # backend init) -> 422, not a 500.
+    client, _svc_ = await _client(tmp_path)
+    try:
+        resp = await client.post("/api/tts/test", json={
+            "provider": "fishaudio", "settings": {}, "text": "hi",
+        })
+        assert resp.status == 422
+        assert "api_key" in (await resp.json())["error"]
+    finally:
+        await client.close()
+
+
+@respx.mock
+async def test_tts_test_upstream_failure_returns_502(tmp_path):
+    respx.get(url__regex=r"http://tts\.test/synthesize/.*").mock(
+        return_value=httpx.Response(500, text="boom")
+    )
+    client, _svc_ = await _client(tmp_path)
+    try:
+        resp = await client.post("/api/tts/test", json={
+            "provider": "teratts",
+            "settings": {"base_url": "http://tts.test"},
+            "text": "проверка",
+        })
+        assert resp.status == 502
+        assert "error" in await resp.json()
+    finally:
+        await client.close()
+
+
+async def test_tts_test_non_object_body_returns_400(tmp_path):
+    client, _svc_ = await _client(tmp_path)
+    try:
+        for bad in ([1, 2, 3], "just a string"):
+            resp = await client.post("/api/tts/test", json=bad)
+            assert resp.status == 400
+            assert "error" in await resp.json()
+    finally:
+        await client.close()
+
+
+async def test_tts_test_piper_missing_voice_path_returns_422(tmp_path):
+    # Provider create() may touch the filesystem: the piper backend loads an ONNX
+    # voice from voice_path (PiperVoice.load), which raises FileNotFoundError (an
+    # OSError) for a nonexistent path. That's a config problem from the panel's
+    # draft, so it must map to a 422 JSON error, not leak as a bare 500. No real
+    # model is needed: the load fails on the missing file before anything heavy.
+    client, _svc_ = await _client(tmp_path)
+    try:
+        resp = await client.post("/api/tts/test", json={
+            "provider": "piper",
+            "settings": {"voice_path": str(tmp_path / "no-such-voice.onnx")},
+            "text": "привет",
+        })
+        assert resp.status == 422
+        assert "error" in await resp.json()
+    finally:
+        await client.close()
+
+
+@respx.mock
+async def test_tts_test_text_at_500_char_cap_returns_200(tmp_path):
+    # Boundary: the 500-char cap is inclusive and measured AFTER strip, so both
+    # exactly-500 text and 500 significant chars padded with whitespace pass.
+    respx.get(url__regex=r"http://tts\.test/synthesize/.*").mock(
+        return_value=httpx.Response(
+            200, content=b"MP3-BYTES", headers={"Content-Type": "audio/mpeg"}
+        )
+    )
+    client, _svc_ = await _client(tmp_path)
+    try:
+        for text in ("а" * 500, "  \n" + "а" * 500 + "  \t"):
+            resp = await client.post("/api/tts/test", json={
+                "provider": "teratts",
+                "settings": {"base_url": "http://tts.test"},
+                "text": text,
+            })
+            assert resp.status == 200
+            assert await resp.read() == b"MP3-BYTES"
+    finally:
+        await client.close()
+
+
 async def test_prompt_round_trip(tmp_path):
     # Back-compat endpoints: GET /api/prompt returns the ACTIVE profile
     # {"id","name","text"} (no "path" anymore); PUT updates its text.

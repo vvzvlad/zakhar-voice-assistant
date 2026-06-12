@@ -127,6 +127,14 @@ class ConfigService:
         cfg = prov.ConfigModel(**self._slot(category).instances.get(plugin, {}))
         return prov.options(field, cfg, self._deps, query)
 
+    def create_adhoc(self, category, plugin, overrides: dict):
+        """Build a transient provider backend from caller-supplied settings
+        (e.g. the panel's unsaved draft), without touching the stored config
+        or the running pipeline. ValidationError/ValueError propagate."""
+        prov = get_provider(category, plugin)
+        cfg = prov.ConfigModel(**(overrides or {}))
+        return prov.create(cfg, self._deps)
+
     def catalog(self) -> dict:
         """Everything the panel needs: per-category providers + JSON Schema +
         plain values + core schema/values.
