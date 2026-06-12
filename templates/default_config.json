@@ -3,7 +3,7 @@
   "vad": {"selected": "webrtc", "instances": {"webrtc": {"aggressiveness": 2}}},
   "stt": {"selected": "groq", "instances": {"groq": {"api_key": "", "model": "whisper-large-v3-turbo", "language": "ru", "temperature": 0.0, "timeout": 60}}},
   "llm": {"selected": "openrouter", "instances": {"openrouter": {"api_key": "", "model": "anthropic/claude-haiku-4.5", "timeout": 300, "reply_rate_limit": "Лимит запросов исчерпан. Попробуй ещё раз чуть позже.", "reply_empty_after_tools": "Готово.", "reply_empty": "Я тебя не расслышал, повтори."}}},
-  "ruaccent": {"selected": "ruaccent", "instances": {"ruaccent": {"enabled": true, "model_size": "turbo3.1", "stress_format": "plus", "use_dictionary": true, "tiny_mode": false, "device": "CPU"}}},
+  "stress": {"selected": "ruaccent", "instances": {"ruaccent": {"enabled": true, "model_size": "turbo3.1", "stress_format": "plus", "use_dictionary": true, "tiny_mode": false, "device": "CPU"}}},
   "tts": {"selected": "teratts", "instances": {"teratts": {"base_url": ""}}},
   "core": {
     "context": {"max_turns": 5, "ttl_seconds": 300},

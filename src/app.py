@@ -88,10 +88,10 @@ async def main() -> None:
     stt_backend = svc.create("stt")
     tts_backend = svc.create("tts")
     llm_backend = svc.create("llm")
-    ruaccent_backend = svc.create("ruaccent")
+    stress_backend = svc.create("stress")
     # Startup log: name the exact backend ("provider/model") behind every stage.
     for cat, b in (("vad", vad_backend), ("stt", stt_backend), ("llm", llm_backend),
-                   ("ruaccent", ruaccent_backend), ("tts", tts_backend)):
+                   ("stress", stress_backend), ("tts", tts_backend)):
         logger.info(f"{cat} backend: {getattr(b, 'backend_desc', type(b).__name__)}")
 
     # Observability: persist every finalized pipeline run to SQLite (gated on config).
@@ -150,7 +150,7 @@ async def main() -> None:
         svc,
         vad_backend=vad_backend,
         stt_backend=stt_backend, llm_backend=llm_backend, tts_backend=tts_backend,
-        ruaccent_backend=ruaccent_backend,
+        stress_backend=stress_backend,
         hub=hub, audio_server=audio_server,
         runs_store=runs_store, run_events=run_events,
         prompt_store=prompt_store,

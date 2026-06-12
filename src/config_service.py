@@ -18,7 +18,7 @@ from src import config_store
 from src.core_config import CoreConfig
 from src.plugins.base import Deps, get_provider, providers
 
-STAGE_CATEGORIES = ("vad", "stt", "llm", "ruaccent", "tts")
+STAGE_CATEGORIES = ("vad", "stt", "llm", "stress", "tts")
 
 
 class StageSlot(BaseModel):
@@ -33,9 +33,9 @@ class ConfigDoc(BaseModel):
     vad: StageSlot = StageSlot(selected="webrtc")
     stt: StageSlot
     llm: StageSlot
-    # ruaccent has a default slot (like vad) so configs written before the accent
+    # stress has a default slot (like vad) so configs written before the stress
     # stage existed still parse; the ruaccent provider's own defaults then apply.
-    ruaccent: StageSlot = StageSlot(selected="ruaccent")
+    stress: StageSlot = StageSlot(selected="ruaccent")
     tts: StageSlot
     core: CoreConfig = CoreConfig()
 

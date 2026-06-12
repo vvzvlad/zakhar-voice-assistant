@@ -9,14 +9,21 @@ describe("mapRun", () => {
 
   it("coerces every t_* timing to 0 when missing/null", () => {
     const out = mapRun({ id: 1, ts: 0, t_vad: 10, t_stt: null, t_llm: 20 });
-    // t_stt is null -> 0; t_tts/t_ruaccent absent -> 0; provided ones kept.
-    expect(out.t).toEqual({ vad: 10, stt: 0, llm: 20, ruaccent: 0, tts: 0 });
+    // t_stt is null -> 0; t_tts/t_stress absent -> 0; provided ones kept.
+    expect(out.t).toEqual({ vad: 10, stt: 0, llm: 20, stress: 0, tts: 0 });
   });
 
   it("maps stt_text/llm_text into stt/llm", () => {
     const out = mapRun({ id: 1, ts: 0, stt_text: "hi", llm_text: "hello" });
     expect(out.stt).toBe("hi");
     expect(out.llm).toBe("hello");
+  });
+
+  it("maps stress_text into stress (accent-stage output)", () => {
+    const out = mapRun({ id: 1, ts: 0, stress_text: "прив+ет", t_stress: 5 });
+    expect(out.stress).toBe("прив+ет");
+    // The accent timing stays under r.t.stress.
+    expect(out.t.stress).toBe(5);
   });
 
   it("leaves audio null unless audio_bytes is present", () => {

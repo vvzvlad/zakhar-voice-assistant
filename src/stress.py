@@ -6,7 +6,7 @@ is the canonical LLM->TTS text contract used across this repo — plain text wit
 "+" before each stressed vowel (e.g. "прив+ет") — so every TTS backend already
 adapts it via src/plugins/tts/_ru_text.py, and NO TTS backend change is needed.
 
-Backend implementations live with their providers in src/plugins/ruaccent/; the
+Backend implementations live with their providers in src/plugins/stress/; the
 orchestrator imports only this contract module.
 """
 

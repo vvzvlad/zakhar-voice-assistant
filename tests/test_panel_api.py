@@ -1167,7 +1167,7 @@ def _seed_runs(tmp_path):
     store.insert({
         "ts": now, "device": "kitchen", "result": "ok", "reason": "endpoint",
         "stt_text": "включи свет", "llm_text": "Готово.", "model": "m1", "tokens": 10,
-        "t_vad": 1000, "t_stt": 200, "t_llm": 300, "t_ruaccent": 0, "t_tts": 100,
+        "t_vad": 1000, "t_stt": 200, "t_llm": 300, "t_stress": 0, "t_tts": 100,
         "t_total": 1600, "audio_ms": None, "audio_bytes": 500, "audio_fmt": "mp3",
         "error_stage": None, "error_text": None,
         "rounds": [{"round": 1, "note": "final answer", "tokens": 10, "calls": []}],
@@ -1178,7 +1178,7 @@ def _seed_runs(tmp_path):
         # spoken fallback phrase — mirrors what pipeline records since the R1 contract.
         "stt_text": "сломайся", "llm_text": "Что-то сломалось, попробуй ещё раз попозже.",
         "model": None, "tokens": None,
-        "t_vad": 1000, "t_stt": 200, "t_llm": 300, "t_ruaccent": 0, "t_tts": 0,
+        "t_vad": 1000, "t_stt": 200, "t_llm": 300, "t_stress": 0, "t_tts": 0,
         "t_total": 1500, "audio_ms": None, "audio_bytes": None, "audio_fmt": None,
         "error_stage": "LLM", "error_text": "boom", "rounds": [],
     })
@@ -1362,7 +1362,7 @@ async def test_get_metrics(tmp_path):
         assert body["requests_24h"] == 2
         assert body["error_rate"] == 0.5
         assert "p50_ms" in body and "p95_ms" in body
-        assert set(body["per_stage_avg_ms"]) == {"vad", "stt", "llm", "ruaccent", "tts"}
+        assert set(body["per_stage_avg_ms"]) == {"vad", "stt", "llm", "stress", "tts"}
     finally:
         await client.close()
         store.close()

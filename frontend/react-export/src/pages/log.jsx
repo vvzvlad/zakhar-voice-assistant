@@ -16,7 +16,7 @@ const SC = STAGE_COLOR;
 // > 0 (see `present` below), so it shows up only on runs where it actually ran.
 const GSTAGES = [
   { k: "vad", label: "VAD capture" }, { k: "stt", label: "STT" },
-  { k: "llm", label: "LLM + tools" }, { k: "ruaccent", label: "Accents" },
+  { k: "llm", label: "LLM + tools" }, { k: "stress", label: "Accents" },
   { k: "tts", label: "TTS synth" },
 ];
 
@@ -177,6 +177,13 @@ function Drawer({ r, loading, error, onClose }) {
                     </div>)}
                   </>}
             </div>)}
+          </>}
+
+          {r.stress && <>
+            <div className="z-sl">Accents<div className="ln" />{r.t && r.t.stress ? <span style={{ fontFamily: "var(--mono)", fontSize: 10.5, color: "var(--mut2)", textTransform: "none", letterSpacing: 0 }}>{fmtSec(r.t.stress)}</span> : null}</div>
+            <div className="z-card"><div style={{ padding: "12px 17px" }}>
+              <div style={{ fontSize: 14, color: "var(--ink)", lineHeight: 1.6 }}>{r.stress}</div>
+            </div></div>
           </>}
 
           <div className="z-sl">Metadata</div>

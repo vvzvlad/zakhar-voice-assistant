@@ -186,8 +186,8 @@ class Pipeline:
         return self.rt.llm_backend
 
     @property
-    def ruaccent_backend(self):
-        return self.rt.ruaccent_backend
+    def stress_backend(self):
+        return self.rt.stress_backend
 
     @property
     def tts_backend(self):
@@ -683,8 +683,8 @@ class Pipeline:
                     "reason": reason,
                     "result": "empty",
                     "t_vad": int(len(pcm) / (SAMPLE_RATE * 2) * 1000),
-                    "t_stt": 0, "t_llm": 0, "t_ruaccent": 0, "t_tts": 0,
-                    "stt_text": "", "llm_text": "",
+                    "t_stt": 0, "t_llm": 0, "t_stress": 0, "t_tts": 0,
+                    "stt_text": "", "llm_text": "", "stress_text": "",
                     "filler_text": "", "t_filler": None,
                     "model": None, "tokens": None,
                     "audio_ms": None, "audio_bytes": None, "audio_fmt": None,
@@ -868,14 +868,21 @@ class Pipeline:
                     # unchanged. record["llm_text"] keeps the original (mark-free) reply for the
                     # panel; only the text sent to TTS is accented. Isolated: a failure falls back
                     # to the un-accented reply so it can never break the run.
-                    ruaccent = self.ruaccent_backend
-                    if ruaccent is not None:
+                    stress = self.stress_backend
+                    if stress is not None:
                         ra_t = time.perf_counter()
+                        accented = reply
                         try:
-                            reply = await ruaccent.accentize(reply)
+                            accented = await stress.accentize(reply)
                         except Exception as e:
-                            logger.error(f"{self.name}: RuAccent [{self._backend_desc(ruaccent)}] failed: {e}")
-                        record["t_ruaccent"] = int((time.perf_counter() - ra_t) * 1000)
+                            logger.error(f"{self.name}: accent stage [{self._backend_desc(stress)}] failed: {e}")
+                        record["t_stress"] = int((time.perf_counter() - ra_t) * 1000)
+                        # Store the accent-stage output (the text actually sent to TTS) ONLY when it
+                        # differs from the LLM reply, so the panel shows it without cluttering no-op
+                        # (disabled / nothing-to-stress) runs. record["llm_text"] keeps the original.
+                        if accented != reply:
+                            record["stress_text"] = accented
+                        reply = accented
                         self._emit_live(record)
 
                     self._emit(StageEvent.TTS_START, {"text": reply})
@@ -1082,8 +1089,8 @@ class Pipeline:
                     "reason": "text",
                     "result": "empty",
                     "t_vad": 0,
-                    "t_stt": 0, "t_llm": 0, "t_ruaccent": 0, "t_tts": 0,
-                    "stt_text": text, "llm_text": "",
+                    "t_stt": 0, "t_llm": 0, "t_stress": 0, "t_tts": 0,
+                    "stt_text": text, "llm_text": "", "stress_text": "",
                     "filler_text": "", "t_filler": None,
                     "model": None, "tokens": None,
                     "audio_ms": None, "audio_bytes": None, "audio_fmt": None,
@@ -1167,14 +1174,19 @@ class Pipeline:
                     # output is the canonical '+vowel' contract every TTS backend adapts.
                     # Isolated: a failure falls back to the un-accented text.
                     spoken = reply
-                    ruaccent = self.ruaccent_backend
-                    if speak and reply and ruaccent is not None:
+                    stress = self.stress_backend
+                    if speak and reply and stress is not None:
                         ra_t = time.perf_counter()
                         try:
-                            spoken = await ruaccent.accentize(reply)
+                            spoken = await stress.accentize(reply)
                         except Exception as e:
-                            logger.error(f"{self.name}: RuAccent [{self._backend_desc(ruaccent)}] failed: {e}")
-                        record["t_ruaccent"] = int((time.perf_counter() - ra_t) * 1000)
+                            logger.error(f"{self.name}: accent stage [{self._backend_desc(stress)}] failed: {e}")
+                        record["t_stress"] = int((time.perf_counter() - ra_t) * 1000)
+                        # Store the accent-stage output ONLY when it differs from the
+                        # reply (mirror the _run rule); record["llm_text"] keeps the
+                        # original. The value returned to the caller stays `reply`.
+                        if spoken != reply:
+                            record["stress_text"] = spoken
 
                     if speak and reply:
                         try:

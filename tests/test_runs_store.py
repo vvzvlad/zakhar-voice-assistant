@@ -33,9 +33,10 @@ def _rec(**kw):
         "reason": "endpoint",
         "stt_text": "включи свет",
         "llm_text": "Готово.",
+        "stress_text": "",
         "model": "anthropic/claude-haiku-4.5",
         "tokens": 42,
-        "t_vad": 1000, "t_stt": 300, "t_llm": 500, "t_ruaccent": 0, "t_tts": 200,
+        "t_vad": 1000, "t_stt": 300, "t_llm": 500, "t_stress": 0, "t_tts": 200,
         "t_total": 2000,
         "audio_ms": None, "audio_bytes": 1234, "audio_fmt": "mp3",
         "error_stage": None, "error_text": None,
@@ -52,7 +53,7 @@ def test_insert_and_get_round_trip(tmp_path):
          "calls": [{"name": "set_light", "args": {"state": "on"}, "result": "ok"}]},
         {"round": 2, "note": "final answer", "tokens": 12, "calls": []},
     ]
-    rid = store.insert(_rec(result="tool", rounds=rounds))
+    rid = store.insert(_rec(result="tool", rounds=rounds, stress_text="Гот+ово."))
     assert isinstance(rid, int) and rid > 0
 
     got = store.get(rid)
@@ -60,6 +61,7 @@ def test_insert_and_get_round_trip(tmp_path):
     assert got["id"] == rid
     assert got["result"] == "tool"
     assert got["stt_text"] == "включи свет"
+    assert got["stress_text"] == "Гот+ово."
     assert got["audio_bytes"] == 1234
     assert got["audio_fmt"] == "mp3"
     # rounds_json parsed back into a list of dicts.
@@ -160,12 +162,19 @@ def test_migration_adds_filler_columns_to_old_db(tmp_path):
     assert "filler_text" in cols
     assert "t_filler" in cols
     assert "request_json" in cols
+    # The reserved accent-timing column is renamed to its provider-neutral name, and
+    # the stress text column is added. The old name must be gone after the migration.
+    assert "t_stress" in cols
+    assert "t_ruaccent" not in cols
+    assert "stress_text" in cols
 
-    rid = store.insert(_rec(filler_text="Ну, погуглю…", t_filler=77,
+    rid = store.insert(_rec(filler_text="Ну, погуглю…", t_filler=77, stress_text="Гот+ово.",
                             request={"system_prompt": "p", "context": [], "user_text": "u", "tools": []}))
     got = store.get(rid)
     assert got["filler_text"] == "Ну, погуглю…"
     assert got["t_filler"] == 77
+    assert got["t_stress"] == 0
+    assert got["stress_text"] == "Гот+ово."
     assert got["request"]["user_text"] == "u"
     store.close()
 
@@ -268,7 +277,7 @@ def test_metrics_all_none_timings_in_nonempty_window(tmp_path):
     for i in range(3):
         store.insert(_rec(
             ts=now - i, result="error", error_stage="pipeline",
-            t_total=None, t_vad=None, t_stt=None, t_llm=None, t_ruaccent=None, t_tts=None,
+            t_total=None, t_vad=None, t_stt=None, t_llm=None, t_stress=None, t_tts=None,
         ))
 
     m = store.metrics(now=now)
@@ -278,7 +287,7 @@ def test_metrics_all_none_timings_in_nonempty_window(tmp_path):
     assert m["p50_ms"] is None
     assert m["p95_ms"] is None
     # No per-stage values -> _avg over all-None -> None for every stage.
-    assert m["per_stage_avg_ms"] == {"vad": None, "stt": None, "llm": None, "ruaccent": None, "tts": None}
+    assert m["per_stage_avg_ms"] == {"vad": None, "stt": None, "llm": None, "stress": None, "tts": None}
     # All 3 in-window rows are errors.
     assert m["error_rate"] == 1.0
     store.close()
@@ -292,7 +301,7 @@ def test_metrics_empty(tmp_path):
         "p50_ms": None,
         "p95_ms": None,
         "error_rate": 0.0,
-        "per_stage_avg_ms": {"vad": None, "stt": None, "llm": None, "ruaccent": None, "tts": None},
+        "per_stage_avg_ms": {"vad": None, "stt": None, "llm": None, "stress": None, "tts": None},
     }
     store.close()
 

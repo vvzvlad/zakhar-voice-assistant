@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field
 
 from src import config_store
 from src.plugins.base import Deps, Provider, register
-from src.accent import Accentizer, PassthroughAccentizer
+from src.stress import Accentizer, PassthroughAccentizer
 from src.plugins.tts._ru_text import drop_plus_stress, stress_to_acute, stress_to_uppercase
 
 # RuAccent omograph model sizes, ordered roughly by RAM and grouped by family
@@ -146,7 +146,7 @@ class RuAccentConfig(BaseModel):
 
 @register
 class RuAccentProvider(Provider):
-    category = "ruaccent"
+    category = "stress"
     id = "ruaccent"
     label = "RuAccent"
     ConfigModel = RuAccentConfig

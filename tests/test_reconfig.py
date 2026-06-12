@@ -147,11 +147,11 @@ def test_backend_categories_ignores_non_rebuild_paths():
     assert backend_categories({"core.vad.aggressiveness"}) == set()
 
 
-def test_action_for_and_backend_categories_ruaccent():
+def test_action_for_and_backend_categories_stress():
     # The accent stage is a full backend category: a config change rebuilds its
     # backend, and it maps into the rebuild set like the other stages.
-    assert action_for("ruaccent.instances.ruaccent.model_size") == "rebuild_backends"
-    assert "ruaccent" in backend_categories({"ruaccent.instances.ruaccent.model_size"})
+    assert action_for("stress.instances.ruaccent.model_size") == "rebuild_backends"
+    assert "stress" in backend_categories({"stress.instances.ruaccent.model_size"})
 
 
 # --- Reconfigurator ----------------------------------------------------------

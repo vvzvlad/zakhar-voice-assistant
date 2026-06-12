@@ -53,7 +53,7 @@ the only env-tunable values are the bind host/port of the admin panel
 start. The agent MCP endpoint rides the panel server at `/mcp` (same port); its
 only setting is `core.agent_mcp.enabled`, panel-editable and read live per request.
 
-- Per stage (`vad`/`stt`/`llm`/`ruaccent`/`tts`) the doc holds `{selected, instances}`; each provider
+- Per stage (`vad`/`stt`/`llm`/`stress`/`tts`) the doc holds `{selected, instances}`; each provider
   defines its own settings via a pydantic `ConfigModel` in `src/plugins/<stage>/<id>.py`.
   The config core (`ConfigService`/`config_store`) is provider-agnostic — it never names a
   provider's fields. Adding a provider = one new plugin file; zero changes to the core.

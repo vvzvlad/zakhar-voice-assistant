@@ -280,8 +280,8 @@ export function LLM() {
   return <ProviderStage cat="llm" title="LLM · Reasoning & tools" crumb="Pipeline / Stage 03"
     desc="Generates the reply and calls smart-home tools over MCP. OpenAI-compatible chat completions." />;
 }
-export function RUAccent() {
-  return <ProviderStage cat="ruaccent" title="Accents · Stress placement" crumb="Pipeline / Stage 04"
+export function Accents() {
+  return <ProviderStage cat="stress" title="Accents · Stress placement" crumb="Pipeline / Stage 04"
     desc="Place Russian word stress on the reply text so TTS pronounces it correctly." />;
 }
 export function TTS() {

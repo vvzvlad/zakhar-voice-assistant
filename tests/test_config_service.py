@@ -93,7 +93,7 @@ def test_constructor_validates_selected_instances(tmp_path):
 def test_catalog_lists_all_categories_with_schemas(tmp_path):
     cat = _service(tmp_path).catalog()
     ids = {c["id"] for c in cat["categories"]}
-    assert ids == {"vad", "stt", "llm", "ruaccent", "tts"}
+    assert ids == {"vad", "stt", "llm", "stress", "tts"}
     for c in cat["categories"]:
         for prov in c["providers"]:
             assert "schema" in prov and "properties" in prov["schema"]

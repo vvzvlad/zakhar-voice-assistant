@@ -10,9 +10,9 @@ import httpx
 import pytest
 
 import src.plugins  # noqa: F401  register all providers
-from src.accent import PassthroughAccentizer
+from src.stress import PassthroughAccentizer
 from src.plugins.base import REGISTRY, Deps
-from src.plugins.ruaccent.ruaccent import (
+from src.plugins.stress.ruaccent import (
     RuAccentBackend,
     RuAccentConfig,
     RuAccentProvider,
@@ -128,4 +128,4 @@ def test_provider_describe():
 
 
 def test_provider_is_registered():
-    assert "ruaccent" in REGISTRY["ruaccent"]
+    assert "ruaccent" in REGISTRY["stress"]

@@ -46,7 +46,7 @@ describe("Dashboard service map", () => {
     useAppData.mockReturnValue({ catalog: catalogWithVad(), config });
     const { container } = await renderDashboard();
     const provs = [...container.querySelectorAll(".z-svc .prov")];
-    expect(provs).toHaveLength(5); // vad, stt, llm, ruaccent, tts
+    expect(provs).toHaveLength(5); // vad, stt, llm, stress, tts
     expect(provs[0].textContent).toBe("WebRTC VAD");
   });
 

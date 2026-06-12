@@ -23,11 +23,12 @@ CREATE TABLE IF NOT EXISTS runs (
   reason TEXT,
   stt_text TEXT,
   llm_text TEXT,
+  stress_text TEXT,
   filler_text TEXT,
   model TEXT,
   tokens INTEGER,
   t_filler INTEGER,
-  t_vad INTEGER, t_stt INTEGER, t_llm INTEGER, t_ruaccent INTEGER, t_tts INTEGER, t_total INTEGER,
+  t_vad INTEGER, t_stt INTEGER, t_llm INTEGER, t_stress INTEGER, t_tts INTEGER, t_total INTEGER,
   audio_ms INTEGER, audio_bytes INTEGER, audio_fmt TEXT,
   error_stage TEXT, error_text TEXT,
   rounds_json TEXT,
@@ -47,9 +48,10 @@ CREATE TABLE IF NOT EXISTS run_audio (
 # Columns persisted on insert, in order. `id` autoincrements; `rounds_json` is
 # derived from rec["rounds"] separately, so it is appended last by insert().
 _INSERT_COLS = [
-    "ts", "device", "result", "reason", "stt_text", "llm_text", "filler_text",
+    "ts", "device", "result", "reason", "stt_text", "llm_text", "stress_text",
+    "filler_text",
     "model", "tokens",
-    "t_vad", "t_stt", "t_llm", "t_ruaccent", "t_tts", "t_filler", "t_total",
+    "t_vad", "t_stt", "t_llm", "t_stress", "t_tts", "t_filler", "t_total",
     "audio_ms", "audio_bytes", "audio_fmt", "error_stage", "error_text",
 ]
 
@@ -57,7 +59,7 @@ _INSERT_COLS = [
 _LIST_COLS = [
     "id", "ts", "device", "result", "reason", "stt_text", "llm_text", "filler_text",
     "tokens",
-    "t_vad", "t_stt", "t_llm", "t_ruaccent", "t_tts", "t_filler", "t_total",
+    "t_vad", "t_stt", "t_llm", "t_stress", "t_tts", "t_filler", "t_total",
 ]
 
 _DAY_SECONDS = 86400
@@ -85,8 +87,17 @@ class RunsStore:
         and ALTER only what's missing. Column names are fixed literals (not user
         input), so the f-string interpolation is safe. Idempotent."""
         existing = {row["name"] for row in self._conn.execute("PRAGMA table_info(runs)")}
+        # Rename the reserved accent-timing column to its provider-neutral name (the
+        # stage is now `stress`, not the RuAccent provider). SQLite >= 3.25 supports
+        # RENAME COLUMN; the bundled sqlite is newer. Only when the old name is present
+        # and the new one is not, so it's idempotent.
+        if "t_ruaccent" in existing and "t_stress" not in existing:
+            self._conn.execute("ALTER TABLE runs RENAME COLUMN t_ruaccent TO t_stress")
+            existing.discard("t_ruaccent")
+            existing.add("t_stress")
         for col, decl in (("filler_text", "TEXT"), ("t_filler", "INTEGER"),
-                          ("request_json", "TEXT"), ("t_ruaccent", "INTEGER")):
+                          ("request_json", "TEXT"), ("t_stress", "INTEGER"),
+                          ("stress_text", "TEXT")):
             if col not in existing:
                 self._conn.execute(f"ALTER TABLE runs ADD COLUMN {col} {decl}")
         self._conn.commit()
@@ -234,7 +245,7 @@ class RunsStore:
         # Same Connection as writes from a worker thread: hold the write lock.
         with self._lock:
             rows = self._conn.execute(
-                "SELECT result, t_total, t_vad, t_stt, t_llm, t_ruaccent, t_tts "
+                "SELECT result, t_total, t_vad, t_stt, t_llm, t_stress, t_tts "
                 "FROM runs WHERE ts >= ?",
                 (since,),
             ).fetchall()
@@ -245,7 +256,7 @@ class RunsStore:
                 "p50_ms": None,
                 "p95_ms": None,
                 "error_rate": 0.0,
-                "per_stage_avg_ms": {"vad": None, "stt": None, "llm": None, "ruaccent": None, "tts": None},
+                "per_stage_avg_ms": {"vad": None, "stt": None, "llm": None, "stress": None, "tts": None},
             }
 
         totals = sorted(r["t_total"] for r in rows if r["t_total"] is not None)
@@ -260,7 +271,7 @@ class RunsStore:
                 "vad": _avg(r["t_vad"] for r in rows),
                 "stt": _avg(r["t_stt"] for r in rows),
                 "llm": _avg(r["t_llm"] for r in rows),
-                "ruaccent": _avg(r["t_ruaccent"] for r in rows),
+                "stress": _avg(r["t_stress"] for r in rows),
                 "tts": _avg(r["t_tts"] for r in rows),
             },
         }

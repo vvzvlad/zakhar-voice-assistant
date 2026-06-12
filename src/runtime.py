@@ -11,7 +11,7 @@ rebuilding the pipelines.
 class Runtime:
     def __init__(self, svc, *, vad_backend, stt_backend, llm_backend, tts_backend,
                  hub, audio_server, runs_store=None, run_events=None,
-                 prompt_store=None, ruaccent_backend=None):
+                 prompt_store=None, stress_backend=None):
         self.svc = svc
         # Swappable runtime objects (rebuilt by the reconfigurator in later tiers).
         self.vad_backend = vad_backend
@@ -20,7 +20,7 @@ class Runtime:
         # Accent (Russian stress) stage backend, between LLM and TTS. Defaults to
         # None so test fixtures that don't pass it keep working (the pipeline guards
         # for a None backend and simply skips the stage).
-        self.ruaccent_backend = ruaccent_backend
+        self.stress_backend = stress_backend
         self.tts_backend = tts_backend
         self.hub = hub
         self.audio_server = audio_server

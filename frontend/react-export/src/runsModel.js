@@ -2,7 +2,7 @@
 // the Log/Dashboard components expect, plus the presentation consts they read.
 //
 // Backend row (list)  : { id, ts, device, result, reason, stt_text, llm_text,
-//                         tokens, t_vad, t_stt, t_llm, t_ruaccent, t_tts, t_total }
+//                         tokens, t_vad, t_stt, t_llm, t_stress, t_tts, t_total }
 // Backend row (detail): the above PLUS model, rounds[], audio_*, error_*.
 
 import { total } from "./components/primitives.jsx";
@@ -20,7 +20,7 @@ export const STAGE_COLOR = {
   vad:      "#64748b",
   stt:      "#0891b2",
   llm:      "#4f46e5",
-  ruaccent: "#9333ea",
+  stress:   "#9333ea",
   tts:      "#0d9488",
 };
 
@@ -43,7 +43,7 @@ function fmtTime(ts) {
 
 // Map a backend row to the UI run object. `t` groups per-stage timings (ms);
 // 0/null are coerced to 0 so the waterfall's `> 0` filter drops empty stages
-// (ruaccent shows only when the stage actually ran, i.e. t_ruaccent > 0).
+// (stress shows only when the stage actually ran, i.e. t_stress > 0).
 // `audio`/`error` are null unless the detail payload carries them.
 export function mapRun(row) {
   if (!row) return row;
@@ -58,11 +58,12 @@ export function mapRun(row) {
     time: fmtTime(row.ts),
     stt: row.stt_text,
     llm: row.llm_text,
+    stress: row.stress_text,
     t: {
       vad: row.t_vad || 0,
       stt: row.t_stt || 0,
       llm: row.t_llm || 0,
-      ruaccent: row.t_ruaccent || 0,
+      stress: row.t_stress || 0,
       tts: row.t_tts || 0,
     },
     audio: row.audio_bytes

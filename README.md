@@ -47,7 +47,7 @@ Shape (see `templates/default_config.json` for the full default):
     Voice-capture settings) stay in `core.vad`.
   - `stt`: `groq` (cloud Whisper) | `vosk` (offline) — `selected` + per-provider `instances`.
   - `llm`: `openrouter` | `groq` — model, api_key, temperature, max_tokens, max_tool_rounds.
-  - `ruaccent`: `ruaccent` (offline Russian stress placement) — runs between LLM and TTS,
+  - `stress`: `ruaccent` (offline Russian stress placement) — runs between LLM and TTS,
     marks the stressed vowels in the reply (the canonical `+vowel` text every TTS backend
     already adapts); `enabled` (on by default) + model size.
   - `tts`: `teratts` (HTTP) | `piper` (offline) | `yandex` (SpeechKit) — voice/key/etc. per provider.

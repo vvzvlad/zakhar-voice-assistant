@@ -165,7 +165,7 @@ class FakeToolHub:
 
 def make_pipeline(tmp_path, monkeypatch, name="dev", stt_text="распознанный текст",
                   stt_backend=None, tts_backend=None, runs_store=None,
-                  run_events=None, ack=False, hub=None, ruaccent_backend=None):
+                  run_events=None, ack=False, hub=None, stress_backend=None):
     # The data dir is hardcoded in config_store; the pipeline reads it as a module
     # attribute, so isolate per-test context files by monkeypatching DATA_DIR to
     # tmp_path BEFORE the pipeline (and its _context_path) is built.
@@ -195,7 +195,7 @@ def make_pipeline(tmp_path, monkeypatch, name="dev", stt_text="распозна�
         llm_backend=object(),
         # Accent stage backend: None by default so every existing test runs with the
         # stage skipped; the accent test injects a fake accentizer.
-        ruaccent_backend=ruaccent_backend,
+        stress_backend=stress_backend,
         tts_backend=tts_backend or FakeTtsBackend(),
         # Default hub double: the filler tests' slow tools are slow, everything
         # else (set_light, ...) is fast — the same shape the real ToolHub exposes.
@@ -842,7 +842,7 @@ async def test_run_recorded_on_happy_path(tmp_path, monkeypatch):
 async def test_run_accentizes_tts_text_but_keeps_llm_text_original(tmp_path, monkeypatch):
     # The accent stage runs between LLM and TTS: TTS must synthesize the ACCENTED
     # text, while the recorded llm_text stays the original (mark-free) reply and
-    # t_ruaccent is set.
+    # t_stress is set.
     class CapturingTtsBackend(TtsBackend):
         def __init__(self):
             self.texts = []
@@ -860,7 +860,7 @@ async def test_run_accentizes_tts_text_but_keeps_llm_text_original(tmp_path, mon
     tts = CapturingTtsBackend()
     pipeline, events = make_pipeline(
         tmp_path, monkeypatch, stt_text="включи свет",
-        tts_backend=tts, runs_store=store, ruaccent_backend=FakeAccentizer(),
+        tts_backend=tts, runs_store=store, stress_backend=FakeAccentizer(),
     )
 
     await pipeline.on_start("cid", 0, None, None)
@@ -871,11 +871,47 @@ async def test_run_accentizes_tts_text_but_keeps_llm_text_original(tmp_path, mon
     assert tts.texts == ["готово [ACC]"]
     # The TTS_START event carries the accented text too.
     assert dict(events)[StageEvent.TTS_START] == {"text": "готово [ACC]"}
-    # (b) and (c): the recorded run keeps the original reply and records t_ruaccent.
+    # (b) and (c): the recorded run keeps the original reply and records t_stress.
     assert len(store.records) == 1
     rec = store.records[0]
     assert rec["llm_text"] == "готово"
-    assert rec["t_ruaccent"] >= 0
+    assert rec["t_stress"] >= 0
+    # (d) the accent-stage OUTPUT (text sent to TTS) is stored since it changed.
+    assert rec["stress_text"] == "готово [ACC]"
+
+
+async def test_run_accent_noop_leaves_stress_text_empty(tmp_path, monkeypatch):
+    # When the accentizer returns the SAME text (nothing to stress / disabled-like
+    # behavior), stress_text stays empty so the panel doesn't show a no-op section.
+    class CapturingTtsBackend(TtsBackend):
+        def __init__(self):
+            self.texts = []
+
+        async def synthesize(self, text, lang="ru"):
+            self.texts.append(text)
+            return ("audio/mpeg", b"MP3")
+
+    class NoopAccentizer:
+        async def accentize(self, text):
+            return text  # unchanged
+
+    patch_llm(monkeypatch, reply="готово")
+    store = FakeRunsStore()
+    tts = CapturingTtsBackend()
+    pipeline, events = make_pipeline(
+        tmp_path, monkeypatch, stt_text="включи свет",
+        tts_backend=tts, runs_store=store, stress_backend=NoopAccentizer(),
+    )
+
+    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_audio(b"\x01\x02" * 100)
+    await pipeline.on_stop(False)
+
+    assert tts.texts == ["готово"]
+    assert len(store.records) == 1
+    rec = store.records[0]
+    assert rec["llm_text"] == "готово"
+    assert rec["stress_text"] == ""
 
 
 async def test_run_records_llm_result_observability_fields(tmp_path, monkeypatch):
