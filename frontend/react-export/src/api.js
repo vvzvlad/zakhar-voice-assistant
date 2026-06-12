@@ -141,19 +141,26 @@ export async function downloadCaptureResult(device) {
     URL.revokeObjectURL(url);
   }
 }
-// Synthesize a short test phrase with the CURRENT (possibly unsaved) TTS form
-// settings and return the audio as a Blob for in-browser playback. request()
-// parses JSON, so this sibling handles the binary success body itself; error
-// responses are shaped into ApiError exactly like request() does.
-export const testTtsVoice = async (provider, settings, text) => {
+// Start a streaming voice test: POST the CURRENT (possibly unsaved) TTS draft to
+// /api/tts/test and return the raw Response so the caller can stream the body via
+// MediaSource (true streaming playback) or buffer it into a Blob (fallback). The
+// backend always sends any error as a JSON body with a non-2xx status BEFORE the
+// audio stream starts, so error shaping here mirrors request()/the old
+// testTtsVoice. `signal` (optional) lets the caller abort the in-flight request.
+export const streamTtsVoice = async (provider, settings, text, signal) => {
   let resp;
   try {
     resp = await fetch(BASE + "/api/tts/test", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ provider, settings, text }),
+      signal,
     });
   } catch (e) {
+    // A caller-driven abort (Stop / unmount) is not a server error: re-throw it
+    // unchanged so the component can recognise e.name === "AbortError" and stay
+    // silent instead of flashing a red "failed to reach the server" line.
+    if (e && e.name === "AbortError") throw e;
     throw new ApiError("Failed to reach the server: " + e.message, { status: 0 });
   }
   if (!resp.ok) {
@@ -166,7 +173,7 @@ export const testTtsVoice = async (provider, settings, text) => {
       { status: resp.status, detail: data && data.detail, body: data }
     );
   }
-  return await resp.blob();
+  return resp;
 };
 
 // Live tool sources (external MCP + built-ins) with their advertised tools.

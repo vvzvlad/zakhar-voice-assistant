@@ -3,7 +3,8 @@ import { Selector, PageHeader, FormSaveBar } from "../components/primitives.jsx"
 import SchemaForm from "../components/SchemaForm.jsx";
 import { useAppData } from "../appData.jsx";
 import { useStageForm, errorLines } from "../useStageForm.js";
-import { getOptions, getChimes, playChime, testTtsVoice } from "../api.js";
+import { getOptions, getChimes, playChime, streamTtsVoice } from "../api.js";
+import { playAudioResponse } from "../streamAudio.js";
 import { buildVoiceMarker } from "../voiceMarker.js";
 
 function Card({ title, sub, children, foot }) {
@@ -66,57 +67,58 @@ function VoiceTestCard({ provider, settings }) {
   // Button phase: null (idle) | "synth" (request in flight) | "playing" (clip audible).
   const [phase, setPhase] = useState(null);
   const [msg, setMsg] = useState(null); // last error text (success is silent)
-  const audioRef = useRef(null); // currently playing Audio element, if any
-  const urlRef = useRef(null);   // object URL backing it, revoked on cleanup
+  const ctlRef = useRef(null);   // current playAudioResponse controller, if any
+  const abortRef = useRef(null); // AbortController for the in-flight request
+  // Per-run identity token: callbacks capture the run that started them and bail
+  // if it is no longer the active run, so a late event from a superseded clip (or
+  // a stale request failure) can never touch a newer playback.
+  const runRef = useRef(null);
 
   const onText = (v) => {
     setText(v);
     try { localStorage.setItem(TTS_TEST_TEXT_KEY, v); } catch { /* privacy mode: keep in memory */ }
   };
 
-  // Stop playback (if any), free the object URL and return to idle. Idempotent
-  // (null refs make a repeat call a no-op), and the "ended"/"error" listeners in
-  // test() only invoke it while their own Audio still owns the refs, so a stale
-  // event from a superseded clip can never touch a newer playback.
+  // Stop playback (if any), abort any in-flight request and return to idle.
+  // Idempotent (the controller's stop() and AbortController.abort() are both safe
+  // to call repeatedly / after completion).
   const cleanup = () => {
-    if (audioRef.current) {
-      try { audioRef.current.pause(); } catch { /* already unloaded — ignore */ }
-      audioRef.current = null;
+    if (ctlRef.current) {
+      try { ctlRef.current.stop(); } catch { /* already torn down — ignore */ }
+      ctlRef.current = null;
     }
-    if (urlRef.current) {
-      URL.revokeObjectURL(urlRef.current);
-      urlRef.current = null;
+    if (abortRef.current) {
+      try { abortRef.current.abort(); } catch { /* already aborted — ignore */ }
+      abortRef.current = null;
     }
     setPhase(null);
   };
 
   const test = async () => {
+    const myRun = {};
+    runRef.current = myRun;
+    const ac = new AbortController();
+    abortRef.current = ac;
     setPhase("synth");
     setMsg(null);
     try {
-      const blob = await testTtsVoice(provider, settings, text);
-      const url = URL.createObjectURL(blob);
-      const audio = new Audio(url);
-      audioRef.current = audio;
-      urlRef.current = url;
-      // Guard by instance: a late event from a superseded clip must not touch the
-      // refs, which by then belong to a newer Audio (Stop + quick re-Test race).
-      audio.addEventListener("ended", () => { if (audioRef.current === audio) cleanup(); });
-      audio.addEventListener("error", () => {
-        if (audioRef.current !== audio) return;
-        setMsg("Audio playback failed");
-        cleanup();
+      const resp = await streamTtsVoice(provider, settings, text, ac.signal);
+      if (runRef.current !== myRun) return;           // superseded/stopped while awaiting
+      const ctl = playAudioResponse(resp, {
+        onPlaying: () => { if (runRef.current === myRun) setPhase("playing"); },
+        onEnded:   () => { if (runRef.current === myRun) cleanup(); },
+        onError:   (m) => { if (runRef.current !== myRun) return; setMsg(m); cleanup(); },
       });
-      await audio.play();
-      // Playback started: the same button now acts as Stop until "ended" fires.
-      setPhase("playing");
+      ctlRef.current = ctl;
     } catch (e) {
+      if (runRef.current !== myRun) return;           // stale failure from a superseded run
+      if (e.name === "AbortError") return;            // user Stop / unmount aborted — not an error
       setMsg(e.message || "Voice test failed");
       cleanup();
     }
   };
 
-  const stop = () => cleanup(); // pause + revoke + back to idle
+  const stop = () => cleanup(); // stop playback + abort + back to idle
 
   // Stop audio and free the URL if the user navigates away mid-playback.
   useEffect(() => () => cleanup(), []); // eslint-disable-line react-hooks/exhaustive-deps

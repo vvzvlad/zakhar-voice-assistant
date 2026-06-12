@@ -2,22 +2,38 @@
 // Integration tests (jsdom) for the universal TTS voice-test card: rendered ONLY
 // on the TTS stage page, it synthesizes the typed phrase with the CURRENT
 // (possibly unsaved) provider draft via the /api/tts/test endpoint and plays the
-// returned blob in the browser. The phrase persists in localStorage across
+// result through the streaming player. The phrase persists in localStorage across
 // reloads, prefilled with a default phrase.
+//
+// The card is wired to two seams, both mocked here:
+//   - api.streamTtsVoice(provider, settings, text, signal) -> a raw Response. The
+//     fake Response is shape-only (the component never reads its body — that is
+//     playAudioResponse's job, which is also mocked).
+//   - streamAudio.playAudioResponse(resp, { onPlaying, onEnded, onError }) ->
+//     { stop }. We capture the callbacks so each test can drive the terminal
+//     events (onPlaying / onEnded / onError) and assert the resulting UI phase.
 import React from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, cleanup, waitFor, act } from "@testing-library/react";
 import { TTS, STT, LLM } from "../pages/stages.jsx";
 import { useAppData } from "../appData.jsx";
 import * as api from "../api.js";
+import { playAudioResponse } from "../streamAudio.js";
 
 vi.mock("../appData.jsx", () => ({ useAppData: vi.fn() }));
 vi.mock("../api.js", () => ({
   getOptions: vi.fn(async () => ({ options: [] })),
   getChimes: vi.fn(async () => ({ options: [] })),
   playChime: vi.fn(async () => ({ played: ["speaker"], offline: [] })),
-  testTtsVoice: vi.fn(async () => new Blob(["mp3"], { type: "audio/mpeg" })),
+  // Minimal fake Response: ok + a Content-Type header. The component hands this
+  // straight to playAudioResponse (mocked), so no body/blob plumbing is needed.
+  streamTtsVoice: vi.fn(async () => ({
+    ok: true,
+    headers: { get: () => "audio/mpeg" },
+    body: {},
+  })),
 }));
+vi.mock("../streamAudio.js", () => ({ playAudioResponse: vi.fn() }));
 
 const TEXT_KEY = "zakhar.tts.test_text";
 const DEFAULT_PHRASE = "Привет! Это проверка голоса: раз, два, три.";
@@ -38,18 +54,17 @@ function makeCatalog() {
   };
 }
 
-// Audio stub: records created instances; play() resolves immediately by default;
-// pause() is a spy so Stop / unmount behavior is observable; listeners can be
-// fired manually to simulate "ended" / "error".
-class FakeAudio {
-  constructor(url) {
-    this.url = url;
-    this.listeners = {};
-    this.pause = vi.fn();
-    FakeAudio.instances.push(this);
-  }
-  addEventListener(ev, cb) { this.listeners[ev] = cb; }
-  play() { return FakeAudio.playImpl(); }
+// Fake playAudioResponse controllers: each call records its captured callbacks and
+// returns a { stop } spy, so tests can fire onPlaying/onEnded/onError and assert
+// stop() was invoked on cleanup. controllers[i] mirrors the i-th playback.
+let controllers;
+function installPlayer() {
+  controllers = [];
+  playAudioResponse.mockImplementation((resp, cbs) => {
+    const ctl = { stop: vi.fn(), cbs };
+    controllers.push(ctl);
+    return ctl;
+  });
 }
 
 // Functional in-memory localStorage: the ambient global in this environment is
@@ -71,18 +86,27 @@ beforeEach(() => {
   storage = makeLocalStorage();
   vi.stubGlobal("localStorage", storage);
   useAppData.mockReturnValue({ catalog: makeCatalog(), config: {}, patch: vi.fn(async () => ({})) });
-  FakeAudio.instances = [];
-  FakeAudio.playImpl = () => Promise.resolve();
-  vi.stubGlobal("Audio", FakeAudio);
-  // jsdom has no object-URL implementation — stub both ends.
-  URL.createObjectURL = vi.fn(() => "blob:voice-test");
-  URL.revokeObjectURL = vi.fn();
+  installPlayer();
 });
 
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
 });
+
+// Click "Test voice", wait for the request to resolve and a NEW playback to be
+// wired, then fire onPlaying so the button reaches the "Stop" phase. Returns the
+// freshly-created controller (works across repeated runs, since `controllers`
+// accumulates one entry per playback).
+async function startAndPlay() {
+  const before = controllers.length;
+  fireEvent.click(screen.getByRole("button", { name: "Test voice" }));
+  await waitFor(() => expect(controllers.length).toBe(before + 1));
+  const ctl = controllers[before];
+  act(() => ctl.cbs.onPlaying());
+  await screen.findByRole("button", { name: "Stop" });
+  return ctl;
+}
 
 describe("VoiceTestCard placement", () => {
   it("renders on the TTS stage only — not on STT or LLM", () => {
@@ -121,7 +145,7 @@ describe("test phrase persistence (localStorage)", () => {
 });
 
 describe("voice test action", () => {
-  it("calls the API with the selected provider, the CURRENT (unsaved) draft and the text, then plays the blob", async () => {
+  it("calls streamTtsVoice with provider, the CURRENT (unsaved) draft, text and an AbortSignal, then starts playback", async () => {
     render(<TTS />);
     // Edit the provider form WITHOUT saving: the test must use the live draft.
     fireEvent.change(screen.getByDisplayValue("http://initial"), {
@@ -129,130 +153,135 @@ describe("voice test action", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "Test voice" }));
 
-    await waitFor(() => expect(api.testTtsVoice).toHaveBeenCalledWith(
-      "teratts", { base_url: "http://unsaved-draft" }, DEFAULT_PHRASE,
-    ));
-    // The blob is turned into an object URL and played in the browser.
-    await waitFor(() => expect(FakeAudio.instances).toHaveLength(1));
-    expect(URL.createObjectURL).toHaveBeenCalledTimes(1);
-    expect(FakeAudio.instances[0].url).toBe("blob:voice-test");
-    // The object URL is revoked when playback ends (act: the handler sets state).
-    act(() => FakeAudio.instances[0].listeners.ended());
-    expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:voice-test");
+    await waitFor(() => expect(api.streamTtsVoice).toHaveBeenCalledTimes(1));
+    const [provider, draft, text, signal] = api.streamTtsVoice.mock.calls[0];
+    expect(provider).toBe("teratts");
+    expect(draft).toEqual({ base_url: "http://unsaved-draft" });
+    expect(text).toBe(DEFAULT_PHRASE);
+    expect(signal).toBeInstanceOf(AbortSignal);
+
+    // The resolved Response is handed to the streaming player.
+    await waitFor(() => expect(playAudioResponse).toHaveBeenCalledTimes(1));
+    expect(playAudioResponse.mock.calls[0][0]).toMatchObject({ ok: true });
   });
 
-  it("shows the API error message (red line) on failure", async () => {
-    api.testTtsVoice.mockRejectedValueOnce(new Error("text too long (max 500 chars)"));
+  it("shows the API error message (red line) on failure and starts no playback", async () => {
+    api.streamTtsVoice.mockRejectedValueOnce(new Error("text too long (max 500 chars)"));
     render(<TTS />);
     fireEvent.click(screen.getByRole("button", { name: "Test voice" }));
     await waitFor(() =>
       expect(screen.getByText("text too long (max 500 chars)")).toBeInTheDocument());
-    // No audio was created for a failed request.
-    expect(FakeAudio.instances).toHaveLength(0);
+    expect(playAudioResponse).not.toHaveBeenCalled();
+    // Back to the idle button.
+    expect(screen.getByRole("button", { name: "Test voice" })).toBeEnabled();
+  });
+
+  it("an AbortError rejection (Stop/unmount race) shows NO message", async () => {
+    const abort = new Error("aborted");
+    abort.name = "AbortError";
+    api.streamTtsVoice.mockRejectedValueOnce(abort);
+    render(<TTS />);
+    fireEvent.click(screen.getByRole("button", { name: "Test voice" }));
+    // Let the rejected promise settle, then assert nothing went red.
+    await waitFor(() => expect(api.streamTtsVoice).toHaveBeenCalled());
+    await Promise.resolve();
+    expect(screen.queryByText("aborted")).toBeNull();
+    expect(playAudioResponse).not.toHaveBeenCalled();
   });
 
   it("disables the button with 'Synthesizing…' while the request is in flight", async () => {
     let resolveCall;
-    api.testTtsVoice.mockReturnValueOnce(new Promise((res) => { resolveCall = res; }));
+    api.streamTtsVoice.mockReturnValueOnce(new Promise((res) => { resolveCall = res; }));
     render(<TTS />);
     const button = screen.getByRole("button", { name: "Test voice" });
     fireEvent.click(button);
     // Disabled until the synthesized clip STARTS playing — repeat clicks impossible.
     await waitFor(() => expect(button).toBeDisabled());
     expect(button).toHaveTextContent("Synthesizing…");
-    // Once playback starts the SAME button becomes an enabled Stop button.
-    resolveCall(new Blob(["mp3"], { type: "audio/mpeg" }));
+    // Resolve the request, then the player reports playback started: the SAME
+    // button becomes an enabled Stop button.
+    resolveCall({ ok: true, headers: { get: () => "audio/mpeg" }, body: {} });
+    await waitFor(() => expect(controllers).toHaveLength(1));
+    act(() => controllers[0].cbs.onPlaying());
     await waitFor(() => expect(button).toHaveTextContent("Stop"));
     expect(button).toBeEnabled();
   });
 
-  it("turns into a danger-styled Stop button while playing", async () => {
+  it("onPlaying turns the button into a danger-styled Stop button", async () => {
     render(<TTS />);
-    fireEvent.click(screen.getByRole("button", { name: "Test voice" }));
-    const stopBtn = await screen.findByRole("button", { name: "Stop" });
+    const ctl = await startAndPlay();
+    const stopBtn = screen.getByRole("button", { name: "Stop" });
     expect(stopBtn).toBeEnabled();
     expect(stopBtn).toHaveClass("z-btn", "d");
+    expect(ctl.stop).not.toHaveBeenCalled();
   });
 
-  it("Stop pauses the audio, revokes the object URL and returns to idle", async () => {
+  it("Stop calls the controller's stop(), aborts the request and returns to idle", async () => {
     render(<TTS />);
-    fireEvent.click(screen.getByRole("button", { name: "Test voice" }));
-    const stopBtn = await screen.findByRole("button", { name: "Stop" });
-    fireEvent.click(stopBtn);
+    const ctl = await startAndPlay();
+    fireEvent.click(screen.getByRole("button", { name: "Stop" }));
 
-    expect(FakeAudio.instances[0].pause).toHaveBeenCalled();
-    expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:voice-test");
+    expect(ctl.stop).toHaveBeenCalled();
     const idle = screen.getByRole("button", { name: "Test voice" });
     expect(idle).toBeEnabled();
     expect(idle).toHaveClass("z-btn", "p");
   });
 
-  it("'ended' reverts to idle and revokes the URL; a late 'ended' after Stop is harmless", async () => {
+  it("onEnded reverts to idle; a late onEnded after Stop is harmless", async () => {
     render(<TTS />);
-    fireEvent.click(screen.getByRole("button", { name: "Test voice" }));
-    await screen.findByRole("button", { name: "Stop" });
+    const ctl = await startAndPlay();
 
-    // Natural end of playback: back to idle, URL freed exactly once.
-    act(() => FakeAudio.instances[0].listeners.ended());
+    // Natural end of playback: back to idle.
+    act(() => ctl.cbs.onEnded());
     expect(screen.getByRole("button", { name: "Test voice" })).toBeEnabled();
-    expect(URL.revokeObjectURL).toHaveBeenCalledTimes(1);
 
-    // Second run: manual Stop, then the browser still fires "ended" afterwards —
-    // cleanup is idempotent, so no crash and no double revoke for this clip.
-    fireEvent.click(screen.getByRole("button", { name: "Test voice" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Stop" }));
-    expect(URL.revokeObjectURL).toHaveBeenCalledTimes(2);
-    expect(() => act(() => FakeAudio.instances[1].listeners.ended())).not.toThrow();
-    expect(URL.revokeObjectURL).toHaveBeenCalledTimes(2);
+    // Second run: manual Stop, then the player still delivers onEnded afterwards —
+    // cleanup is idempotent, so no crash and the card stays idle.
+    const ctl2 = await startAndPlay();
+    fireEvent.click(screen.getByRole("button", { name: "Stop" }));
+    expect(ctl2.stop).toHaveBeenCalled();
+    expect(() => act(() => ctl2.cbs.onEnded())).not.toThrow();
+    expect(screen.getByRole("button", { name: "Test voice" })).toBeEnabled();
   });
 
-  it("a late 'ended'/'error' from a superseded clip does not kill the next playback", async () => {
-    // Distinguishable URLs per clip so revocations can be attributed.
-    let n = 0;
-    URL.createObjectURL.mockImplementation(() => `blob:clip-${n++}`);
+  it("a late onEnded/onError from a superseded run does not touch the next playback", async () => {
     render(<TTS />);
 
-    // Test #1 → Stop: clip0's URL is revoked, refs are cleared.
-    fireEvent.click(screen.getByRole("button", { name: "Test voice" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Stop" }));
-    expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:clip-0");
+    // Run #1 → Stop: controller[0] torn down, refs cleared.
+    const ctl0 = await startAndPlay();
+    fireEvent.click(screen.getByRole("button", { name: "Stop" }));
+    expect(ctl0.stop).toHaveBeenCalled();
 
-    // Test #2: clip1 (instances[1]) is now playing and owns the refs.
-    fireEvent.click(screen.getByRole("button", { name: "Test voice" }));
-    await screen.findByRole("button", { name: "Stop" });
-    expect(FakeAudio.instances).toHaveLength(2);
+    // Run #2: controller[1] is now active and owns the refs.
+    const ctl1 = await startAndPlay();
+    expect(controllers).toHaveLength(2);
 
-    // The browser delivers clip0's queued "ended" (and even "error") AFTER
-    // clip1 started: both must be no-ops for the shared refs.
-    act(() => FakeAudio.instances[0].listeners.ended());
-    act(() => FakeAudio.instances[0].listeners.error());
+    // The superseded run #1 delivers its queued onEnded (and even onError) AFTER
+    // run #2 started playing: both must be no-ops for the shared state.
+    act(() => ctl0.cbs.onEnded());
+    act(() => ctl0.cbs.onError("Audio playback failed"));
 
     expect(screen.getByRole("button", { name: "Stop" })).toBeInTheDocument();
-    expect(FakeAudio.instances[1].pause).not.toHaveBeenCalled();
-    expect(URL.revokeObjectURL).not.toHaveBeenCalledWith("blob:clip-1");
-    expect(URL.revokeObjectURL).toHaveBeenCalledTimes(1); // only clip0, by Stop
+    expect(ctl1.stop).not.toHaveBeenCalled();
     expect(screen.queryByText("Audio playback failed")).toBeNull();
   });
 
-  it("playback 'error' shows a message and reverts to idle", async () => {
+  it("onError shows a message and reverts to idle", async () => {
     render(<TTS />);
-    fireEvent.click(screen.getByRole("button", { name: "Test voice" }));
-    await screen.findByRole("button", { name: "Stop" });
+    const ctl = await startAndPlay();
 
-    act(() => FakeAudio.instances[0].listeners.error());
+    act(() => ctl.cbs.onError("Audio playback failed"));
     expect(screen.getByText("Audio playback failed")).toBeInTheDocument();
-    expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:voice-test");
+    expect(ctl.stop).toHaveBeenCalled();
     expect(screen.getByRole("button", { name: "Test voice" })).toBeEnabled();
   });
 
-  it("unmount during playback pauses the audio and revokes the URL", async () => {
+  it("unmount during playback calls the controller's stop()", async () => {
     const { unmount } = render(<TTS />);
-    fireEvent.click(screen.getByRole("button", { name: "Test voice" }));
-    await screen.findByRole("button", { name: "Stop" });
+    const ctl = await startAndPlay();
 
     unmount();
-    expect(FakeAudio.instances[0].pause).toHaveBeenCalled();
-    expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:voice-test");
+    expect(ctl.stop).toHaveBeenCalled();
   });
 
   it("disables the button when the text is blank", () => {

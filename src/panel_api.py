@@ -157,6 +157,20 @@ async def _read_json(request: web.Request):
                                  content_type="application/json")
 
 
+async def _aclose_quietly(aiter) -> None:
+    """Best-effort aclose() of an async iterator that will not be (further)
+    iterated. Async generators (the default buffered TtsBackend adapter and the
+    streaming providers) have aclose(); a plain iterator may not. A close failure
+    is swallowed so it cannot mask the real outcome on the error/empty paths."""
+    aclose = getattr(aiter, "aclose", None)
+    if aclose is None:
+        return
+    try:
+        await aclose()
+    except Exception:  # noqa: BLE001 - closing is best-effort
+        pass
+
+
 class PanelServer:
     def __init__(self, svc, host, port, *, version, started_at,
                  device_status=None, device_capture=None, device_play=None,
@@ -301,7 +315,7 @@ class PanelServer:
             return web.json_response({"error": str(e)}, status=404)
         return web.json_response(result)
 
-    async def _post_tts_test(self, request: web.Request) -> web.Response:
+    async def _post_tts_test(self, request: web.Request) -> web.StreamResponse:
         """Synthesize a short test phrase with caller-supplied TTS settings and return
         the audio for in-browser playback.
 
@@ -356,17 +370,52 @@ class PanelServer:
             # path raises FileNotFoundError — a config problem (422), not a server
             # fault.
             return web.json_response({"error": str(e)}, status=422)
+        # Stream the synthesized audio so the browser can begin playback before the
+        # whole clip is ready. synthesize_stream() validates connect/auth/4xx
+        # EAGERLY (raises before returning the iterator, per the TtsBackend
+        # contract), so those still map to a 502. We then PEEK the first chunk:
+        # this (a) surfaces an error embedded in the first chunk as a 502 and
+        # (b) lets an empty stream (unvoiceable text) return 422 — all while the
+        # response headers are still unsent and a JSON error is still possible.
+        # Only a failure AFTER the first chunk (headers already flushed) degrades
+        # to a dropped/truncated stream, which the browser surfaces as an error.
         try:
-            mime, audio = await backend.synthesize(text)
+            mime, chunks = await backend.synthesize_stream(text)
+            aiter = chunks.__aiter__()
+            try:
+                first = await aiter.__anext__()
+            except StopAsyncIteration:
+                first = b""
         except (RuntimeError, httpx.HTTPError) as e:
             return web.json_response({"error": str(e)}, status=502)
-        if not audio:
+        if not first:
             # Unvoiceable text (punctuation-only etc.): the backend served no audio.
+            # Close the iterator so a streaming backend releases its HTTP response.
+            await _aclose_quietly(aiter)
             return web.json_response({"error": "nothing to synthesize"}, status=422)
-        # Serve the backend's NATIVE format: browsers decode both audio/mpeg and
-        # audio/wav, so no transcoding here (audio_codec.to_playable is the speaker
-        # delivery boundary, not this browser preview path).
-        return web.Response(body=audio, content_type=mime)
+        # Serve the backend's NATIVE format (audio/mpeg or audio/wav); browsers
+        # decode both, so no transcoding here. No Content-Length -> aiohttp uses
+        # chunked transfer encoding.
+        resp = web.StreamResponse(status=200)
+        resp.content_type = mime
+        await resp.prepare(request)
+        try:
+            await resp.write(first)
+            async for chunk in aiter:
+                if chunk:
+                    await resp.write(chunk)
+        except (RuntimeError, httpx.HTTPError, ConnectionError, OSError):
+            # Mid-stream synthesis failure or client disconnect AFTER headers were
+            # sent (ConnectionResetError/BrokenPipeError/ConnectionAbortedError are
+            # all OSError subtypes): the status can no longer change. Stop writing
+            # (aiohttp closes the connection; the browser reports a truncated
+            # stream) and close the iterator so the backend releases its upstream
+            # HTTP response. If the error came FROM the iterator it already
+            # self-terminated; aclose() is then a no-op.
+            await _aclose_quietly(aiter)
+            return resp
+        await resp.write_eof()
+        return resp
 
     # --- system prompt (named profiles over PromptStore) ----------------------
     def _profile_id(self, request: web.Request) -> int | None:
