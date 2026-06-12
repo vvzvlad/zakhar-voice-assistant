@@ -116,7 +116,20 @@ class ConfigService:
     def create(self, category: str):
         slot = self._slot(category)
         prov = get_provider(category, slot.selected)
-        return prov.create(self.get(category), self._deps)
+        cfg = prov.ConfigModel(**slot.instances.get(slot.selected, {}))
+        backend = prov.create(cfg, self._deps)
+        self._stamp_desc(backend, prov, cfg)
+        return backend
+
+    @staticmethod
+    def _stamp_desc(backend, prov, cfg) -> None:
+        # Stamp the human-readable "provider/model" identity onto the backend so
+        # log lines can name the exact backend that executed a stage. Best-effort:
+        # a backend that rejects attributes simply stays unlabeled.
+        try:
+            backend.backend_desc = prov.describe(cfg)
+        except Exception:
+            pass
 
     def provider(self, category: str):
         """Return the selected provider instance for a category (for runtime reconfig)."""
@@ -133,7 +146,9 @@ class ConfigService:
         or the running pipeline. ValidationError/ValueError propagate."""
         prov = get_provider(category, plugin)
         cfg = prov.ConfigModel(**(overrides or {}))
-        return prov.create(cfg, self._deps)
+        backend = prov.create(cfg, self._deps)
+        self._stamp_desc(backend, prov, cfg)
+        return backend
 
     def catalog(self) -> dict:
         """Everything the panel needs: per-category providers + JSON Schema +

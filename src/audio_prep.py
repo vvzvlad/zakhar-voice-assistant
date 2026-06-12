@@ -3,7 +3,10 @@
 Distinct from VAD (the speech/no-speech end-pointing stage): these helpers are
 applied ONCE by the pipeline to the finalized utterance — high-pass / peak
 normalization / lead-in trim before STT, and the WAV builders for the capture
-and diagnostic audio paths — never per chunk.
+and diagnostic audio paths — never per chunk. The one PER-CHUNK exception is
+``vad_boost``: a decision-only makeup gain the pipeline applies to each chunk
+on its VAD feed path (gated by core.vad.mic_auto_gain) — the boosted bytes go
+only to the VAD session, never to the buffer/STT/stored audio.
 """
 
 import io
@@ -12,6 +15,41 @@ import wave
 import numpy as np
 
 from src.vad import SAMPLE_RATE
+
+# Target int16 peak the boost lifts the quiet channel's SPEECH toward. Deliberately
+# MODERATE (~-15 dBFS, not full-scale): a higher target needs a larger gain, which also
+# amplifies the channel's (clean, quiet) trailing silence enough that a VAD engine reads
+# it as speech and never end-points (the utterance runs to max-length). At -15 dBFS the
+# quiet channel's speech (peak ~50) reaches ~5800 (clearly speech) while its silence
+# (peak ~5) stays ~600 (clearly non-speech), so the pause is still detected → fast end-point.
+VAD_BOOST_TARGET = 5824.0    # 32767 * 10**(-15/20)
+# int16 peak below which we treat the (very clean) less-processed channel as pre-roll
+# silence and don't boost — keeps leading noise from being amplified into false speech.
+# Must sit BELOW the real speech level of the quiet channel (measured ~50-80) and ABOVE
+# its silence floor (~1-5), so the boost engages once the wake word is heard.
+VAD_BOOST_FLOOR = 30
+
+
+def vad_boost(frame: bytes, peak: int, max_gain: float = 128.0) -> bytes:
+    """Lift a 16-bit mono PCM frame toward VAD_BOOST_TARGET for the VAD decision only.
+
+    `peak` is the running peak of the WHOLE utterance so far (not this frame), so the
+    gain (target/peak) is the same for every frame once the loud wake word has set the
+    peak — this preserves the speech-vs-silence energy ratio (silence stays detectable)
+    while bringing the quiet less-processed channel into the VAD engine's range. Returns
+    the frame unchanged until a real signal has been seen (peak < floor) or when no boost
+    is needed (gain <= 1). Used ONLY for the speech/no-speech decision — never stored.
+    """
+    if peak < VAD_BOOST_FLOOR:
+        return frame
+    gain = min(VAD_BOOST_TARGET / peak, max_gain)
+    if gain <= 1.0:
+        return frame
+    n = len(frame) - (len(frame) % 2)
+    if n == 0:
+        return frame
+    s = np.frombuffer(frame[:n], dtype="<i2").astype(np.float32) * gain
+    return np.clip(s, -32768, 32767).astype("<i2").tobytes() + frame[n:]
 
 
 def highpass(pcm: bytes, cutoff_hz: float = 80.0, sample_rate: int = SAMPLE_RATE) -> bytes:

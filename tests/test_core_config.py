@@ -119,12 +119,13 @@ def test_builtin_prompt_fields_carry_textarea_widget():
 
 def test_vad_mic_defaults_are_channel0_conditioning_off():
     # Mic channel + conditioning toggles live inside VadConfig (the Voice-capture
-    # section), not a separate core.mic section. Defaults: processed channel 0, both
-    # the peak-normalize and high-pass toggles OFF.
+    # section), not a separate core.mic section. Defaults: processed channel 0, the
+    # peak-normalize, high-pass and decision-only VAD auto-gain toggles all OFF.
     v = VadConfig()
     assert v.mic_channel == 0
     assert v.mic_normalize is False
     assert v.mic_highpass is False
+    assert v.mic_auto_gain is False
 
 
 def test_vad_mic_channel_literal_rejects_out_of_range():
@@ -135,10 +136,11 @@ def test_vad_mic_channel_literal_rejects_out_of_range():
 
 
 def test_vad_mic_conditioning_toggles_accept_overrides():
-    # Both conditioning toggles are independent bools that can be turned on.
-    v = VadConfig(mic_normalize=True, mic_highpass=True)
+    # The conditioning toggles are independent bools that can be turned on.
+    v = VadConfig(mic_normalize=True, mic_highpass=True, mic_auto_gain=True)
     assert v.mic_normalize is True
     assert v.mic_highpass is True
+    assert v.mic_auto_gain is True
 
 
 def test_core_config_vad_has_mic_fields():
@@ -146,3 +148,9 @@ def test_core_config_vad_has_mic_fields():
     assert vad.mic_channel == 0
     assert vad.mic_normalize is False
     assert vad.mic_highpass is False
+
+
+def test_audio_stream_tts_defaults_true():
+    # Streaming TTS delivery is on by default; old docs carry no
+    # core.audio.stream_tts key, so the default must cover them.
+    assert CoreConfig().audio.stream_tts is True

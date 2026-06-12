@@ -11,7 +11,15 @@ import wave
 
 import numpy as np
 
-from src.audio_prep import highpass, normalize_peak, pcm_to_wav_bytes, write_wav
+from src.audio_prep import (
+    VAD_BOOST_FLOOR,
+    VAD_BOOST_TARGET,
+    highpass,
+    normalize_peak,
+    pcm_to_wav_bytes,
+    vad_boost,
+    write_wav,
+)
 from src.vad import SAMPLE_RATE
 
 
@@ -123,3 +131,64 @@ def test_pcm_to_wav_bytes_mono_empty_pcm_yields_valid_empty_wav():
         assert w.getsampwidth() == 2
         assert w.getframerate() == SAMPLE_RATE
         assert w.getnframes() == 0
+
+
+# --- vad_boost: the decision-only per-chunk makeup gain ---------------------------
+# Moved here from the vad/webrtc plugin: the pipeline now applies it to every chunk
+# before any VAD engine sees it (gated by core.vad.mic_auto_gain).
+
+def test_vad_boost_lifts_quiet_frame_toward_target():
+    # A frame whose own samples are small, with a representative running utterance
+    # peak (~3000), is scaled by min(target/peak, max_gain) so quiet speech reaches
+    # the VAD engine's range. The gain is well below the max_gain cap here.
+    peak = 3000
+    gain = VAD_BOOST_TARGET / peak
+    samples = np.array([100, -200, 300, -50] * 80, dtype="<i2")  # 320 samples = 640 B
+    frame = samples.tobytes()
+    out = vad_boost(frame, peak)
+    out_samples = np.frombuffer(out, dtype="<i2")
+    expected = np.clip(samples.astype(np.float32) * gain, -32768, 32767).astype("<i2")
+    assert np.array_equal(out_samples, expected)
+    # Sanity: the frame really was amplified (gain > 1).
+    assert gain > 1.0
+    assert np.max(np.abs(out_samples)) > np.max(np.abs(samples))
+
+
+def test_vad_boost_below_floor_is_identity():
+    # peak below VAD_BOOST_FLOOR (30) -> treated as pre-roll silence -> frame unchanged.
+    frame = (np.array([10, -20, 30, -40] * 80, dtype="<i2")).tobytes()
+    assert vad_boost(frame, VAD_BOOST_FLOOR - 10) == frame
+
+
+def test_vad_boost_caps_at_max_gain():
+    # A peak just above the floor gives a target/peak ratio above the max_gain cap
+    # (128); the cap must clamp it. peak=40 -> target/40 ≈ 145 > 128, so the gain is 128.
+    peak = 40
+    assert VAD_BOOST_TARGET / peak > 128.0  # uncapped ratio really does exceed the cap
+    samples = np.array([5, -6, 7, -8] * 80, dtype="<i2")  # small -> no clipping at 128x
+    frame = samples.tobytes()
+    out = np.frombuffer(vad_boost(frame, peak), dtype="<i2")
+    expected = np.clip(samples.astype(np.float32) * 128.0, -32768, 32767).astype("<i2")
+    assert np.array_equal(out, expected)
+
+
+def test_vad_boost_never_attenuates_loud_signal():
+    # When the running peak already sits at or above the boost target, gain <= 1:
+    # the frame must come back byte-identical (the boost only ever lifts, never cuts).
+    frame = np.array([100, -200, 300, -400] * 80, dtype="<i2").tobytes()
+    assert vad_boost(frame, int(VAD_BOOST_TARGET)) == frame   # gain == 1 exactly
+    assert vad_boost(frame, 8000) == frame                    # gain < 1
+
+
+def test_vad_boost_handles_empty_and_odd_length():
+    # Empty frame -> unchanged. Odd-length (a stray trailing byte): the whole-sample
+    # prefix is boosted, the torn trailing byte survives verbatim (same contract as
+    # the other audio_prep helpers) and no exception is raised.
+    assert vad_boost(b"", 3000) == b""
+    odd = (np.array([100, -200], dtype="<i2")).tobytes() + b"\x07"  # 5 bytes
+    out = vad_boost(odd, 3000)
+    assert len(out) == len(odd)
+    assert out[-1:] == b"\x07"
+    assert out[:4] != odd[:4]  # the whole samples really were boosted
+    # A single-byte frame has no whole int16 sample -> returned unchanged.
+    assert vad_boost(b"\x01", 3000) == b"\x01"

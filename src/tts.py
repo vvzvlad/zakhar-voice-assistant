@@ -6,6 +6,7 @@ per brick); the orchestrator imports only this contract module.
 
 import re
 from abc import ABC, abstractmethod
+from collections.abc import AsyncIterator
 
 
 # Sentence-ending punctuation; ellipsis "…" is normalized to "." first because
@@ -27,3 +28,19 @@ class TtsBackend(ABC):
     @abstractmethod
     async def synthesize(self, text: str, lang: str = "ru") -> tuple[str, bytes]:
         ...
+
+    async def synthesize_stream(
+        self, text: str, lang: str = "ru"
+    ) -> tuple[str, AsyncIterator[bytes]]:
+        """Streaming synthesis: (mime, async chunk iterator). Default adapter wraps
+        the buffered synthesize() in a single-chunk stream, so every backend is
+        streamable; engines with native chunked output override this. Connect/auth
+        errors must be raised HERE (before the iterator is returned), so callers can
+        fail the run cleanly; mid-stream errors surface from the iterator."""
+        mime, audio = await self.synthesize(text, lang)
+
+        async def _single():
+            if audio:
+                yield audio
+
+        return (mime, _single())

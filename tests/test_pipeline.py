@@ -5,6 +5,8 @@ import numpy as np
 import pytest
 
 from src.audio_prep import (
+    VAD_BOOST_FLOOR,
+    VAD_BOOST_TARGET,
     highpass,
     normalize_peak,
     pcm_to_wav_bytes,
@@ -32,6 +34,7 @@ from src.prompt_store import PromptStore
 from src.runs_store import _LIST_COLS
 from src.runtime import Runtime
 from src.stage_errors import StageError
+from src.tts import TtsBackend
 
 PUBLIC_BASE_URL = "http://10.0.0.10:8200"
 
@@ -63,7 +66,10 @@ class FakeSttBackend:
         return self.text
 
 
-class FakeTtsBackend:
+# Subclasses the real TtsBackend contract so the ABC's buffered single-chunk
+# synthesize_stream default adapter applies — existing tests run unchanged
+# through the new streaming TTS path.
+class FakeTtsBackend(TtsBackend):
     def __init__(self, mime="audio/mpeg", audio=b"MP3"):
         self.mime = mime
         self.audio = audio
@@ -72,13 +78,47 @@ class FakeTtsBackend:
         return (self.mime, self.audio)
 
 
+class _FakeStreamFeed:
+    """StreamFeed double mirroring its write/close/abort surface. close() lands
+    the joined clip in the owning FakeAudioServer's `calls` list, so existing
+    assertions on `calls` keep their meaning (the pipeline awaits the feed task
+    before the run record is written)."""
+
+    def __init__(self, server, content_type):
+        self._server = server
+        self._content_type = content_type
+        self.chunks = []
+        self.done = False
+        self.failed = False
+
+    def write(self, chunk):
+        if chunk:
+            self.chunks.append(chunk)
+
+    def close(self):
+        self.done = True
+        self._server.calls.append((b"".join(self.chunks), self._content_type))
+
+    def abort(self):
+        self.done = True
+        self.failed = True
+
+
 class FakeAudioServer:
     def __init__(self):
-        self.calls = []  # records (data, content_type) for assertions
+        self.calls = []    # records (data, content_type) for assertions
+        self.streams = []  # the _FakeStreamFeed of each put_stream() call
 
     def put(self, data, content_type="audio/mpeg"):
         self.calls.append((data, content_type))
         return "abc123"
+
+    def put_stream(self, content_type="audio/mpeg"):
+        # Mirror of AudioServer.put_stream for the streaming TTS path: same id
+        # as put() so URL assertions hold for both paths.
+        feed = _FakeStreamFeed(self, content_type)
+        self.streams.append(feed)
+        return "abc123", feed
 
 
 class FakeRunsStore:
@@ -360,8 +400,132 @@ async def test_empty_stt(tmp_path, monkeypatch):
 # returns "" for a hallucinated transcript, which the pipeline handles via the
 # existing empty-transcription path — covered by the empty-STT tests above).
 
-# The VAD-decision boost (auto_gain) is the webrtc plugin's concern now; its unit
-# tests live in tests/test_vad_webrtc.py against the session/backend directly.
+# --- decision-only VAD boost (core.vad.mic_auto_gain) ---------------------------
+# The pipeline applies the boost to every chunk BEFORE it reaches the VAD session
+# (any engine), while the buffer/STT path keeps the raw bytes. The vad_boost
+# primitive itself is unit-tested in tests/test_audio_prep.py.
+
+
+class RecordingVadSession:
+    """VadSession double: records every chunk fed to it and never finalizes."""
+
+    def __init__(self):
+        self.fed = []
+
+    def feed(self, chunk):
+        self.fed.append(chunk)
+        return None
+
+    def debug_state(self):
+        return {}
+
+
+class RecordingVadBackend:
+    """VadBackend double: open() hands out a fresh recording session per run and
+    keeps them all, so tests can inspect exactly what the pipeline fed."""
+
+    def __init__(self):
+        self.sessions = []
+
+    def open(self, policy):
+        session = RecordingVadSession()
+        self.sessions.append(session)
+        return session
+
+
+def _const_chunk(value, samples=320):
+    """One chunk of 16-bit mono PCM with every sample set to `value`."""
+    return np.full(samples, value, dtype="<i2").tobytes()
+
+
+def _boosted(chunk, peak):
+    """The bytes vad_boost produces for `chunk` at running utterance peak `peak`."""
+    gain = min(VAD_BOOST_TARGET / peak, 128.0)
+    return np.clip(
+        np.frombuffer(chunk, dtype="<i2").astype(np.float32) * gain, -32768, 32767
+    ).astype("<i2").tobytes()
+
+
+async def test_mic_auto_gain_boosts_vad_feed_but_buffers_raw(tmp_path, monkeypatch):
+    # With mic_auto_gain on, once a loud chunk has raised the running peak above
+    # the floor, the VAD session receives BOOSTED bytes (scaled by
+    # min(target/peak, 128)) while self._buffer keeps the raw chunk bytes.
+    patch_llm(monkeypatch)
+    pipeline, _ = make_pipeline(tmp_path, monkeypatch)
+    pipeline.rt.core.vad.mic_auto_gain = True
+    backend = RecordingVadBackend()
+    pipeline.rt.vad_backend = backend
+
+    await pipeline.on_start("cid", 0, None, None)
+    peak = 3000
+    loud = _const_chunk(peak)
+    quiet = _const_chunk(100)
+    await pipeline.on_audio(loud)
+    await pipeline.on_audio(quiet)
+
+    [session] = backend.sessions
+    # The peak is tracked from the chunk itself BEFORE boosting, so even the
+    # first loud chunk is already lifted with the utterance-level gain.
+    assert pipeline._vad_peak == peak
+    assert session.fed == [_boosted(loud, peak), _boosted(quiet, peak)]
+    assert session.fed[1] != quiet  # the decision really saw boosted bytes...
+    assert bytes(pipeline._buffer) == loud + quiet  # ...while the buffer kept raw
+
+
+async def test_mic_auto_gain_off_feeds_verbatim_and_tracks_no_peak(tmp_path, monkeypatch):
+    # Default (mic_auto_gain=False): the session receives the chunk verbatim and
+    # the pipeline does no peak tracking at all.
+    patch_llm(monkeypatch)
+    pipeline, _ = make_pipeline(tmp_path, monkeypatch)
+    backend = RecordingVadBackend()
+    pipeline.rt.vad_backend = backend
+
+    await pipeline.on_start("cid", 0, None, None)
+    loud = _const_chunk(3000)
+    await pipeline.on_audio(loud)
+
+    [session] = backend.sessions
+    assert session.fed == [loud]
+    assert pipeline._vad_peak == 0
+
+
+async def test_mic_auto_gain_preroll_below_floor_fed_verbatim(tmp_path, monkeypatch):
+    # While the running peak is still below VAD_BOOST_FLOOR, pre-roll silence is
+    # NOT amplified: chunks reach the session unchanged (boost identity).
+    patch_llm(monkeypatch)
+    pipeline, _ = make_pipeline(tmp_path, monkeypatch)
+    pipeline.rt.core.vad.mic_auto_gain = True
+    backend = RecordingVadBackend()
+    pipeline.rt.vad_backend = backend
+
+    await pipeline.on_start("cid", 0, None, None)
+    preroll = _const_chunk(VAD_BOOST_FLOOR - 20)
+    await pipeline.on_audio(preroll)
+
+    [session] = backend.sessions
+    assert pipeline._vad_peak == VAD_BOOST_FLOOR - 20
+    assert session.fed == [preroll]
+
+
+async def test_mic_auto_gain_peak_resets_between_runs(tmp_path, monkeypatch):
+    # The running peak is per utterance: a loud first run must not leak its peak
+    # into the next run — a quiet (below-floor) chunk in run 2 is fed verbatim.
+    patch_llm(monkeypatch)
+    pipeline, _ = make_pipeline(tmp_path, monkeypatch)
+    pipeline.rt.core.vad.mic_auto_gain = True
+    backend = RecordingVadBackend()
+    pipeline.rt.vad_backend = backend
+
+    await pipeline.on_start("cid1", 0, None, None)
+    await pipeline.on_audio(_const_chunk(3000))
+    assert pipeline._vad_peak == 3000
+
+    await pipeline.on_start("cid2", 0, None, None)
+    quiet = _const_chunk(VAD_BOOST_FLOOR - 20)  # would be boosted at peak=3000
+    await pipeline.on_audio(quiet)
+
+    assert pipeline._vad_peak == VAD_BOOST_FLOOR - 20
+    assert backend.sessions[-1].fed == [quiet]
 
 
 async def test_pipelines_are_independent(tmp_path, monkeypatch):
@@ -942,7 +1106,10 @@ async def test_truly_empty_audio_not_recorded(tmp_path, monkeypatch):
     assert store.records == []
 
 
-class RaisingTtsBackend:
+# Subclasses TtsBackend so the streaming path's default synthesize_stream
+# adapter raises the same error BEFORE the iterator is returned (the existing
+# pre-URL TTS error path).
+class RaisingTtsBackend(TtsBackend):
     """TTS double that always fails, to exercise the TTS except branch."""
 
     async def synthesize(self, text, lang="ru"):
@@ -2930,3 +3097,342 @@ async def test_run_text_without_store_or_hub(tmp_path, monkeypatch):
     assert result["reply"] == "ок"
     assert result["result"] == "ok"
     assert events == []
+
+
+# --- streaming TTS (stream_tts flag, serve_audio_stream) --------------------------
+
+
+async def test_streaming_tts_emits_stream_url_and_records_total_bytes(tmp_path, monkeypatch):
+    # End-to-end streaming run with a slow generator backend: TTS_END carries the
+    # stream URL (handed out while synthesis still runs) and the run record's
+    # audio_bytes equals the total fed through the stream.
+    import asyncio
+
+    class _StreamingTts(TtsBackend):
+        async def synthesize(self, text, lang="ru"):
+            raise AssertionError("streaming path must not call buffered synthesize")
+
+        async def synthesize_stream(self, text, lang="ru"):
+            async def _gen():
+                yield b"chunk1"
+                await asyncio.sleep(0)  # synthesis keeps running after TTS_END
+                yield b"chunk2"
+
+            return ("audio/mpeg", _gen())
+
+    patch_llm(monkeypatch, reply="готово")
+    store = FakeRunsStore()
+    pipeline, events = make_pipeline(
+        tmp_path, monkeypatch, stt_text="включи свет",
+        tts_backend=_StreamingTts(), runs_store=store,
+    )
+
+    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_audio(b"\x01\x02" * 100)
+    await pipeline.on_stop(False)
+
+    data = dict(events)
+    url = data[StageEvent.TTS_END]["url"]
+    assert url.endswith("/tts/abc123.mp3")
+    assert url.startswith(PUBLIC_BASE_URL)
+    # The whole clip went through the stream feed (closed -> landed in calls)...
+    assert len(pipeline.audio_server.streams) == 1
+    assert pipeline.audio_server.calls == [(b"chunk1chunk2", "audio/mpeg")]
+    # ...and the record carries the total streamed bytes (feed awaited by the run).
+    rec = store.records[0]
+    assert rec["result"] == "ok"
+    assert rec["audio_bytes"] == len(b"chunk1chunk2")
+    assert rec["audio_fmt"] == "mp3"
+
+
+async def test_streaming_tts_wav_backend_falls_back_to_buffered_transcode(tmp_path, monkeypatch):
+    # A WAV-native backend (Piper-like) can't be played from mid-stream: the
+    # streaming run must drain the iterator and fall back through serve_audio
+    # (the transcode boundary, put()) — never put_stream.
+    patch_llm(monkeypatch, reply="готово")
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(16000)
+        wf.writeframes(b"\x00\x00" * 160)
+    wav_bytes = buf.getvalue()
+    pipeline, events = make_pipeline(
+        tmp_path, monkeypatch, stt_text="включи свет",
+        tts_backend=FakeTtsBackend(mime="audio/wav", audio=wav_bytes),
+    )
+    assert pipeline.core.audio.stream_tts is True  # streaming run, WAV fallback inside
+
+    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_audio(b"\x01\x02" * 100)
+    await pipeline.on_stop(False)
+
+    assert pipeline.audio_server.streams == []  # no stream entry for a WAV clip
+    [(served, mime)] = pipeline.audio_server.calls  # put() used (transcode path)
+    assert mime == "audio/mpeg"
+    assert served[0] == 0xFF  # MP3 frame sync byte: genuinely transcoded
+    assert dict(events)[StageEvent.TTS_END]["url"].endswith(".mp3")
+
+
+async def test_stream_tts_disabled_uses_buffered_path(tmp_path, monkeypatch):
+    # The kill-switch: stream_tts=False restores buffer-then-serve — buffered
+    # synthesize() runs and the clip lands via put(), never put_stream.
+    class _RecordingTts(FakeTtsBackend):
+        def __init__(self):
+            super().__init__()
+            self.synth_calls = []   # (text, lang) per buffered synthesize
+            self.stream_calls = []  # (text, lang) per synthesize_stream
+
+        async def synthesize(self, text, lang="ru"):
+            self.synth_calls.append((text, lang))
+            return await super().synthesize(text, lang)
+
+        async def synthesize_stream(self, text, lang="ru"):
+            self.stream_calls.append((text, lang))
+            return await super().synthesize_stream(text, lang)
+
+    patch_llm(monkeypatch, reply="готово")
+    tts = _RecordingTts()
+    pipeline, events = make_pipeline(
+        tmp_path, monkeypatch, stt_text="включи свет", tts_backend=tts,
+    )
+    pipeline.rt.core.audio.stream_tts = False  # read live per run
+
+    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_audio(b"\x01\x02" * 100)
+    await pipeline.on_stop(False)
+
+    assert tts.synth_calls == [("готово", "ru")]
+    assert tts.stream_calls == []
+    assert pipeline.audio_server.streams == []
+    assert pipeline.audio_server.calls == [(b"MP3", "audio/mpeg")]
+    assert dict(events)[StageEvent.TTS_END]["url"].endswith("/tts/abc123.mp3")
+
+
+async def test_streaming_tts_midstream_error_records_tts_stage(tmp_path, monkeypatch):
+    # A generator failing AFTER the URL was handed out (mid-stream): the run
+    # still completes cleanly (RUN_END, no top-level ERROR), the record blames
+    # TTS, and the feed task's error is consumed — no unhandled task exception.
+    class _ExplodingStreamTts(TtsBackend):
+        async def synthesize(self, text, lang="ru"):
+            return ("audio/mpeg", b"")
+
+        async def synthesize_stream(self, text, lang="ru"):
+            async def _gen():
+                yield b"part1"
+                raise RuntimeError("stream boom")
+
+            return ("audio/mpeg", _gen())
+
+    patch_llm(monkeypatch, reply="готово")
+    store = FakeRunsStore()
+    pipeline, events = make_pipeline(
+        tmp_path, monkeypatch, stt_text="включи свет",
+        tts_backend=_ExplodingStreamTts(), runs_store=store,
+    )
+
+    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_audio(b"\x01\x02" * 100)
+    await pipeline.on_stop(False)
+
+    types = types_of(events)
+    assert StageEvent.TTS_END in types   # the URL had already been emitted
+    assert StageEvent.RUN_END in types
+    assert StageEvent.ERROR not in types  # handled mid-stream, not a pipeline crash
+    rec = store.records[0]
+    assert rec["result"] == "error"
+    assert rec["error_stage"] == "TTS"
+    assert "stream boom" in rec["error_text"]
+    # The aborted feed never landed a clip on the audio server.
+    assert pipeline.audio_server.calls == []
+    [feed] = pipeline.audio_server.streams
+    assert feed.failed is True
+
+
+class _ClosableChunkIter:
+    """Async chunk-iterator double recording aclose() calls: stands in for a
+    streaming backend's generator, whose open HTTP response is only released
+    when the iterator is iterated or explicitly closed."""
+
+    def __init__(self, chunks=()):
+        self._chunks = iter(chunks)
+        self.closed = False
+        self.iterated = False
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        self.iterated = True
+        try:
+            return next(self._chunks)
+        except StopIteration:
+            raise StopAsyncIteration from None
+
+    async def aclose(self):
+        self.closed = True
+
+
+async def test_serve_audio_stream_closes_iterator_when_put_stream_raises(tmp_path, monkeypatch):
+    # The ownership invariant: serve_audio_stream must close the iterator when
+    # anything between receiving it and the feed task's first iteration raises
+    # (here: put_stream). Otherwise the backend's open streamed HTTP response
+    # (released from the generator's finally) would leak.
+    pipeline, _events = make_pipeline(tmp_path, monkeypatch)
+
+    def _boom(content_type="audio/mpeg"):
+        raise RuntimeError("put_stream boom")
+
+    monkeypatch.setattr(pipeline.audio_server, "put_stream", _boom)
+    it = _ClosableChunkIter([b"never-served"])
+
+    with pytest.raises(RuntimeError, match="put_stream boom"):
+        await pipeline.serve_audio_stream("audio/mpeg", it)
+
+    assert it.closed is True
+    assert it.iterated is False  # dropped BEFORE the first iteration — the leak window
+    assert pipeline.audio_server.streams == []  # nothing was registered
+
+
+async def test_serve_audio_stream_closes_iterator_when_drain_fallback_fails(tmp_path, monkeypatch):
+    # Same invariant on the non-playable (drain) branch: when serve_audio fails
+    # AFTER a successful drain, the branch still explicitly closes the iterator.
+    pipeline, _events = make_pipeline(tmp_path, monkeypatch)
+
+    async def _boom(mime, audio):
+        raise RuntimeError("serve_audio boom")
+
+    monkeypatch.setattr(pipeline, "serve_audio", _boom)
+    it = _ClosableChunkIter([b"wav-bytes"])
+
+    with pytest.raises(RuntimeError, match="serve_audio boom"):
+        await pipeline.serve_audio_stream("audio/wav", it)  # non-playable mime
+
+    assert it.closed is True
+
+
+async def test_streaming_tts_emit_failure_on_tts_end_reaps_feed_task(tmp_path, monkeypatch):
+    # A custom send_event raising on TTS_END lands in the window between the
+    # feed task's creation and its await. The orphan guard must cancel/await
+    # the task (no "Task exception was never retrieved") and the run records
+    # the error through the existing pipeline catch-all.
+    import asyncio
+
+    class _StreamingTts(TtsBackend):
+        async def synthesize(self, text, lang="ru"):
+            raise AssertionError("streaming path must not call buffered synthesize")
+
+        async def synthesize_stream(self, text, lang="ru"):
+            async def _gen():
+                yield b"chunk1"
+                await asyncio.sleep(0)
+                yield b"chunk2"
+
+            return ("audio/mpeg", _gen())
+
+    patch_llm(monkeypatch, reply="готово")
+    store = FakeRunsStore()
+    pipeline, events = make_pipeline(
+        tmp_path, monkeypatch, stt_text="включи свет",
+        tts_backend=_StreamingTts(), runs_store=store,
+    )
+
+    # Capture the feed task handed to the run so its fate can be asserted.
+    feed_tasks = []
+    orig_serve = pipeline.serve_audio_stream
+
+    async def _capturing_serve(mime, chunks):
+        ext, url, task = await orig_serve(mime, chunks)
+        feed_tasks.append(task)
+        return ext, url, task
+
+    monkeypatch.setattr(pipeline, "serve_audio_stream", _capturing_serve)
+
+    # send_event keeps recording events but explodes exactly on TTS_END.
+    orig_send = pipeline.send_event
+
+    def _exploding_send(event_type, data):
+        orig_send(event_type, data)
+        if event_type == StageEvent.TTS_END:
+            raise RuntimeError("emit boom")
+
+    pipeline.send_event = _exploding_send
+
+    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_audio(b"\x01\x02" * 100)
+    await pipeline.on_stop(False)
+
+    # The run survived (RUN_END fired) and recorded the emit failure honestly
+    # (the TTS-section except catches it: nothing earlier claimed the stage).
+    types = types_of(events)
+    assert StageEvent.RUN_END in types
+    rec = store.records[0]
+    assert rec["result"] == "error"
+    assert rec["error_stage"] == "TTS"
+    assert "emit boom" in rec["error_text"]
+    # The feed task was reaped (cancelled + awaited), never orphaned.
+    [task] = feed_tasks
+    assert task.done()
+    assert task.cancelled()
+
+
+async def test_speak_streaming_announce_failure_cancels_feed_task(tmp_path, monkeypatch):
+    # speak() with an instantly-failing announce while synthesis would run for
+    # a long time: the guard must CANCEL the still-running feed task before
+    # reaping it (mirroring _run's orphan guard), so the announce error
+    # surfaces promptly instead of after the whole synthesis.
+    import asyncio
+    import time
+
+    never_set = asyncio.Event()  # the "synthesis" would block forever on this
+
+    class _SlowStreamTts(TtsBackend):
+        async def synthesize(self, text, lang="ru"):
+            raise AssertionError("streaming path must not call buffered synthesize")
+
+        async def synthesize_stream(self, text, lang="ru"):
+            async def _gen():
+                yield b"chunk1"
+                await never_set.wait()  # never completes without cancellation
+                yield b"chunk2"
+
+            return ("audio/mpeg", _gen())
+
+    pipeline, _ = make_pipeline(tmp_path, monkeypatch, tts_backend=_SlowStreamTts())
+
+    # Capture the feed task handed to speak() so its fate can be asserted.
+    feed_tasks = []
+    orig_serve = pipeline.serve_audio_stream
+
+    async def _capturing_serve(mime, chunks):
+        ext, url, task = await orig_serve(mime, chunks)
+        feed_tasks.append(task)
+        return ext, url, task
+
+    monkeypatch.setattr(pipeline, "serve_audio_stream", _capturing_serve)
+
+    async def _announce_boom(**kwargs):
+        # Yield once (a real announce suspends on I/O) so the feed task gets
+        # scheduled and is genuinely mid-stream when the failure hits.
+        await asyncio.sleep(0)
+        raise RuntimeError("announce down")
+
+    pipeline.send_announcement = _announce_boom
+
+    # Bound the whole call AND time it: without the cancel, speak() would block
+    # on the never-finishing feed until wait_for's 2s timeout (whose cancellation
+    # would reap the task as a side effect) instead of re-raising the announce
+    # error promptly — so the prompt-failure proof is the elapsed time.
+    start = time.monotonic()
+    with pytest.raises(RuntimeError, match="announce down"):
+        await asyncio.wait_for(pipeline.speak("привет"), 2)
+    assert time.monotonic() - start < 1.0  # failed fast, not at the 2s bound
+
+    # The feed task was reaped (cancelled + awaited), never orphaned...
+    [task] = feed_tasks
+    assert task.done()
+    assert task.cancelled()
+    # ...and the aborted feed never landed a clip on the audio server.
+    [feed] = pipeline.audio_server.streams
+    assert feed.failed is True
+    assert pipeline.audio_server.calls == []

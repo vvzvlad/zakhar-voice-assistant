@@ -256,7 +256,7 @@ function ProviderCard({ cat, sub }) {
 
 export function VAD() {
   const { catalog, patch } = useAppData();
-  // VAD is a catalog category since R2 (webrtc provider: aggressiveness, auto_gain).
+  // VAD is a catalog category since R2 (webrtc provider: aggressiveness).
   // Tolerate an older backend without it — render the core.vad cards only.
   const vadCat = catalog.categories.find((c) => c.id === "vad");
   const coreSchema = catalog.core.schema;

@@ -6,6 +6,7 @@ provider declares its own settings schema, so adding one is a single new module 
 self-registers via @register on `import src.plugins`.
 """
 
+import os
 from collections import defaultdict
 from dataclasses import dataclass
 
@@ -41,6 +42,22 @@ class Provider:
 
     def create(self, cfg: BaseModel, deps: Deps):
         raise NotImplementedError
+
+    def describe(self, cfg: BaseModel) -> str:
+        """Human-readable backend identity ("provider/model") for per-phase pipeline
+        log lines.
+
+        The default scans the config for the conventional model-ish fields in a
+        fixed priority order and appends the first non-empty string value to the
+        provider id; path-like fields are shortened to their basename so the log
+        stays short. Providers with unusual config schemas may override."""
+        for field in ("model", "model_path", "voice_path", "voice"):
+            value = getattr(cfg, field, None)
+            if isinstance(value, str) and value:
+                if field.endswith("_path"):
+                    value = os.path.basename(value)
+                return f"{self.id}/{value}"
+        return self.id
 
     def options(self, field: str, cfg: BaseModel, deps: Deps, query: str = ""):
         """Optional dynamic option lists (voices/models) for a config field.

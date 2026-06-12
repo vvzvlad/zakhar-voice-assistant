@@ -1,28 +1,26 @@
-"""Unit tests for the WebRTC VAD stage plugin (session, backend, provider, boost).
+"""Unit tests for the WebRTC VAD stage plugin (session, backend, provider).
 
 These drive WebRtcVadSession directly (much cleaner than via the pipeline):
-framing across odd chunk sizes, the end-pointing decisions against an
-EndpointPolicy, and the decision-only auto_gain boost.
+framing across odd chunk sizes and the end-pointing decisions against an
+EndpointPolicy. The decision-only VAD boost lives in the pipeline now
+(core.vad.mic_auto_gain); its tests are in tests/test_audio_prep.py and
+tests/test_pipeline.py.
 """
 
 import importlib.util
 import os
 
-import numpy as np
 import pytest
 from pydantic import ValidationError
 
 import src.plugins  # noqa: F401  triggers @register on all providers
 from src.plugins.base import get_provider, providers
 from src.plugins.vad.webrtc import (
-    _VAD_BOOST_FLOOR,
-    _VAD_BOOST_TARGET,
     FRAME_BYTES,
     FRAME_MS,
     WebRtcVadBackend,
     WebRtcVadConfig,
     WebRtcVadSession,
-    _vad_boost,
 )
 from src.vad import EndpointPolicy, VadBackend, VadSession
 
@@ -57,9 +55,9 @@ POLICY = EndpointPolicy(
 FRAME = b"\x00" * FRAME_BYTES  # one 20 ms frame of silence-shaped PCM
 
 
-def make_session(script, *, auto_gain=False, policy=POLICY):
+def make_session(script, *, policy=POLICY):
     fake = FakeVad(script)
-    session = WebRtcVadSession(fake, policy, auto_gain=auto_gain)
+    session = WebRtcVadSession(fake, policy)
     return session, fake
 
 
@@ -140,106 +138,8 @@ def test_debug_state_shape():
     session.feed(FRAME * 2)
     assert session.debug_state() == {
         "speech_ms": 40, "silence_ms": 0, "elapsed_ms": 40,
-        "speech_detected": True, "peak": 0,
+        "speech_detected": True,
     }
-
-
-# --- auto_gain (decision-only makeup gain) -------------------------------------
-
-def _quiet_frame(value=20):
-    return np.full(FRAME_BYTES // 2, value, dtype="<i2").tobytes()
-
-
-def test_auto_gain_off_passes_frames_verbatim():
-    session, fake = make_session([False], auto_gain=False)
-    frame = _quiet_frame(8000)
-    session.feed(frame)
-    assert fake.frames == [frame]
-    assert session.debug_state()["peak"] == 0  # no peak tracking when off
-
-
-def test_auto_gain_tracks_running_peak():
-    session, _ = make_session([False], auto_gain=True)
-    session.feed(np.full(320, 8000, "<i2").tobytes())
-    assert session.debug_state()["peak"] >= 8000
-
-
-def test_auto_gain_does_not_boost_below_floor():
-    # Until the running peak crosses _VAD_BOOST_FLOOR, pre-roll silence must NOT be
-    # amplified into false speech: frames reach the classifier unchanged.
-    session, fake = make_session([False], auto_gain=True)
-    frame = _quiet_frame(_VAD_BOOST_FLOOR - 10)
-    session.feed(frame)
-    assert session.debug_state()["peak"] == _VAD_BOOST_FLOOR - 10
-    assert fake.frames == [frame]  # below the floor -> identity
-
-
-def test_auto_gain_boosts_decision_only_after_real_signal():
-    # Once the peak exceeds the floor, subsequent frames are lifted toward the boost
-    # target FOR THE DECISION ONLY (the original bytes are what the pipeline buffers).
-    session, fake = make_session([False], auto_gain=True)
-    peak = 3000
-    loud = _quiet_frame(peak)
-    session.feed(loud)
-    quiet = _quiet_frame(100)
-    session.feed(quiet)
-    assert len(fake.frames) == 2
-    # Both frames were boosted with the same utterance-level gain (target/peak).
-    gain = _VAD_BOOST_TARGET / peak
-    expected_quiet = np.clip(
-        np.frombuffer(quiet, dtype="<i2").astype(np.float32) * gain, -32768, 32767
-    ).astype("<i2").tobytes()
-    assert fake.frames[1] == expected_quiet
-    assert fake.frames[1] != quiet  # the decision saw a boosted frame...
-    # ...but the session never mutates the fed bytes themselves (decision-only).
-
-
-# --- _vad_boost (the boost primitive, moved verbatim from the pipeline) --------
-
-def test_vad_boost_lifts_quiet_frame_toward_target():
-    # A frame whose own samples are small, with a representative running utterance
-    # peak (~3000), is scaled by min(target/peak, max_gain) so quiet speech reaches
-    # WebRTC VAD's range. The gain is well below the max_gain cap here.
-    peak = 3000
-    gain = _VAD_BOOST_TARGET / peak
-    samples = np.array([100, -200, 300, -50] * 80, dtype="<i2")  # 320 samples = 640 B
-    frame = samples.tobytes()
-    out = _vad_boost(frame, peak)
-    out_samples = np.frombuffer(out, dtype="<i2")
-    expected = np.clip(samples.astype(np.float32) * gain, -32768, 32767).astype("<i2")
-    assert np.array_equal(out_samples, expected)
-    # Sanity: the frame really was amplified (gain > 1).
-    assert gain > 1.0
-    assert np.max(np.abs(out_samples)) > np.max(np.abs(samples))
-
-
-def test_vad_boost_below_floor_is_identity():
-    # peak below _VAD_BOOST_FLOOR (30) -> treated as pre-roll silence -> frame unchanged.
-    frame = (np.array([10, -20, 30, -40] * 80, dtype="<i2")).tobytes()
-    assert _vad_boost(frame, 20) == frame
-
-
-def test_vad_boost_caps_at_max_gain():
-    # A peak just above the floor gives a target/peak ratio above the max_gain cap
-    # (128); the cap must clamp it. peak=40 -> target/40 ≈ 145 > 128, so the gain is 128.
-    peak = 40
-    assert _VAD_BOOST_TARGET / peak > 128.0  # uncapped ratio really does exceed the cap
-    samples = np.array([5, -6, 7, -8] * 80, dtype="<i2")  # small -> no clipping at 128x
-    frame = samples.tobytes()
-    out = np.frombuffer(_vad_boost(frame, peak), dtype="<i2")
-    expected = np.clip(samples.astype(np.float32) * 128.0, -32768, 32767).astype("<i2")
-    assert np.array_equal(out, expected)
-
-
-def test_vad_boost_handles_empty_and_odd_length():
-    # Empty frame -> unchanged. Odd-length (a stray trailing byte) -> still safe; the
-    # whole-sample prefix is boosted and no exception is raised.
-    assert _vad_boost(b"", 3000) == b""
-    odd = (np.array([100, -200], dtype="<i2")).tobytes() + b"\x07"  # 5 bytes
-    out = _vad_boost(odd, 3000)
-    assert isinstance(out, bytes)
-    # A single-byte frame has no whole int16 sample -> returned unchanged.
-    assert _vad_boost(b"\x01", 3000) == b"\x01"
 
 
 # --- backend / provider ---------------------------------------------------------
@@ -267,16 +167,14 @@ def test_provider_registered_and_creates_configured_backend():
     prov = get_provider("vad", "webrtc")
     assert prov.label == "WebRTC VAD"
     assert prov.ConfigModel is WebRtcVadConfig
-    backend = prov.create(WebRtcVadConfig(aggressiveness=1, auto_gain=True), deps=None)
+    backend = prov.create(WebRtcVadConfig(aggressiveness=1), deps=None)
     assert isinstance(backend, VadBackend)
     assert backend._aggressiveness == 1
-    assert backend._auto_gain is True
 
 
 def test_config_defaults_and_schema_extras():
     cfg = WebRtcVadConfig()
     assert cfg.aggressiveness == 2
-    assert cfg.auto_gain is False
     # The panel renders the same labeled segment control as before the move: the
     # choices/poles/readout json_schema_extra block moved verbatim from core.vad.
     schema = WebRtcVadConfig.model_json_schema()["properties"]["aggressiveness"]
@@ -311,23 +209,12 @@ def test_maxlen_wins_over_no_speech_when_timeouts_coincide():
     assert session.feed(FRAME * 10) == "maxlen"  # 10 frames = 200 ms hits both caps
 
 
-# --- _vad_boost: no-attenuation branch (gain <= 1) --------------------------------
+# --- framing over odd-length chunks -------------------------------------------------
 
-def test_vad_boost_never_attenuates_loud_signal():
-    # When the running peak already sits at or above the boost target, gain <= 1:
-    # the frame must come back byte-identical (the boost only ever lifts, never cuts).
-    frame = np.array([100, -200, 300, -400] * 80, dtype="<i2").tobytes()
-    assert _vad_boost(frame, int(_VAD_BOOST_TARGET)) == frame   # gain == 1 exactly
-    assert _vad_boost(frame, 8000) == frame                     # gain < 1
-
-
-# --- framing with auto_gain over odd-length chunks ---------------------------------
-
-def test_feed_auto_gain_odd_chunk_consumes_frame_and_carries_remainder():
-    # A 641-byte chunk with auto_gain on: peak tracking ignores the torn trailing
-    # byte, exactly one 640-byte frame reaches the classifier and the 1-byte
-    # remainder is carried into the next feed.
-    session, fake = make_session([False], auto_gain=True)
+def test_feed_odd_chunk_consumes_frame_and_carries_remainder():
+    # A 641-byte chunk: exactly one 640-byte frame reaches the classifier and the
+    # 1-byte remainder is carried into the next feed.
+    session, fake = make_session([False])
     assert session.feed(b"\x01" * 641) is None
     assert len(fake.frames) == 1
     assert len(session._rem) == 1

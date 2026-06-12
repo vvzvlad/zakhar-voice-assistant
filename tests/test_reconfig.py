@@ -99,7 +99,6 @@ def test_action_for_representative_paths():
         "tts.instances.yandex.voice": "rebuild_backends",
         "stt.instances.groq.api_key": "rebuild_backends",
         "vad.instances.webrtc.aggressiveness": "rebuild_backends",
-        "vad.instances.webrtc.auto_gain": "rebuild_backends",
         "vad.instances.silero.threshold": "rebuild_backends",
         "vad.instances.ten.threshold": "rebuild_backends",
         "vad.selected": "rebuild_backends",
@@ -113,6 +112,12 @@ def test_action_for_llm_reply_error_is_live():
     # reply_error is one of the live LLM provider leaves (read per request, not baked
     # into the backend), so changing it must NOT trigger a backend rebuild.
     assert action_for("llm.instances.openrouter.reply_error") == "live"
+
+
+def test_action_for_audio_stream_tts_is_live():
+    # stream_tts (the streaming-TTS kill-switch) is read live per run via the
+    # Runtime read-through, so flipping it must NOT re-bind the audio server.
+    assert action_for("core.audio.stream_tts") == "live"
 
 
 # --- backend_categories ------------------------------------------------------
@@ -829,7 +834,7 @@ async def test_apply_job_rebuild_http_also_rebuilds_vad_changed_in_job(monkeypat
     reconf = Reconfigurator(rt, deps, asyncio.Queue())
 
     await reconf.apply_job(
-        {"core.network.external_proxy", "vad.instances.webrtc.auto_gain"}
+        {"core.network.external_proxy", "vad.instances.webrtc.aggressiveness"}
     )
 
     # vad rebuilt exactly once via the union, plus each cloud stage exactly once.

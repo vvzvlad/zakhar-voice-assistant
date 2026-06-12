@@ -63,13 +63,15 @@ class FishAudioTtsBackend(TtsBackend):
         self.speed = speed
         self.timeout = timeout
 
-    async def synthesize(self, text: str, lang: str = "ru") -> tuple[str, bytes]:
-        # Adapt the canonical "+vowel" text: expand units, then strip the stress
-        # markup entirely — Fish Audio takes plain text.
+    def _build_payload(self, text: str) -> tuple[dict, dict] | None:
+        """Adapt the canonical "+vowel" text and build (headers, payload) for the
+        TTS POST. Returns None for unvoiceable input (empty / punctuation-only):
+        serve no audio, don't POST. Shared by synthesize and synthesize_stream."""
+        # Expand units, then strip the stress markup entirely — Fish Audio takes
+        # plain text.
         adapted = drop_plus_stress(expand_units(text))
-        # Nothing pronounceable (empty / punctuation-only) -> serve no audio, don't POST.
         if re.search(r"\w", adapted, re.UNICODE) is None:
-            return ("audio/mpeg", b"")
+            return None
         payload: dict = {
             "text": adapted,
             "format": "mp3",
@@ -80,6 +82,13 @@ class FishAudioTtsBackend(TtsBackend):
         if self.reference_id:
             payload["reference_id"] = self.reference_id
         headers = {"Authorization": f"Bearer {self.api_key}", "model": self.model}
+        return headers, payload
+
+    async def synthesize(self, text: str, lang: str = "ru") -> tuple[str, bytes]:
+        prepared = self._build_payload(text)
+        if prepared is None:
+            return ("audio/mpeg", b"")
+        headers, payload = prepared
         resp = await self.client.post(FISH_TTS_URL, headers=headers, json=payload, timeout=self.timeout)
         try:
             resp.raise_for_status()
@@ -91,6 +100,48 @@ class FishAudioTtsBackend(TtsBackend):
                 f"Fish Audio TTS {resp.status_code}: {resp.text[:500]}"
             ) from e
         return ("audio/mpeg", resp.content)
+
+    async def synthesize_stream(self, text: str, lang: str = "ru"):
+        """Native chunked synthesis: fish.audio streams the MP3 body progressively,
+        so chunks are yielded as they arrive. HTTP/auth errors raise HERE (before
+        the iterator is returned), per the TtsBackend streaming contract."""
+        prepared = self._build_payload(text)
+        if prepared is None:
+            # Unvoiceable input: empty stream, no request (same as synthesize).
+            async def _empty():
+                return
+                yield  # pragma: no cover - marks this as an async generator
+
+            return ("audio/mpeg", _empty())
+        headers, payload = prepared
+        req = self.client.build_request(
+            "POST", FISH_TTS_URL, headers=headers, json=payload, timeout=self.timeout
+        )
+        resp = await self.client.send(req, stream=True)
+        try:
+            resp.raise_for_status()
+        except httpx.HTTPStatusError as e:
+            # Same RuntimeError shaping as synthesize(), but the body must be
+            # read explicitly (streamed response) and the response ALWAYS closed
+            # on the error path.
+            await resp.aread()
+            await resp.aclose()
+            raise RuntimeError(
+                f"Fish Audio TTS {resp.status_code}: {resp.text[:500]}"
+            ) from e
+
+        # The open streamed response is released by the generator's finally,
+        # which only runs if the generator is iterated or aclose()d. The caller
+        # (Pipeline.serve_audio_stream) owns the returned iterator and
+        # guarantees exactly that — fully consumed or explicitly closed.
+        async def _gen():
+            try:
+                async for chunk in resp.aiter_bytes():
+                    yield chunk
+            finally:
+                await resp.aclose()
+
+        return ("audio/mpeg", _gen())
 
 
 class FishAudioTtsConfig(BaseModel):
@@ -125,6 +176,14 @@ class FishAudioTtsProvider(Provider):
             speed=cfg.speed,
             timeout=deps.tts_timeout,
         )
+
+    def describe(self, cfg: FishAudioTtsConfig) -> str:
+        # The default describe() would name only the engine generation (`model`);
+        # the actual voice is `reference_id`, so include it when set. An empty
+        # reference_id means the provider-default voice -> engine generation alone.
+        if cfg.reference_id:
+            return f"{self.id}/{cfg.model}/{cfg.reference_id}"
+        return f"{self.id}/{cfg.model}"
 
     def options(self, field: str, cfg: FishAudioTtsConfig, deps: Deps, query: str = ""):
         if field == "model":

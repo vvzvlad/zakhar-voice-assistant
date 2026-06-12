@@ -18,7 +18,7 @@ from src.plugins.tts.yandex import (
     _decode_v3_audio,
     _split_oversized,
 )
-from src.tts import split_sentences
+from src.tts import TtsBackend, split_sentences
 
 YANDEX_URL = YANDEX_V3_URL
 
@@ -832,3 +832,183 @@ async def test_fishaudio_synthesize_surfaces_error_body():
     assert route.called
     assert "402" in str(exc.value)
     assert "insufficient credit" in str(exc.value)
+
+
+# --- synthesize_stream (streaming synthesis contract) -------------------------
+
+
+def _astream(*chunks):
+    """Async byte generator for respx streaming response bodies (httpx keeps
+    the chunk boundaries, so 'delivered as yielded' is observable)."""
+
+    async def _gen():
+        for c in chunks:
+            yield c
+
+    return _gen()
+
+
+@respx.mock
+async def test_fishaudio_synthesize_stream_yields_chunks_with_same_request():
+    import json
+
+    route = respx.post(FISH_TTS_URL).mock(
+        return_value=httpx.Response(200, content=_astream(b"\xff\xf3aa", b"bbb")))
+    async with httpx.AsyncClient() as client:
+        backend = FishAudioTtsBackend(client, api_key="k", reference_id="ref-1",
+                                      model="s2-pro", speed=1.2, timeout=10)
+        mime, chunks = await backend.synthesize_stream("привет", "ru")
+        got = [c async for c in chunks]
+    assert mime == "audio/mpeg"
+    # Chunks are delivered exactly as the server yields them, in order.
+    assert got == [b"\xff\xf3aa", b"bbb"]
+    # The streamed request carries the SAME headers/payload as the buffered one.
+    req = route.calls.last.request
+    assert req.headers["Authorization"] == "Bearer k"
+    assert req.headers["model"] == "s2-pro"
+    sent = json.loads(req.content)
+    assert sent["text"] == "привет"
+    assert sent["format"] == "mp3"
+    assert sent["prosody"]["speed"] == 1.2
+    assert sent["reference_id"] == "ref-1"
+
+
+@respx.mock
+async def test_fishaudio_synthesize_stream_error_raises_before_iteration():
+    # An HTTP error must raise from synthesize_stream itself (before the
+    # iterator is returned), surfacing the diagnostic body like the buffered path.
+    route = respx.post(FISH_TTS_URL).mock(
+        return_value=httpx.Response(402, text='{"message":"insufficient credit"}'))
+    async with httpx.AsyncClient() as client:
+        backend = FishAudioTtsBackend(client, api_key="k", reference_id="",
+                                      model="s2-pro", speed=1.0, timeout=10)
+        with pytest.raises(RuntimeError) as exc:
+            await backend.synthesize_stream("привет", "ru")
+    assert route.called
+    assert "402" in str(exc.value)
+    assert "insufficient credit" in str(exc.value)
+
+
+@respx.mock
+async def test_fishaudio_synthesize_stream_unvoiceable_empty_stream_no_request():
+    route = respx.post(FISH_TTS_URL).mock(
+        return_value=httpx.Response(200, content=b"\xff\xf3mp3"))
+    async with httpx.AsyncClient() as client:
+        backend = FishAudioTtsBackend(client, api_key="k", reference_id="",
+                                      model="s2-pro", speed=1.0, timeout=10)
+        mime, chunks = await backend.synthesize_stream("…", "ru")
+        got = [c async for c in chunks]
+    assert (mime, got) == ("audio/mpeg", [])
+    assert not route.called
+
+
+@respx.mock
+async def test_teratts_synthesize_stream_streams_bytes_and_mime_from_header():
+    # Same URL-encoded GET as the buffered path; the mime comes from the
+    # response Content-Type header and the body is streamed chunk by chunk.
+    route = respx.get(
+        "http://tera.local/synthesize/%D0%BF%D1%80%D0%B8%D0%B2%D0%B5%D1%82"
+    ).mock(return_value=httpx.Response(200, content=_astream(b"\xff\xf3aa", b"bb"),
+                                       headers={"Content-Type": "audio/wav"}))
+    async with httpx.AsyncClient() as client:
+        backend = TeraTtsHttpBackend("http://tera.local/", client, timeout=10)
+        mime, chunks = await backend.synthesize_stream("привет", "ru")
+        got = [c async for c in chunks]
+    assert route.called
+    assert mime == "audio/wav"
+    assert got == [b"\xff\xf3aa", b"bb"]
+
+
+@respx.mock
+async def test_teratts_synthesize_stream_raises_before_iteration_on_non_2xx():
+    respx.get("http://tera.local/synthesize/hi").mock(return_value=httpx.Response(503))
+    async with httpx.AsyncClient() as client:
+        backend = TeraTtsHttpBackend("http://tera.local", client, timeout=10)
+        with pytest.raises(httpx.HTTPStatusError):
+            await backend.synthesize_stream("hi", "ru")
+
+
+@respx.mock
+async def test_yandex_synthesize_stream_yields_one_audio_block_per_post_in_order():
+    import base64
+    import json
+
+    # Same chunking as the buffered path, measured on the adapted text.
+    num_calls = len(_chunk_for_v3(sanitize_plus_stress(expand_units(_LONG_REPLY))))
+    assert num_calls >= 2
+
+    audios = [b"\xff\xf3chunk-%d" % i for i in range(num_calls)]
+    responses = [
+        httpx.Response(
+            200,
+            text=json.dumps({"result": {"audioChunk": {"data": base64.b64encode(a).decode()}}}),
+            headers={"Content-Type": "application/json"},
+        )
+        for a in audios
+    ]
+    route = respx.post(YANDEX_URL).mock(side_effect=responses)
+    async with httpx.AsyncClient() as client:
+        backend = YandexTtsBackend(client, api_key="k", voice="zahar",
+                                   role="neutral", speed=1.0, timeout=10)
+        mime, chunks = await backend.synthesize_stream(_LONG_REPLY, "ru")
+        # Only the FIRST request ran eagerly (the connect/auth error gate);
+        # the rest are synthesized lazily as the stream is consumed.
+        assert route.call_count == 1
+        got = [c async for c in chunks]
+
+    assert mime == "audio/mpeg"
+    assert route.call_count == num_calls
+    # One decoded MP3 block per POST, yielded in request order.
+    assert got == audios
+
+
+@respx.mock
+async def test_yandex_synthesize_stream_first_request_error_raises_before_iterator():
+    route = respx.post(YANDEX_URL).mock(
+        return_value=httpx.Response(400, text='{"error":"text is too long"}'))
+    async with httpx.AsyncClient() as client:
+        backend = YandexTtsBackend(client, api_key="k", voice="zahar",
+                                   role="neutral", speed=1.0, timeout=10)
+        with pytest.raises(Exception) as exc:
+            await backend.synthesize_stream("привет", "ru")
+    assert route.called
+    assert "400" in str(exc.value)
+    assert "text is too long" in str(exc.value)
+
+
+@respx.mock
+async def test_yandex_synthesize_stream_unvoiceable_empty_stream_no_request():
+    route = respx.post(YANDEX_URL).mock(
+        return_value=httpx.Response(200, text="{}",
+                                    headers={"Content-Type": "application/json"}))
+    async with httpx.AsyncClient() as client:
+        backend = YandexTtsBackend(client, api_key="k", voice="zahar",
+                                   role="neutral", speed=1.0, timeout=10)
+        mime, chunks = await backend.synthesize_stream("…", "ru")
+        got = [c async for c in chunks]
+    assert (mime, got) == ("audio/mpeg", [])
+    assert not route.called
+
+
+async def test_default_synthesize_stream_adapter_yields_single_chunk():
+    # The TtsBackend default adapter wraps buffered synthesize() in a
+    # single-chunk stream, so every backend is streamable.
+    class _Buffered(TtsBackend):
+        async def synthesize(self, text, lang="ru"):
+            return ("audio/mpeg", b"WHOLE-CLIP")
+
+    mime, chunks = await _Buffered().synthesize_stream("привет")
+    assert mime == "audio/mpeg"
+    assert [c async for c in chunks] == [b"WHOLE-CLIP"]
+
+
+async def test_default_synthesize_stream_adapter_skips_empty_audio():
+    # Empty buffered audio (unvoiceable text) yields an EMPTY stream, not one
+    # empty chunk.
+    class _Silent(TtsBackend):
+        async def synthesize(self, text, lang="ru"):
+            return ("audio/mpeg", b"")
+
+    mime, chunks = await _Silent().synthesize_stream("…")
+    assert mime == "audio/mpeg"
+    assert [c async for c in chunks] == []

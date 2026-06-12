@@ -42,8 +42,9 @@ are applied at process start.
 Shape (see `templates/default_config.json` for the full default):
 
 - **Stage providers** — for each stage you pick one provider and configure it:
-  - `vad`: `webrtc` (WebRTC VAD) — aggressiveness / auto_gain; the end-pointing
-    thresholds stay in `core.vad`.
+  - `vad`: `webrtc` (WebRTC VAD) — aggressiveness; the end-pointing
+    thresholds and the decision-only VAD auto gain (`mic_auto_gain`, in the core
+    Voice-capture settings) stay in `core.vad`.
   - `stt`: `groq` (cloud Whisper) | `vosk` (offline) — `selected` + per-provider `instances`.
   - `llm`: `openrouter` | `groq` — model, api_key, temperature, max_tokens, max_tool_rounds.
   - `tts`: `teratts` (HTTP) | `piper` (offline) | `yandex` (SpeechKit) — voice/key/etc. per provider.

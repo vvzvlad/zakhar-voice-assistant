@@ -58,8 +58,8 @@ def action_for(path: str) -> str:
         return "live"          # capture.enabled/dir are read per-run via the Runtime read-through
     if path.startswith("core.ack"):
         return "live"          # ack.enabled/sound_path are read per-run via the Runtime read-through
-    if path == "core.audio.public_base_url" or path == "core.audio.ttl":
-        return "live"
+    if path in ("core.audio.public_base_url", "core.audio.ttl", "core.audio.stream_tts"):
+        return "live"          # stream_tts is read per run via the Runtime read-through
     if path.startswith("core.audio"):            # host/port -> rebind
         return "rebuild_audio"
     if path.startswith("core.prompt"):           # system_prompt_path read live
@@ -217,7 +217,10 @@ class Reconfigurator:
                 logger.error(f"hot-reload of {cat} backend failed: {e}")
                 continue
             setattr(self.rt, f"{cat}_backend", backend)
-            logger.info(f"hot-reloaded {cat} backend")
+            logger.info(
+                f"hot-reloaded {cat} backend -> "
+                f"{getattr(backend, 'backend_desc', type(backend).__name__)}"
+            )
 
     async def _rebuild_audio(self) -> None:
         """Re-bind the audio server to the configured host/port without a restart."""

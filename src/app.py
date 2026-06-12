@@ -28,80 +28,6 @@ from src.tool_hub import ToolHub
 from src.version import __version__
 
 
-def migrate_vad_plugin(doc: dict) -> bool:
-    """One-time migration: move the WebRTC-specific VAD knobs out of core.vad into
-    the vad/webrtc stage instance. Returns True when the doc was modified.
-
-    Old docs carried `core.vad.aggressiveness` (every pre-migration save wrote the
-    full core.vad section, so its presence is the reliable old-doc marker). Its value
-    moves to vad.instances.webrtc.aggressiveness and the core key is DELETED. In the
-    same pass, a true `core.vad.mic_normalize` is COPIED (not moved) to
-    vad.instances.webrtc.auto_gain: both the pre-STT normalization (still gated by
-    mic_normalize) and the VAD decision boost (now the plugin's auto_gain) used to be
-    gated by that one toggle, so copying keeps the old behavior intact. The copy is
-    gated on the aggressiveness marker so a later panel change to auto_gain is never
-    overwritten on a subsequent boot.
-    """
-    core = doc.get("core")
-    core_vad = core.get("vad") if isinstance(core, dict) else None
-    if not isinstance(core_vad, dict) or "aggressiveness" not in core_vad:
-        return False
-    slot = doc.setdefault("vad", {"selected": "webrtc", "instances": {}})
-    inst = slot.setdefault("instances", {}).setdefault("webrtc", {})
-    inst["aggressiveness"] = core_vad.pop("aggressiveness")
-    if core_vad.get("mic_normalize"):
-        inst["auto_gain"] = True
-    return True
-
-
-# Markers from the removed SLOW_TOOL_MARKERS runtime heuristic (dropped by R6 in
-# favor of the explicit McpServerConfig.slow flag). Kept ONLY to seed the one-time
-# migrate_mcp_slow migration below; nothing at runtime matches names anymore.
-_LEGACY_SLOW_MARKERS = ("google", "search", "web", "browse", "weather", "погод",
-                        "event", "calendar", "календар", "wiki")
-
-
-def migrate_mcp_slow(doc: dict) -> bool:
-    """One-time migration: write an explicit "slow" flag on every core.mcp_servers
-    entry that lacks one. Returns True when the doc was modified.
-
-    R6 replaced the SLOW_TOOL_MARKERS name heuristic with the declarative
-    McpServerConfig.slow flag (default False). A pre-R6 config has no "slow" key,
-    so without this migration every external server would silently become "fast"
-    and lose the spoken filler the heuristic used to trigger. The flag is seeded
-    from the legacy markers and written explicitly, so entries that carry the key
-    are never touched again (one-time). NOTE: the old heuristic matched TOOL
-    names, but only the server NAME is available here — the seed is a best-effort
-    approximation, hence the per-server log line and the operator warning.
-    """
-    core = doc.get("core")
-    servers = core.get("mcp_servers") if isinstance(core, dict) else None
-    if not isinstance(servers, list):
-        return False
-    changed = False
-    any_false = False
-    for srv in servers:
-        if not isinstance(srv, dict) or "slow" in srv:
-            continue
-        name = str(srv.get("name") or "")
-        slow = any(marker in name.lower() for marker in _LEGACY_SLOW_MARKERS)
-        srv["slow"] = slow
-        changed = True
-        any_false = any_false or not slow
-        logger.info(
-            f"config: mcp server '{name}': slow={'true' if slow else 'false'} "
-            f"(migrated; was name-heuristic)"
-        )
-    if any_false:
-        logger.warning(
-            "config: some mcp_servers were migrated with slow=false — the legacy "
-            "heuristic matched tool names, so this server-name guess may be wrong. "
-            "Enable 'Slow tools' in the panel for servers exposing slow tools "
-            "(web search etc.) to keep the spoken filler."
-        )
-    return changed
-
-
 def load_or_create_config() -> dict:
     """Return the config document, creating data/config.json from the template on first boot."""
     doc = config_store.load()
@@ -110,15 +36,6 @@ def load_or_create_config() -> dict:
             doc = json.load(f)
         config_store.save(doc, config_store.DEFAULT_PATH)
         logger.info("created default config at data/config.json")
-    if migrate_vad_plugin(doc):
-        config_store.save(doc, config_store.DEFAULT_PATH)
-        logger.info(
-            "config migrated: core.vad.aggressiveness (and the mic_normalize VAD-boost "
-            "half as auto_gain) moved to the vad/webrtc plugin instance"
-        )
-    if migrate_mcp_slow(doc):
-        config_store.save(doc, config_store.DEFAULT_PATH)
-        logger.info("config migrated: explicit 'slow' flags written to core.mcp_servers")
     return doc
 
 
@@ -171,6 +88,9 @@ async def main() -> None:
     stt_backend = svc.create("stt")
     tts_backend = svc.create("tts")
     llm_backend = svc.create("llm")
+    # Startup log: name the exact backend ("provider/model") behind every stage.
+    for cat, b in (("vad", vad_backend), ("stt", stt_backend), ("llm", llm_backend), ("tts", tts_backend)):
+        logger.info(f"{cat} backend: {getattr(b, 'backend_desc', type(b).__name__)}")
 
     # Observability: persist every finalized pipeline run to SQLite (gated on config).
     # Pruned once at boot; the panel API serves the run log + 24h metrics from it.

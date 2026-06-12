@@ -139,6 +139,31 @@ class YandexTtsBackend(TtsBackend):
             audio.extend(await self._synthesize_chunk(chunk))
         return ("audio/mpeg", bytes(audio))
 
+    async def synthesize_stream(self, text: str, lang: str = "ru"):
+        """Streaming synthesis over the same <=250-char request chunking: the
+        decoded MP3 of each request is yielded as soon as that request completes,
+        so playback can start after the first chunk instead of the whole reply.
+        Per the TtsBackend streaming contract connect/auth errors must raise
+        BEFORE the iterator is returned, so the FIRST chunk request runs eagerly
+        here; the rest are synthesized lazily inside the generator."""
+        marked = sanitize_plus_stress(expand_units(text))
+        chunks = _chunk_for_v3(marked, YANDEX_V3_TEXT_LIMIT)
+        if not chunks:
+            # Nothing pronounceable -> empty stream, no request.
+            async def _empty():
+                return
+                yield  # pragma: no cover - marks this as an async generator
+
+            return ("audio/mpeg", _empty())
+        first = await self._synthesize_chunk(chunks[0])
+
+        async def _gen():
+            yield first
+            for chunk in chunks[1:]:
+                yield await self._synthesize_chunk(chunk)
+
+        return ("audio/mpeg", _gen())
+
     async def _synthesize_chunk(self, text: str) -> bytes:
         # `text` is already adapted (units expanded, stray '+' dropped) and within
         # the length limit; it carries Yandex-native "+vowel" stress markup as-is.

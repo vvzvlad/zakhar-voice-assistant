@@ -20,6 +20,11 @@ class AudioConfig(BaseModel):
     port: int = 8200
     ttl: int = 300
     public_base_url: str = ""
+    # Serve TTS as a chunked stream while synthesis is still running, so the
+    # speaker starts playing before the clip is complete. Kill-switch: disable
+    # to restore the buffer-then-serve path (some speaker firmwares may
+    # mishandle chunked audio). Read live per run.
+    stream_tts: bool = True
 
 
 class AgentMcpConfig(BaseModel):
@@ -34,8 +39,9 @@ class AgentMcpConfig(BaseModel):
 
 class VadConfig(BaseModel):
     """Engine-independent voice-capture policy: end-pointing thresholds plus the
-    mic channel selection and pre-STT conditioning toggles. The speech classifier
-    itself (e.g. WebRTC aggressiveness, decision-only auto gain) is the swappable
+    mic channel selection and conditioning toggles (pre-STT highpass/normalize and
+    the decision-only VAD auto gain, applied by the pipeline for every VAD engine).
+    The speech classifier itself (e.g. WebRTC aggressiveness) is the swappable
     vad stage plugin (src/plugins/vad/*), configured under the `vad` slot."""
 
     silence_ms: int = Field(
@@ -86,6 +92,11 @@ class VadConfig(BaseModel):
         False,
         title="Low-frequency filter",
         description="Apply a ~80 Hz high-pass filter to the whole utterance before STT to strip DC offset and low-frequency rumble (table thumps, HVAC) that hurt recognition. Off by default; applies on the next utterance.",
+    )
+    mic_auto_gain: bool = Field(
+        False,
+        title="VAD auto gain",
+        description="Boost quiet audio for the speech/no-speech decision only, before it reaches the VAD engine (the recorded/STT audio is untouched). Lets any VAD engine end-point the quiet, less-processed mic channel. Read live per chunk.",
     )
 
 

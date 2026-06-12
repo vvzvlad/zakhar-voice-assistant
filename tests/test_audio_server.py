@@ -134,3 +134,164 @@ async def test_start_with_ephemeral_port_records_actual_port():
         assert server.port == _bound_port(server)
     finally:
         await server.stop()
+
+
+# --- streaming entries (put_stream / StreamFeed) -----------------------------
+
+
+async def test_stream_serves_chunks_written_before_and_after_connect():
+    # A reader must get chunks written BEFORE it connected (replay from chunk 0)
+    # and then follow chunks written AFTER, over a real chunked HTTP response.
+    import aiohttp
+
+    server = AudioServer("127.0.0.1", 0, ttl=300)
+    await server.start()
+    try:
+        audio_id, feed = server.put_stream("audio/mpeg")
+        feed.write(b"AAA")  # written before any reader connects
+
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                f"http://127.0.0.1:{server.port}/tts/{audio_id}.mp3"
+            ) as resp:
+                assert resp.status == 200
+                assert resp.headers["Content-Type"] == "audio/mpeg"
+                # The pre-connect chunk arrives while the stream is still open.
+                first = await resp.content.readexactly(3)
+                # Feed more and close: the open response follows the feed.
+                feed.write(b"BBBB")
+                feed.close()
+                rest = await resp.content.read()
+        assert first + rest == b"AAABBBB"
+    finally:
+        await server.stop()
+
+
+async def test_stream_fetch_after_close_serves_full_clip_from_cache():
+    # After close() the complete clip becomes a regular byte-cache entry, so a
+    # late (or repeated) fetch — e.g. a speaker retry — replays the full clip.
+    server = AudioServer("127.0.0.1", 0, ttl=300)
+    audio_id, feed = server.put_stream("audio/mpeg")
+    feed.write(b"X")
+    feed.write(b"YZ")
+    feed.close()
+
+    assert server._streams == {}  # the stream entry was retired into the cache
+    resp = await server._handle_tts(FakeRequest(f"{audio_id}.mp3"))
+    assert isinstance(resp, web.Response)
+    assert resp.body == b"XYZ"
+    assert resp.content_type == "audio/mpeg"
+
+
+async def test_stream_two_concurrent_readers_both_get_full_clip():
+    import aiohttp
+
+    server = AudioServer("127.0.0.1", 0, ttl=300)
+    await server.start()
+    try:
+        audio_id, feed = server.put_stream()
+        url = f"http://127.0.0.1:{server.port}/tts/{audio_id}.mp3"
+        feed.write(b"one-")
+
+        async def read_all(session):
+            async with session.get(url) as resp:
+                assert resp.status == 200
+                return await resp.read()
+
+        async with aiohttp.ClientSession() as session:
+            readers = [
+                asyncio.create_task(read_all(session)),
+                asyncio.create_task(read_all(session)),
+            ]
+            await asyncio.sleep(0.05)  # let both readers attach mid-stream
+            feed.write(b"two")
+            feed.close()
+            bodies = await asyncio.gather(*readers)
+        # Each reader has its own cursor and replays from chunk 0.
+        assert bodies == [b"one-two", b"one-two"]
+    finally:
+        await server.stop()
+
+
+async def test_stream_abort_before_any_read_returns_404():
+    server = AudioServer("127.0.0.1", 0, ttl=300)
+    audio_id, feed = server.put_stream()
+    feed.write(b"partial")
+    feed.abort()
+
+    # The aborted entry is dropped — no cache handoff, nothing to serve.
+    assert server._streams == {}
+    resp = await server._handle_tts(FakeRequest(f"{audio_id}.mp3"))
+    assert resp.status == 404
+
+
+async def test_stream_reader_released_at_deadline_before_first_byte():
+    # A reader already parked inside the wait loop must be released by its OWN
+    # bounded wait once the deadline passes, even though the producer dies
+    # silently (no close()/abort()) and nothing else triggers a prune. Before
+    # any byte was sent the aborted stream surfaces as a clean 404.
+    import aiohttp
+
+    server = AudioServer("127.0.0.1", 0, ttl=1)  # short deadline: now + 1s
+    await server.start()
+    try:
+        audio_id, feed = server.put_stream()
+        # No chunks ever written, producer never closes: the reader connects
+        # and waits. Generous 5s bound — the deadline fires after ~1s.
+
+        async def fetch():
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    f"http://127.0.0.1:{server.port}/tts/{audio_id}.mp3"
+                ) as resp:
+                    return resp.status, await resp.read()
+
+        status, body = await asyncio.wait_for(fetch(), timeout=5)
+        assert status == 404
+        assert body == b""
+        assert feed.failed is True   # treated as aborted at the deadline
+        assert server._streams == {} # entry retired, not handed to the cache
+    finally:
+        await server.stop()
+
+
+async def test_stream_reader_released_at_deadline_mid_send():
+    # Same silent-producer scenario, but the reader already received a chunk:
+    # at the deadline the response must END (truncated body), not hang — the
+    # same quiet termination as a mid-send abort().
+    import aiohttp
+
+    server = AudioServer("127.0.0.1", 0, ttl=1)
+    await server.start()
+    try:
+        audio_id, feed = server.put_stream()
+        feed.write(b"head")  # the producer dies after the first chunk
+
+        async def fetch():
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    f"http://127.0.0.1:{server.port}/tts/{audio_id}.mp3"
+                ) as resp:
+                    assert resp.status == 200
+                    return await resp.read()
+
+        body = await asyncio.wait_for(fetch(), timeout=5)
+        assert body == b"head"       # truncated at the dead producer's deadline
+        assert feed.failed is True
+        assert server._streams == {}
+    finally:
+        await server.stop()
+
+
+async def test_stream_unclosed_past_ttl_treated_as_gone():
+    # Safety net: a producer that never closes must not keep the entry alive
+    # forever — past its deadline the stream is treated as aborted on access.
+    server = AudioServer("127.0.0.1", 0, ttl=0)  # immediate deadline
+    audio_id, feed = server.put_stream()
+    feed.write(b"stuck")
+    await asyncio.sleep(0.01)  # let the monotonic clock pass the deadline
+
+    resp = await server._handle_tts(FakeRequest(f"{audio_id}.mp3"))
+    assert resp.status == 404
+    assert feed.failed is True   # retired as aborted, not handed to the cache
+    assert server._streams == {}

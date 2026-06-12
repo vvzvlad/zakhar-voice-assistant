@@ -22,6 +22,7 @@ import asyncio
 import os
 import time
 
+import numpy as np
 from loguru import logger
 
 from src import config_store, context, llm
@@ -30,10 +31,12 @@ from src.audio_prep import (
     normalize_peak,
     pcm_to_wav_bytes,
     trim_start_pcm,
+    vad_boost,
     write_wav,
 )
-from src.audio_codec import to_playable
+from src.audio_codec import PLAYABLE_MIMES, to_playable
 from src.audio_server import tts_url
+from src.tts import TtsBackend
 from src.pipeline_events import StageEvent
 from src.llm_text import clean_llm_output
 from src.prompt import build_system_prompt
@@ -98,9 +101,15 @@ class Pipeline:
 
         # Per-run VAD session, opened in on_start (normal runs only) from the
         # swappable vad stage backend (self.rt.vad_backend). The session owns ALL
-        # end-pointing state (framing, counters, the optional decision-only gain);
-        # the pipeline only feeds it chunks and acts on the returned reason.
+        # end-pointing state (framing, counters); the pipeline only feeds it
+        # chunks and acts on the returned reason.
         self._vad_session = None
+        # Running utterance peak driving the optional decision-only VAD boost
+        # (core.vad.mic_auto_gain); reset per run in on_start.
+        self._vad_peak = 0
+        # Identity of the VAD backend that opened this run's session, for the
+        # finalize log line.
+        self._vad_desc = ""
         self._finalized = False
         # Logging-only flag: log "receiving audio" once per run, not per chunk.
         self._audio_logged = False
@@ -154,6 +163,12 @@ class Pipeline:
     # tests) and the run logic below all reach config/backends THROUGH the runtime,
     # so a reconfiguration (live field change or backend swap) takes effect without
     # rebuilding the pipeline.
+    @staticmethod
+    def _backend_desc(backend) -> str:
+        """Human-readable 'provider/model' identity stamped by ConfigService.create();
+        falls back to the class name for unstamped backends (tests/fakes)."""
+        return getattr(backend, "backend_desc", None) or type(backend).__name__
+
     @property
     def core(self):
         return self.rt.core
@@ -296,6 +311,7 @@ class Pipeline:
         self._buffer.clear()
         self._buffer2.clear()
         self._vad_session = None
+        self._vad_peak = 0
         self._finalized = False
         self._audio_logged = False
         self._mic_fallback_logged = False
@@ -348,7 +364,11 @@ class Pipeline:
         # or a changed policy applies on the next run. Capture runs returned above
         # and never open a session (no VAD in capture mode).
         vad_cfg = self.core.vad
-        self._vad_session = self.rt.vad_backend.open(EndpointPolicy(
+        # Capture the identity from the SAME backend ref used to open the session,
+        # so a hot-swap mid-run can't mislabel the finalize log line.
+        vad_backend = self.rt.vad_backend
+        self._vad_desc = self._backend_desc(vad_backend)
+        self._vad_session = vad_backend.open(EndpointPolicy(
             silence_ms=vad_cfg.silence_ms,
             min_speech_ms=vad_cfg.min_speech_ms,
             max_utterance_ms=vad_cfg.max_utterance_ms,
@@ -452,12 +472,24 @@ class Pipeline:
             # already set reason="maxlen" above, the session is NOT fed: we're about
             # to finalize this chunk anyway, and the buffer was truncated, so there's
             # no point feeding (possibly truncated) bytes into the VAD counters.
-            reason = self._vad_session.feed(data)
+            vdata = data
+            if self.core.vad.mic_auto_gain:
+                # Track the running utterance peak and lift the chunk for the
+                # speech/no-speech decision only — the buffer/STT path above keeps
+                # the raw bytes (per-utterance normalization happens pre-STT in _run).
+                m = len(data) - (len(data) % 2)
+                if m:
+                    self._vad_peak = max(
+                        self._vad_peak,
+                        int(np.abs(np.frombuffer(data[:m], dtype="<i2")).max()),
+                    )
+                vdata = vad_boost(data, self._vad_peak)
+            reason = self._vad_session.feed(vdata)
 
         if reason is not None:
             state = self._vad_session.debug_state() if self._vad_session else {}
             logger.debug(
-                f"{self.name}: VAD finalize reason={reason} "
+                f"{self.name}: VAD finalize reason={reason} peak={self._vad_peak} "
                 + " ".join(f"{k}={v}" for k, v in state.items())
             )
 
@@ -543,7 +575,8 @@ class Pipeline:
                 t0 = time.perf_counter()
                 logger.info(
                     f"{self.name}: 🎙️ captured {len(pcm)} bytes "
-                    f"(~{len(pcm) / (SAMPLE_RATE * 2):.1f}s), reason={reason}"
+                    f"(~{len(pcm) / (SAMPLE_RATE * 2):.1f}s), reason={reason}, "
+                    f"vad={self._vad_desc}"
                 )
                 if not pcm:
                     # Truly-empty audio: nothing to transcribe and nothing to record.
@@ -598,9 +631,9 @@ class Pipeline:
                 # audio and STT all get the exact audio Whisper sees.
                 # `pcm2` (the other channel) is deliberately kept raw here, so the
                 # stored stereo WAV allows comparing conditioned vs raw channels.
-                # NOTE: mic_normalize gates ONLY this pre-STT normalization now; the
-                # VAD-decision boost it used to also gate is the vad/webrtc plugin's
-                # own `auto_gain` setting.
+                # NOTE: mic_normalize gates ONLY this pre-STT normalization; the
+                # decision-only VAD boost applied per chunk in on_audio is gated by
+                # `core.vad.mic_auto_gain`.
                 if self.core.vad.mic_highpass:
                     pcm = highpass(pcm)
                 if self.core.vad.mic_normalize:
@@ -670,9 +703,12 @@ class Pipeline:
                         self._emit(StageEvent.STT_END, {"text": ""})
                         self._emit(StageEvent.RUN_END, {})
                         return
+                    # Read the backend property ONCE: the same ref both executes the
+                    # call and labels the log lines, so they can never diverge.
+                    stt = self.stt_backend
                     stt_t = time.perf_counter()
                     try:
-                        text = await self.stt_backend.transcribe(pcm)
+                        text = await stt.transcribe(pcm)
                     except StageError as e:
                         # STT failed: record the run honestly as an error (not "empty"),
                         # balance the STT_START emitted in on_start with an empty
@@ -682,14 +718,16 @@ class Pipeline:
                         record["result"] = "error"
                         record["error_stage"] = "STT"
                         record["error_text"] = str(e)
-                        logger.error(f"{self.name}: STT failed: {e}")
+                        logger.error(
+                            f"{self.name}: STT [{self._backend_desc(stt)}] failed: {e}"
+                        )
                         self._emit(StageEvent.STT_END, {"text": ""})
                         self._emit(StageEvent.RUN_END, {})
                         return
                     record["t_stt"] = int((time.perf_counter() - stt_t) * 1000)
                     logger.info(
-                        f"{self.name}: 📝 STT ({time.perf_counter() - stt_t:.2f}s): "
-                        f"{text!r}"
+                        f"{self.name}: 📝 STT [{self._backend_desc(stt)}] "
+                        f"({time.perf_counter() - stt_t:.2f}s): {text!r}"
                     )
                     record["stt_text"] = text
                     self._emit(StageEvent.STT_END, {"text": text})
@@ -704,7 +742,13 @@ class Pipeline:
                         return
 
                     self._emit(StageEvent.INTENT_START, {})
-                    logger.info(f"{self.name}: 🤖 → LLM: {text!r}")
+                    # Read the backend property ONCE: the same ref both runs the
+                    # stage and labels the log line, so they can never diverge.
+                    llm_backend = self.llm_backend
+                    logger.info(
+                        f"{self.name}: 🤖 → LLM "
+                        f"[{self._backend_desc(llm_backend)}]: {text!r}"
+                    )
                     llm_t = time.perf_counter()
                     history = context.load_context(
                         self._context_path,
@@ -744,7 +788,7 @@ class Pipeline:
                         # text/device. The stage is constructed per run so a
                         # hot-swapped backend/config applies naturally.
                         system_prompt = build_system_prompt(self.core, self.prompt_store)
-                        stage = llm.LlmStage(self.llm_backend, self.hub, self.llm_cfg)
+                        stage = llm.LlmStage(llm_backend, self.hub, self.llm_cfg)
                         result = await stage.respond(
                             llm.LlmRequest(
                                 system_prompt=system_prompt,
@@ -815,21 +859,90 @@ class Pipeline:
                     )
 
                     self._emit(StageEvent.TTS_START, {"text": reply})
+                    # Read the backend property ONCE: the same ref both synthesizes
+                    # and labels the log lines, so they can never diverge.
+                    tts = self.tts_backend
                     try:
                         tts_t = time.perf_counter()
-                        mime, audio = await self.tts_backend.synthesize(reply, "ru")
-                        record["t_tts"] = int((time.perf_counter() - tts_t) * 1000)
-                        logger.info(
-                            f"{self.name}: 🔊 TTS ({time.perf_counter() - tts_t:.2f}s, "
-                            f"{len(audio)} bytes)"
-                        )
-                        ext, url, served_bytes = await self.serve_audio(mime, audio)
-                        # Record what the speaker actually downloads (post-transcode),
-                        # not the backend's native-format size.
-                        record["audio_bytes"] = served_bytes
-                        record["audio_fmt"] = ext
-                        logger.info(f"{self.name}: ▶ serving {url}")
-                        self._emit(StageEvent.TTS_END, {"url": url})
+                        if self.core.audio.stream_tts:
+                            # Streaming TTS: register a stream URL and emit
+                            # TTS_END as soon as synthesis STARTS — the speaker
+                            # fetches the URL itself and plays while the backend
+                            # is still producing audio. Errors raised before the
+                            # URL exists (connect/auth, put_stream) fall through
+                            # to the existing except below, exactly like the
+                            # buffered path.
+                            mime, chunks = await self._synthesize_stream(tts, reply, "ru")
+                            ext, url, feed_task = await self.serve_audio_stream(mime, chunks)
+                            try:
+                                # t_tts = time-to-stream-start: the user-perceived TTS
+                                # latency (total synth time is logged after the feed).
+                                record["t_tts"] = int((time.perf_counter() - tts_t) * 1000)
+                                logger.info(
+                                    f"{self.name}: 🔊 TTS [{self._backend_desc(tts)}] "
+                                    f"stream start ({time.perf_counter() - tts_t:.2f}s) "
+                                    f"▶ serving {url}"
+                                )
+                                self._emit(StageEvent.TTS_END, {"url": url})  # speaker starts fetching NOW
+                                try:
+                                    # Synthesis is still running; wait for the whole
+                                    # feed before closing the run record.
+                                    served_bytes = await feed_task
+                                except Exception as e:
+                                    # Mid-stream TTS failure. TTS_END was already
+                                    # emitted, so the speaker may play a truncated
+                                    # clip — acceptable; record the failure honestly.
+                                    # Same precedence as the buffered except below:
+                                    # never clobber an earlier (LLM) root cause.
+                                    record["result"] = "error"
+                                    if record["error_stage"] is None:
+                                        record["error_stage"] = "TTS"
+                                        record["error_text"] = str(e)
+                                    logger.error(
+                                        f"{self.name}: TTS [{self._backend_desc(tts)}] "
+                                        f"failed mid-stream: {e}"
+                                    )
+                                else:
+                                    record["audio_bytes"] = served_bytes
+                                    record["audio_fmt"] = ext
+                                    logger.info(
+                                        f"{self.name}: 🔊 TTS stream complete "
+                                        f"({time.perf_counter() - tts_t:.2f}s total, "
+                                        f"{served_bytes} bytes)"
+                                    )
+                            finally:
+                                # Orphan guard: if anything between obtaining the
+                                # feed task and consuming its result raises (e.g.
+                                # a custom send_event failing on TTS_END) or the
+                                # run is cancelled, the task would otherwise never
+                                # be awaited ("Task exception was never retrieved").
+                                # On the happy/handled paths the task is already
+                                # done: cancel() is then a no-op and the re-await
+                                # only re-surfaces an already-consumed result/
+                                # exception, logged at debug.
+                                if not feed_task.done():
+                                    feed_task.cancel()
+                                try:
+                                    await feed_task
+                                except BaseException as fe:  # noqa: BLE001 - reaping must not mask the original error
+                                    logger.debug(
+                                        f"{self.name}: TTS feed task reaped: {fe!r}"
+                                    )
+                        else:
+                            mime, audio = await tts.synthesize(reply, "ru")
+                            record["t_tts"] = int((time.perf_counter() - tts_t) * 1000)
+                            logger.info(
+                                f"{self.name}: 🔊 TTS [{self._backend_desc(tts)}] "
+                                f"({time.perf_counter() - tts_t:.2f}s, "
+                                f"{len(audio)} bytes)"
+                            )
+                            ext, url, served_bytes = await self.serve_audio(mime, audio)
+                            # Record what the speaker actually downloads (post-transcode),
+                            # not the backend's native-format size.
+                            record["audio_bytes"] = served_bytes
+                            record["audio_fmt"] = ext
+                            logger.info(f"{self.name}: ▶ serving {url}")
+                            self._emit(StageEvent.TTS_END, {"url": url})
                     except Exception as e:
                         # No TTS_END on failure; the run still ends cleanly.
                         # result="error" unconditionally, but only claim the stage/
@@ -841,7 +954,9 @@ class Pipeline:
                         if record["error_stage"] is None:
                             record["error_stage"] = "TTS"
                             record["error_text"] = str(e)
-                        logger.error(f"TTS failed: {e}")
+                        logger.error(
+                            f"{self.name}: TTS [{self._backend_desc(tts)}] failed: {e}"
+                        )
 
                     logger.info(
                         f"{self.name}: ✅ run complete in {time.perf_counter() - t0:.2f}s"
@@ -957,7 +1072,13 @@ class Pipeline:
                     "request": None,
                 }
                 try:
-                    logger.info(f"{self.name}: 🤖 → LLM (text): {text!r}")
+                    # Read the backend property ONCE: the same ref both runs the
+                    # stage and labels the log line, so they can never diverge.
+                    llm_backend = self.llm_backend
+                    logger.info(
+                        f"{self.name}: 🤖 → LLM (text) "
+                        f"[{self._backend_desc(llm_backend)}]: {text!r}"
+                    )
                     llm_t = time.perf_counter()
                     history = context.load_context(
                         self._context_path,
@@ -967,7 +1088,7 @@ class Pipeline:
                     llm_failed = False
                     try:
                         system_prompt = build_system_prompt(self.core, self.prompt_store)
-                        stage = llm.LlmStage(self.llm_backend, self.hub, self.llm_cfg)
+                        stage = llm.LlmStage(llm_backend, self.hub, self.llm_cfg)
                         # No on_filler: a text run has no listener waiting in
                         # silence, so no early filler line is spoken.
                         result = await stage.respond(
@@ -1034,7 +1155,10 @@ class Pipeline:
                             if record["error_stage"] is None:
                                 record["error_stage"] = "TTS"
                                 record["error_text"] = str(e)
-                            logger.error(f"{self.name}: text-run TTS failed: {e}")
+                            logger.error(
+                                f"{self.name}: text-run TTS "
+                                f"[{self._backend_desc(self.tts_backend)}] failed: {e}"
+                            )
                 except Exception as e:
                     # Mirror `_run`'s catch-all: an unexpected failure is recorded
                     # honestly and never propagates to the MCP caller.
@@ -1087,6 +1211,99 @@ class Pipeline:
         ext, url = tts_url(self.public_base_url, audio_id, mime)
         return ext, url, len(audio)
 
+    @staticmethod
+    async def _synthesize_stream(backend, text: str, lang: str = "ru"):
+        """Resolve `backend`'s streaming synthesis entry point.
+
+        Backends on the TtsBackend contract always have synthesize_stream (the
+        ABC ships a buffered single-chunk default); a duck-typed backend that
+        only exposes synthesize() is routed through that same default adapter,
+        so the streaming path never hard-requires the method. Takes the backend
+        explicitly so callers keep their read-the-property-once pattern."""
+        fn = getattr(backend, "synthesize_stream", None)
+        if fn is None:
+            return await TtsBackend.synthesize_stream(backend, text, lang)
+        return await fn(text, lang)
+
+    @staticmethod
+    async def _close_stream(chunks) -> None:
+        """Best-effort aclose() of a chunk iterator that will never be (further)
+        iterated. Guarded: the default buffered TtsBackend adapter and the
+        streaming providers return async generators (which have aclose), but a
+        plain duck-typed iterable may not. A close failure is logged, never
+        raised, so it can't mask the original error on the failure paths."""
+        aclose = getattr(chunks, "aclose", None)
+        if aclose is None:
+            return
+        try:
+            await aclose()
+        except Exception as e:  # noqa: BLE001 - closing is best-effort
+            logger.debug(f"TTS chunk iterator close failed: {e!r}")
+
+    async def serve_audio_stream(self, mime, chunks):
+        """Streaming delivery boundary: serve `chunks` (an async iterator of
+        audio bytes) under a URL available IMMEDIATELY, while synthesis runs.
+
+        Returns (ext, url, feed_task) where feed_task resolves to the total
+        served bytes once the whole clip has been fed (or raises on a mid-stream
+        synthesis failure — the URL was already handed out by then).
+
+        OWNERSHIP INVARIANT: once called, this method owns the `chunks`
+        iterator and guarantees it is always either fully consumed or
+        explicitly closed. Streaming TTS backends open their HTTP response
+        BEFORE returning the iterator and release it from the generator's
+        finally, which only runs if the generator is iterated or closed —
+        dropping the iterator un-iterated would leak the open response.
+
+        A mime the speaker can't decode (e.g. Piper's WAV, which is unplayable
+        from mid-stream anyway) falls back to the buffered path: drain the
+        iterator fully and go through serve_audio (the transcode boundary); the
+        returned awaitable is then already resolved to nbytes.
+        """
+        if mime not in PLAYABLE_MIMES:
+            # Drain branch: an exception raised BY the iterator self-terminates
+            # the generator, but one raised downstream (serve_audio after a
+            # successful drain) would not touch it — close on ANY failure for a
+            # uniform guarantee (aclose on a finished generator is a no-op).
+            try:
+                audio = b"".join([c async for c in chunks])
+                ext, url, nbytes = await self.serve_audio(mime, audio)
+            except BaseException:
+                await self._close_stream(chunks)
+                raise
+            done = asyncio.get_running_loop().create_future()
+            done.set_result(nbytes)
+            return ext, url, done
+        try:
+            audio_id, feed = self.audio_server.put_stream(mime)
+            ext, url = tts_url(self.public_base_url, audio_id, mime)
+
+            async def _feed():
+                total = 0
+                try:
+                    async for chunk in chunks:
+                        total += len(chunk)
+                        feed.write(chunk)
+                except BaseException:
+                    # Mid-stream failure (or cancellation): readers that got nothing
+                    # see a 404, readers mid-send get a truncated clip; the caller
+                    # awaits this task and records the error. The iterator either
+                    # self-terminated (the error came from it) or is closed here
+                    # (no-op when already finished) — the invariant holds.
+                    feed.abort()
+                    await Pipeline._close_stream(chunks)
+                    raise
+                feed.close()
+                return total
+
+            return ext, url, asyncio.create_task(_feed())
+        except BaseException:
+            # Anything failing between receiving the iterator and the feed task
+            # taking ownership (put_stream, URL building, task creation) would
+            # drop the iterator un-iterated; close it before propagating.
+            await self._close_stream(chunks)
+            raise
+
     async def speak(self, text: str) -> None:
         """Public entry for proactive speech (reminders, external callers).
 
@@ -1095,9 +1312,47 @@ class Pipeline:
         The single text->speaker path shared by the filler and the device
         layer's announce. Raises on failure (callers decide isolation).
         """
-        mime, audio = await self.tts_backend.synthesize(text, "ru")
+        # Read the backend property ONCE: the same ref both synthesizes and
+        # labels the log line, so they can never diverge.
+        backend = self.tts_backend
+        if self.core.audio.stream_tts:
+            # Streaming: announce the stream URL as soon as synthesis starts;
+            # the clip plays while the feed completes.
+            mime, chunks = await self._synthesize_stream(backend, text, "ru")
+            _ext, url, feed_task = await self.serve_audio_stream(mime, chunks)
+            logger.info(
+                f"{self.name}: 🔔 announce [tts={self._backend_desc(backend)}]: "
+                f"{text!r} -> {url}"
+            )
+            try:
+                if self.send_announcement is not None:
+                    await self.send_announcement(media_id=url, timeout=30.0, text=text)
+            except BaseException:
+                # The announce itself failed (or was cancelled) BEFORE the feed
+                # task was consumed: cancel a still-running feed (no point
+                # finishing a synthesis nobody will play — and an instant
+                # announce failure must not block on a long stream), then
+                # await the task so it is never orphaned, suppressing ITS
+                # failure (logged) so a feed error can't mask the original
+                # announce error. Mirrors the orphan guard in _run.
+                if not feed_task.done():
+                    feed_task.cancel()
+                try:
+                    await feed_task
+                except BaseException as fe:  # noqa: BLE001 - must not mask the announce error
+                    logger.debug(f"{self.name}: announce TTS feed failed: {fe!r}")
+                raise
+            # Await the feed AFTER the announce returns (the announcement plays
+            # while the feed completes) so a mid-stream synthesis failure still
+            # surfaces to the caller and the task is never orphaned.
+            await feed_task
+            return
+        mime, audio = await backend.synthesize(text, "ru")
         _ext, url, _nbytes = await self.serve_audio(mime, audio)
-        logger.info(f"{self.name}: 🔔 announce: {text!r} -> {url}")
+        logger.info(
+            f"{self.name}: 🔔 announce [tts={self._backend_desc(backend)}]: "
+            f"{text!r} -> {url}"
+        )
         if self.send_announcement is not None:
             await self.send_announcement(media_id=url, timeout=30.0, text=text)
 
