@@ -196,10 +196,11 @@ function SchemaField({ name, node, root, value, labelValue, onLabelChange, onCha
     );
   }
 
-  // Boolean / stepper render nicely as a "row" field (label left, control right).
-  // Numeric enums render as a Seg/Select (handled above), not a stepper, so exclude
-  // them here too — they lay out like the other enum selects, not as a row.
-  const row = !segOptions && (type === "boolean" || (type === "integer" && !enums && !(r.minimum != null && r.maximum != null && widget === "slider")));
+  // Boolean and numeric steppers (both integer and fractional/float) render nicely as a
+  // "row" field (label left, control right). Excluded: sliders (float fields with a
+  // min/max range and widget "slider" stay full-width stacked) and numeric enums, which
+  // render as a Seg/Select (handled above) and lay out like the other enum selects.
+  const row = !segOptions && (type === "boolean" || ((type === "integer" || type === "number") && !enums && !(r.minimum != null && r.maximum != null && widget === "slider")));
   return (
     <Field label={label} hint={hint} row={row}>
       {control}

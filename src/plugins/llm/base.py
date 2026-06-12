@@ -35,7 +35,7 @@ class LlmConfig(BaseModel):
     max_tokens: int = Field(4096, ge=1)
     max_tool_rounds: int = Field(5, ge=1)
     # Per-request HTTP timeout for one chat-completions round-trip (seconds).
-    timeout: int = 300
+    timeout: int = Field(300, json_schema_extra={"unit": "s"})
     # Spoken fallbacks (read per request). Never let an empty/null model reply or a
     # rate-limit reach TTS as "".
     reply_rate_limit: str = "Лимит запросов исчерпан. Попробуй ещё раз чуть позже."
