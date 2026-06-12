@@ -15,7 +15,7 @@ credentials, the `micro_wake_word` model, and the `voice_assistant` component (a
 | `secrets.yaml` | Wi-Fi creds + API key (gitignored). **Edit the two Wi-Fi lines.** |
 | `.gitignore` | Keeps `secrets.yaml` and `.esphome/` out of git. |
 
-The model is referenced by a **local path** — `../microWakeWord/v16/model/zakhar.json`
+The model is referenced by a **local path** — `../microWakeWord/v27/model/zakhar.json`
 — so `zakhar.json` and `zakhar.tflite` are read straight from this repo at build
 time (no network, no push needed). A remote `github://` / raw URL does **not**
 work for this model: ESPHome can't resolve the manifest's relative
@@ -57,18 +57,18 @@ flashing it.
 
 ## Tuning (no retrain needed)
 
-- The current model is **v16** (v8 recipe + real device-tract positives + 4 real
-  negative classes: silence/music/speech/vacuum, all recorded through the device). On
-  the honest leakage-safe device eval it matches v8's recall (~21% FRR) but with **FAPH
-  0 across all classes** under the VAD pre-gate, where v8 false-fired ~12.5/h in real
-  silence — so it fixes the field silence false-fire bug at no recall cost.
-- `probability_cutoff` defaults to `95%` in `zakhar-voice-preroll.yaml` — FIELD-CORRECTED:
-  at `80%` v16 false-fired in real silence (heard «захар» in a quiet room), so it was
-  raised to `95%`. v16's DET curve is ~flat (recall floor ~21% FRR across cutoffs), so
-  `95%` removes the silence false-fires WITHOUT a meaningful recall cost. The `vad:` gate
-  from the stock config stays on; lower live from the panel only if real «захааар» starts
-  getting missed. The ~21% recall floor is fundamental this round — the model keys on the
-  onset, not vowel duration (see [`../microWakeWord/v16/DURATION_CAUSALITY.md`](../microWakeWord/v16/DURATION_CAUSALITY.md)).
+- The current model is **v27** (v16 recipe + synthetic short-«захар» negatives). It is the
+  first single model to beat v16: on the honest device eval it slightly improves drawn-out
+  recall (FRR 21→**19.3%** @0.90) AND fixes the field **short-«захар» false-trigger** — firing
+  on the plain name «Захар» dropped **65%→23%** — while keeping every FAPH class low (music
+  5.8→2.9/h). Same size as v16. Synthetic shorts will be swapped for REAL ones next round.
+- `probability_cutoff` defaults to `90%` in `zakhar-voice-preroll.yaml` — v27's eval knee
+  (FRR 19.3%, FAPH ~1.2/h with VAD). The DET sweep showed v16's old `95%` was OVER-tightening
+  (its FAPH plateaus 0.85→0.95), so v27 ships at `90%`. v27's silence-FAPH @0.90 is ~0.8/h
+  (low); if real silence false-fires appear in the field, raise to `95%` via the panel
+  (FRR 22.7%, FAPH 0.86/h). The `vad:` gate stays on (halves FAPH at no recall cost). The
+  model keys on the onset, not vowel duration — short-«захар» is fixed by the short negatives,
+  not by a duration feature (see [`../microWakeWord/v16/DURATION_CAUSALITY.md`](../microWakeWord/v16/DURATION_CAUSALITY.md)).
 - Both the **wake cutoff** and the **speaker volume** are now adjustable **live from
   the panel's Devices page** (the **Wake Probability Cutoff** and **Speaker Volume**
   numbers, 0–100) with NO re-flash; the cutoff value persists across reboots.
