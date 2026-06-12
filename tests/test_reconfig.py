@@ -155,6 +155,14 @@ def test_action_for_and_backend_categories_stress():
     assert "stress" in backend_categories({"stress.instances.ruaccent.model_size"})
 
 
+def test_request_initial_load_warmup_path_routes_to_stress_rebuild():
+    # The synthetic "stress.__warmup__" path used by request_initial_load() routes
+    # through the SAME classifier as a real field change: it maps to a backend rebuild
+    # and reduces to the {"stress"} category, so the drain loop rebuilds the stress stage.
+    assert action_for("stress.__warmup__") == "rebuild_backends"
+    assert backend_categories({"stress.__warmup__"}) == {"stress"}
+
+
 # --- Reconfigurator ----------------------------------------------------------
 
 def _stub_runtime(log_level="INFO", audio_ttl=300):
@@ -233,6 +241,14 @@ def test_reconfigurator_async_action_enqueues(paths, expected_action):
     reconf.on_config_change(paths)
     assert reconf.queue.qsize() == 1
     assert reconf.queue.get_nowait() == paths
+
+
+def test_request_initial_load_enqueues_warmup_job():
+    # request_initial_load only does queue.put_nowait, so a stub runtime is fine: it must
+    # enqueue exactly the synthetic warm-up path set for the requested categories.
+    reconf = _make_reconf(_stub_runtime())
+    reconf.request_initial_load({"stress"})
+    assert reconf.queue.get_nowait() == {"stress.__warmup__"}
 
 
 def test_reconfigurator_audio_ttl_applied_live():
@@ -375,6 +391,20 @@ async def test_apply_job_partial_failure_rebuilds_what_it_can():
     await reconf.apply_job({"stt.selected", "llm.selected"})
     assert rt.stt_backend == ("backend", "stt", 30)   # rebuilt despite the sibling failure
     assert rt.llm_backend == "old-llm"     # failed -> old backend kept
+
+
+@pytest.mark.asyncio
+async def test_request_initial_load_rebuilds_stress_when_drained():
+    # End-to-end: the warm-up job enqueued by request_initial_load(), when drained via
+    # apply_job, actually rebuilds the stress backend and swaps it into the runtime while
+    # leaving the other stages untouched. _job_runtime is a SimpleNamespace, so the
+    # warm-up's setattr(rt, "stress_backend", ...) works even though stress was deferred.
+    reconf, rt, _deps = _make_job_reconf(_StubSvc(), deps_timeout=30)
+    reconf.request_initial_load({"stress"})
+    job = reconf.queue.get_nowait()
+    await reconf.apply_job(job)
+    assert rt.stress_backend == ("backend", "stress", 30)   # swapped in via the warm-up
+    assert rt.stt_backend == "old-stt"                       # other stages untouched
 
 
 # --- reloading() (in-flight model-load status for the panel) ------------------

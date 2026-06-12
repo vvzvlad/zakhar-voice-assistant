@@ -105,7 +105,7 @@ ASYNC_ACTIONS = {"rebuild_backends", "rebuild_audio", "rebuild_runs",
 
 
 def backend_categories(paths) -> set[str]:
-    """Subset of {'vad','stt','llm','tts'} whose backend must be rebuilt for these paths."""
+    """Subset of {'vad','stt','llm','stress','tts'} whose backend must be rebuilt for these paths."""
     cats = set()
     for p in paths:
         if action_for(p) != "rebuild_backends":
@@ -132,6 +132,20 @@ class Reconfigurator:
         Read by the panel's system snapshot to surface a 'loading' state in the UI.
         Mutated only from the drain task; sorted for a stable payload."""
         return sorted(self._reloading)
+
+    def request_initial_load(self, cats) -> None:
+        """Queue a one-shot background (re)build of the given stage backend categories so a
+        slow model load (e.g. the RuAccent stress model) does NOT block boot. Drained by
+        run_loop in the main task: it marks reloading() while the load is in flight (the
+        panel surfaces a 'loading' state) and swaps the real backend into the runtime when
+        ready; until then the runtime keeps its boot value (None for stress -> the pipeline
+        skips the stage). Routed through the SAME queue as live config changes so the warm-up
+        is serialized and coalesced with any change that arrives during boot (one rebuild per
+        category, last-writer-wins)."""
+        # Synthetic "<cat>.__warmup__" path: action_for() maps any path under a stage
+        # category to a backend rebuild and backend_categories() reduces it to {cat}; the
+        # "__warmup__" leaf marks it as a boot warm-up rather than a real field change.
+        self.queue.put_nowait({f"{c}.__warmup__" for c in cats})
 
     def on_config_change(self, paths) -> None:
         """ConfigService.on_change callback (SYNC, runs on the panel request task).
@@ -212,7 +226,7 @@ class Reconfigurator:
         await self._rebuild_backend_cats(backend_categories(paths))
 
     async def _rebuild_backend_cats(self, cats) -> None:
-        """Rebuild the given backend categories (subset of {'vad','stt','llm','tts'}) and swap
+        """Rebuild the given backend categories (subset of {'vad','stt','llm','stress','tts'}) and swap
         them into the runtime. Shared by path-driven rebuilds (_rebuild_backends) and the
         http rebuild (which rebuilds all cloud backends off the new client). Same
         contracts as _rebuild_backends: tts_timeout push-before-create, per-category
