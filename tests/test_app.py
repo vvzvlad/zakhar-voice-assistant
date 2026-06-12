@@ -1,15 +1,13 @@
 """Tests for the composition-root helpers in src.app.
 
 These cover the small pure helpers extracted out of async main(): first-boot config
-creation, the legacy-mcp warning, the empty-public_base_url warning and the tolerant
-agent-MCP boot. They assert observable behaviour (returned doc, save calls, emitted
-log records), so each fails if the targeted logic is broken.
+creation, the legacy-mcp warning and the empty-public_base_url warning. They assert
+observable behaviour (returned doc, save calls, emitted log records), so each fails
+if the targeted logic is broken.
 """
 
 import contextlib
-import types
 
-import pytest
 from loguru import logger
 
 from src import app, config_store
@@ -359,86 +357,3 @@ def test_validate_boot_config_silent_on_set_public_base_url():
     with capture_logs() as records:
         app.validate_boot_config(core)
     assert not any("public_base_url is empty" in r for r in records)
-
-
-# --- start_agent_mcp ---------------------------------------------------------
-
-
-class _FakeAgentMcpServer:
-    """Stand-in for AgentMcpServer: records ctor args; start() optionally raises."""
-
-    instances = []
-    start_error = None
-
-    def __init__(self, rt, host, port):
-        self.rt = rt
-        self.host = host
-        self.port = port
-        self.started = False
-        _FakeAgentMcpServer.instances.append(self)
-
-    async def start(self):
-        if _FakeAgentMcpServer.start_error is not None:
-            raise _FakeAgentMcpServer.start_error
-        self.started = True
-
-
-@pytest.fixture(autouse=True)
-def _reset_fake_agent_mcp():
-    _FakeAgentMcpServer.instances.clear()
-    _FakeAgentMcpServer.start_error = None
-    yield
-    _FakeAgentMcpServer.instances.clear()
-    _FakeAgentMcpServer.start_error = None
-
-
-def _agent_mcp_rt():
-    """Runtime stub: only the agent_mcp slot start_agent_mcp publishes into."""
-    return types.SimpleNamespace(agent_mcp=None)
-
-
-@pytest.mark.asyncio
-async def test_start_agent_mcp_boots_from_config(monkeypatch):
-    # enabled=True: the server is built from core.agent_mcp host/port, started, and
-    # published on rt.agent_mcp (so the hot rebuild / shutdown see the live instance).
-    monkeypatch.setattr(app, "AgentMcpServer", _FakeAgentMcpServer)
-    rt = _agent_mcp_rt()
-    core = CoreConfig(agent_mcp={"host": "127.0.0.1", "port": 9300})
-
-    await app.start_agent_mcp(rt, core)
-
-    assert len(_FakeAgentMcpServer.instances) == 1
-    server = _FakeAgentMcpServer.instances[0]
-    assert (server.rt, server.host, server.port) == (rt, "127.0.0.1", 9300)
-    assert server.started is True
-    assert rt.agent_mcp is server
-
-
-@pytest.mark.asyncio
-async def test_start_agent_mcp_disabled_builds_nothing(monkeypatch):
-    monkeypatch.setattr(app, "AgentMcpServer", _FakeAgentMcpServer)
-    rt = _agent_mcp_rt()
-    core = CoreConfig(agent_mcp={"enabled": False})
-
-    await app.start_agent_mcp(rt, core)
-
-    assert _FakeAgentMcpServer.instances == []
-    assert rt.agent_mcp is None
-
-
-@pytest.mark.asyncio
-async def test_start_agent_mcp_failure_logged_boot_continues(monkeypatch):
-    # The MCP server is auxiliary: a failed start (e.g. port taken) is logged as an
-    # error and swallowed — it must NOT propagate and abort the assistant's boot.
-    monkeypatch.setattr(app, "AgentMcpServer", _FakeAgentMcpServer)
-    _FakeAgentMcpServer.start_error = RuntimeError("failed to bind 0.0.0.0:8202")
-    rt = _agent_mcp_rt()
-
-    with capture_logs() as records:
-        await app.start_agent_mcp(rt, CoreConfig())
-
-    assert rt.agent_mcp is None
-    errors = [r for r in records if "agent MCP server failed to start" in r]
-    assert len(errors) == 1
-    assert "ERROR" in errors[0]
-    assert "continuing without it" in errors[0]

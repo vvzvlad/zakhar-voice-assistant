@@ -11,5 +11,4 @@ onnxruntime==1.26.0
 ten-vad==1.0.6.8
 lameenc==1.8.2
 mcp==1.27.2
-uvicorn==0.49.0
 caldav==3.2.1

@@ -3,7 +3,10 @@
 Runs in a TRUSTED zone — there is NO authentication. The panel is driven entirely
 by ConfigService, so it carries no provider-specific knowledge: it exposes the
 catalog, the raw config document, generic patch/options endpoints, the named
-system-prompt profiles, system/version info and live device status.
+system-prompt profiles, system/version info and live device status. It also
+serves the agent-facing MCP endpoint at /mcp (an aiohttp→ASGI bridge into the
+FastMCP streamable-HTTP session manager, see src/agent_mcp.AgentMcpEndpoint);
+the `core.agent_mcp.enabled` toggle is read live per request.
 
 Start/stop mirror AudioServer (AppRunner + TCPSite). CORS is restricted to the
 hardcoded `_ALLOWED_ORIGINS` allowlist (empty — see below); it never reflects a
@@ -25,6 +28,7 @@ import httpx
 import numpy as np
 from aiohttp import web
 from loguru import logger
+from multidict import CIMultiDict
 from pydantic import ValidationError
 
 from src import config_store
@@ -34,6 +38,13 @@ from src.runs_store import db_file_size
 
 # HTTP methods the API exposes (used by the CORS preflight headers).
 _ALLOW_METHODS = "GET, POST, PATCH, PUT, DELETE, OPTIONS"
+
+# Hop-by-hop headers (RFC 9110 §7.6.1) the /mcp ASGI bridge must not copy from the
+# ASGI response into the aiohttp response — the aiohttp transport owns them.
+_HOP_BY_HOP_HEADERS = frozenset({
+    "connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
+    "te", "trailers", "transfer-encoding", "upgrade",
+})
 
 # Browser origins allowed cross-origin access to the (unauthenticated) panel API.
 # Hardcoded empty: there is no cross-origin reflection. The prod frontend is
@@ -149,7 +160,7 @@ class PanelServer:
                  device_status=None, device_capture=None, device_play=None,
                  device_controls_get=None, device_controls_set=None,
                  static_dir=None, runs_store=None, tool_sources=None,
-                 run_events=None, prompt_store=None,
+                 run_events=None, prompt_store=None, agent_mcp=None,
                  heartbeat_interval: float = 1.0):
         # svc: ConfigService; started_at: float (time.time())
         # device_status: optional callable -> list[dict]; static_dir: optional path to built frontend
@@ -163,6 +174,10 @@ class PanelServer:
         # run_events: optional RunEventsHub for the live WS run stream (None -> WS closes)
         # prompt_store: optional PromptStore (named system-prompt profiles); None ->
         #   every /api/prompt* endpoint returns 503
+        # agent_mcp: optional AgentMcpEndpoint (the agent-facing MCP server bridged
+        #   at /mcp); None -> /mcp returns 503 (API-only / boot-failure tolerant,
+        #   mirroring runs_store=None). Its start/stop lifecycle is owned by this
+        #   server's start()/stop().
         self.svc = svc
         self.host = host
         self.port = port
@@ -190,6 +205,7 @@ class PanelServer:
         self.tool_sources = tool_sources
         self.run_events = run_events
         self.prompt_store = prompt_store
+        self.agent_mcp = agent_mcp
         # Period (seconds) of the WS system heartbeat used as the panel liveness signal.
         self.heartbeat_interval = heartbeat_interval
         self._heartbeat_task = None
@@ -697,6 +713,86 @@ class PanelServer:
         """Serve index.html for any non-/api GET so client-side routing works."""
         return web.FileResponse(os.path.join(self.static_dir, "index.html"))
 
+    # --- agent MCP endpoint (aiohttp → ASGI bridge) ----------------------------
+    async def _mcp(self, request: web.Request) -> web.StreamResponse:
+        """Bridge one /mcp request into the FastMCP streamable-HTTP session manager.
+
+        The endpoint object exposes a plain path-agnostic ASGI callable
+        (AgentMcpEndpoint.handle); this handler translates the aiohttp request
+        into an ASGI http scope, feeds the (fully read) body as a single
+        http.request event, and streams the ASGI response back. Streaming-safe:
+        chunks are written as they arrive, so both the buffered JSON responses of
+        stateless+json mode and SSE chunks would pass through.
+
+        The `core.agent_mcp.enabled` toggle is read LIVE per request through the
+        ConfigService — flipping it in the panel applies immediately, no rebuild.
+        """
+        if self.agent_mcp is None:
+            return web.json_response(
+                {"error": "agent MCP endpoint not available"}, status=503
+            )
+        if not self.svc.core.agent_mcp.enabled:
+            return web.json_response(
+                {"error": "MCP server is disabled (core.agent_mcp.enabled = false)"},
+                status=403,
+            )
+        body = await request.read()
+        scope = {
+            "type": "http",
+            "asgi": {"version": "3.0"},
+            "http_version": f"{request.version.major}.{request.version.minor}",
+            "method": request.method,
+            "scheme": request.scheme,
+            "path": "/mcp",
+            "raw_path": b"/mcp",
+            "query_string": request.query_string.encode(),
+            "root_path": "",
+            # Host is included automatically (aiohttp keeps it in request.headers).
+            "headers": [
+                (k.lower().encode("latin-1"), v.encode("latin-1"))
+                for k, v in request.headers.items()
+            ],
+            "client": (request.remote, 0),
+            "server": (self.host, self.port),
+        }
+
+        body_sent = False
+
+        async def receive():
+            # One-shot body, then disconnect on any further pull.
+            nonlocal body_sent
+            if not body_sent:
+                body_sent = True
+                return {"type": "http.request", "body": body, "more_body": False}
+            return {"type": "http.disconnect"}
+
+        resp: web.StreamResponse | None = None
+
+        async def send(message):
+            nonlocal resp
+            if message["type"] == "http.response.start":
+                headers = CIMultiDict()
+                for name, value in message.get("headers", []):
+                    n = name.decode("latin-1")
+                    # Hop-by-hop headers are owned by the aiohttp transport.
+                    if n.lower() in _HOP_BY_HOP_HEADERS:
+                        continue
+                    headers.add(n, value.decode("latin-1"))
+                resp = web.StreamResponse(status=message["status"], headers=headers)
+                await resp.prepare(request)
+            elif message["type"] == "http.response.body":
+                chunk = message.get("body", b"")
+                if chunk:
+                    await resp.write(chunk)
+                if not message.get("more_body"):
+                    await resp.write_eof()
+
+        await self.agent_mcp.handle(scope, receive, send)
+        if resp is None:  # the ASGI app produced no response at all
+            return web.json_response({"error": "MCP endpoint sent no response"},
+                                     status=500)
+        return resp
+
     # --- wiring --------------------------------------------------------------
     def build_app(self) -> web.Application:
         allowed = _ALLOWED_ORIGINS
@@ -729,6 +825,11 @@ class PanelServer:
             web.get("/api/runs/{id}/audio", self._get_run_audio),
             web.get("/api/runs/{id}", self._get_run),
             web.get("/api/metrics", self._get_metrics),
+            # Agent-facing MCP endpoint (streamable HTTP). Registered BEFORE the SPA
+            # fallback below — aiohttp resolves routes in registration order.
+            web.post("/mcp", self._mcp),
+            web.get("/mcp", self._mcp),
+            web.delete("/mcp", self._mcp),
         ])
         # Static frontend is optional: only mount it when a built dist exists.
         if self.static_dir and os.path.isdir(self.static_dir):
@@ -739,7 +840,9 @@ class PanelServer:
             if os.path.isdir(assets):
                 app.router.add_static("/assets/", assets)
             app.router.add_get("/", self._spa_index)
-            app.router.add_get("/{path:(?!api/).*}", self._spa_index)
+            # /mcp is excluded so an unregistered method on the MCP endpoint can
+            # never fall through into the SPA index.
+            app.router.add_get("/{path:(?!api/|mcp$).*}", self._spa_index)
 
         if self.run_events is not None:
             async def _start_heartbeat(_app: web.Application) -> None:
@@ -772,6 +875,11 @@ class PanelServer:
         return app
 
     async def start(self) -> None:
+        # The agent MCP endpoint's session manager runs for the panel's lifetime
+        # (its start/stop are owned here; AgentMcpEndpoint.start is a no-op when
+        # already started).
+        if self.agent_mcp is not None:
+            await self.agent_mcp.start()
         # access_log=None disables per-request access logs; shutdown_timeout bounds how
         # long cleanup() waits for in-flight handlers (defense-in-depth so even a lingering
         # connection can't make Ctrl+C hang for the 60s aiohttp default).
@@ -785,3 +893,7 @@ class PanelServer:
         if self._runner is not None:
             await self._runner.cleanup()
             self._runner = None
+        # Stopped AFTER the listener so no request can race the teardown; stop()
+        # is idempotent and safe when start() failed before reaching it.
+        if self.agent_mcp is not None:
+            await self.agent_mcp.stop()

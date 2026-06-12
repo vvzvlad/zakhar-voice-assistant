@@ -8,13 +8,11 @@ test needs it) a real RunsStore on a tmp sqlite file.
 """
 
 import json
-import socket
 from types import SimpleNamespace
 
-import pytest
 from mcp.shared.memory import create_connected_server_and_client_session
 
-from src.agent_mcp import AgentMcpServer, build_agent_mcp
+from src.agent_mcp import AgentMcpEndpoint, build_agent_mcp
 from src.runs_store import RunsStore
 
 
@@ -281,21 +279,89 @@ async def test_ask_no_devices_configured():
     assert out == {"error": "no devices configured"}
 
 
-# --- AgentMcpServer.start() bind failure ----------------------------------------
+# --- AgentMcpEndpoint (in-panel ASGI serving) ------------------------------------
 
-async def test_start_raises_on_taken_port_and_stop_is_safe():
-    # Occupy a port with a plain socket so uvicorn cannot bind. start() must
-    # surface that as a RuntimeError (not fire-and-forget a doomed serve task),
-    # and a subsequent stop() must stay idempotent/safe.
-    blocker = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    blocker.bind(("127.0.0.1", 0))
-    blocker.listen(1)
-    port = blocker.getsockname()[1]
+def _asgi_request(method="POST", body=b"", headers=()):
+    """Build the (scope, receive, send, sent) set mirroring the panel's bridge:
+    a path-agnostic http scope, a one-shot body receive, and a send that records
+    every ASGI message into `sent`."""
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0"},
+        "http_version": "1.1",
+        "method": method,
+        "scheme": "http",
+        "path": "/mcp",
+        "raw_path": b"/mcp",
+        "query_string": b"",
+        "root_path": "",
+        "headers": [(k.lower().encode(), v.encode()) for k, v in headers],
+        "client": ("10.0.0.7", 0),
+        "server": ("myhost.lan", 8201),
+    }
+    body_sent = False
+
+    async def receive():
+        nonlocal body_sent
+        if not body_sent:
+            body_sent = True
+            return {"type": "http.request", "body": body, "more_body": False}
+        return {"type": "http.disconnect"}
+
+    sent = []
+
+    async def send(message):
+        sent.append(message)
+
+    return scope, receive, send, sent
+
+
+def _initialize_body():
+    return json.dumps({
+        "jsonrpc": "2.0", "id": 1, "method": "initialize",
+        "params": {
+            "protocolVersion": "2025-03-26", "capabilities": {},
+            "clientInfo": {"name": "test-agent", "version": "0"},
+        },
+    }).encode()
+
+
+async def test_endpoint_start_stop_idempotent():
+    ep = AgentMcpEndpoint(make_rt())
+    await ep.start()
+    await ep.start()   # second start is a no-op, not a second context
+    await ep.stop()
+    await ep.stop()    # second stop is a quiet no-op
+    # stop() without a prior start() is also safe.
+    ep2 = AgentMcpEndpoint(make_rt())
+    await ep2.stop()
+
+
+async def test_endpoint_handles_initialize_round_trip():
+    # handle() is a plain ASGI callable: an initialize POST with a non-localhost
+    # Host header must come back 200 (DNS-rebinding protection is disabled — the
+    # endpoint serves trusted-LAN clients through the panel) with a JSON body
+    # carrying serverInfo (stateless+json mode -> plain JSON, no SSE).
+    ep = AgentMcpEndpoint(make_rt())
+    await ep.start()
     try:
-        server = AgentMcpServer(make_rt(), "127.0.0.1", port)
-        with pytest.raises(RuntimeError, match=f"failed to bind 127.0.0.1:{port}"):
-            await server.start()
-        # The failed start cleared its task/server refs; stop() is a quiet no-op.
-        await server.stop()
+        scope, receive, send, sent = _asgi_request(
+            method="POST", body=_initialize_body(),
+            headers=[
+                ("host", "myhost.lan:8201"),
+                ("content-type", "application/json"),
+                ("accept", "application/json, text/event-stream"),
+            ],
+        )
+        await ep.handle(scope, receive, send)
     finally:
-        blocker.close()
+        await ep.stop()
+
+    start = next(m for m in sent if m["type"] == "http.response.start")
+    assert start["status"] == 200
+    headers = {k.decode().lower(): v.decode() for k, v in start["headers"]}
+    assert headers["content-type"].startswith("application/json")
+    body = b"".join(m.get("body", b"") for m in sent
+                    if m["type"] == "http.response.body")
+    reply = json.loads(body)
+    assert reply["result"]["serverInfo"]["name"] == "zakhar-voice-assistant"

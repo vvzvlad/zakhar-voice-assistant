@@ -12,7 +12,7 @@ from loguru import logger
 
 import src.plugins  # noqa: F401  triggers provider registration
 from src import config_store
-from src.agent_mcp import AgentMcpServer
+from src.agent_mcp import AgentMcpEndpoint
 from src.audio_server import AudioServer
 from src.config_service import ConfigDoc, ConfigService
 from src.esphome_client import DeviceManager
@@ -134,24 +134,6 @@ def warn_legacy_mcp(doc: dict) -> None:
             "config: legacy 'core.mcp' is ignored — add external servers under "
             "'core.mcp_servers' (panel: Tool sources)."
         )
-
-
-async def start_agent_mcp(rt, core) -> None:
-    """Start the agent-facing MCP server from core.agent_mcp, tolerant of failures.
-
-    The MCP server is auxiliary — a failed bind must NOT prevent the voice
-    assistant from booting (unlike the panel), so errors are logged and swallowed.
-    The started server is published on rt.agent_mcp so the core.agent_mcp hot
-    rebuild (and the shutdown path) always deal with the LIVE instance.
-    """
-    if not core.agent_mcp.enabled:
-        return
-    try:
-        agent_mcp = AgentMcpServer(rt, core.agent_mcp.host, core.agent_mcp.port)
-        await agent_mcp.start()
-        rt.agent_mcp = agent_mcp
-    except Exception as e:
-        logger.error(f"agent MCP server failed to start: {e} — continuing without it")
 
 
 def validate_boot_config(core) -> None:
@@ -285,6 +267,16 @@ async def main() -> None:
     panel_host = os.environ.get("PANEL_HOST", "0.0.0.0")
     panel_port = int(os.environ.get("PANEL_PORT", "8201"))
 
+    # Agent-facing MCP endpoint, served BY the panel at /mcp on the panel port
+    # (external agents drive the assistant over streamable HTTP). Reads everything
+    # live through `rt`; the core.agent_mcp.enabled toggle is checked per request.
+    # Auxiliary: a failed build must not break boot — the panel then answers 503.
+    agent_mcp = None
+    try:
+        agent_mcp = AgentMcpEndpoint(rt)
+    except Exception as e:
+        logger.error(f"agent MCP endpoint failed to build: {e} — continuing without it")
+
     try:
         panel = PanelServer(
             svc, panel_host, panel_port,
@@ -299,16 +291,13 @@ async def main() -> None:
             tool_sources=hub.describe,
             run_events=run_events,
             prompt_store=prompt_store,
+            agent_mcp=agent_mcp,
         )
         # Back-ref so the Reconfigurator can re-point the panel's runs-store at a
         # hot-swapped store. Set before the reconfig loop can run.
         rt.panel = panel
+        # panel.start()/stop() own the agent MCP endpoint's lifecycle too.
         await panel.start()
-        # Agent-facing MCP server (external agents drive the assistant over
-        # streamable HTTP at /mcp). Reads everything live through `rt`; configured
-        # under core.agent_mcp (panel-editable, hot-applied) and auxiliary, so a
-        # failed start does not abort boot.
-        await start_agent_mcp(rt, core)
         await manager.start()
         if scheduler is not None:
             await scheduler.start()
@@ -329,10 +318,6 @@ async def main() -> None:
                 await reconfig_task
         if panel is not None:
             await panel.stop()
-        # Stop the LIVE agent MCP server: a core.agent_mcp hot toggle may have
-        # swapped rt.agent_mcp away from the boot-time instance (or to None).
-        if rt.agent_mcp is not None:
-            await rt.agent_mcp.stop()
         # Tear down the LIVE scheduler/store: a reminders hot toggle may have swapped
         # rt.scheduler/rt.reminders_store away from the boot-time locals (or to None).
         if rt.scheduler is not None:

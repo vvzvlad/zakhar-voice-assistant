@@ -23,10 +23,13 @@ class AudioConfig(BaseModel):
 
 
 class AgentMcpConfig(BaseModel):
-    """Agent-facing MCP server (external agents drive the assistant over /mcp)."""
+    """Agent-facing MCP server (external agents drive the assistant over /mcp).
+
+    Served by the admin panel on the panel port — there is no separate bind, so
+    `enabled` is the only knob (read live per /mcp request). Old docs may still
+    carry host/port keys: pydantic ignores extras on parse and the stale keys
+    drop on the next save — no migration needed."""
     enabled: bool = True
-    host: str = "0.0.0.0"
-    port: int = 8202
 
 
 class VadConfig(BaseModel):

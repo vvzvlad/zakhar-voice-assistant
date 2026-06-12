@@ -56,7 +56,7 @@ Shape (see `templates/default_config.json` for the full default):
   assistant speak a short filler line before calling its tools),
   `calendar` (url / username / password / calendar), `esphome.port`, `prompt.system_prompt_path`
   (legacy seed only — prompts now live as named profiles in `data/prompts.db`),
-  `agent_mcp` (enabled / host / port — the agent-facing MCP server),
+  `agent_mcp` (enabled — the agent-facing MCP endpoint served by the panel at `/mcp`),
   `runs` (enabled / retention_days),
   `reminders` (enabled), `devices` (list of `{name, host, psk}`), `tts_timeout`, `log_level`.
 
@@ -66,10 +66,11 @@ gitignored, so `config.json` and its keys never get committed.
 ## Agent MCP server
 
 The app is also an MCP **server**, so an external agent (e.g. Claude) can drive the
-assistant. Endpoint: `http://<host>:<port>/mcp` (MCP streamable HTTP). Settings live
-under `core.agent_mcp` in the JSON config (`enabled` / `host` / `port`, defaults
-`true` / `0.0.0.0` / `8202`), editable in the panel (System page) and applied live
-like every other JSON setting. There is NO authentication (trusted-LAN service,
+assistant. The endpoint is served by the admin panel itself:
+`http://<host>:8201/mcp` (MCP streamable HTTP, on the panel port — `PANEL_PORT`
+env, default 8201; no separate server or port). The on/off toggle is
+`core.agent_mcp.enabled` in the JSON config, editable in the panel (System page)
+and applied live per request. There is NO authentication (trusted-LAN service,
 like the admin panel). Tools:
 
 - `list_runs(limit, device?, search?)` — recent voice interactions (user text, reply, timings).

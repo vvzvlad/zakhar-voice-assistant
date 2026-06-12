@@ -84,9 +84,8 @@ def test_action_for_representative_paths():
         "core.openweathermap.api_key": "rebuild_tools",
         "core.calendar.url": "rebuild_tools",
         "core.mcp_servers": "rebuild_tools",
-        "core.agent_mcp.enabled": "rebuild_agent_mcp",
-        "core.agent_mcp.host": "rebuild_agent_mcp",
-        "core.agent_mcp.port": "rebuild_agent_mcp",
+        # enabled is read live per /mcp request through the panel — no rebuild.
+        "core.agent_mcp.enabled": "live",
         "core.reminders.enabled": "rebuild_reminders",
         "core.reminders.something": "rebuild_reminders",
         "core.runs.enabled": "rebuild_runs",
@@ -167,6 +166,14 @@ def test_reconfigurator_capture_is_live_no_job():
     assert reconf.queue.qsize() == 0
 
 
+def test_reconfigurator_agent_mcp_is_live_no_job():
+    # core.agent_mcp.enabled is read live per /mcp request through the panel, so
+    # it applies live: it must NOT enqueue an async rebuild job.
+    reconf = _make_reconf(_stub_runtime())
+    reconf.on_config_change({"core.agent_mcp.enabled"})
+    assert reconf.queue.qsize() == 0
+
+
 def test_reconfigurator_ack_is_live_no_job():
     # core.ack.* (enabled / sound_path) is read per-run via the Runtime read-through,
     # so it applies live: it must NOT enqueue an async rebuild job.
@@ -192,8 +199,6 @@ def test_reconfigurator_ack_is_live_no_job():
         ({"core.esphome.port"}, "rebuild_devices"),
         # core.reminders.* -> rebuild_reminders (Tier 3c).
         ({"core.reminders.enabled"}, "rebuild_reminders"),
-        # core.agent_mcp.* -> rebuild_agent_mcp (agent-facing MCP server).
-        ({"core.agent_mcp.port"}, "rebuild_agent_mcp"),
     ],
 )
 def test_reconfigurator_async_action_enqueues(paths, expected_action):
@@ -1053,130 +1058,3 @@ async def test_apply_job_reminders_noop_when_already_enabled(monkeypatch):
 async def _async_none():
     """Awaitable returning None, used to stub the async _rebuild_tools via a lambda."""
     return None
-
-
-# --- _rebuild_agent_mcp --------------------------------------------------------
-
-class _FakeAgentMcpServer:
-    """Stand-in for AgentMcpServer: records ctor args and start/stop calls; start()
-    optionally raises to model a bind failure."""
-
-    instances = []
-    start_error = None
-
-    def __init__(self, rt, host, port):
-        self.rt = rt
-        self.host = host
-        self.port = port
-        self.started = False
-        self.stopped = False
-        _FakeAgentMcpServer.instances.append(self)
-
-    async def start(self):
-        if _FakeAgentMcpServer.start_error is not None:
-            raise _FakeAgentMcpServer.start_error
-        self.started = True
-
-    async def stop(self):
-        self.stopped = True
-
-
-@pytest.fixture(autouse=True)
-def _reset_fake_agent_mcp_instances():
-    _FakeAgentMcpServer.instances.clear()
-    _FakeAgentMcpServer.start_error = None
-    yield
-    _FakeAgentMcpServer.instances.clear()
-    _FakeAgentMcpServer.start_error = None
-
-
-def _agent_mcp_runtime(*, enabled, host="0.0.0.0", port=8202, agent_mcp=None):
-    """Runtime stub for _rebuild_agent_mcp: core.agent_mcp plus the swappable
-    rt.agent_mcp slot."""
-    return types.SimpleNamespace(
-        core=types.SimpleNamespace(
-            agent_mcp=types.SimpleNamespace(enabled=enabled, host=host, port=port),
-        ),
-        agent_mcp=agent_mcp,
-    )
-
-
-@pytest.mark.asyncio
-async def test_apply_job_agent_mcp_enabled_swaps_old_for_new(monkeypatch):
-    # enabled with a running server: the old one is stopped, a new one is built from
-    # the CURRENT config (host/port read at apply time), started, and published.
-    monkeypatch.setattr("src.reconfig.AgentMcpServer", _FakeAgentMcpServer)
-    old = _FakeAgentMcpServer(None, "0.0.0.0", 8202)
-    _FakeAgentMcpServer.instances.clear()
-
-    rt = _agent_mcp_runtime(enabled=True, host="127.0.0.1", port=9300, agent_mcp=old)
-    reconf = Reconfigurator(rt, types.SimpleNamespace(tts_timeout=30), asyncio.Queue())
-
-    await reconf.apply_job({"core.agent_mcp.port"})
-
-    assert old.stopped is True
-    assert len(_FakeAgentMcpServer.instances) == 1
-    new = _FakeAgentMcpServer.instances[0]
-    assert (new.rt, new.host, new.port) == (rt, "127.0.0.1", 9300)
-    assert new.started is True
-    assert rt.agent_mcp is new
-
-
-@pytest.mark.asyncio
-async def test_apply_job_agent_mcp_disabled_stops_old_and_clears_ref(monkeypatch):
-    # Disabling: the old server is stopped, no new one is built, the ref is cleared.
-    monkeypatch.setattr("src.reconfig.AgentMcpServer", _FakeAgentMcpServer)
-    old = _FakeAgentMcpServer(None, "0.0.0.0", 8202)
-    _FakeAgentMcpServer.instances.clear()
-
-    rt = _agent_mcp_runtime(enabled=False, agent_mcp=old)
-    reconf = Reconfigurator(rt, types.SimpleNamespace(tts_timeout=30), asyncio.Queue())
-
-    await reconf.apply_job({"core.agent_mcp.enabled"})
-
-    assert old.stopped is True
-    assert _FakeAgentMcpServer.instances == []   # no replacement built
-    assert rt.agent_mcp is None
-
-
-@pytest.mark.asyncio
-async def test_apply_job_agent_mcp_start_failure_logged_not_raised(monkeypatch):
-    # A failed start (e.g. port taken) is logged, leaves rt.agent_mcp None and does
-    # NOT raise — the next config change can bring the server back.
-    monkeypatch.setattr("src.reconfig.AgentMcpServer", _FakeAgentMcpServer)
-    _FakeAgentMcpServer.start_error = RuntimeError("bind failed")
-    logged = []
-    from loguru import logger as _logger
-    sink_id = _logger.add(logged.append, level="ERROR", format="{message}")
-
-    rt = _agent_mcp_runtime(enabled=True, agent_mcp=None)
-    reconf = Reconfigurator(rt, types.SimpleNamespace(tts_timeout=30), asyncio.Queue())
-    try:
-        await reconf.apply_job({"core.agent_mcp.port"})
-    finally:
-        _logger.remove(sink_id)
-
-    assert rt.agent_mcp is None
-    assert any("agent MCP server start failed" in r for r in logged)
-
-
-@pytest.mark.asyncio
-async def test_apply_job_agent_mcp_old_stop_failure_still_starts_new(monkeypatch):
-    # A failing old.stop() is only a warning: the new server is still built/started.
-    monkeypatch.setattr("src.reconfig.AgentMcpServer", _FakeAgentMcpServer)
-
-    class _ExplodingStop(_FakeAgentMcpServer):
-        async def stop(self):
-            raise RuntimeError("stuck connection")
-
-    old = _ExplodingStop(None, "0.0.0.0", 8202)
-    _FakeAgentMcpServer.instances.clear()
-
-    rt = _agent_mcp_runtime(enabled=True, agent_mcp=old)
-    reconf = Reconfigurator(rt, types.SimpleNamespace(tts_timeout=30), asyncio.Queue())
-
-    await reconf.apply_job({"core.agent_mcp.host"})
-
-    assert len(_FakeAgentMcpServer.instances) == 1
-    assert rt.agent_mcp is _FakeAgentMcpServer.instances[0]
-    assert rt.agent_mcp.started is True
