@@ -6,6 +6,7 @@ tmp config file and drives a fresh PanelServer app.
 """
 
 import asyncio
+import json
 import re
 import time
 
@@ -1368,3 +1369,148 @@ async def test_spa_static_and_catch_all_does_not_swallow_api(tmp_path):
         assert "SPA INDEX" not in api_body
     finally:
         await client.close()
+
+
+# --- /mcp (agent MCP endpoint bridged into the panel) -------------------------
+
+# MCP streamable-HTTP requests must accept both JSON and SSE; in stateless+json
+# mode the server answers with plain JSON.
+_MCP_HEADERS = {
+    "Content-Type": "application/json",
+    "Accept": "application/json, text/event-stream",
+}
+
+
+def _mcp_initialize():
+    return {
+        "jsonrpc": "2.0", "id": 1, "method": "initialize",
+        "params": {
+            "protocolVersion": "2025-03-26", "capabilities": {},
+            "clientInfo": {"name": "test-agent", "version": "0"},
+        },
+    }
+
+
+async def _mcp_client(tmp_path, **kw):
+    """Panel test client with a STARTED AgentMcpEndpoint bridged at /mcp.
+
+    The endpoint's Runtime stub shares the panel's ConfigService, so the
+    get_config tool returns the same document the panel serves."""
+    from types import SimpleNamespace
+
+    from src.agent_mcp import AgentMcpEndpoint
+
+    svc = _svc(tmp_path)
+    rt = SimpleNamespace(
+        svc=svc, runs_store=None,
+        manager=SimpleNamespace(clients=[], statuses=lambda: []),
+    )
+    endpoint = AgentMcpEndpoint(rt)
+    await endpoint.start()
+    srv = PanelServer(svc, "127.0.0.1", 0, version="9.9", started_at=time.time(),
+                      agent_mcp=endpoint, **kw)
+    client = TestClient(TestServer(srv.build_app()))
+    await client.start_server()
+    return client, svc, endpoint
+
+
+async def test_mcp_post_initialize_round_trip(tmp_path):
+    # A JSON-RPC initialize POST through the aiohttp bridge answers 200 with a
+    # plain JSON body (stateless+json mode) carrying serverInfo.
+    client, _svc_, endpoint = await _mcp_client(tmp_path)
+    try:
+        resp = await client.post("/mcp", json=_mcp_initialize(), headers=_MCP_HEADERS)
+        assert resp.status == 200
+        assert resp.headers["Content-Type"].startswith("application/json")
+        body = await resp.json()
+        assert body["result"]["serverInfo"]["name"] == "zakhar-voice-assistant"
+    finally:
+        await client.close()
+        await endpoint.stop()
+
+
+async def test_mcp_disabled_via_config_returns_403(tmp_path):
+    # core.agent_mcp.enabled is read LIVE per request: flipping it off makes the
+    # very next /mcp request 403 — no rebuild, no restart.
+    client, svc, endpoint = await _mcp_client(tmp_path)
+    try:
+        svc.apply({"core": {"agent_mcp": {"enabled": False}}})
+        resp = await client.post("/mcp", json=_mcp_initialize(), headers=_MCP_HEADERS)
+        assert resp.status == 403
+        assert "disabled" in (await resp.json())["error"]
+
+        # Flipping it back on restores service on the next request.
+        svc.apply({"core": {"agent_mcp": {"enabled": True}}})
+        resp = await client.post("/mcp", json=_mcp_initialize(), headers=_MCP_HEADERS)
+        assert resp.status == 200
+    finally:
+        await client.close()
+        await endpoint.stop()
+
+
+async def test_mcp_unavailable_returns_503(tmp_path):
+    # No AgentMcpEndpoint wired (boot failure / API-only) -> 503, like runs_store=None.
+    client, _svc_ = await _client(tmp_path)
+    try:
+        resp = await client.post("/mcp", json=_mcp_initialize(), headers=_MCP_HEADERS)
+        assert resp.status == 503
+        assert (await resp.json()) == {"error": "agent MCP endpoint not available"}
+    finally:
+        await client.close()
+
+
+async def test_mcp_get_is_not_swallowed_by_spa(tmp_path):
+    # With the SPA catch-all mounted, /mcp must always reach the MCP bridge (or a
+    # plain router 405), never fall through to index.html.
+    static_dir = _build_static_dir(tmp_path)
+    client, _svc_, endpoint = await _mcp_client(tmp_path, static_dir=str(static_dir))
+    try:
+        # GET without an SSE accept reaches the MCP server, which answers a
+        # JSON-RPC "Not Acceptable" error — proving the bridge handled it.
+        resp = await client.get("/mcp")
+        body = await resp.text()
+        assert resp.status == 406
+        assert resp.headers["Content-Type"].startswith("application/json")
+        assert "SPA INDEX" not in body
+
+        # An unregistered method on /mcp (PUT) must also stay out of the SPA:
+        # the (?!api/|mcp$) lookahead plus route order give a plain 405.
+        resp = await client.put("/mcp")
+        body = await resp.text()
+        assert resp.status == 405
+        assert "SPA INDEX" not in body
+    finally:
+        await client.close()
+        await endpoint.stop()
+
+
+async def test_mcp_tools_call_round_trip(tmp_path):
+    # Full stateless round-trip: initialize -> notifications/initialized (202) ->
+    # tools/call get_config returns the panel's own config document.
+    client, svc, endpoint = await _mcp_client(tmp_path)
+    try:
+        resp = await client.post("/mcp", json=_mcp_initialize(), headers=_MCP_HEADERS)
+        assert resp.status == 200
+
+        resp = await client.post(
+            "/mcp", json={"jsonrpc": "2.0", "method": "notifications/initialized"},
+            headers=_MCP_HEADERS,
+        )
+        assert resp.status == 202
+
+        resp = await client.post(
+            "/mcp",
+            json={"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                  "params": {"name": "get_config", "arguments": {}}},
+            headers=_MCP_HEADERS,
+        )
+        assert resp.status == 200
+        body = await resp.json()
+        result = body["result"]
+        assert result.get("isError") in (False, None)
+        # The tool's dict payload comes back as JSON text content; it must equal
+        # the very document the panel itself serves.
+        assert json.loads(result["content"][0]["text"]) == svc.document()
+    finally:
+        await client.close()
+        await endpoint.stop()

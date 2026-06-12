@@ -13,7 +13,7 @@
     "mcp_servers": [],
     "calendar": {"url": "", "username": "", "password": "", "calendar": "", "prompt": ""},
     "esphome": {"port": 6053},
-    "agent_mcp": {"enabled": true, "host": "0.0.0.0", "port": 8202},
+    "agent_mcp": {"enabled": true},
     "prompt": {"system_prompt_path": "data/system_prompt.md"},
     "runs": {"enabled": true, "retention_days": 30},
     "reminders": {"enabled": true},

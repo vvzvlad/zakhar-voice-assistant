@@ -3,10 +3,13 @@
 Exposes the assistant ITSELF as an MCP server so an external agent (e.g. Claude)
 can read the voice run log, view/change the live config, speak arbitrary text on
 a speaker and send full text requests through the assistant pipeline. Runs in a
-TRUSTED zone — there is NO authentication, same posture as the admin panel. The
-enabled flag and bind host/port come from `core.agent_mcp` in data/config.json
-(panel-editable on the System page, hot-applied via the reconfigurator — no
-restart). The endpoint is http://<host>:<port>/mcp (streamable HTTP).
+TRUSTED zone — there is NO authentication, same posture as the admin panel.
+
+There is no standalone server: the endpoint is SERVED BY THE ADMIN PANEL at /mcp
+on the panel port (PanelServer bridges aiohttp requests into the FastMCP
+streamable-HTTP session manager, see AgentMcpEndpoint below). The on/off toggle
+is `core.agent_mcp.enabled` in data/config.json (panel-editable on the System
+page) and is read LIVE per request by the panel — no rebuild, no restart.
 
 Everything is read live THROUGH the Runtime holder (rt.svc / rt.runs_store /
 rt.manager) at call time, so hot-reloads and runs-store swaps take effect without
@@ -16,11 +19,10 @@ src/builtin_mcp/reminders.py.
 """
 
 import asyncio
-import contextlib
 
-import uvicorn
 from loguru import logger
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 from pydantic import ValidationError
 
 
@@ -40,7 +42,20 @@ def build_agent_mcp(rt) -> FastMCP:
     `rt` is the live Runtime holder; every tool reads rt.svc / rt.runs_store /
     rt.manager at CALL time (never captured), so hot-swapped subsystems apply.
     """
-    mcp = FastMCP("zakhar-voice-assistant", stateless_http=True, json_response=True)
+    # DNS-rebinding protection is disabled on purpose: the SDK's default rejects
+    # any non-localhost Host header with "421 Invalid Host header", which breaks
+    # every LAN client. This is a trusted-LAN no-auth service (same posture as the
+    # admin panel that serves it); browser cross-origin POSTs are still
+    # preflight-gated by the panel's empty CORS allowlist, so disabling the check
+    # keeps the same protection level as the rest of the panel API.
+    mcp = FastMCP(
+        "zakhar-voice-assistant",
+        stateless_http=True,
+        json_response=True,
+        transport_security=TransportSecuritySettings(
+            enable_dns_rebinding_protection=False
+        ),
+    )
 
     @mcp.tool(
         name="list_runs",
@@ -197,90 +212,42 @@ def build_agent_mcp(rt) -> FastMCP:
     return mcp
 
 
-class _NoSignalUvicornServer(uvicorn.Server):
-    # Uvicorn must not steal the process SIGINT/SIGTERM handlers: the app owns
-    # shutdown (app.py relies on KeyboardInterrupt/CancelledError out of
-    # asyncio.run), so the stock capture_signals() would break Ctrl+C.
-    @contextlib.contextmanager
-    def capture_signals(self):
-        yield
+class AgentMcpEndpoint:
+    """Owns the FastMCP instance + its session-manager lifecycle for in-panel serving.
 
-
-class AgentMcpServer:
-    """Serves the agent-facing FastMCP app with uvicorn inside the app's event loop.
-
-    start/stop mirror PanelServer/AudioServer naming. The uvicorn lifespan runs
-    the FastMCP streamable-HTTP session manager (the ASGI app provides its own
-    lifespan), so nothing else needs to be started.
+    The panel (PanelServer) bridges /mcp requests into handle(), a plain
+    path-agnostic ASGI callable. start()/stop() enter/exit the session manager's
+    run() context for the server's lifetime; both must be called from the same
+    task (anyio task-group rule) — the panel's start/stop run in the main task.
     """
 
-    def __init__(self, rt, host: str, port: int):
-        self.rt = rt
-        self.host = host
-        self.port = port
-        self._server: _NoSignalUvicornServer | None = None
-        self._task: asyncio.Task | None = None
-
-    @staticmethod
-    async def _serve(server: "_NoSignalUvicornServer") -> None:
-        """Run uvicorn's serve(), converting SystemExit into a plain exception.
-
-        uvicorn calls sys.exit(1) when the bind fails; a SystemExit escaping an
-        asyncio Task is re-raised into the event loop and would kill the whole
-        app, so it must be downgraded to an exception start() can retrieve."""
-        try:
-            await server.serve()
-        except SystemExit as e:
-            raise RuntimeError(f"uvicorn exited (code {e.code})") from e
+    def __init__(self, rt):
+        self.mcp = build_agent_mcp(rt)
+        # streamable_http_app() is called only for its side effect: it creates the
+        # session manager. The returned Starlette app itself is unused — the panel
+        # talks straight to the session manager.
+        self._app = self.mcp.streamable_http_app()
+        self._ctx = None
 
     async def start(self) -> None:
-        """Start serving; raises RuntimeError if the server fails to bind."""
-        app = build_agent_mcp(self.rt).streamable_http_app()
-        config = uvicorn.Config(
-            app, host=self.host, port=self.port, log_level="warning", lifespan="on"
-        )
-        server = _NoSignalUvicornServer(config)
-        self._server = server
-        task = asyncio.create_task(self._serve(server))
-        self._task = task
-        # serve() is fire-and-forget, so a taken port would "succeed" silently and
-        # the task would die later. Wait until uvicorn reports it is listening
-        # (Server.started flips True) or the task completes/times out, so callers
-        # see bind failures as an exception.
-        deadline = asyncio.get_running_loop().time() + 5.0
-        while not server.started:
-            if task.done() or asyncio.get_running_loop().time() > deadline:
-                self._task = None
-                self._server = None
-                if task.done():
-                    exc = task.exception()
-                    reason = str(exc) if exc is not None else "server task exited"
-                else:
-                    task.cancel()
-                    with contextlib.suppress(asyncio.CancelledError):
-                        await task
-                    reason = "timed out waiting for the server to start"
-                logger.error(f"agent MCP server failed to start: {reason}")
-                raise RuntimeError(
-                    f"agent MCP server failed to bind {self.host}:{self.port}: {reason}"
-                )
-            await asyncio.sleep(0.05)
-        logger.info(f"agent MCP server on http://{self.host}:{self.port}/mcp")
+        """Enter the session-manager run() context; no-op when already started."""
+        if self._ctx is not None:
+            return
+        ctx = self.mcp.session_manager.run()
+        await ctx.__aenter__()
+        self._ctx = ctx
+        logger.info("agent MCP endpoint started (served by the panel at /mcp)")
 
     async def stop(self) -> None:
-        """Idempotent shutdown; safe when start() failed or never ran."""
-        task, self._task = self._task, None
-        server, self._server = self._server, None
-        if server is not None:
-            server.should_exit = True
-        if task is None:
+        """Exit the run() context; idempotent and safe when start() never ran."""
+        ctx, self._ctx = self._ctx, None
+        if ctx is None:
             return
         try:
-            with contextlib.suppress(asyncio.CancelledError):
-                await asyncio.wait_for(task, timeout=5.0)
-        except asyncio.TimeoutError:
-            # The graceful exit flag was ignored (e.g. a stuck connection):
-            # cancel the serve task outright.
-            task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await task
+            await ctx.__aexit__(None, None, None)
+        except Exception as e:  # noqa: BLE001 - shutdown must never propagate
+            logger.warning(f"agent MCP endpoint stop failed: {e}")
+
+    async def handle(self, scope, receive, send) -> None:
+        """Serve one ASGI request through the streamable-HTTP session manager."""
+        await self.mcp.session_manager.handle_request(scope, receive, send)
