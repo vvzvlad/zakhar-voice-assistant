@@ -22,6 +22,14 @@ jobs:
       with:
         python-version: "3.11"
 
+    - name: Install native VAD runtime libraries
+      # ten-vad's bundled libten_vad.so links against LLVM libc++
+      # (libc++.so.1 / libc++abi.so.1), absent on the stock ubuntu runner.
+      # Without them the real TEN engine integration tests fail at CDLL load.
+      run: |
+        for i in 1 2 3; do sudo apt-get update && break; sleep 5; done
+        sudo apt-get install -y --no-install-recommends libc++1 libc++abi1
+
     - name: Install dependencies
       run: pip install -r requirements-dev.txt
 
