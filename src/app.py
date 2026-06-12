@@ -88,11 +88,17 @@ async def main() -> None:
     stt_backend = svc.create("stt")
     tts_backend = svc.create("tts")
     llm_backend = svc.create("llm")
-    stress_backend = svc.create("stress")
+    # Defer the accent (stress) backend: RuAccent loads an ONNX model from
+    # disk/HuggingFace, which would block boot for seconds. Start with no stress
+    # backend (the pipeline skips the stage) and load it in the background after the
+    # panel + drain loop are up (see request_initial_load below), so boot stays
+    # responsive and the load is surfaced via reloading() in the UI.
+    stress_backend = None
     # Startup log: name the exact backend ("provider/model") behind every stage.
     for cat, b in (("vad", vad_backend), ("stt", stt_backend), ("llm", llm_backend),
-                   ("stress", stress_backend), ("tts", tts_backend)):
+                   ("tts", tts_backend)):
         logger.info(f"{cat} backend: {getattr(b, 'backend_desc', type(b).__name__)}")
+    logger.info("stress backend: deferred — loads in the background after boot (if enabled)")
 
     # Observability: persist every finalized pipeline run to SQLite (gated on config).
     # Pruned once at boot; the panel API serves the run log + 24h metrics from it.
@@ -230,6 +236,11 @@ async def main() -> None:
         # Drain heavy reconfiguration jobs in this (main) task so blocking model
         # loads stay off the panel request task and off the event loop (to_thread).
         reconfig_task = asyncio.create_task(reconf.run_loop())
+        # Now that the panel is serving and the drain loop is running, start the deferred
+        # accent (stress) model load in the background. It rebuilds via the hot-reload
+        # path: marks reloading() (the panel shows "Loading… Accents") and swaps the real
+        # backend into the runtime when ready; the stage is skipped until then.
+        reconf.request_initial_load({"stress"})
         # There is no in-app restart trigger anymore: block on a never-fired event
         # so the process runs until cancelled by a signal (SIGINT/SIGTERM).
         await asyncio.Event().wait()
