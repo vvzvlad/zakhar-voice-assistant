@@ -19,6 +19,7 @@ import asyncio
 import contextlib
 import inspect
 import io
+import json
 import os
 import time
 import wave
@@ -501,16 +502,57 @@ class PanelServer:
         return web.json_response({"ok": True})
 
     async def _activate_prompt_profile(self, request: web.Request) -> web.Response:
-        """Make one profile the active one (what the pipeline uses from now on)."""
+        """Make one profile active. Optional body {"apply_voice": true} also applies
+        that profile's preferred-voice marker (when present) to the TTS config."""
         if self.prompt_store is None:
             return web.json_response({"error": "prompt store not available"}, status=503)
         pid = self._profile_id(request)
         if pid is None:
             return web.json_response({"error": "invalid id"}, status=400)
+        # Body is optional: legacy callers POST without one. Tolerate empty/missing.
+        apply_voice = False
+        if request.body_exists:
+            raw = (await request.text()).strip()
+            if raw:
+                try:
+                    body = json.loads(raw)
+                except ValueError:
+                    return web.json_response({"error": "invalid JSON body"}, status=400)
+                if not isinstance(body, dict):
+                    return web.json_response({"error": "body must be a JSON object"}, status=400)
+                apply_voice = bool(body.get("apply_voice"))
         ok = await asyncio.to_thread(self.prompt_store.activate, pid)
         if not ok:
             return web.json_response({"error": "not found"}, status=404)
-        return web.json_response({"ok": True, "active_id": pid})
+        out = {"ok": True, "active_id": pid}
+        if apply_voice:
+            out.update(await self._apply_profile_voice(pid))
+        return web.json_response(out)
+
+    async def _apply_profile_voice(self, pid: int) -> dict:
+        """Parse the profile's preferred-voice marker and apply it to the TTS config.
+
+        Returns a dict merged into the activate response:
+          {"voice_applied": {"provider": ..., "fields": {...}}}  on success,
+          {"voice_applied": None}                                when there is no marker,
+          {"voice_error": "<message>"}                           on a bad provider/config.
+        Never raises: activation already succeeded, so a voice problem must not fail it."""
+        from src.voice_marker import parse_voice_marker, build_voice_patch
+        profile = await asyncio.to_thread(self.prompt_store.get, pid)
+        parsed = parse_voice_marker(profile["text"] if profile else "")
+        if parsed is None:
+            return {"voice_applied": None}
+        try:
+            prov = get_provider("tts", parsed["provider"])
+        except ValueError:
+            return {"voice_error": f"unknown TTS provider {parsed['provider']!r}"}
+        allowed = set(prov.ConfigModel.model_fields)
+        patch = build_voice_patch(parsed["provider"], parsed["fields"], allowed)
+        try:
+            self.svc.apply(patch)
+        except (ValidationError, ValueError) as e:
+            return {"voice_error": str(e)}
+        return {"voice_applied": {"provider": parsed["provider"], "fields": patch["tts"]["instances"][parsed["provider"]]}}
 
     def _system_snapshot(self) -> dict:
         # Lightweight system/liveness payload shared by /api/system and the WS

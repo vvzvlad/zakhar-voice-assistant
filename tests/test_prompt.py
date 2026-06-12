@@ -112,6 +112,26 @@ def test_build_system_prompt_skips_disabled_builtin_prompts(tmp_path):
     store.close()
 
 
+def test_build_system_prompt_strips_voice_marker(tmp_path):
+    # The per-profile preferred-voice marker is metadata for the panel only and
+    # must NEVER reach the model: build_system_prompt strips it while keeping the
+    # rest of the body and the TDW substitution intact.
+    store = _store(
+        tmp_path,
+        "BODY <<<<<TDW>>>>>\n<<<<<VOICE provider=yandex voice=zahar>>>>>\nTAIL",
+    )
+    core = CoreConfig()
+
+    out = build_system_prompt(core, store)
+
+    assert "<<<<<VOICE" not in out
+    assert "provider=yandex" not in out
+    assert out.startswith("BODY ")
+    assert "Сейчас (дата и время):" in out
+    assert "TAIL" in out
+    store.close()
+
+
 def test_build_system_prompt_uses_active_profile_not_seed_file(tmp_path):
     # The prompt body comes from the ACTIVE store profile, not from the legacy
     # seed file: after switching profiles the new text is what gets assembled.

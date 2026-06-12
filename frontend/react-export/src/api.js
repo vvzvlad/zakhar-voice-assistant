@@ -78,8 +78,11 @@ export const updatePromptProfile = (id, body) =>
   request(`/api/prompt/profiles/${encodeURIComponent(id)}`, { method: "PUT", body });
 export const deletePromptProfile = (id) =>
   request(`/api/prompt/profiles/${encodeURIComponent(id)}`, { method: "DELETE" });
-export const activatePromptProfile = (id) =>
-  request(`/api/prompt/profiles/${encodeURIComponent(id)}/activate`, { method: "POST" });
+// Activate a profile. opts.applyVoice also applies that profile's preferred-voice
+// marker (if any) to the TTS config server-side.
+export const activatePromptProfile = (id, { applyVoice = false } = {}) =>
+  request(`/api/prompt/profiles/${encodeURIComponent(id)}/activate`,
+    { method: "POST", body: { apply_voice: applyVoice } });
 export const getSystem = () => request("/api/system");
 export const getDevices = () => request("/api/devices");
 

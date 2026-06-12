@@ -665,6 +665,101 @@ async def test_prompt_profile_activate_switches_what_get_prompt_returns(tmp_path
         store.close()
 
 
+async def test_prompt_profile_activate_apply_voice_sets_tts(tmp_path):
+    # Activating with apply_voice=true reads the profile's preferred-voice marker
+    # and applies it to the TTS config. The test ConfigService registers no
+    # reconfig callbacks, so apply() only validates+persists — selecting piper does
+    # NOT load an ONNX file.
+    store = _prompt_store(tmp_path)
+    client, svc = await _client(tmp_path, prompt_store=store)
+    try:
+        created = await (await client.post(
+            "/api/prompt/profiles",
+            json={"name": "voiced",
+                  "text": "BODY <<<<<VOICE provider=piper voice_path=models/x.onnx>>>>>"},
+        )).json()
+        pid = created["id"]
+
+        resp = await client.post(f"/api/prompt/profiles/{pid}/activate",
+                                 json={"apply_voice": True})
+        assert resp.status == 200
+        body = await resp.json()
+        assert body["ok"] is True and body["active_id"] == pid
+        assert body["voice_applied"] == {
+            "provider": "piper", "fields": {"voice_path": "models/x.onnx"}
+        }
+
+        doc = svc.document()
+        assert doc["tts"]["selected"] == "piper"
+        assert doc["tts"]["instances"]["piper"]["voice_path"] == "models/x.onnx"
+    finally:
+        await client.close()
+        store.close()
+
+
+async def test_prompt_profile_activate_apply_voice_no_marker(tmp_path):
+    # apply_voice=true but no marker -> voice_applied is null and TTS is unchanged.
+    store = _prompt_store(tmp_path)
+    client, svc = await _client(tmp_path, prompt_store=store)
+    try:
+        created = await (await client.post(
+            "/api/prompt/profiles", json={"name": "plain", "text": "no marker here"})).json()
+        pid = created["id"]
+
+        resp = await client.post(f"/api/prompt/profiles/{pid}/activate",
+                                 json={"apply_voice": True})
+        assert resp.status == 200
+        body = await resp.json()
+        assert body["voice_applied"] is None
+        assert svc.document()["tts"]["selected"] == "yandex"
+    finally:
+        await client.close()
+        store.close()
+
+
+async def test_prompt_profile_activate_apply_voice_unknown_provider(tmp_path):
+    # An unknown provider in the marker -> voice_error, but activation still
+    # succeeded (active_id switched) and the TTS config is untouched.
+    store = _prompt_store(tmp_path)
+    client, svc = await _client(tmp_path, prompt_store=store)
+    try:
+        created = await (await client.post(
+            "/api/prompt/profiles",
+            json={"name": "bad", "text": "<<<<<VOICE provider=nope voice=x>>>>>"})).json()
+        pid = created["id"]
+
+        resp = await client.post(f"/api/prompt/profiles/{pid}/activate",
+                                 json={"apply_voice": True})
+        assert resp.status == 200
+        body = await resp.json()
+        assert body["active_id"] == pid
+        assert "voice_error" in body and "nope" in body["voice_error"]
+        assert svc.document()["tts"]["selected"] == "yandex"
+    finally:
+        await client.close()
+        store.close()
+
+
+async def test_prompt_profile_activate_no_body_back_compat(tmp_path):
+    # Legacy callers POST with no body: still returns {"ok", "active_id"} and never
+    # touches TTS (no voice_applied / voice_error keys).
+    store = _prompt_store(tmp_path)
+    client, svc = await _client(tmp_path, prompt_store=store)
+    try:
+        created = await (await client.post(
+            "/api/prompt/profiles",
+            json={"name": "voiced", "text": "<<<<<VOICE provider=piper voice_path=x.onnx>>>>>"})).json()
+        pid = created["id"]
+
+        resp = await client.post(f"/api/prompt/profiles/{pid}/activate")
+        assert resp.status == 200
+        assert (await resp.json()) == {"ok": True, "active_id": pid}
+        assert svc.document()["tts"]["selected"] == "yandex"
+    finally:
+        await client.close()
+        store.close()
+
+
 async def test_prompt_profile_non_numeric_id_returns_400(tmp_path):
     # Non-numeric {id} segments are rejected with 400 "invalid id" consistently.
     store = _prompt_store(tmp_path)
