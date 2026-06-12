@@ -6,7 +6,9 @@ microWakeWord (INT8 streaming TFLite, ESP32-S3 / Home Assistant Voice PE, ESPHom
 
 ## Деплой: v16
 - В проде/[../esphome/zakhar-voice-preroll.yaml](../esphome/zakhar-voice-preroll.yaml) стоит
-  **[v16/model/](v16/model/)**, `probability_cutoff 0.80`, окно = манифест (5), VAD on.
+  **[v16/model/](v16/model/)**, **`probability_cutoff 0.95`** (полевая рабочая точка), окно = манифест (5), VAD on.
+- **Полевая поправка порога:** на 0.80 v16 ложил в тишине (слышал слово в тихой комнате) → подняли до **0.95**.
+  DET-кривая v16 плоская (recall ~21% на всех порогах, #C) → 0.95 убирает ложные в тишине почти без потери recall.
 - **v16** = v8-рецепт + реальные device-tract позитивы + **4 реальных негатив-класса**
   (silence/music/speech/vacuum, записаны через устройство). На честном device-eval (held-out
   по источнику): **FRR 21%, FAPH 0 по всем классам с VAD** → строго лучше v8 (тот давал

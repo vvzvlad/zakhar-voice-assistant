@@ -62,13 +62,13 @@ flashing it.
   the honest leakage-safe device eval it matches v8's recall (~21% FRR) but with **FAPH
   0 across all classes** under the VAD pre-gate, where v8 false-fired ~12.5/h in real
   silence — so it fixes the field silence false-fire bug at no recall cost.
-- `probability_cutoff` defaults to `80%` in `zakhar-voice-preroll.yaml`, kept at v8's
-  known-good field point: v16 keys on the same «заха» onset as v8, so real «захааар»
-  still peaks low and detection matters more than silence FAPH. (v16's FAPH-0 was
-  measured at `90%`; raise toward `90%` if silence false-fires get annoying — v16
-  tolerates it at FAPH 0.) The `vad:` gate from the stock config stays on. The ~21%
-  recall floor is fundamental this round — the model keys on the onset, not vowel
-  duration (see [`../microWakeWord/v16/DURATION_CAUSALITY.md`](../microWakeWord/v16/DURATION_CAUSALITY.md)).
+- `probability_cutoff` defaults to `95%` in `zakhar-voice-preroll.yaml` — FIELD-CORRECTED:
+  at `80%` v16 false-fired in real silence (heard «захар» in a quiet room), so it was
+  raised to `95%`. v16's DET curve is ~flat (recall floor ~21% FRR across cutoffs), so
+  `95%` removes the silence false-fires WITHOUT a meaningful recall cost. The `vad:` gate
+  from the stock config stays on; lower live from the panel only if real «захааар» starts
+  getting missed. The ~21% recall floor is fundamental this round — the model keys on the
+  onset, not vowel duration (see [`../microWakeWord/v16/DURATION_CAUSALITY.md`](../microWakeWord/v16/DURATION_CAUSALITY.md)).
 - Both the **wake cutoff** and the **speaker volume** are now adjustable **live from
   the panel's Devices page** (the **Wake Probability Cutoff** and **Speaker Volume**
   numbers, 0–100) with NO re-flash; the cutoff value persists across reboots.

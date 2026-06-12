@@ -73,14 +73,14 @@ packages:
         # Music false-accepts stay ~0 via the stock VAD pre-gate (inherited here).
         - model: ../microWakeWord/v16/model/zakhar.json
           id: zakhar
-          # Operating point: cutoff 0.80 — kept at v8's KNOWN-GOOD field point because
-          # v16 keys on the SAME onset, so real «захааар» still peaks low; detection
-          # matters more than silence FAPH, which the VAD pre-gate + v16's far better
-          # FAPH curve already keep low. (v16's eval FAPH-0 was measured at 0.90; the
-          # sliding window defaults to v16's manifest value = 5.) Tune live from the
-          # panel (Wake Probability Cutoff, below) — raise toward 0.90 if silence
-          # false-fires get annoying (v16 tolerates 0.90 at FAPH 0).
-          probability_cutoff: 80%
+          # Operating point: cutoff 0.95 — FIELD-CORRECTED. At 0.80 v16 false-fired in
+          # real silence (heard «захар» in a quiet room), so the threshold was raised to
+          # 0.95 live and is made the default here so a re-flash won't revert to the
+          # false-firing 0.80. v16's DET curve is ~flat (recall floor ~21% FRR across
+          # cutoffs), so 0.95 kills the silence false-fires WITHOUT a meaningful recall
+          # cost. (sliding window = v16 manifest default 5.) Tune live from the panel
+          # (Wake Probability Cutoff, below) — lower only if real «захааар» gets missed.
+          probability_cutoff: 95%
 
   # Official Home Assistant Voice PE firmware, pinned to a release tag.
   # Bump the @ref to update the base firmware later.
