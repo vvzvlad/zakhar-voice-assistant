@@ -1468,6 +1468,43 @@ async def test_runs_stream_without_hub_closes_promptly(tmp_path):
         await client.close()
 
 
+async def test_runs_stream_handshake_disconnect_is_quiet(tmp_path, monkeypatch):
+    # A client that drops DURING the WS handshake makes ws.prepare() raise
+    # ClientConnectionResetError. The handler must swallow it (debug log, no
+    # traceback), never register the socket, and leave the response in a state
+    # where aiohttp's real finish_response (prepare() + write_eof()) is a clean
+    # no-op instead of raising a second time ("Call .prepare() first").
+    from aiohttp.client_exceptions import ClientConnectionResetError
+    from src import panel_api
+
+    hub = RunEventsHub()
+    srv = PanelServer(_svc(tmp_path), "127.0.0.1", 0, version="9.9",
+                      started_at=time.time(), run_events=hub)
+
+    # Subclass the REAL WebSocketResponse so write_eof()/close() are genuine aiohttp
+    # code, only overriding prepare() to reproduce the failure: aiohttp's
+    # StreamResponse._start assigns _payload_writer BEFORE writing the 101 headers,
+    # so when the transport write fails _payload_writer is already set while _writer
+    # (assigned later in _post_start) is not.
+    class _HandshakeBoomWS(aiohttp.web.WebSocketResponse):
+        async def prepare(self, request):
+            self._payload_writer = object()
+            raise ClientConnectionResetError("Cannot write to closing transport")
+
+    monkeypatch.setattr(panel_api.web, "WebSocketResponse", _HandshakeBoomWS)
+
+    # request is unused on the handshake-failure path; a bare object() is enough.
+    ws = await srv._runs_stream(object())
+
+    assert hub.count() == 0        # the socket was never registered
+    assert ws._eof_sent is True    # response marked finalized
+
+    # The crux of the regression: aiohttp's real write_eof() must now be a clean
+    # no-op. Without the fix (ws._eof_sent left False) this call raises
+    # RuntimeError("Call .prepare() first").
+    await ws.write_eof()
+
+
 # --- _patch_config plain-ValueError branch (distinct from ValidationError) ----
 
 async def test_patch_config_value_error_returns_422_with_empty_detail(tmp_path):

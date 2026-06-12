@@ -849,10 +849,16 @@ class PanelServer:
         except (ConnectionError, OSError) as e:
             # The client disconnected during the WebSocket handshake, before aiohttp
             # could write the 101 response (ClientConnectionResetError is a
-            # ConnectionResetError -> ConnectionError -> OSError). Nothing to stream:
-            # log at debug level instead of letting it bubble up as an unhandled
-            # "Error handling request" traceback. Skip registration and return.
+            # ConnectionResetError -> ConnectionError -> OSError). At this point
+            # ws._payload_writer is already set but ws._writer is not, so returning
+            # the half-prepared response as-is would make aiohttp's finish_response()
+            # run write_eof() -> close() and raise RuntimeError("Call .prepare()
+            # first"), which would just be re-logged as a fresh "Unhandled exception"
+            # traceback. Mark the response finalized so finish_response() is a clean
+            # no-op (prepare() short-circuits on _payload_writer, write_eof() returns
+            # immediately on _eof_sent). Report at debug level, skip registration.
             logger.debug(f"runs-stream: client gone during handshake: {e}")
+            ws._eof_sent = True
             return ws
         if self.run_events is None:
             await ws.close()
