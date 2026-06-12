@@ -85,7 +85,8 @@ class RunsStore:
         and ALTER only what's missing. Column names are fixed literals (not user
         input), so the f-string interpolation is safe. Idempotent."""
         existing = {row["name"] for row in self._conn.execute("PRAGMA table_info(runs)")}
-        for col, decl in (("filler_text", "TEXT"), ("t_filler", "INTEGER"), ("request_json", "TEXT")):
+        for col, decl in (("filler_text", "TEXT"), ("t_filler", "INTEGER"),
+                          ("request_json", "TEXT"), ("t_ruaccent", "INTEGER")):
             if col not in existing:
                 self._conn.execute(f"ALTER TABLE runs ADD COLUMN {col} {decl}")
         self._conn.commit()
@@ -233,7 +234,7 @@ class RunsStore:
         # Same Connection as writes from a worker thread: hold the write lock.
         with self._lock:
             rows = self._conn.execute(
-                "SELECT result, t_total, t_vad, t_stt, t_llm, t_tts "
+                "SELECT result, t_total, t_vad, t_stt, t_llm, t_ruaccent, t_tts "
                 "FROM runs WHERE ts >= ?",
                 (since,),
             ).fetchall()
@@ -244,7 +245,7 @@ class RunsStore:
                 "p50_ms": None,
                 "p95_ms": None,
                 "error_rate": 0.0,
-                "per_stage_avg_ms": {"vad": None, "stt": None, "llm": None, "tts": None},
+                "per_stage_avg_ms": {"vad": None, "stt": None, "llm": None, "ruaccent": None, "tts": None},
             }
 
         totals = sorted(r["t_total"] for r in rows if r["t_total"] is not None)
@@ -259,6 +260,7 @@ class RunsStore:
                 "vad": _avg(r["t_vad"] for r in rows),
                 "stt": _avg(r["t_stt"] for r in rows),
                 "llm": _avg(r["t_llm"] for r in rows),
+                "ruaccent": _avg(r["t_ruaccent"] for r in rows),
                 "tts": _avg(r["t_tts"] for r in rows),
             },
         }

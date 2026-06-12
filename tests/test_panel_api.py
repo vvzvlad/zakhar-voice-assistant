@@ -1362,7 +1362,7 @@ async def test_get_metrics(tmp_path):
         assert body["requests_24h"] == 2
         assert body["error_rate"] == 0.5
         assert "p50_ms" in body and "p95_ms" in body
-        assert set(body["per_stage_avg_ms"]) == {"vad", "stt", "llm", "tts"}
+        assert set(body["per_stage_avg_ms"]) == {"vad", "stt", "llm", "ruaccent", "tts"}
     finally:
         await client.close()
         store.close()

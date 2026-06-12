@@ -268,7 +268,7 @@ def test_metrics_all_none_timings_in_nonempty_window(tmp_path):
     for i in range(3):
         store.insert(_rec(
             ts=now - i, result="error", error_stage="pipeline",
-            t_total=None, t_vad=None, t_stt=None, t_llm=None, t_tts=None,
+            t_total=None, t_vad=None, t_stt=None, t_llm=None, t_ruaccent=None, t_tts=None,
         ))
 
     m = store.metrics(now=now)
@@ -278,7 +278,7 @@ def test_metrics_all_none_timings_in_nonempty_window(tmp_path):
     assert m["p50_ms"] is None
     assert m["p95_ms"] is None
     # No per-stage values -> _avg over all-None -> None for every stage.
-    assert m["per_stage_avg_ms"] == {"vad": None, "stt": None, "llm": None, "tts": None}
+    assert m["per_stage_avg_ms"] == {"vad": None, "stt": None, "llm": None, "ruaccent": None, "tts": None}
     # All 3 in-window rows are errors.
     assert m["error_rate"] == 1.0
     store.close()
@@ -292,7 +292,7 @@ def test_metrics_empty(tmp_path):
         "p50_ms": None,
         "p95_ms": None,
         "error_rate": 0.0,
-        "per_stage_avg_ms": {"vad": None, "stt": None, "llm": None, "tts": None},
+        "per_stage_avg_ms": {"vad": None, "stt": None, "llm": None, "ruaccent": None, "tts": None},
     }
     store.close()
 

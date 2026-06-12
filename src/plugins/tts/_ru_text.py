@@ -23,6 +23,16 @@ def stress_to_acute(text: str) -> str:
     return _DOUBLE_SPACE_RE.sub(" ", text)
 
 
+def stress_to_uppercase(text: str) -> str:
+    """Model "+vowel" stress notation -> the stressed vowel upper-cased
+    (e.g. "прив+ет" -> "привЕт"), for neural engines that strip "+"/acute but
+    may pick up an upper-case stressed vowel. Stray '+' (not before a Cyrillic
+    vowel) is dropped so it is never spoken; double spaces are collapsed."""
+    text = _PLUS_VOWEL_RE.sub(lambda m: m.group(1).upper(), text)
+    text = text.replace("+", "")  # drop any stray "+" so it isn't spoken
+    return _DOUBLE_SPACE_RE.sub(" ", text)
+
+
 def sanitize_plus_stress(text: str) -> str:
     """Keep "+vowel" stress pairs (Yandex SpeechKit native notation),
     drop any other stray '+' so it is never spoken; collapse double

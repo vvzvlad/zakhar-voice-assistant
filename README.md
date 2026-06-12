@@ -4,8 +4,8 @@ Client-side voice assistant for a "HA Voice PE" ESP32 speaker that replaces Home
 Assistant in the voice loop. The server connects to the speaker over the ESPHome
 Native API (as the client) and runs the pipeline: STT (cloud Whisper, default
 Groq) → LLM (default Claude Haiku 4.5 via OpenRouter) → smart-home tools via an
-external MCP server → TTS (local TeraTTS HTTP service), returning the generated
-audio to N speakers.
+external MCP server → RuAccent (Russian stress placement) → TTS (local TeraTTS HTTP
+service), returning the generated audio to N speakers.
 
 Smart-home control is an MCP integration: the app is an MCP client that connects
 to an external smart-home MCP server (hosted in Node-RED via
@@ -47,6 +47,9 @@ Shape (see `templates/default_config.json` for the full default):
     Voice-capture settings) stay in `core.vad`.
   - `stt`: `groq` (cloud Whisper) | `vosk` (offline) — `selected` + per-provider `instances`.
   - `llm`: `openrouter` | `groq` — model, api_key, temperature, max_tokens, max_tool_rounds.
+  - `ruaccent`: `ruaccent` (offline Russian stress placement) — runs between LLM and TTS,
+    marks the stressed vowels in the reply (the canonical `+vowel` text every TTS backend
+    already adapts); `enabled` (on by default) + model size.
   - `tts`: `teratts` (HTTP) | `piper` (offline) | `yandex` (SpeechKit) — voice/key/etc. per provider.
   Each provider declares its own settings schema (`src/plugins/<stage>/<id>.py`); adding a
   provider is one file, no changes to the config core.

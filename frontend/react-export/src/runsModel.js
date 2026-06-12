@@ -43,8 +43,8 @@ function fmtTime(ts) {
 
 // Map a backend row to the UI run object. `t` groups per-stage timings (ms);
 // 0/null are coerced to 0 so the waterfall's `> 0` filter drops empty stages
-// (ruaccent is always 0 today, so it never shows). `audio`/`error` are null
-// unless the detail payload carries them.
+// (ruaccent shows only when the stage actually ran, i.e. t_ruaccent > 0).
+// `audio`/`error` are null unless the detail payload carries them.
 export function mapRun(row) {
   if (!row) return row;
   // Live (in-progress) rows have no DB id yet; they are upserted by device, so

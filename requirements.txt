@@ -9,6 +9,7 @@ vosk==0.3.44
 piper-tts==1.4.2
 onnxruntime==1.26.0
 ten-vad==1.0.6.8
+ruaccent==1.5.8.3
 lameenc==1.8.2
 mcp==1.27.2
 caldav==3.2.1

@@ -3,7 +3,7 @@
 Client-side voice assistant for a "HA Voice PE" ESP32 speaker. It connects to the
 speaker over the ESPHome Native API (as the client), then runs the pipeline:
 STT (cloud Whisper, default Groq) → LLM (default Claude Haiku 4.5 via OpenRouter) →
-smart-home tools via an external MCP server →
+smart-home tools via an external MCP server → RuAccent (Russian stress placement) →
 TTS (local TeraTTS HTTP service), and serves the resulting audio back to N speakers.
 It replaces Home Assistant in this loop. Smart-home control is an MCP integration:
 the app is an MCP client (running an agentic tool-calling loop) that connects to an
@@ -53,7 +53,7 @@ the only env-tunable values are the bind host/port of the admin panel
 start. The agent MCP endpoint rides the panel server at `/mcp` (same port); its
 only setting is `core.agent_mcp.enabled`, panel-editable and read live per request.
 
-- Per stage (`vad`/`stt`/`llm`/`tts`) the doc holds `{selected, instances}`; each provider
+- Per stage (`vad`/`stt`/`llm`/`ruaccent`/`tts`) the doc holds `{selected, instances}`; each provider
   defines its own settings via a pydantic `ConfigModel` in `src/plugins/<stage>/<id>.py`.
   The config core (`ConfigService`/`config_store`) is provider-agnostic — it never names a
   provider's fields. Adding a provider = one new plugin file; zero changes to the core.

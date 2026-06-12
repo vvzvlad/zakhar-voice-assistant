@@ -86,7 +86,8 @@ def action_for(path: str) -> str:
     if path.startswith("core.devices") or path.startswith("core.esphome"):
         return "rebuild_devices"
     # stage providers
-    if path.startswith("vad") or path.startswith("stt") or path.startswith("tts"):
+    if (path.startswith("vad") or path.startswith("stt") or path.startswith("tts")
+            or path.startswith("ruaccent")):
         return "rebuild_backends"
     if path.startswith("llm"):
         leaf = path.rsplit(".", 1)[-1]
@@ -110,7 +111,7 @@ def backend_categories(paths) -> set[str]:
         if action_for(p) != "rebuild_backends":
             continue
         top = p.split(".", 1)[0]
-        if top in ("vad", "stt", "llm", "tts"):
+        if top in ("vad", "stt", "llm", "ruaccent", "tts"):
             cats.add(top)
         elif p == "core.tts_timeout":
             cats.add("tts")
@@ -352,6 +353,10 @@ class Reconfigurator:
         # Rebuild the cloud stages (their client changed) UNION the stages whose own config
         # changed in this job (incl. offline backends), so nothing is silently dropped.
         svc = self.rt.svc
+        # ruaccent is intentionally absent from this tuple: it is offline
+        # (uses_http_cloud defaults False), so a proxy change never needs to rebuild
+        # it. A coalesced patch that also touches ruaccent config is still picked up
+        # via backend_categories(paths) below.
         cloud_cats = {c for c in ("vad", "stt", "llm", "tts") if svc.provider(c).uses_http_cloud}
         cats = cloud_cats | backend_categories(paths)
         await self._rebuild_backend_cats(cats)

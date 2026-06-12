@@ -844,7 +844,16 @@ class PanelServer:
         client messages — we iterate only to drive ping/pong and detect close.
         """
         ws = web.WebSocketResponse(heartbeat=30.0)
-        await ws.prepare(request)
+        try:
+            await ws.prepare(request)
+        except (ConnectionError, OSError) as e:
+            # The client disconnected during the WebSocket handshake, before aiohttp
+            # could write the 101 response (ClientConnectionResetError is a
+            # ConnectionResetError -> ConnectionError -> OSError). Nothing to stream:
+            # log at debug level instead of letting it bubble up as an unhandled
+            # "Error handling request" traceback. Skip registration and return.
+            logger.debug(f"runs-stream: client gone during handshake: {e}")
+            return ws
         if self.run_events is None:
             await ws.close()
             return ws

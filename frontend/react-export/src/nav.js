@@ -4,7 +4,7 @@
 // [id, label] tuples rendered as always-visible sub-items under the parent.
 export const NAV = [
   { grp: "Overview", items: [["dashboard", "Dashboard"]] },
-  { grp: "Pipeline", items: [["devices", "Devices"], ["vad", "VAD / Capture"], ["stt", "STT"], ["llm", "LLM", [["mcp", "MCP Servers"], ["prompt", "System Prompt"]]], ["tts", "TTS"]] },
+  { grp: "Pipeline", items: [["devices", "Devices"], ["vad", "VAD / Capture"], ["stt", "STT"], ["llm", "LLM", [["mcp", "MCP Servers"], ["prompt", "System Prompt"]]], ["ruaccent", "Accents"], ["tts", "TTS"]] },
   { grp: "Operations", items: [["log", "Request Log"], ["system", "System"]] },
 ];
 // Flatten children into TITLES so child ids stay valid routes/page titles.

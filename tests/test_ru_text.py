@@ -6,6 +6,7 @@ from src.plugins.tts._ru_text import (
     phonetic_ru,
     sanitize_plus_stress,
     stress_to_acute,
+    stress_to_uppercase,
 )
 
 
@@ -34,6 +35,34 @@ def test_stress_to_acute_stray_plus_dropped():
 
 def test_stress_to_acute_passthrough():
     assert stress_to_acute("просто текст") == "просто текст"
+
+
+# --- stress_to_uppercase (neural engines that strip "+"/acute) ---------------
+
+def test_stress_to_uppercase_single_word():
+    # "+" before the stressed vowel disappears and the vowel is upper-cased.
+    assert stress_to_uppercase("прив+ет") == "привЕт"
+
+
+def test_stress_to_uppercase_multiple_words():
+    assert stress_to_uppercase("больш+ая к+омната") == "большАя кОмната"
+
+
+def test_stress_to_uppercase_stray_plus_dropped():
+    # A "+" not preceding a Cyrillic vowel is dropped so it isn't spoken,
+    # and the double space it leaves is collapsed.
+    out = stress_to_uppercase("два + два")
+    assert "+" not in out
+    assert out == "два два"
+
+
+def test_stress_to_uppercase_yo_edge():
+    # "ё" upper-cases to "Ё" (start-of-word stress).
+    assert stress_to_uppercase("+ёлка") == "Ёлка"
+
+
+def test_stress_to_uppercase_passthrough():
+    assert stress_to_uppercase("просто текст") == "просто текст"
 
 
 # --- sanitize_plus_stress (Yandex native notation) ---------------------------

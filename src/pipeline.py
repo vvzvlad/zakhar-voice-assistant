@@ -186,6 +186,10 @@ class Pipeline:
         return self.rt.llm_backend
 
     @property
+    def ruaccent_backend(self):
+        return self.rt.ruaccent_backend
+
+    @property
     def tts_backend(self):
         return self.rt.tts_backend
 
@@ -858,6 +862,22 @@ class Pipeline:
                         },
                     )
 
+                    # Accent (stress) stage: place '+' stress marks on the reply so every TTS
+                    # backend pronounces Russian correctly. RuAccent's output IS the canonical
+                    # '+vowel' LLM->TTS contract, so the per-backend adaptation handles it
+                    # unchanged. record["llm_text"] keeps the original (mark-free) reply for the
+                    # panel; only the text sent to TTS is accented. Isolated: a failure falls back
+                    # to the un-accented reply so it can never break the run.
+                    ruaccent = self.ruaccent_backend
+                    if ruaccent is not None:
+                        ra_t = time.perf_counter()
+                        try:
+                            reply = await ruaccent.accentize(reply)
+                        except Exception as e:
+                            logger.error(f"{self.name}: RuAccent [{self._backend_desc(ruaccent)}] failed: {e}")
+                        record["t_ruaccent"] = int((time.perf_counter() - ra_t) * 1000)
+                        self._emit_live(record)
+
                     self._emit(StageEvent.TTS_START, {"text": reply})
                     # Read the backend property ONCE: the same ref both synthesizes
                     # and labels the log lines, so they can never diverge.
@@ -1142,10 +1162,24 @@ class Pipeline:
                             # Context persistence failure must not break the run.
                             logger.error(f"{self.name}: context append failed: {e}")
 
+                    # Accent (stress) stage: only accent the text actually spoken; the
+                    # value RETURNED to the caller stays the plain `reply`. RuAccent's
+                    # output is the canonical '+vowel' contract every TTS backend adapts.
+                    # Isolated: a failure falls back to the un-accented text.
+                    spoken = reply
+                    ruaccent = self.ruaccent_backend
+                    if speak and reply and ruaccent is not None:
+                        ra_t = time.perf_counter()
+                        try:
+                            spoken = await ruaccent.accentize(reply)
+                        except Exception as e:
+                            logger.error(f"{self.name}: RuAccent [{self._backend_desc(ruaccent)}] failed: {e}")
+                        record["t_ruaccent"] = int((time.perf_counter() - ra_t) * 1000)
+
                     if speak and reply:
                         try:
                             tts_t = time.perf_counter()
-                            await self.speak(reply)
+                            await self.speak(spoken)
                             record["t_tts"] = int((time.perf_counter() - tts_t) * 1000)
                         except Exception as e:
                             # Same precedence rule as `_run`: a TTS failure must

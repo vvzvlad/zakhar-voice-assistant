@@ -9,3 +9,4 @@ from src.plugins.vad import silero, ten, webrtc  # noqa: F401
 from src.plugins.tts import teratts, piper, yandex, fishaudio  # noqa: F401
 from src.plugins.stt import groq as stt_groq, openrouter as stt_openrouter, vosk  # noqa: F401
 from src.plugins.llm import openrouter, groq as llm_groq  # noqa: F401
+from src.plugins.ruaccent import ruaccent as ruaccent_stage  # noqa: F401

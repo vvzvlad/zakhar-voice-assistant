@@ -11,11 +11,13 @@ import { matchesFilters } from "../runsFilters.js";
 
 const SC = STAGE_COLOR;
 
-// Stage rows for the drawer Gantt, in pipeline order. RUAccent is not a real
-// backend stage yet, so it is intentionally omitted.
+// Stage rows for the drawer Gantt, in pipeline order. The accent (RuAccent)
+// stage sits between LLM and TTS; the Gantt only renders stages whose timing is
+// > 0 (see `present` below), so it shows up only on runs where it actually ran.
 const GSTAGES = [
   { k: "vad", label: "VAD capture" }, { k: "stt", label: "STT" },
-  { k: "llm", label: "LLM + tools" }, { k: "tts", label: "TTS synth" },
+  { k: "llm", label: "LLM + tools" }, { k: "ruaccent", label: "Accents" },
+  { k: "tts", label: "TTS synth" },
 ];
 
 // matchesFilters lives in ../runsFilters.js (extracted for unit tests); it is the
