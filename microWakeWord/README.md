@@ -87,6 +87,7 @@ microWakeWord (INT8 streaming TFLite, ESP32-S3 / Home Assistant Voice PE, ESPHom
    (текущий eval по одной сессии оптимистичен).
 
 ## Ключевые документы
+- **Словарик терминов** (recall/FRR/FAPH/cutoff/…): [GLOSSARY.md](GLOSSARY.md)
 - Каталог гипотез + статусы: [v10/HYPOTHESIS_REGISTRY.md](v10/HYPOTHESIS_REGISTRY.md)
 - Раунд v16 (реальные данные): [v16/SUMMARY_real_eval.md](v16/SUMMARY_real_eval.md) ·
   [v16/DURATION_CAUSALITY.md](v16/DURATION_CAUSALITY.md) · [v16/VERIFIER_DEPLOY_SPEC.md](v16/VERIFIER_DEPLOY_SPEC.md)
