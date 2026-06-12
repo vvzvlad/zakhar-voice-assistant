@@ -872,9 +872,11 @@ class Pipeline:
                     if stress is not None:
                         ra_t = time.perf_counter()
                         accented = reply
+                        accent_failed = False
                         try:
                             accented = await stress.accentize(reply)
                         except Exception as e:
+                            accent_failed = True
                             logger.error(f"{self.name}: accent stage [{self._backend_desc(stress)}] failed: {e}")
                         record["t_stress"] = int((time.perf_counter() - ra_t) * 1000)
                         # Store the accent-stage output (the text actually sent to TTS) ONLY when it
@@ -883,6 +885,14 @@ class Pipeline:
                         if accented != reply:
                             record["stress_text"] = accented
                         reply = accented
+                        # Log the accent stage on the success path only; failures are
+                        # already surfaced by the logger.error above. `reply` now holds
+                        # the accented text actually sent to TTS.
+                        if not accent_failed:
+                            logger.info(
+                                f"{self.name}: ✒️ Accent [{self._backend_desc(stress)}] "
+                                f"({record['t_stress'] / 1000:.2f}s): {reply!r}"
+                            )
                         self._emit_live(record)
 
                     self._emit(StageEvent.TTS_START, {"text": reply})
@@ -1177,9 +1187,11 @@ class Pipeline:
                     stress = self.stress_backend
                     if speak and reply and stress is not None:
                         ra_t = time.perf_counter()
+                        accent_failed = False
                         try:
                             spoken = await stress.accentize(reply)
                         except Exception as e:
+                            accent_failed = True
                             logger.error(f"{self.name}: accent stage [{self._backend_desc(stress)}] failed: {e}")
                         record["t_stress"] = int((time.perf_counter() - ra_t) * 1000)
                         # Store the accent-stage output ONLY when it differs from the
@@ -1187,6 +1199,13 @@ class Pipeline:
                         # original. The value returned to the caller stays `reply`.
                         if spoken != reply:
                             record["stress_text"] = spoken
+                        # Mirror _run: log the accent stage on success only; `spoken`
+                        # holds the accented text actually sent to TTS.
+                        if not accent_failed:
+                            logger.info(
+                                f"{self.name}: ✒️ Accent [{self._backend_desc(stress)}] "
+                                f"({record['t_stress'] / 1000:.2f}s): {spoken!r}"
+                            )
 
                     if speak and reply:
                         try:
