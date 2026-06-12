@@ -30,6 +30,13 @@ class Deps:
 # does NOT inherit Field metadata on overridden fields.
 MODEL_FIELD_EXTRA: dict = {"widget": "select", "options": "dynamic", "freeform": True}
 
+# Hidden companion field storing the human label of a dynamic-select choice (e.g.
+# a voice/model id -> its catalog title/name). The panel writes it on selection and
+# reads it to render the chosen name immediately on load — no catalog round-trip and
+# no id->name flicker. Never rendered as its own input ("hidden"); never sent to a
+# provider API. Convention: the companion field is named "<field>_label".
+LABEL_FIELD_EXTRA: dict = {"hidden": True}
+
 
 class Provider:
     """Base for all stage providers. Subclasses set the class attrs and implement create()."""

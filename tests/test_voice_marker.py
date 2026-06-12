@@ -122,3 +122,16 @@ def test_build_patch_provider_only():
 
 def test_build_patch_empty_provider_returns_none():
     assert build_voice_patch("", {"voice": "zahar"}, {"voice"}) is None
+
+
+def test_build_patch_drops_label_companion_fields():
+    # A hidden "*_label" companion (the chosen voice's human name) is display
+    # metadata, not voice identity, so it is dropped even when allowed.
+    patch = build_voice_patch(
+        "fishaudio",
+        {"reference_id": "abc", "reference_id_label": "Nice Voice"},
+        allowed_fields={"reference_id", "reference_id_label"},
+    )
+    assert patch == {
+        "tts": {"selected": "fishaudio", "instances": {"fishaudio": {"reference_id": "abc"}}}
+    }

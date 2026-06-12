@@ -51,11 +51,13 @@ def build_voice_patch(provider, fields, allowed_fields):
 
     `allowed_fields` is the set of the provider's ConfigModel field names; any key
     not in it OR in SECRET_FIELDS is dropped (so a typo or a pasted secret never
-    reaches the config). Provider-only (no safe fields) is valid, e.g. teratts.
-    Returns {"tts": {"selected": provider, "instances": {provider: {...}}}} or
-    None when provider is empty."""
+    reaches the config). Hidden `*_label` display-companion fields are dropped too:
+    they are UI metadata (the chosen voice/model's human name), not voice identity,
+    and are never applied from a marker. Provider-only (no safe fields) is valid,
+    e.g. teratts. Returns {"tts": {"selected": provider, "instances":
+    {provider: {...}}}} or None when provider is empty."""
     if not provider:
         return None
     safe = {k: v for k, v in fields.items()
-            if k in allowed_fields and k not in SECRET_FIELDS}
+            if k in allowed_fields and k not in SECRET_FIELDS and not k.endswith("_label")}
     return {"tts": {"selected": provider, "instances": {provider: safe}}}

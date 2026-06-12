@@ -18,9 +18,14 @@ import React, { useEffect, useRef, useState } from "react";
 import { Field, KeyInput, ScaleSeg, Seg, Select, Slider, Stepper, Toggle } from "./primitives.jsx";
 import { resolve, enumOf, isSecret, humanize } from "../schema.js";
 
-function DynamicSelect({ value, onChange, load, itemAction, itemActionBusy, allowCustom, remoteSearch }) {
+function DynamicSelect({ value, currentLabel, onChange, load, itemAction, itemActionBusy, allowCustom, remoteSearch }) {
   const norm = (o) => (o && typeof o === "object" ? o : { value: o, label: String(o) });
-  const [opts, setOpts] = useState(value != null ? [norm(value)] : []);
+  // The current value's seed option: its persisted human label when known
+  // (currentLabel, e.g. reference_id_label), otherwise the bare id. Shown on the
+  // FIRST render so the collapsed control never flickers id->name when the
+  // catalog loads later.
+  const normCurrent = () => ({ value, label: currentLabel || String(value) });
+  const [opts, setOpts] = useState(value != null ? [normCurrent()] : []);
   // Monotonic request counter: only the LATEST load() result may replace the
   // option list, so a slow earlier search can never clobber a faster later one.
   // Bumped (without a request) on unmount to drop any in-flight response.
@@ -37,7 +42,7 @@ function DynamicSelect({ value, onChange, load, itemAction, itemActionBusy, allo
   // even if the list omits it.
   const withCurrent = (normalized) => {
     const has = value != null && normalized.some((o) => o.value === value);
-    return value != null && !has ? [norm(value), ...normalized] : normalized;
+    return value != null && !has ? [normCurrent(), ...normalized] : normalized;
   };
   const run = (q) => {
     const seq = ++seqRef.current;
@@ -83,12 +88,20 @@ function DynamicSelect({ value, onChange, load, itemAction, itemActionBusy, allo
   // it is the only way to type an arbitrary value when the fetched list is
   // short or empty (e.g. a provider with no api_key returns []). Remote-search
   // fields get the input via `onQuery`, which forces it inside Select.
-  return <Select value={value} options={opts} onChange={onChange} itemAction={itemAction} itemActionBusy={itemActionBusy}
+  // Report the picked option's human label alongside its value, so the parent
+  // can persist <field>_label. The label is looked up from the current option
+  // list; a freeform/custom typed value (not in the list) falls back to the
+  // value itself as its own label.
+  const handlePick = (v) => {
+    const opt = opts.find((o) => o.value === v);
+    onChange(v, opt ? opt.label : String(v));
+  };
+  return <Select value={value} options={opts} onChange={handlePick} itemAction={itemAction} itemActionBusy={itemActionBusy}
     searchable={opts.length > 10} allowCustom={allowCustom} onQuery={remoteSearch ? onQuery : undefined} />;
 }
 
 // One property → one <Field> with the right widget.
-function SchemaField({ name, node, root, value, onChange, optionsFor, itemActionFor, itemActionBusy }) {
+function SchemaField({ name, node, root, value, labelValue, onLabelChange, onChange, optionsFor, itemActionFor, itemActionBusy }) {
   const r = resolve(node, root);
   const label = node.title || r.title || humanize(name);
   const hint = node.description || r.description;
@@ -116,7 +129,16 @@ function SchemaField({ name, node, root, value, onChange, optionsFor, itemAction
   let control;
   if (dynamic && optionsFor) {
     const itemAction = itemActionFor ? itemActionFor(name) : null;
-    control = <DynamicSelect value={value} onChange={set} load={(q) => optionsFor(name, q)} itemAction={itemAction || undefined} itemActionBusy={itemActionBusy} allowCustom={freeform} remoteSearch={remoteSearch} />;
+    // Persist the picked option's human label into the <name>_label companion
+    // field (when the field has one) so it renders immediately next load; the
+    // value write keeps its existing behavior. No companion -> label ignored.
+    const setWithLabel = (v, lbl) => {
+      set(v);                                   // writes <name> = value (existing behavior)
+      if (onLabelChange && lbl !== undefined) onLabelChange(lbl);  // writes <name>_label = label
+    };
+    control = <DynamicSelect value={value} currentLabel={labelValue} onChange={setWithLabel}
+      load={(q) => optionsFor(name, q)} itemAction={itemAction || undefined}
+      itemActionBusy={itemActionBusy} allowCustom={freeform} remoteSearch={remoteSearch} />;
   } else if (segOptions) {
     control = <ScaleSeg
       options={segOptions} value={value} onChange={set}
@@ -191,21 +213,28 @@ export default function SchemaForm({ schema, values, onChange, optionsFor, root,
   const skipSet = new Set(skip);
   return (
     <>
-      {Object.entries(props).map(([name, node]) =>
-        skipSet.has(name) ? null : (
+      {Object.entries(props).map(([name, node]) => {
+        if (skipSet.has(name)) return null;
+        const r = resolve(node, doc);
+        if (node.hidden || (r && r.hidden)) return null; // hidden companion fields (e.g. *_label)
+        const labelField = name + "_label";
+        const hasLabel = Object.prototype.hasOwnProperty.call(props, labelField);
+        return (
           <SchemaField
             key={name}
             name={name}
             node={node}
             root={doc}
             value={values ? values[name] : undefined}
+            labelValue={hasLabel && values ? values[labelField] : undefined}
+            onLabelChange={hasLabel ? (lbl) => onChange(labelField, lbl) : undefined}
             onChange={onChange}
             optionsFor={optionsFor}
             itemActionFor={itemActionFor}
             itemActionBusy={itemActionBusy}
           />
-        )
-      )}
+        );
+      })}
     </>
   );
 }

@@ -79,6 +79,14 @@ describe("buildVoiceMarker", () => {
       .toBe("<<<<<VOICE provider=yandex speed=0 flag=false>>>>>");
   });
 
+  it("skips '<field>_label' display-companion fields (not voice identity)", () => {
+    // A space-less label exercises the endsWith("_label") skip specifically: a
+    // label with whitespace would already be dropped by the whitespace guard.
+    const m = buildVoiceMarker("fishaudio", { reference_id: "abc123", reference_id_label: "Nice" });
+    expect(m).toContain("reference_id=abc123");
+    expect(m).not.toContain("reference_id_label");
+  });
+
   it("yields a provider-only marker when nothing emittable remains", () => {
     expect(buildVoiceMarker("teratts", { base_url: "" }))
       .toBe("<<<<<VOICE provider=teratts>>>>>");

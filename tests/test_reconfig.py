@@ -120,6 +120,16 @@ def test_action_for_audio_stream_tts_is_live():
     assert action_for("core.audio.stream_tts") == "live"
 
 
+def test_action_for_label_companion_fields_are_live():
+    # "<field>_label" companion fields are display-only panel metadata that no
+    # backend reads, so an ISOLATED change to one applies live — no rebuild.
+    assert action_for("tts.instances.fishaudio.reference_id_label") == "live"
+    assert action_for("llm.instances.openrouter.model_label") == "live"
+    # Guard: the sibling VALUE fields still drive the backend rebuild as before.
+    assert action_for("tts.instances.fishaudio.reference_id") == "rebuild_backends"
+    assert action_for("llm.instances.openrouter.model") == "rebuild_backends"
+
+
 # --- backend_categories ------------------------------------------------------
 
 def test_backend_categories_maps_each_stage_path():

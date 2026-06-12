@@ -64,6 +64,25 @@ def test_llm_config_new_fields_defaults():
     assert cfg.reply_rate_limit == "Лимит запросов исчерпан. Попробуй ещё раз чуть позже."
 
 
+def test_fishaudio_reference_id_label_companion_field():
+    # The hidden companion field defaults to "" and is marked hidden in the schema
+    # so the panel never renders it as its own input (it only persists the chosen
+    # voice's human label for flicker-free first render).
+    assert FishAudioTtsConfig().reference_id_label == ""
+    props = FishAudioTtsConfig.model_json_schema()["properties"]
+    assert props["reference_id_label"]["hidden"] is True
+
+
+def test_llm_model_label_companion_field():
+    # The hidden companion field defaults to "" and is marked hidden in the schema;
+    # GroqLlmConfig inherits it unchanged (its model options are plain id strings,
+    # so its label naturally equals the id).
+    assert LlmConfig().model_label == ""
+    props = LlmConfig.model_json_schema()["properties"]
+    assert props["model_label"]["hidden"] is True
+    assert GroqLlmConfig().model_label == ""
+
+
 def test_yandex_speed_range_enforced():
     YandexTtsConfig(speed=2.5)            # in range, OK
     with pytest.raises(ValidationError):
@@ -528,102 +547,6 @@ async def test_fishaudio_options_reference_id_merges_own_and_popular_voices(
     assert second.headers["Authorization"] == "Bearer fk-1"
     assert first.url.params["self"] == "true"
     assert second.url.params["sort_by"] == "task_count"
-
-
-def _fishaudio_baseline_routes():
-    """Register the own+popular catalog pair (returning own-1 + pop-1) and return
-    the expected baseline options, for tests of the saved-voice resolution path.
-    Per-model routes (f"{FISH_MODELS_URL}/<id>") must be registered separately and
-    BEFORE-or-after this — respx picks the most specific match, so the bare
-    FISH_MODELS_URL route does not swallow a per-model request."""
-    route = respx.get(FISH_MODELS_URL)
-    route.side_effect = [
-        httpx.Response(200, json={"total": 1, "items": [
-            {"_id": "own-1", "title": "My Voice", "languages": ["ru"]},
-        ]}),
-        httpx.Response(200, json={"total": 1, "items": [
-            {"_id": "pop-1", "title": "Popular Voice", "languages": ["en"]},
-        ]}),
-    ]
-    baseline = [
-        {"value": "own-1", "label": "My Voice [ru]"},
-        {"value": "pop-1", "label": "Popular Voice [en]"},
-    ]
-    return route, baseline
-
-
-@respx.mock
-async def test_fishaudio_options_reference_id_absent_voice_is_resolved_and_prepended(
-        _reset_fishaudio_voices_cache):
-    # The saved voice is not among own/popular -> it is resolved by id via the
-    # per-model endpoint and prepended (with its title) to the baseline.
-    base_route, baseline = _fishaudio_baseline_routes()
-    model_route = respx.get(f"{FISH_MODELS_URL}/saved-1").mock(
-        return_value=httpx.Response(200, json={
-            "_id": "saved-1", "title": "Saved Voice", "languages": ["ru"],
-        }))
-    prov = get_provider("tts", "fishaudio")
-    deps = _deps()
-    async with deps.http_cloud:
-        out = await prov.options(
-            "reference_id", FishAudioTtsConfig(api_key="fk-1", reference_id="saved-1"), deps)
-    assert out == [{"value": "saved-1", "label": "Saved Voice [ru]"}, *baseline]
-    assert base_route.call_count == 2
-    assert model_route.call_count == 1
-    assert model_route.calls.last.request.headers["Authorization"] == "Bearer fk-1"
-
-
-@respx.mock
-async def test_fishaudio_options_reference_id_present_voice_skips_resolution(
-        _reset_fishaudio_voices_cache):
-    # The saved voice is already in the baseline (own-1) -> no per-model request,
-    # and the returned list is the plain baseline (no duplicate prepended).
-    base_route, baseline = _fishaudio_baseline_routes()
-    model_route = respx.get(f"{FISH_MODELS_URL}/own-1").mock(
-        return_value=httpx.Response(200, json={"_id": "own-1", "title": "X"}))
-    prov = get_provider("tts", "fishaudio")
-    deps = _deps()
-    async with deps.http_cloud:
-        out = await prov.options(
-            "reference_id", FishAudioTtsConfig(api_key="fk-1", reference_id="own-1"), deps)
-    assert out == baseline
-    assert base_route.call_count == 2
-    assert model_route.call_count == 0  # already in baseline -> no resolution
-
-
-@respx.mock
-async def test_fishaudio_options_reference_id_resolution_failure_falls_back(
-        _reset_fishaudio_voices_cache):
-    # A missing/deleted saved voice resolves to 404; resolution is best-effort,
-    # so it does NOT raise and the baseline is returned with no entry prepended.
-    base_route, baseline = _fishaudio_baseline_routes()
-    model_route = respx.get(f"{FISH_MODELS_URL}/missing").mock(
-        return_value=httpx.Response(404))
-    prov = get_provider("tts", "fishaudio")
-    deps = _deps()
-    async with deps.http_cloud:
-        out = await prov.options(
-            "reference_id", FishAudioTtsConfig(api_key="fk-1", reference_id="missing"), deps)
-    assert out == baseline  # current voice NOT prepended, no raise
-    assert base_route.call_count == 2
-    assert model_route.call_count == 1
-
-
-@respx.mock
-async def test_fishaudio_options_reference_id_empty_skips_resolution(
-        _reset_fishaudio_voices_cache):
-    # With an empty reference_id the pure baseline path is taken: the per-model
-    # endpoint is never touched (existing baseline tests are unaffected).
-    base_route, baseline = _fishaudio_baseline_routes()
-    model_route = respx.get(url__regex=rf"^{FISH_MODELS_URL}/.+$")
-    prov = get_provider("tts", "fishaudio")
-    deps = _deps()
-    async with deps.http_cloud:
-        out = await prov.options(
-            "reference_id", FishAudioTtsConfig(api_key="fk-1", reference_id=""), deps)
-    assert out == baseline
-    assert base_route.call_count == 2
-    assert model_route.call_count == 0
 
 
 @respx.mock

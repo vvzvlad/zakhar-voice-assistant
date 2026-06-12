@@ -38,6 +38,7 @@ export function buildVoiceMarker(provider, settings = {}) {
   const parts = [`provider=${provider}`];
   for (const [k, v] of Object.entries(settings || {})) {
     if (SECRET_FIELDS.has(k)) continue;
+    if (k.endsWith("_label")) continue; // hidden display-label companion, not voice identity
     if (v === null || v === undefined) continue;
     const s = String(v);
     // Skip values that cannot survive the single-line, space-separated, ">>>>>"-

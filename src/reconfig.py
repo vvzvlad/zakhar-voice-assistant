@@ -49,6 +49,12 @@ def action_for(path: str) -> str:
     Actions: 'live', 'logging', 'rebuild_backends', 'rebuild_http',
     'rebuild_tools', 'rebuild_audio', 'rebuild_devices', 'rebuild_runs',
     'rebuild_reminders', 'restart'. Unknown paths default to 'restart' (safe)."""
+    # Display-only "<field>_label" companion fields (the persisted human label of a
+    # dynamic-select choice) are panel metadata that no backend reads, so an isolated
+    # change needs no rebuild — apply it live. (In the normal flow the label changes
+    # together with its value field, whose own path still drives the needed rebuild.)
+    if path.endswith("_label"):
+        return "live"
     # core.* rules (most specific first)
     if path == "core.log_level":
         return "logging"
