@@ -14,11 +14,12 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# System packages — only if actually needed (e.g. cups-client, libmagic).
-# Otherwise drop this block entirely.
-# RUN apt-get update \
-#     && apt-get install -y --no-install-recommends <pkg> \
-#     && rm -rf /var/lib/apt/lists/*
+# System packages: ten-vad's bundled libten_vad.so links against LLVM libc++
+# (libc++.so.1 / libc++abi.so.1), which the slim image lacks — without them the
+# TEN VAD provider crashes at CDLL load the moment it is selected.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libc++1 libc++abi1 \
+    && rm -rf /var/lib/apt/lists/*
 
 # Dependencies as a separate layer: change less often than code → cached better
 COPY requirements.txt .
