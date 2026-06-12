@@ -18,8 +18,26 @@ from src.plugins.base import Deps, Provider, register
 from src.accent import Accentizer, PassthroughAccentizer
 from src.plugins.tts._ru_text import drop_plus_stress, stress_to_acute, stress_to_uppercase
 
-# RuAccent omograph model sizes (smallest/lowest-RAM first; "big_poetry" last).
+# RuAccent omograph model sizes, ordered roughly by RAM and grouped by family
+# (tiny* smallest, then the turbo* family, "big_poetry" largest/last). The exact
+# per-model RAM is in RUACCENT_MODEL_RAM below and shown in the dropdown options.
 RUACCENT_MODELS = ["tiny", "tiny2", "tiny2.1", "turbo2", "turbo3", "turbo3.1", "turbo", "big_poetry"]
+
+# Approximate per-model RAM footprint. The omograph model.onnx dominates the
+# per-model memory delta; byte sizes are from the ruaccent/accentuator HF repo.
+RUACCENT_MODEL_RAM = {
+    "tiny": "~10 MB",
+    "tiny2": "~10 MB",
+    "tiny2.1": "~40 MB",
+    "turbo2": "~360 MB",
+    "turbo3": "~360 MB",
+    "turbo3.1": "~360 MB",
+    "turbo": "~330 MB",
+    "big_poetry": "~700 MB",
+}
+# Dropdown display labels: "<model id> (<approx RAM>)", keyed by value so the
+# STORED value stays the bare model id. Surfaced to the panel via json_schema_extra.
+RUACCENT_MODEL_LABELS = {m: f"{m} ({RUACCENT_MODEL_RAM.get(m, '?')})" for m in RUACCENT_MODELS}
 
 # How the stage emits stress marks. "plus" keeps RuAccent's native "+vowel"
 # output (the canonical LLM->TTS contract every TTS backend already adapts);
@@ -98,8 +116,9 @@ class RuAccentConfig(BaseModel):
         title="Model",
         # `enum` (not a bare `options` array) is what the panel's SchemaForm reads to
         # render a dropdown; the static `options` list it was using has no widget path.
-        json_schema_extra={"widget": "select", "enum": RUACCENT_MODELS},
-        description="RuAccent omograph model. Larger = better homograph handling, more RAM.",
+        json_schema_extra={"widget": "select", "enum": RUACCENT_MODELS, "enumLabels": RUACCENT_MODEL_LABELS},
+        description="RuAccent omograph model. Larger = better homograph handling, more RAM "
+        "(approx per-model RAM shown in each option).",
     )
     stress_format: Literal["plus", "acute", "uppercase"] = Field(
         "plus",

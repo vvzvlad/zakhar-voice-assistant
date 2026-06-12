@@ -54,6 +54,28 @@ describe("SchemaField widget selection", () => {
     expect(c.querySelector(".z-seg")).toBeNull();
   });
 
+  it("decorates enum Select options with enumLabels but emits the bare value", () => {
+    const onChange = vi.fn();
+    const c = renderField(
+      "model_size",
+      {
+        type: "string", widget: "select",
+        enum: ["tiny", "turbo3.1", "big_poetry", "turbo"],
+        enumLabels: {
+          tiny: "tiny (~10 MB)", "turbo3.1": "turbo3.1 (~360 MB)",
+          big_poetry: "big_poetry (~700 MB)", turbo: "turbo (~330 MB)",
+        },
+      },
+      "turbo3.1", onChange
+    );
+    // The collapsed trigger shows the decorated label, not the bare id.
+    expect(c.querySelector(".z-select").textContent).toContain("turbo3.1 (~360 MB)");
+    // Opening and picking another option emits the BARE model id (not the label).
+    fireEvent.click(c.querySelector(".z-select"));
+    fireEvent.click(screen.getByText("big_poetry (~700 MB)"));
+    expect(onChange).toHaveBeenCalledWith("model_size", "big_poetry");
+  });
+
   it("renders a Toggle for a boolean even when it carries an enum", () => {
     // boolean wins over the enum branch (type check precedes the enum length split).
     const c = renderField("enabled", { type: "boolean", enum: [true, false] }, true);

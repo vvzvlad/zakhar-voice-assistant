@@ -148,9 +148,16 @@ function SchemaField({ name, node, root, value, labelValue, onLabelChange, onCha
   } else if (enums && type !== "boolean") {
     // Numeric enums (e.g. mic.channel = Literal[0,1]) render as a Seg/Select too,
     // not a Stepper — an explicit enum always means "pick one of these".
+    // Optional `enumLabels` (value -> display string) decorates each Select option
+    // (e.g. append a model's RAM footprint) while the STORED value stays the bare
+    // enum entry. Only the Select path honors it; Seg (<=3) renders bare values.
+    const enumLabels = node.enumLabels || r.enumLabels;
+    const selectOptions = enumLabels
+      ? enums.map((v) => ({ value: v, label: enumLabels[v] ?? String(v) }))
+      : enums;
     control = enums.length <= 3
       ? <Seg full options={enums} value={value} onChange={set} />
-      : <Select value={value} options={enums} onChange={set} />;
+      : <Select value={value} options={selectOptions} onChange={set} />;
   } else if (type === "boolean") {
     control = <Toggle on={!!value} onChange={set} />;
   } else if (type === "integer" || type === "number") {
