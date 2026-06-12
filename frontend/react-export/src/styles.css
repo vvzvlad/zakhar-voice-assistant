@@ -44,6 +44,14 @@ button{font-family:inherit;}
 .z-pulse{width:7px;height:7px;border-radius:50%;background:var(--good);box-shadow:0 0 0 3px rgba(22,163,74,.18);flex:0 0 auto;}
 .z-pulse.off{background:var(--bad);box-shadow:0 0 0 3px rgba(220,38,38,.18);}
 
+/* In-progress spinner + loading accents (backend hot-reload / model load). */
+@keyframes zspin{to{transform:rotate(360deg);}}
+.z-spin{width:11px;height:11px;border-radius:50%;border:2px solid var(--line);border-top-color:var(--warn);animation:zspin .7s linear infinite;flex:0 0 auto;}
+.z-env.loading{color:var(--warn);border-color:var(--warn);}
+@keyframes zblink{0%,100%{opacity:1;}50%{opacity:.35;}}
+.z-dot.loading{background:var(--warn);animation:zblink .9s ease-in-out infinite;}
+.z-loading-inline{display:inline-flex;align-items:center;gap:6px;color:var(--warn);}
+
 /* ── Topbar ─────────────────────────────────────────────── */
 .z-env{font-family:var(--mono);font-size:11px;color:var(--mut);border:1px solid var(--line);border-radius:6px;padding:4px 9px;display:flex;align-items:center;gap:6px;}
 .z-env b{color:var(--good);font-size:9px;}

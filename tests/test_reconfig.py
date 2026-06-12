@@ -3,6 +3,7 @@
 import asyncio
 import contextlib
 import os
+import threading
 import types
 
 import pytest
@@ -374,6 +375,60 @@ async def test_apply_job_partial_failure_rebuilds_what_it_can():
     await reconf.apply_job({"stt.selected", "llm.selected"})
     assert rt.stt_backend == ("backend", "stt", 30)   # rebuilt despite the sibling failure
     assert rt.llm_backend == "old-llm"     # failed -> old backend kept
+
+
+# --- reloading() (in-flight model-load status for the panel) ------------------
+
+def test_reloading_empty_on_fresh_reconfigurator():
+    # A fresh Reconfigurator has no rebuild in flight.
+    reconf = _make_reconf(_stub_runtime())
+    assert reconf.reloading() == []
+
+
+class _BlockingSvc:
+    """create(cat) blocks (in its worker thread) until a threading.Event is set, so a
+    test can observe the in-flight reloading() state. Mirrors _StubSvc's create return
+    shape (a sentinel tuple) but gates the call on the release event."""
+
+    def __init__(self, release: threading.Event):
+        self._release = release
+        self.entered = threading.Event()   # set the instant create() begins blocking
+
+    def create(self, cat):
+        self.entered.set()
+        # Block in the worker thread (to_thread) until the test releases us.
+        self._release.wait(timeout=5)
+        return ("backend", cat, None)
+
+
+@pytest.mark.asyncio
+async def test_reloading_reports_category_in_flight_then_clears():
+    # During an in-flight create(), reloading() reports the category; once create()
+    # completes the set is cleared and the new backend is swapped onto the runtime.
+    release = threading.Event()
+    svc = _BlockingSvc(release)
+    rt = _job_runtime(svc)
+    reconf = Reconfigurator(rt, types.SimpleNamespace(tts_timeout=30), asyncio.Queue())
+
+    task = asyncio.create_task(reconf.apply_job({"stt.selected"}))
+    try:
+        # Wait until create() is actually executing in its worker thread. _reloading.add()
+        # happens-before the to_thread() that starts create(), so once `entered` is set the
+        # category is already marked — making the reloading() assert below deterministic
+        # (no race with the worker thread that the reverse order would have).
+        assert await _wait_for(lambda: svc.entered.is_set())
+        assert reconf.reloading() == ["stt"]   # category marked while create() blocks
+        assert rt.stt_backend == "old-stt"     # not swapped yet (create still running)
+        release.set()                       # let create() finish
+        await asyncio.wait_for(task, timeout=5)
+    finally:
+        release.set()
+        if not task.done():
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+    assert reconf.reloading() == []                 # cleared after the rebuild
+    assert rt.stt_backend == ("backend", "stt", None)  # backend swapped in
 
 
 # --- run_loop (queue drain task) ---------------------------------------------

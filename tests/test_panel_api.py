@@ -827,6 +827,50 @@ async def test_get_system_includes_device_statuses(tmp_path):
         await client.close()
 
 
+async def test_get_system_reloading_defaults_empty(tmp_path):
+    # Without a wired reload_status callable the snapshot reports an empty reloading list.
+    client, _svc_ = await _client(tmp_path)
+    try:
+        resp = await client.get("/api/system")
+        assert resp.status == 200
+        body = await resp.json()
+        assert body["reloading"] == []
+    finally:
+        await client.close()
+
+
+async def test_get_system_includes_reloading(tmp_path):
+    # When wired, the snapshot embeds the live reload_status() result verbatim.
+    client, _svc_ = await _client(tmp_path, reload_status=lambda: ["stress"])
+    try:
+        resp = await client.get("/api/system")
+        assert resp.status == 200
+        body = await resp.json()
+        assert body["reloading"] == ["stress"]
+    finally:
+        await client.close()
+
+
+async def test_runs_stream_heartbeat_carries_reloading(tmp_path):
+    # The 1 s heartbeat must surface the in-flight model-load list so the panel can show
+    # a 'loading' indicator without polling.
+    hub = RunEventsHub()
+    client, _svc_ = await _client(
+        tmp_path, run_events=hub, heartbeat_interval=0.05,
+        reload_status=lambda: ["stress"],
+    )
+    try:
+        ws = await client.ws_connect("/api/runs/stream")
+        while True:
+            msg = await asyncio.wait_for(ws.receive_json(), 2)
+            if msg.get("type") == "system":
+                break
+        assert msg["reloading"] == ["stress"]
+        await ws.close()
+    finally:
+        await client.close()
+
+
 async def test_get_devices(tmp_path):
     devices = [{"name": "x", "host": "y", "online": True}]
     client, _svc_ = await _client(tmp_path, device_status=lambda: devices)

@@ -41,7 +41,7 @@ export function providerOf(stage, catalog) {
 }
 
 function Dashboard() {
-  const { catalog, config } = useAppData();
+  const { catalog, config, system } = useAppData();
 
   const [metrics, setMetrics] = useState(null);
   const [recent, setRecent] = useState([]);
@@ -80,6 +80,9 @@ function Dashboard() {
     { k: "Error rate", v: m.error_rate != null ? (m.error_rate * 100).toFixed(1) + "%" : "—" },
   ];
 
+  // Backend categories whose hot-reload is in flight (from the system heartbeat).
+  const reloading = new Set(system?.reloading || []);
+
   return <div className="z-page">
     <PageHeader title="Pipeline overview" desc="Live voice loop across all stages. Click a stage to configure it." />
 
@@ -94,10 +97,11 @@ function Dashboard() {
     <div className="z-card"><div className="z-map">
       {STAGES.map((s, i) => {
         const avg = stageAvg[s.key];
+        const isLoading = reloading.has(s.cat);
         return <React.Fragment key={s.key}>
           <div className="z-svc" onClick={() => nav(s.key)}>
-            <div className="z-svc-h"><span className="z-dot ok" /><b>{s.name}</b><span className="prov">{providerOf(s, catalog)}</span></div>
-            <div className="mdl">{detailFor(s, catalog, config)}</div>
+            <div className="z-svc-h"><span className={"z-dot " + (isLoading ? "loading" : "ok")} /><b>{s.name}</b><span className="prov">{providerOf(s, catalog)}</span></div>
+            <div className="mdl">{isLoading ? <span className="z-loading-inline"><span className="z-spin" />loading…</span> : detailFor(s, catalog, config)}</div>
             <div className="lat">{avg != null
               ? <><b style={{ color: SC[s.key] }}>{(avg / 1000).toFixed(2)}</b><s>s avg</s></>
               : <span style={{ fontSize: 12, color: "var(--mut)" }}>{s.role}</span>}</div>

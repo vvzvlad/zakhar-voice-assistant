@@ -215,6 +215,7 @@ async def main() -> None:
             run_events=run_events,
             prompt_store=prompt_store,
             agent_mcp=agent_mcp,
+            reload_status=reconf.reloading,
         )
         # Back-ref so the Reconfigurator can re-point the panel's runs-store at a
         # hot-swapped store. Set before the reconfig loop can run.

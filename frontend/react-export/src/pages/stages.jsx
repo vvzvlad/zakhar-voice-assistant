@@ -226,7 +226,9 @@ function VoiceMarkerCard({ provider, settings }) {
 
 // ── Generic provider stage (STT / LLM / TTS) ──────────────────────────────
 function ProviderStage({ cat, title, crumb, desc }) {
-  const { catalog, patch } = useAppData();
+  const { catalog, patch, system } = useAppData();
+  // This stage's backend is being hot-reloaded (model load in flight) per the heartbeat.
+  const isReloading = (system?.reloading || []).includes(cat);
   const category = catalog.categories.find((c) => c.id === cat);
   const selected = category.selected;
   const prov = category.providers.find((p) => p.id === selected) || category.providers[0];
@@ -248,6 +250,12 @@ function ProviderStage({ cat, title, crumb, desc }) {
 
   return <div className="z-page narrow">
     <PageHeader title={title} crumb={crumb} desc={desc} />
+    {isReloading && (
+      <div className="z-banner warn">
+        <span className="z-spin" />
+        <span><b>Applying…</b> loading the {prov.label} backend — downloading the model on first use can take a while.</span>
+      </div>
+    )}
     <Selector
       label="Provider"
       options={category.providers.map((p) => p.id)}

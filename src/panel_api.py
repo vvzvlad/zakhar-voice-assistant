@@ -178,7 +178,7 @@ class PanelServer:
                  device_controls_get=None, device_controls_set=None,
                  static_dir=None, runs_store=None, tool_sources=None,
                  run_events=None, prompt_store=None, agent_mcp=None,
-                 heartbeat_interval: float = 1.0):
+                 heartbeat_interval: float = 1.0, reload_status=None):
         # svc: ConfigService; started_at: float (time.time())
         # device_status: optional callable -> list[dict]; static_dir: optional path to built frontend
         # device_capture: optional async callable (device_name, seconds) -> bytes that records a
@@ -223,6 +223,10 @@ class PanelServer:
         self.run_events = run_events
         self.prompt_store = prompt_store
         self.agent_mcp = agent_mcp
+        # reload_status: optional zero-arg callable -> list[str] of backend categories
+        #   currently rebuilding (a model load is in flight); None -> the snapshot
+        #   reports an empty list.
+        self.reload_status = reload_status
         # Period (seconds) of the WS system heartbeat used as the panel liveness signal.
         self.heartbeat_interval = heartbeat_interval
         self._heartbeat_task = None
@@ -618,6 +622,10 @@ class PanelServer:
             # Live device statuses for the panel: flows through the 1 s WS heartbeat
             # so the Devices page / Sidebar update without polling. Cheap in-memory read.
             "devices": self.device_status() if self.device_status else [],
+            # Backend categories whose hot-reload (model load) is in flight, so the panel
+            # can show a 'loading' indicator. Cheap in-memory read; flows through both
+            # GET /api/system and the 1 s WS heartbeat.
+            "reloading": self.reload_status() if self.reload_status else [],
         }
 
     async def _get_system(self, request: web.Request) -> web.Response:
