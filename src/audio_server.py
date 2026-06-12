@@ -21,13 +21,18 @@ from loguru import logger
 _EXT_FOR_MIME = {"audio/wav": "wav", "audio/mpeg": "mp3", "audio/flac": "flac"}
 
 
+def ext_for_mime(mime: str) -> str:
+    """File extension for a TTS audio mime; defaults to mp3 for unknown types."""
+    return _EXT_FOR_MIME.get(mime, "mp3")
+
+
 def tts_url(public_base_url: str, audio_id: str, mime: str) -> tuple[str, str]:
     """Return (ext, url) for a cached TTS audio id of the given mime type.
 
     Centralizes the mime->extension table and the /tts/<id>.<ext> URL shape so the
     pipeline and the announce path stay in sync.
     """
-    ext = _EXT_FOR_MIME.get(mime, "mp3")
+    ext = ext_for_mime(mime)
     url = f"{public_base_url.rstrip('/')}/tts/{audio_id}.{ext}"
     return ext, url
 

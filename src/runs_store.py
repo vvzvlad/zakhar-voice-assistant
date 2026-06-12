@@ -45,6 +45,14 @@ CREATE TABLE IF NOT EXISTS run_audio (
 );
 """
 
+_CREATE_TTS_AUDIO_TABLE = """
+CREATE TABLE IF NOT EXISTS run_tts_audio (
+  run_id INTEGER PRIMARY KEY,
+  audio BLOB NOT NULL,
+  mime TEXT NOT NULL
+);
+"""
+
 # Columns persisted on insert, in order. `id` autoincrements; `rounds_json` is
 # derived from rec["rounds"] separately, so it is appended last by insert().
 _INSERT_COLS = [
@@ -77,6 +85,7 @@ class RunsStore:
         self._conn.execute(_CREATE_TABLE)
         self._conn.execute(_CREATE_INDEX)
         self._conn.execute(_CREATE_AUDIO_TABLE)
+        self._conn.execute(_CREATE_TTS_AUDIO_TABLE)
         self._conn.commit()
         self._migrate()
 
@@ -148,6 +157,32 @@ class RunsStore:
             ).fetchone()
         return bytes(row["wav"]) if row is not None else None
 
+    def put_tts_audio(self, run_id: int, audio: bytes, mime: str, keep: int) -> None:
+        """Store one run's generated TTS reply audio (native backend format) + its
+        mime, then prune to the newest `keep` rows. Mirrors put_audio: an independent
+        rolling ring keyed by run_id (highest id == newest). INSERT OR REPLACE so a
+        repeat updates the bytes; `keep` clamped to >= 0 (keep == 0 keeps none)."""
+        keep = max(0, keep)
+        with self._lock:
+            self._conn.execute(
+                "INSERT OR REPLACE INTO run_tts_audio (run_id, audio, mime) VALUES (?, ?, ?)",
+                (run_id, sqlite3.Binary(audio), mime),
+            )
+            self._conn.execute(
+                "DELETE FROM run_tts_audio WHERE run_id NOT IN "
+                "(SELECT run_id FROM run_tts_audio ORDER BY run_id DESC LIMIT ?)",
+                (keep,),
+            )
+            self._conn.commit()
+
+    def get_tts_audio(self, run_id: int) -> tuple[bytes, str] | None:
+        """Return (audio_bytes, mime) of the stored TTS reply audio, or None."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT audio, mime FROM run_tts_audio WHERE run_id = ?", (run_id,)
+            ).fetchone()
+        return (bytes(row["audio"]), row["mime"]) if row is not None else None
+
     def audio_channels(self, run_id: int) -> int | None:
         """Channel count of the stored WAV for one run, or None when not stored.
 
@@ -217,7 +252,9 @@ class RunsStore:
             row = self._conn.execute(
                 "SELECT *, "
                 "EXISTS(SELECT 1 FROM run_audio WHERE run_audio.run_id = runs.id) "
-                "AS has_audio FROM runs WHERE id = ?",
+                "AS has_audio, "
+                "EXISTS(SELECT 1 FROM run_tts_audio WHERE run_tts_audio.run_id = runs.id) "
+                "AS has_tts_audio FROM runs WHERE id = ?",
                 (run_id,),
             ).fetchone()
         if row is None:
@@ -286,6 +323,9 @@ class RunsStore:
             # Drop audio whose run row was just deleted so it can't outlive its run.
             self._conn.execute(
                 "DELETE FROM run_audio WHERE run_id NOT IN (SELECT id FROM runs)"
+            )
+            self._conn.execute(
+                "DELETE FROM run_tts_audio WHERE run_id NOT IN (SELECT id FROM runs)"
             )
             self._conn.commit()
 

@@ -5,7 +5,7 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import { Ic } from "../components/icons.jsx";
 import { PageHeader, Waterfall, KV, Loading, ErrorBox } from "../components/primitives.jsx";
-import { getRuns, getRun, openRunsStream, runAudioUrl, downloadRunAudio } from "../api.js";
+import { getRuns, getRun, openRunsStream, runAudioUrl, downloadRunAudio, runTtsAudioUrl, downloadRunTtsAudio } from "../api.js";
 import { RESULT_META, STAGE_COLOR, fmtSec, mapRun, totalMs, statusMeta, applyStreamedRun } from "../runsModel.js";
 import { matchesFilters } from "../runsFilters.js";
 
@@ -185,6 +185,14 @@ function Drawer({ r, loading, error, onClose }) {
               <div style={{ fontSize: 14, color: "var(--ink)", lineHeight: 1.6 }}>{r.stress}</div>
             </div></div>
           </>}
+
+          {r.has_tts_audio ? <>
+            <div className="z-sl">TTS audio<div className="ln" />{r.t && r.t.tts ? <span style={{ fontFamily: "var(--mono)", fontSize: 10.5, color: "var(--mut2)", textTransform: "none", letterSpacing: 0 }}>{fmtSec(r.t.tts)}</span> : null}</div>
+            <div className="z-card"><div style={{ padding: "12px 17px", display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+              <audio controls preload="none" src={runTtsAudioUrl(r.id)} style={{ height: 34, flex: 1, minWidth: 220 }} />
+              <button className="z-btn" onClick={() => downloadRunTtsAudio(r.id)}>Download</button>
+            </div></div>
+          </> : null}
 
           <div className="z-sl">Metadata</div>
           <div className="z-card"><div style={{ padding: "6px 17px" }}>

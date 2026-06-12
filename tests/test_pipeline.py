@@ -131,6 +131,8 @@ class FakeRunsStore:
         self.records = []
         self.audio_calls = []  # (run_id, wav, keep) per put_audio
         self.audio = {}        # run_id -> wav
+        self.tts_audio_calls = []  # (run_id, audio, mime, keep) per put_tts_audio
+        self.tts_audio = {}        # run_id -> (audio, mime)
 
     def insert(self, rec):
         self.records.append(rec)
@@ -142,6 +144,13 @@ class FakeRunsStore:
 
     def get_audio(self, run_id):
         return self.audio.get(run_id)
+
+    def put_tts_audio(self, run_id, audio, mime, keep):
+        self.tts_audio_calls.append((run_id, audio, mime, keep))
+        self.tts_audio[run_id] = (audio, mime)
+
+    def get_tts_audio(self, run_id):
+        return self.tts_audio.get(run_id)
 
 
 class FakeRunEvents:
@@ -837,6 +846,57 @@ async def test_run_recorded_on_happy_path(tmp_path, monkeypatch):
     assert rec["audio_bytes"] == len(b"MP3")
     assert rec["audio_fmt"] == "mp3"
     assert rec["error_stage"] is None
+
+
+async def test_tts_audio_stored_on_happy_path(tmp_path, monkeypatch):
+    # A normal voice run stores the GENERATED TTS reply audio (native backend
+    # format + mime) keyed by the new run_id. Default stream_tts=True, so this
+    # exercises the streaming + tee path: the playable MP3 clip streams through
+    # serve_audio_stream and the tee keeps a copy for the store.
+    patch_llm(monkeypatch, reply="готово")
+    store = FakeRunsStore()
+    pipeline, _ = make_pipeline(
+        tmp_path, monkeypatch, stt_text="включи свет",
+        tts_backend=FakeTtsBackend(mime="audio/mpeg", audio=b"MP3"),
+        runs_store=store,
+    )
+
+    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_audio(b"\x01\x02" * 100)
+    await pipeline.on_stop(False)
+
+    # Stored exactly once, keyed by the first run_id, with the configured keep.
+    assert len(store.tts_audio_calls) == 1
+    run_id, audio, mime, keep = store.tts_audio_calls[0]
+    assert run_id == 1
+    assert keep == pipeline.rt.core.runs.audio_keep == 100
+    assert store.get_tts_audio(run_id) == (b"MP3", "audio/mpeg")
+
+
+async def test_tts_audio_stored_native_wav_before_transcode(tmp_path, monkeypatch):
+    # A WAV-native backend (Piper-like) can't stream from mid-stream: the run
+    # drains the iterator and transcodes to MP3 for the speaker. The stored TTS
+    # audio must be the NATIVE WAV captured by the tee BEFORE the transcode.
+    patch_llm(monkeypatch, reply="готово")
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(16000)
+        wf.writeframes(b"\x00\x00" * 160)
+    wav_bytes = buf.getvalue()
+    store = FakeRunsStore()
+    pipeline, _ = make_pipeline(
+        tmp_path, monkeypatch, stt_text="включи свет",
+        tts_backend=FakeTtsBackend(mime="audio/wav", audio=wav_bytes),
+        runs_store=store,
+    )
+
+    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_audio(b"\x01\x02" * 100)
+    await pipeline.on_stop(False)
+
+    assert store.get_tts_audio(1) == (wav_bytes, "audio/wav")
 
 
 async def test_run_accentizes_tts_text_but_keeps_llm_text_original(tmp_path, monkeypatch):

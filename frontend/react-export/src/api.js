@@ -221,6 +221,35 @@ export async function downloadRunAudio(id) {
     URL.revokeObjectURL(url);
   }
 }
+
+// Absolute URL of a run's stored generated TTS reply audio (for an <audio> src).
+export const runTtsAudioUrl = (id) =>
+  `${BASE}/api/runs/${encodeURIComponent(id)}/tts-audio`;
+
+// Fetch a run's stored TTS reply audio as a blob and trigger a browser download.
+// The native format varies (mp3/wav/flac), so derive the extension from the blob mime.
+export async function downloadRunTtsAudio(id) {
+  let resp;
+  try {
+    resp = await fetch(runTtsAudioUrl(id));
+  } catch (e) {
+    throw new ApiError("Failed to reach the server: " + e.message, { status: 0 });
+  }
+  if (!resp.ok) throw new ApiError(`HTTP ${resp.status}`, { status: resp.status });
+  const blob = await resp.blob();
+  const ext = (blob.type && blob.type.split("/")[1]) || "mp3";
+  const url = URL.createObjectURL(blob);
+  try {
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `zakhar_run_${id}_tts.${ext}`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
 export const getMetrics = () => request("/api/metrics");
 
 // --- live panel stream (WebSocket) -----------------------------------------

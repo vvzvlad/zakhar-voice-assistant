@@ -677,6 +677,11 @@ class Pipeline:
                 # NOT the CPU time spent running the VAD.
                 # audio_ms is intentionally left None for now: we don't decode the
                 # synthesized mp3 to measure its playback duration yet.
+                # Native TTS reply audio captured during synthesis (see the TTS section) and
+                # stored after the run is inserted, mirroring the utterance-audio store. Stays
+                # None unless synthesis produced bytes, so a failed/empty TTS stores nothing.
+                tts_audio = None
+                tts_mime = None
                 record = {
                     "ts": time.time(),
                     "device": self.name,
@@ -910,7 +915,10 @@ class Pipeline:
                             # to the existing except below, exactly like the
                             # buffered path.
                             mime, chunks = await self._synthesize_stream(tts, reply, "ru")
-                            ext, url, feed_task = await self.serve_audio_stream(mime, chunks)
+                            tts_chunks = []
+                            ext, url, feed_task = await self.serve_audio_stream(
+                                mime, self._tee_chunks(chunks, tts_chunks)
+                            )
                             try:
                                 # t_tts = time-to-stream-start: the user-perceived TTS
                                 # latency (total synth time is logged after the feed).
@@ -942,6 +950,9 @@ class Pipeline:
                                 else:
                                     record["audio_bytes"] = served_bytes
                                     record["audio_fmt"] = ext
+                                    # Keep the full native clip for the run's stored TTS audio (see finally).
+                                    tts_audio = b"".join(tts_chunks)
+                                    tts_mime = mime
                                     logger.info(
                                         f"{self.name}: 🔊 TTS stream complete "
                                         f"({time.perf_counter() - tts_t:.2f}s total, "
@@ -978,6 +989,12 @@ class Pipeline:
                             # not the backend's native-format size.
                             record["audio_bytes"] = served_bytes
                             record["audio_fmt"] = ext
+                            # Keep the full native clip for the run's stored TTS audio (see
+                            # finally). Set only AFTER a successful serve_audio so a serving/
+                            # transcode failure stores nothing — symmetric with the streaming
+                            # branch, which captures only in its post-feed success path.
+                            tts_audio = audio
+                            tts_mime = mime
                             logger.info(f"{self.name}: ▶ serving {url}")
                             self._emit(StageEvent.TTS_END, {"url": url})
                     except Exception as e:
@@ -1042,6 +1059,19 @@ class Pipeline:
                                     logger.error(
                                         f"{self.name}: utterance audio store failed: {e}"
                                     )
+                            # Store the generated TTS reply audio (native backend format) in the same
+                            # rolling window as the utterance audio (runs.audio_keep) so operators can play
+                            # back exactly what the assistant spoke — shown right after the Accents text in
+                            # the log detail view. Best-effort: a storage failure must never break the run.
+                            # tts_audio is set only when synthesis produced bytes (see the TTS section).
+                            if self.core.runs.store_audio and tts_audio:
+                                try:
+                                    await asyncio.to_thread(
+                                        self.runs_store.put_tts_audio,
+                                        run_id, tts_audio, tts_mime, self.core.runs.audio_keep,
+                                    )
+                                except Exception as e:
+                                    logger.error(f"{self.name}: TTS audio store failed: {e}")
                             # Defer the live broadcast until the lock is released so a slow
                             # WebSocket consumer can't backpressure the next run on this speaker.
                             if self.run_events is not None:
@@ -1304,6 +1334,19 @@ class Pipeline:
             await aclose()
         except Exception as e:  # noqa: BLE001 - closing is best-effort
             logger.debug(f"TTS chunk iterator close failed: {e!r}")
+
+    @staticmethod
+    async def _tee_chunks(chunks, sink):
+        """Pass-through wrapper over a TTS chunk async-iterator that also appends each
+        chunk to `sink`, so _run keeps a copy of the full streamed clip to store as the
+        run's TTS audio. Preserves serve_audio_stream's ownership invariant: on early
+        close (aclose), the underlying iterator is closed too."""
+        try:
+            async for chunk in chunks:
+                sink.append(chunk)
+                yield chunk
+        finally:
+            await Pipeline._close_stream(chunks)
 
     async def serve_audio_stream(self, mime, chunks):
         """Streaming delivery boundary: serve `chunks` (an async iterator of

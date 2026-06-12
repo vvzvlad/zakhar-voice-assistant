@@ -1352,6 +1352,68 @@ async def test_get_run_audio_404_without_store(tmp_path):
         await client.close()
 
 
+async def test_get_run_tts_audio_returns_native_inline(tmp_path):
+    # A run with stored TTS audio is served with its native mime as Content-Type,
+    # an inline disposition (extension derived from the mime), and the exact bytes.
+    store = _seed_runs(tmp_path)
+    store.put_tts_audio(1, b"MP3", "audio/mpeg", keep=100)
+    client, _svc_ = await _client(tmp_path, runs_store=store)
+    try:
+        resp = await client.get("/api/runs/1/tts-audio")
+        assert resp.status == 200
+        assert resp.headers["Content-Type"] == "audio/mpeg"
+        assert resp.headers["Content-Disposition"] == \
+            'inline; filename="zakhar_run_1_tts.mp3"'
+        body = await resp.read()
+        assert body == b"MP3"
+    finally:
+        await client.close()
+        store.close()
+
+
+async def test_get_run_tts_audio_wav_mime_extension(tmp_path):
+    # An audio/wav blob picks the .wav download extension from the stored mime.
+    store = _seed_runs(tmp_path)
+    store.put_tts_audio(1, b"WAVE", "audio/wav", keep=100)
+    client, _svc_ = await _client(tmp_path, runs_store=store)
+    try:
+        resp = await client.get("/api/runs/1/tts-audio")
+        assert resp.status == 200
+        assert resp.headers["Content-Type"] == "audio/wav"
+        assert resp.headers["Content-Disposition"] == \
+            'inline; filename="zakhar_run_1_tts.wav"'
+        body = await resp.read()
+        assert body == b"WAVE"
+    finally:
+        await client.close()
+        store.close()
+
+
+async def test_get_run_tts_audio_404_when_none_and_400_on_bad_id(tmp_path):
+    # A run without stored TTS audio -> 404; a non-integer id -> 400.
+    store = _seed_runs(tmp_path)
+    client, _svc_ = await _client(tmp_path, runs_store=store)
+    try:
+        missing = await client.get("/api/runs/1/tts-audio")
+        assert missing.status == 404
+
+        bad = await client.get("/api/runs/abc/tts-audio")
+        assert bad.status == 400
+    finally:
+        await client.close()
+        store.close()
+
+
+async def test_get_run_tts_audio_404_without_store(tmp_path):
+    # No runs_store wired -> tts-audio endpoint returns 404.
+    client, _svc_ = await _client(tmp_path)
+    try:
+        resp = await client.get("/api/runs/1/tts-audio")
+        assert resp.status == 404
+    finally:
+        await client.close()
+
+
 async def test_get_metrics(tmp_path):
     store = _seed_runs(tmp_path)
     client, _svc_ = await _client(tmp_path, runs_store=store)

@@ -531,3 +531,68 @@ def test_prune_deletes_orphaned_audio(tmp_path):
     assert store.get_audio(old) is None
     assert store.get_audio(keep) == b"recent-wav"
     store.close()
+
+
+def test_put_get_tts_audio_round_trip(tmp_path):
+    store = _store(tmp_path)
+    rid = store.insert(_rec())
+    store.put_tts_audio(rid, b"MP3", "audio/mpeg", keep=100)
+    assert store.get_tts_audio(rid) == (b"MP3", "audio/mpeg")
+    # A run with no stored TTS audio returns None.
+    assert store.get_tts_audio(999) is None
+    store.close()
+
+
+def test_put_tts_audio_insert_or_replace_updates_bytes(tmp_path):
+    store = _store(tmp_path)
+    rid = store.insert(_rec())
+    store.put_tts_audio(rid, b"first", "audio/mpeg", keep=100)
+    store.put_tts_audio(rid, b"second", "audio/wav", keep=100)
+    assert store.get_tts_audio(rid) == (b"second", "audio/wav")
+    store.close()
+
+
+def test_put_tts_audio_ring_buffer_keeps_newest(tmp_path):
+    store = _store(tmp_path)
+    # Insert several runs and store TTS audio for each; run_id AUTOINCREMENTs so the
+    # newest 3 ids must survive the keep=3 ring buffer, older ones get pruned.
+    rids = []
+    for i in range(6):
+        rid = store.insert(_rec(stt_text=f"q{i}"))
+        rids.append(rid)
+        store.put_tts_audio(rid, f"mp3-{rid}".encode(), "audio/mpeg", keep=3)
+
+    survivors = [r for r in rids if store.get_tts_audio(r) is not None]
+    assert survivors == rids[-3:]
+    # Older run_ids no longer carry TTS audio.
+    for r in rids[:-3]:
+        assert store.get_tts_audio(r) is None
+    store.close()
+
+
+def test_get_includes_has_tts_audio(tmp_path):
+    store = _store(tmp_path)
+    with_audio = store.insert(_rec())
+    without_audio = store.insert(_rec())
+    store.put_tts_audio(with_audio, b"MP3", "audio/mpeg", keep=100)
+
+    assert store.get(with_audio)["has_tts_audio"] == 1
+    assert store.get(without_audio)["has_tts_audio"] == 0
+    store.close()
+
+
+def test_prune_deletes_orphaned_tts_audio(tmp_path):
+    store = _store(tmp_path)
+    now = time.time()
+    keep = store.insert(_rec(ts=now, stt_text="recent"))
+    old = store.insert(_rec(ts=now - 40 * 86400, stt_text="ancient"))
+    store.put_tts_audio(keep, b"recent-mp3", "audio/mpeg", keep=100)
+    store.put_tts_audio(old, b"old-mp3", "audio/mpeg", keep=100)
+
+    store.prune(now=now, retention_days=30)
+
+    # The old run AND its TTS audio are gone; the recent run's TTS audio survives.
+    assert store.get(old) is None
+    assert store.get_tts_audio(old) is None
+    assert store.get_tts_audio(keep) == (b"recent-mp3", "audio/mpeg")
+    store.close()
