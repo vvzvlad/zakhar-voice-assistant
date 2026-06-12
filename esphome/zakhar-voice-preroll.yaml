@@ -32,17 +32,23 @@
 substitutions:
   # Bump on EVERY change to this device config — the Config Version entity lets you
   # verify which config is actually flashed (catches a stale / wrong-file flash).
-  config_version: "v13_preroll"
+  config_version: "v13_preroll_wakeprob"
   # micro_wake_word model version flashed; keep in sync with the model path in
   # packages.zakhar_wake_word below
   model_version: "zakhar_v16"
 
 # --- Pre-roll fork: overrides the built-in voice_assistant with the patched copy ---
+# We now ALSO fork micro_wake_word from the SAME local source. The micro_wake_word fork
+# is a verbatim copy of the stock component with ONE additive, non-destructive change
+# (a gated peak-probability getter on StreamingModel) — NO config-schema change — used
+# only to expose the live "Wake Probability" sensor below. Like the voice_assistant
+# fork it is pinned to ESPHome 2026.5.x; bumping ESPHome past 2026.5.x requires rebasing
+# BOTH forks (see zakhar-preroll/README.md and the header in components/micro_wake_word).
 external_components:
   - source:
       type: local
       path: zakhar-preroll/components
-    components: [voice_assistant]
+    components: [voice_assistant, micro_wake_word]
 
 packages:
   # IMPORTANT: this inline package is declared FIRST on purpose. ESPHome appends
@@ -107,6 +113,26 @@ switch:
   - id: !extend wake_sound
     restore_mode: ALWAYS_OFF
 
+  # Wake Probability stream gate (object_id wake_probability_stream). The server flips
+  # this ON when the device modal opens and OFF when it closes, so the firmware only
+  # tracks/publishes the live Wake Probability while someone is actually watching — no
+  # constant network traffic otherwise. optimistic: the state follows the command with
+  # no device feedback path. ALWAYS_OFF: never stream after a reboot if nobody's looking.
+  #
+  # IMPORTANT: the Native API object_id = slugify(name), NOT the YAML `id:` field — the
+  # server matches on object_id, so this name MUST slugify to `wake_probability_stream`.
+  - platform: template
+    name: "Wake Probability Stream"
+    id: wake_probability_stream
+    optimistic: true
+    restore_mode: ALWAYS_OFF
+    on_turn_on:
+      then:
+        - lambda: 'id(zakhar)->set_stream_enabled(true);'
+    on_turn_off:
+      then:
+        - lambda: 'id(zakhar)->set_stream_enabled(false);'
+
 # --- Firmware versioning: config + model version as separate read-only diagnostic
 # entities, so you can confirm exactly what's flashed and catch config/file drift.
 text_sensor:
@@ -118,6 +144,23 @@ text_sensor:
   - platform: template
     name: "Model Version"
     id: mdl_version
+    entity_category: diagnostic
+    update_interval: never
+
+# --- Live Wake Probability (object_id wake_probability) ---
+# Read-only diagnostic sensor that reports the on-device PEAK wake-word probability over
+# the last second as a percentage. We publish it MANUALLY from the 1s interval below
+# (update_interval: never), and ONLY while the "Wake Probability Stream" switch is ON, so
+# there is no constant network traffic when nobody is watching.
+#
+# IMPORTANT: the Native API object_id = slugify(name), NOT the YAML `id:` field — the
+# server matches on object_id, so this name MUST slugify to `wake_probability`.
+sensor:
+  - platform: template
+    name: "Wake Probability"
+    id: wake_probability_sensor
+    unit_of_measurement: "%"
+    accuracy_decimals: 0
     entity_category: diagnostic
     update_interval: never
 
@@ -143,6 +186,14 @@ interval:
           }
           if (id(mdl_version).state.empty()) {
             id(mdl_version).publish_state("${model_version}");
+          }
+          // Wake Probability: publish the on-device PEAK probability over the last second
+          // as a percentage, but ONLY while the panel has enabled the stream (switch ON).
+          // read_and_reset returns 0..255 and clears the running peak, so each tick reports
+          // that second's max. When the switch is OFF we publish nothing (no traffic).
+          if (id(wake_probability_stream).state) {
+            uint8_t peak = id(zakhar)->read_and_reset_stream_peak();
+            id(wake_probability_sensor).publish_state(peak / 255.0f * 100.0f);
           }
 
 # Bake Wi-Fi credentials in (the stock config relies on Bluetooth/serial "improv"

@@ -1147,6 +1147,121 @@ async def test_capture_result_404_when_nothing_recorded(tmp_path):
         await client.close()
 
 
+# --- live Wake Probability endpoints -----------------------------------------
+
+async def test_wake_probability_endpoints_without_manager_return_503(tmp_path):
+    # Neither callable wired -> both endpoints return 503.
+    client, _svc_ = await _client(tmp_path)
+    try:
+        assert (await client.get("/api/device/wake-probability", params={"device": "h"})).status == 503
+        assert (await client.post("/api/device/wake-probability", json={"device": "h", "enabled": True})).status == 503
+    finally:
+        await client.close()
+
+
+async def test_get_wake_probability_happy_path(tmp_path):
+    snap = {"device": "hall", "online": True, "available": True, "value": 73.0}
+    client, _svc_ = await _client(tmp_path, device_wake_prob_get=lambda d: snap)
+    try:
+        resp = await client.get("/api/device/wake-probability", params={"device": "hall"})
+        assert resp.status == 200
+        assert (await resp.json()) == snap
+    finally:
+        await client.close()
+
+
+async def test_get_wake_probability_missing_device_returns_400(tmp_path):
+    client, _svc_ = await _client(tmp_path, device_wake_prob_get=lambda d: {})
+    try:
+        resp = await client.get("/api/device/wake-probability")
+        assert resp.status == 400
+    finally:
+        await client.close()
+
+
+async def test_get_wake_probability_unknown_device_returns_404(tmp_path):
+    def get(device):
+        raise LookupError(f"unknown device {device!r}")
+
+    client, _svc_ = await _client(tmp_path, device_wake_prob_get=get)
+    try:
+        resp = await client.get("/api/device/wake-probability", params={"device": "nope"})
+        assert resp.status == 404
+    finally:
+        await client.close()
+
+
+async def test_post_wake_probability_happy_path(tmp_path):
+    calls = []
+
+    def setit(device, enabled):
+        calls.append((device, enabled))
+        return {"device": device, "online": True, "available": True, "value": None}
+
+    client, _svc_ = await _client(tmp_path, device_wake_prob_set=setit)
+    try:
+        resp = await client.post("/api/device/wake-probability",
+                                 json={"device": "hall", "enabled": True})
+        assert resp.status == 200
+        assert calls == [("hall", True)]
+        # And disable on close.
+        resp = await client.post("/api/device/wake-probability",
+                                 json={"device": "hall", "enabled": False})
+        assert resp.status == 200
+        assert calls == [("hall", True), ("hall", False)]
+    finally:
+        await client.close()
+
+
+async def test_post_wake_probability_bad_fields_return_400(tmp_path):
+    called = []
+
+    def setit(device, enabled):
+        called.append((device, enabled))
+        return {}
+
+    client, _svc_ = await _client(tmp_path, device_wake_prob_set=setit)
+    try:
+        # Missing device, empty device, missing enabled, non-bool enabled (incl. 1/"x").
+        for body in ({"enabled": True},
+                     {"device": "", "enabled": True},
+                     {"device": "h"},
+                     {"device": "h", "enabled": 1},
+                     {"device": "h", "enabled": "true"},
+                     {"device": "h", "enabled": None}):
+            resp = await client.post("/api/device/wake-probability", json=body)
+            assert resp.status == 400, body
+        assert called == []
+    finally:
+        await client.close()
+
+
+async def test_post_wake_probability_unknown_device_returns_404(tmp_path):
+    def setit(device, enabled):
+        raise LookupError(f"unknown device {device!r}")
+
+    client, _svc_ = await _client(tmp_path, device_wake_prob_set=setit)
+    try:
+        resp = await client.post("/api/device/wake-probability",
+                                 json={"device": "nope", "enabled": True})
+        assert resp.status == 404
+    finally:
+        await client.close()
+
+
+async def test_post_wake_probability_offline_returns_409(tmp_path):
+    def setit(device, enabled):
+        raise RuntimeError(f"{device} is offline")
+
+    client, _svc_ = await _client(tmp_path, device_wake_prob_set=setit)
+    try:
+        resp = await client.post("/api/device/wake-probability",
+                                 json={"device": "hall", "enabled": True})
+        assert resp.status == 409
+    finally:
+        await client.close()
+
+
 async def test_get_tools(tmp_path):
     # tool_sources is a zero-arg callable returning ToolHub.describe() output.
     sources = [{

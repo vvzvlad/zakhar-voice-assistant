@@ -12,6 +12,7 @@ import {
   getPromptProfiles, getPromptProfile, createPromptProfile, updatePromptProfile,
   deletePromptProfile, activatePromptProfile,
   getTools, startCapture, getCaptureStatus, downloadCaptureResult, getDeviceControls, setDeviceControl,
+  getWakeProbability, setWakeProbabilityStream,
 } from "../api.js";
 import { deviceVersion } from "../format.js";
 
@@ -544,6 +545,7 @@ function DeviceModal({ initial, onSave, onClose, title, device, online }) {
     <Field label="PSK" hint="ESPHome API encryption key."><KeyInput value={psk} placeholder="base64 key…" onChange={setPsk} /></Field>
     {device && <CaptureControl device={device} online={online} />}
     {device && <DeviceControls device={device} online={online} />}
+    {device && <WakeProbabilityMeter device={device} online={online} />}
   </Modal>;
 }
 
@@ -715,6 +717,72 @@ function DeviceControls({ device, online: onlineProp }) {
       </div>)}
     </div>}
   </>;
+}
+
+// Live, read-only Wake Probability meter shown inside the Edit-speaker modal (only for
+// an EXISTING device). The stream is gated ON THE DEVICE: opening the modal enables it
+// (POST enabled=true), closing it disables it (POST enabled=false), so the firmware only
+// streams while the panel is open. While open we poll once a second and render the
+// on-device PEAK wake-word probability over the last second as a percent + a thin bar.
+// The enable/disable are idempotent and tolerate React StrictMode's double-invoke (the
+// device-side switch_command is idempotent; failures are swallowed since the speaker may
+// be offline). `online` seeds reachability and is refreshed from each snapshot.
+function WakeProbabilityMeter({ device, online: onlineProp }) {
+  const [online, setOnline] = useState(onlineProp);
+  const [available, setAvailable] = useState(true); // assume present until told otherwise
+  const [value, setValue] = useState(null);         // latest percent (number) or null
+  const [err, setErr] = useState(null);
+
+  // Single effect owns the whole lifecycle: enable on open, poll while open, disable on
+  // close. `device` is stable for the modal's lifetime, so the cleanup disables the same
+  // device it enabled. Both enable and disable are best-effort (offline -> ignore).
+  useEffect(() => {
+    if (!device) return undefined;
+    let alive = true;
+    // Best-effort enable; ignore errors (offline / firmware lacks the entity).
+    setWakeProbabilityStream(device, true).catch(() => {});
+    const poll = () => getWakeProbability(device)
+      .then((snap) => {
+        if (!alive) return;
+        setOnline(snap.online);
+        setAvailable(snap.available !== false);
+        setValue(snap.value ?? null);
+        setErr(null);
+      })
+      .catch((e) => { if (alive) setErr(e); });
+    poll();
+    const iv = setInterval(poll, 1000);
+    return () => {
+      alive = false;
+      clearInterval(iv);
+      // Best-effort disable so the device stops streaming once nobody is watching.
+      setWakeProbabilityStream(device, false).catch(() => {});
+    };
+  }, [device]);
+
+  let body;
+  if (!online) {
+    body = <div className="z-fh">Speaker offline.</div>;
+  } else if (!available) {
+    body = <div className="z-fh">Re-flash the firmware to enable the wake-probability stream.</div>;
+  } else {
+    const pct = value == null ? null : Math.max(0, Math.min(100, value));
+    body = <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+      <div className="mono" style={{ fontSize: 13, fontWeight: 600, minWidth: 38, textAlign: "right" }}>
+        {pct == null ? "…" : `${Math.round(pct)}%`}
+      </div>
+      <div style={{ flex: 1, height: 6, borderRadius: 3, background: "var(--bd, #e5e7eb)", overflow: "hidden" }}>
+        <div style={{ width: `${pct == null ? 0 : pct}%`, height: "100%", background: "var(--acc, #2563eb)", transition: "width .2s" }} />
+      </div>
+    </div>;
+  }
+
+  return <Field label="Wake probability" hint="On-device wake-word probability — peak over the last second.">
+    {body}
+    {err && <div className="z-fh" style={{ color: "#b91c1c", marginTop: 6 }}>
+      {(err && (err.message || String(err))) || "Failed to read wake probability."}
+    </div>}
+  </Field>;
 }
 
 export function Devices() {

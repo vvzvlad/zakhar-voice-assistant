@@ -176,6 +176,7 @@ class PanelServer:
     def __init__(self, svc, host, port, *, version, started_at,
                  device_status=None, device_capture=None, device_play=None,
                  device_controls_get=None, device_controls_set=None,
+                 device_wake_prob_get=None, device_wake_prob_set=None,
                  static_dir=None, runs_store=None, tool_sources=None,
                  run_events=None, prompt_store=None, agent_mcp=None,
                  heartbeat_interval: float = 1.0, reload_status=None):
@@ -214,6 +215,15 @@ class PanelServer:
         #   endpoints return 503.
         self.device_controls_get = device_controls_get
         self.device_controls_set = device_controls_set
+        # device_wake_prob_get: optional SYNC callable (device_name) -> dict snapshot of
+        #   the live Wake Probability {device, online, available, value} (DeviceManager.wake_prob).
+        # device_wake_prob_set: optional SYNC callable (device_name, enabled: bool) -> dict
+        #   that toggles the on-device peak stream (the panel enables it while the device
+        #   modal is open, disables it on close) and returns the refreshed snapshot
+        #   (DeviceManager.set_wake_prob_stream). For both: None -> the
+        #   /api/device/wake-probability endpoints return 503.
+        self.device_wake_prob_get = device_wake_prob_get
+        self.device_wake_prob_set = device_wake_prob_set
         # Background capture jobs: the recording runs as a server-side task so a
         # browser disconnect no longer cancels it (which used to reboot the device).
         self._capture_jobs = CaptureJobManager(device_capture) if device_capture is not None else None
@@ -689,6 +699,42 @@ class PanelServer:
         except RuntimeError as e:  # offline
             return web.json_response({"error": str(e)}, status=409)
 
+    async def _get_wake_probability(self, request: web.Request) -> web.Response:
+        """Current live Wake Probability snapshot for one speaker (drives the panel meter)."""
+        if self.device_wake_prob_get is None:
+            return web.json_response({"error": "wake probability not available"}, status=503)
+        device = request.query.get("device")
+        if not device:
+            return web.json_response({"error": 'query param "device" is required'}, status=400)
+        try:
+            return web.json_response(self.device_wake_prob_get(device))
+        except LookupError as e:
+            return web.json_response({"error": str(e)}, status=404)
+
+    async def _post_wake_probability(self, request: web.Request) -> web.Response:
+        """Enable/disable the on-device Wake Probability stream. Body: {device, enabled(bool)}.
+
+        The panel POSTs enabled=true when the device modal opens and enabled=false when it
+        closes, so the firmware only streams the probability while someone is watching."""
+        if self.device_wake_prob_set is None:
+            return web.json_response({"error": "wake probability not available"}, status=503)
+        body = await _read_json(request)
+        if not isinstance(body, dict):
+            return web.json_response({"error": "body must be a JSON object"}, status=400)
+        device = body.get("device")
+        if not isinstance(device, str) or not device:
+            return web.json_response({"error": 'field "device" (string) is required'}, status=400)
+        enabled = body.get("enabled")
+        # Strict bool: reject ints/strings/None (avoid an ambiguous truthiness toggle).
+        if not isinstance(enabled, bool):
+            return web.json_response({"error": 'field "enabled" (bool) is required'}, status=400)
+        try:
+            return web.json_response(self.device_wake_prob_set(device, bool(enabled)))
+        except LookupError as e:
+            return web.json_response({"error": str(e)}, status=404)
+        except RuntimeError as e:  # offline
+            return web.json_response({"error": str(e)}, status=409)
+
     async def _post_capture(self, request: web.Request) -> web.Response:
         """Start a background capture of a manual sample on a speaker (non-blocking).
 
@@ -1021,6 +1067,8 @@ class PanelServer:
             web.get("/api/devices", self._get_devices),
             web.get("/api/device/controls", self._get_device_controls),
             web.post("/api/device/controls", self._post_device_controls),
+            web.get("/api/device/wake-probability", self._get_wake_probability),
+            web.post("/api/device/wake-probability", self._post_wake_probability),
             web.post("/api/capture", self._post_capture),
             web.get("/api/capture", self._get_capture_status),
             web.get("/api/capture/result", self._get_capture_result),

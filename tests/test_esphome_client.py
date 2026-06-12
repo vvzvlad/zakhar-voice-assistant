@@ -47,17 +47,21 @@ class _Ent:
 
 
 class _CaptureCli:
-    """Fake APIClient recording number_command/button_command calls."""
+    """Fake APIClient recording number_command/button_command/switch_command calls."""
 
     def __init__(self):
         self.numbers = []  # (key, state)
         self.buttons = []  # key
+        self.switches = []  # (key, state)
 
     def number_command(self, key, state, device_id=0):
         self.numbers.append((key, state))
 
     def button_command(self, key, device_id=0):
         self.buttons.append(key)
+
+    def switch_command(self, key, state, device_id=0):
+        self.switches.append((key, state))
 
 
 def _wav_bytes(pcm=b"\x01\x02" * 8):
@@ -182,6 +186,163 @@ async def test_capture_raises_when_keys_missing():
     with pytest.raises(RuntimeError):
         await c.capture(5)
     assert c.pipeline.armed == []
+
+
+# --- live Wake Probability (DeviceClient + DeviceManager) ---------------------
+
+def _wake_prob_client(name="dev", *, online=True, switch_key=33, sensor_key=44):
+    """Build a DeviceClient bypassing __init__, wired for the wake-prob tests."""
+    from src.esphome_client import DeviceClient
+    c = DeviceClient.__new__(DeviceClient)
+    c.cfg = _Cfg(name)
+    c.online = online
+    c.cli = _CaptureCli()
+    c._wake_prob_switch_key = switch_key
+    c._wake_prob_sensor_key = sensor_key
+    c._wake_prob_value = None
+    # _on_state also touches the control/version key sets — keep them empty here.
+    c._control_keys = set()
+    c._control_value = {}
+    c._version_keys = set()
+    c._version_value = {}
+    return c
+
+
+class _State:
+    """Fake subscribe_states state object (key/state/missing_state)."""
+
+    def __init__(self, key, state, missing_state=False):
+        self.key = key
+        self.state = state
+        self.missing_state = missing_state
+
+
+def test_discover_wake_prob_keys_maps_by_object_id():
+    # object_id = slugify(name) for "Wake Probability Stream" / "Wake Probability";
+    # these MUST stay equal to slugify(name) or discovery silently fails on hardware.
+    c = _wake_prob_client(switch_key=None, sensor_key=None)
+    c._discover_wake_prob_keys([
+        _Ent("unrelated", 1),
+        _Ent("wake_probability_stream", 33),
+        _Ent("wake_probability", 44),
+    ])
+    assert c._wake_prob_switch_key == 33
+    assert c._wake_prob_sensor_key == 44
+
+
+def test_discover_wake_prob_keys_absent_leaves_none():
+    c = _wake_prob_client(switch_key=7, sensor_key=8)
+    c._discover_wake_prob_keys([_Ent("unrelated", 1)])
+    assert c._wake_prob_switch_key is None
+    assert c._wake_prob_sensor_key is None
+
+
+def test_on_state_caches_wake_prob_sensor_value():
+    c = _wake_prob_client(sensor_key=44)
+    c._on_state(_State(44, "62.0"))
+    assert c._wake_prob_value == 62.0
+    # A missing_state push must not overwrite the cached value.
+    c._on_state(_State(44, "99.0", missing_state=True))
+    assert c._wake_prob_value == 62.0
+    # An unrelated key is ignored.
+    c._on_state(_State(999, "10.0"))
+    assert c._wake_prob_value == 62.0
+
+
+def test_set_wake_prob_stream_issues_switch_command():
+    c = _wake_prob_client(switch_key=33)
+    c._wake_prob_value = 50.0
+    c.set_wake_prob_stream(True)
+    assert c.cli.switches == [(33, True)]
+    # Enabling leaves the cached value intact.
+    assert c._wake_prob_value == 50.0
+    # Disabling issues the off command AND clears the cached value (no stale read).
+    c.set_wake_prob_stream(False)
+    assert c.cli.switches == [(33, True), (33, False)]
+    assert c._wake_prob_value is None
+
+
+def test_set_wake_prob_stream_missing_switch_raises_lookup():
+    c = _wake_prob_client(switch_key=None)
+    with pytest.raises(LookupError):
+        c.set_wake_prob_stream(True)
+    assert c.cli.switches == []
+
+
+def test_set_wake_prob_stream_offline_raises_runtime():
+    c = _wake_prob_client(online=False)
+    with pytest.raises(RuntimeError):
+        c.set_wake_prob_stream(True)
+    assert c.cli.switches == []
+
+
+def test_wake_prob_snapshot_shape():
+    c = _wake_prob_client(switch_key=33, sensor_key=44)
+    c._wake_prob_value = 71.0
+    assert c.wake_prob() == {"available": True, "value": 71.0}
+    # available is False unless BOTH entities are present.
+    c._wake_prob_sensor_key = None
+    assert c.wake_prob() == {"available": False, "value": 71.0}
+
+
+class _MgrWakeProbClient:
+    """Fake DeviceClient for DeviceManager wake-prob routing tests."""
+
+    def __init__(self, name, online=True, available=True, value=None):
+        self.cfg = _Cfg(name)
+        self.online = online
+        self._available = available
+        self._value = value
+        self.stream_calls = []  # enabled flags
+
+    def set_wake_prob_stream(self, enabled):
+        if not self.online:
+            raise RuntimeError(f"{self.cfg.name} is offline")
+        self.stream_calls.append(enabled)
+
+    def wake_prob(self):
+        return {"available": self._available, "value": self._value}
+
+
+def test_manager_set_wake_prob_stream_routes_and_returns_snapshot():
+    a = _MgrWakeProbClient("a")
+    b = _MgrWakeProbClient("b", value=33.0)
+    mgr = _manager([a, b])
+    out = mgr.set_wake_prob_stream("b", True)
+    assert b.stream_calls == [True] and a.stream_calls == []
+    assert out == {"device": "b", "online": True, "available": True, "value": 33.0}
+
+
+def test_manager_set_wake_prob_stream_unknown_device_raises_lookup():
+    mgr = _manager([_MgrWakeProbClient("a")])
+    with pytest.raises(LookupError):
+        mgr.set_wake_prob_stream("nope", True)
+
+
+def test_manager_set_wake_prob_stream_offline_propagates_runtime():
+    off = _MgrWakeProbClient("a", online=False)
+    mgr = _manager([off])
+    with pytest.raises(RuntimeError):
+        mgr.set_wake_prob_stream("a", True)
+
+
+def test_manager_wake_prob_online_returns_client_snapshot():
+    a = _MgrWakeProbClient("a", available=True, value=42.0)
+    mgr = _manager([a])
+    assert mgr.wake_prob("a") == {"device": "a", "online": True, "available": True, "value": 42.0}
+
+
+def test_manager_wake_prob_offline_reports_unavailable_without_call():
+    off = _MgrWakeProbClient("a", online=False, available=True, value=42.0)
+    mgr = _manager([off])
+    # An offline speaker reports unavailable/None without touching the client snapshot.
+    assert mgr.wake_prob("a") == {"device": "a", "online": False, "available": False, "value": None}
+
+
+def test_manager_wake_prob_unknown_device_raises_lookup():
+    mgr = _manager([_MgrWakeProbClient("a")])
+    with pytest.raises(LookupError):
+        mgr.wake_prob("nope")
 
 
 class _MgrCaptureClient:

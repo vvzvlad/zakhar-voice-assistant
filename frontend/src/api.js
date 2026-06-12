@@ -94,6 +94,15 @@ export const getDeviceControls = (device) =>
 export const setDeviceControl = (device, control, value) =>
   request("/api/device/controls", { method: "POST", body: { device, control, value } });
 
+// Live Wake Probability (on-device per-second PEAK, %). GET returns
+// {device, online, available, value}. The stream is gated on the device: POST
+// enabled=true when the device modal opens, enabled=false when it closes, so the
+// firmware only streams the probability while someone is watching.
+export const getWakeProbability = (device) =>
+  request(`/api/device/wake-probability?device=${encodeURIComponent(device)}`);
+export const setWakeProbabilityStream = (device, enabled) =>
+  request("/api/device/wake-probability", { method: "POST", body: { device, enabled } });
+
 // Background capture: the recording runs as a server-side task decoupled from the
 // browser request, so closing the browser no longer cancels it (which used to
 // reboot the device). start kicks it off (202 -> initial status), getCaptureStatus

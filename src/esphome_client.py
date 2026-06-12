@@ -53,6 +53,14 @@ CONFIG_VERSION_OBJECT_ID = "config_version"
 MODEL_VERSION_OBJECT_ID = "model_version"
 VERSION_OBJECT_IDS = (CONFIG_VERSION_OBJECT_ID, MODEL_VERSION_OBJECT_ID)
 
+# Native API object_ids of the gated live Wake-Probability entities: a switch that
+# gates the on-device peak tracker (we flip it on/off as the device modal opens/closes)
+# and a read-only sensor carrying the per-second PEAK probability as a percent. As above
+# these MUST equal slugify(name) from esphome/zakhar-voice-preroll.yaml — i.e. the
+# entities named "Wake Probability Stream" / "Wake Probability".
+WAKE_PROB_STREAM_OBJECT_ID = "wake_probability_stream"
+WAKE_PROB_SENSOR_OBJECT_ID = "wake_probability"
+
 
 class DeviceClient:
     """One ESPHome speaker: connection lifecycle + voice_assistant wiring."""
@@ -88,6 +96,13 @@ class DeviceClient:
         self._version_info = {}    # object_id -> {"key","name"}
         self._version_keys = set()
         self._version_value = {}   # key -> str
+        # Gated live Wake-Probability entities, discovered by object_id on connect. The
+        # switch gates the on-device peak tracker (server flips it as the modal opens/
+        # closes); the sensor carries the per-second PEAK probability as a percent.
+        # Keys are None when the firmware predates these entities (older flash).
+        self._wake_prob_switch_key = None
+        self._wake_prob_sensor_key = None
+        self._wake_prob_value = None  # latest reported percent (float) or None
         self._states_unsub = None
 
     async def _on_connect(self) -> None:
@@ -103,10 +118,12 @@ class DeviceClient:
             self._discover_capture_keys(entities)
             self._discover_control_keys(entities)
             self._discover_version_keys(entities)
+            self._discover_wake_prob_keys(entities)
             # Re-subscribe to entity states each (re)connect so the panel can read current
             # control values (cutoff %, volume %) without its own device round-trip.
             self._control_value = {}
             self._version_value = {}
+            self._wake_prob_value = None
             self._states_unsub = self.cli.subscribe_states(self._on_state)
         except Exception as e:
             logger.warning(f"{self.cfg.name}: device_info/list_entities failed: {e}")
@@ -205,6 +222,20 @@ class DeviceClient:
                 }
                 self._version_keys.add(ent.key)
 
+    def _discover_wake_prob_keys(self, entities) -> None:
+        """Map the gated Wake-Probability switch + sensor entities by object_id.
+
+        Sets _wake_prob_switch_key / _wake_prob_sensor_key from the entity list; leaves
+        them None when the firmware does not expose the entities (older flash)."""
+        self._wake_prob_switch_key = None
+        self._wake_prob_sensor_key = None
+        for ent in entities:
+            object_id = getattr(ent, "object_id", None)
+            if object_id == WAKE_PROB_STREAM_OBJECT_ID:
+                self._wake_prob_switch_key = ent.key
+            elif object_id == WAKE_PROB_SENSOR_OBJECT_ID:
+                self._wake_prob_sensor_key = ent.key
+
     def _on_state(self, state) -> None:
         """Cache the latest value for our control entities (called from subscribe_states)."""
         key = getattr(state, "key", None)
@@ -216,6 +247,14 @@ class DeviceClient:
             value = getattr(state, "state", None)
             if value is not None:
                 self._version_value[key] = str(value)
+        # Guard against a None key matching an undiscovered (None) sensor key on older
+        # firmware — mirrors the None-safe set membership used by the branches above.
+        if (self._wake_prob_sensor_key is not None
+                and key == self._wake_prob_sensor_key
+                and not getattr(state, "missing_state", False)):
+            value = getattr(state, "state", None)
+            if value is not None:
+                self._wake_prob_value = float(value)
 
     def controls(self) -> list[dict]:
         """Current control snapshot for the panel: id/name/value/min/max/step/unit.
@@ -264,6 +303,38 @@ class DeviceClient:
         # Optimistic local update so an immediate GET reflects the change before the
         # device's next state push.
         self._control_value[info["key"]] = clamped
+
+    def set_wake_prob_stream(self, enabled: bool) -> None:
+        """Enable/disable the on-device Wake-Probability peak stream via switch_command.
+
+        The server flips this on when the device modal opens and off when it closes, so
+        the firmware only publishes the probability sensor while someone is watching.
+        Raises RuntimeError if offline, LookupError if the switch is not exposed by the
+        current firmware (older flash). switch_command is idempotent on the device side,
+        so repeated calls (e.g. React StrictMode double-invoke) are harmless."""
+        if not self.online:
+            raise RuntimeError(f"{self.cfg.name} is offline")
+        if self._wake_prob_switch_key is None:
+            raise LookupError(f"{self.cfg.name} has no Wake Probability stream switch")
+        self.cli.switch_command(self._wake_prob_switch_key, bool(enabled))
+        # When disabling, drop the cached value so a stale percent isn't shown the next
+        # time the modal opens (before the first fresh sensor push arrives).
+        if not enabled:
+            self._wake_prob_value = None
+
+    def wake_prob(self) -> dict:
+        """Current Wake-Probability snapshot for the panel.
+
+        `available` is True only when BOTH the switch and sensor entities were
+        discovered (firmware exposes the feature); `value` is the latest reported
+        percent (float) or None until the first sensor state arrives."""
+        return {
+            "available": (
+                self._wake_prob_switch_key is not None
+                and self._wake_prob_sensor_key is not None
+            ),
+            "value": self._wake_prob_value,
+        }
 
     async def capture(self, seconds: int) -> bytes:
         """Record `seconds` of mic audio on this speaker and RETURN it as WAV bytes.
@@ -435,6 +506,30 @@ class DeviceManager:
             # Mirror device_controls() so a control write doesn't blank the version
             # section in the UI (the panel applies this POST response as a snapshot).
             "versions": target.versions() if target.online else [],
+        }
+
+    def set_wake_prob_stream(self, device_name: str, enabled: bool) -> dict:
+        """Enable/disable the live Wake-Probability stream on a speaker; return its snapshot.
+
+        Raises LookupError (unknown device / firmware lacks the switch) or RuntimeError
+        (offline) — both propagate to the caller (panel API) for status mapping."""
+        target = next((c for c in self.clients if c.cfg.name == device_name), None)
+        if target is None:
+            raise LookupError(f"unknown device {device_name!r}")
+        target.set_wake_prob_stream(enabled)
+        return {"device": device_name, "online": target.online, **target.wake_prob()}
+
+    def wake_prob(self, device_name: str) -> dict:
+        """Current Wake-Probability snapshot for a speaker. Raises LookupError if unknown.
+
+        An offline speaker reports {"available": False, "value": None} (no device round-trip)."""
+        target = next((c for c in self.clients if c.cfg.name == device_name), None)
+        if target is None:
+            raise LookupError(f"unknown device {device_name!r}")
+        return {
+            "device": device_name,
+            "online": target.online,
+            **(target.wake_prob() if target.online else {"available": False, "value": None}),
         }
 
     async def play_chime(self, sound_path: str, device_name: str | None = None) -> dict:

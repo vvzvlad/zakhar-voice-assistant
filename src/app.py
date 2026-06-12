@@ -209,6 +209,8 @@ async def main() -> None:
             device_play=manager.play_chime,
             device_controls_get=manager.device_controls,
             device_controls_set=manager.set_device_control,
+            device_wake_prob_get=manager.wake_prob,
+            device_wake_prob_set=manager.set_wake_prob_stream,
             static_dir=static_dir if os.path.isdir(static_dir) else None,
             runs_store=runs_store,
             tool_sources=hub.describe,
