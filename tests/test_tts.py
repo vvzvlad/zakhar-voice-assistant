@@ -14,6 +14,7 @@ from src.plugins.tts.teratts import TeraTtsHttpBackend
 from src.plugins.tts.yandex import (
     YANDEX_V3_URL,
     YandexTtsBackend,
+    _aiter_v3_audio,
     _chunk_for_v3,
     _decode_v3_audio,
     _split_oversized,
@@ -988,6 +989,124 @@ async def test_yandex_synthesize_stream_unvoiceable_empty_stream_no_request():
         got = [c async for c in chunks]
     assert (mime, got) == ("audio/mpeg", [])
     assert not route.called
+
+
+@respx.mock
+async def test_yandex_synthesize_stream_decodes_multiple_audiochunks_in_one_response():
+    import base64
+    import json
+
+    # A single short reply (one <=250-char request) whose v3 response is a stream
+    # of MULTIPLE audioChunk objects (NDJSON). True intra-request streaming must
+    # yield each decoded chunk as its own block, all from ONE POST.
+    blocks = [b"\xff\xf3frame-%d" % i for i in range(3)]
+    body = "\n".join(
+        json.dumps({"result": {"audioChunk": {"data": base64.b64encode(b).decode()}}})
+        for b in blocks
+    )
+    route = respx.post(YANDEX_URL).mock(
+        return_value=httpx.Response(200, text=body,
+                                    headers={"Content-Type": "application/json"}))
+    async with httpx.AsyncClient() as client:
+        backend = YandexTtsBackend(client, api_key="k", voice="zahar",
+                                   role="neutral", speed=1.0, timeout=10)
+        mime, chunks = await backend.synthesize_stream("Привет. Как дела?", "ru")
+        got = [c async for c in chunks]
+    assert mime == "audio/mpeg"
+    # One short reply -> exactly one POST...
+    assert route.call_count == 1
+    # ...but three separate decoded MP3 blocks, in arrival order.
+    assert got == blocks
+
+
+@respx.mock
+async def test_yandex_synthesize_stream_concatenation_matches_buffered():
+    import base64
+    import json
+
+    # Same multi-chunk reply, same per-request bodies for both paths: the streamed
+    # bytes (joined) must be byte-identical to the buffered synthesize() bytes.
+    num_calls = len(_chunk_for_v3(sanitize_plus_stress(expand_units(_LONG_REPLY))))
+    assert num_calls >= 2
+
+    # Each request returns several audioChunks so the per-request decode itself is
+    # multi-block; the buffered path concatenates them, the stream yields them.
+    def _body(call_idx: int) -> str:
+        parts = [b"\xff\xf3c%d-%d" % (call_idx, j) for j in range(2)]
+        return "\n".join(
+            json.dumps({"result": {"audioChunk": {"data": base64.b64encode(p).decode()}}})
+            for p in parts
+        )
+
+    bodies = [_body(i) for i in range(num_calls)]
+    responses = [
+        httpx.Response(200, text=b, headers={"Content-Type": "application/json"})
+        for b in bodies
+    ]
+
+    async with httpx.AsyncClient() as client:
+        backend = YandexTtsBackend(client, api_key="k", voice="zahar",
+                                   role="neutral", speed=1.0, timeout=10)
+        respx.post(YANDEX_URL).mock(side_effect=[
+            httpx.Response(200, text=b, headers={"Content-Type": "application/json"})
+            for b in bodies
+        ])
+        _, buffered = await backend.synthesize(_LONG_REPLY, "ru")
+
+        respx.post(YANDEX_URL).mock(side_effect=responses)
+        _, chunks = await backend.synthesize_stream(_LONG_REPLY, "ru")
+        streamed = b"".join([c async for c in chunks])
+
+    assert streamed == buffered
+
+
+@respx.mock
+async def test_yandex_synthesize_stream_error_object_mid_stream_raises():
+    import base64
+    import json
+
+    # A response that streams an audioChunk THEN an error object: the first block
+    # must be delivered, then the iterator must raise naming the error.
+    good = b"\xff\xf3frame-0"
+    body = (
+        json.dumps({"result": {"audioChunk": {"data": base64.b64encode(good).decode()}}})
+        + "\n"
+        + json.dumps({"error": "synthesis failed midway"})
+    )
+    route = respx.post(YANDEX_URL).mock(
+        return_value=httpx.Response(200, text=body,
+                                    headers={"Content-Type": "application/json"}))
+    async with httpx.AsyncClient() as client:
+        backend = YandexTtsBackend(client, api_key="k", voice="zahar",
+                                   role="neutral", speed=1.0, timeout=10)
+        mime, chunks = await backend.synthesize_stream("Привет. Как дела?", "ru")
+        it = chunks.__aiter__()
+        first = await it.__anext__()
+        assert first == good
+        with pytest.raises(RuntimeError) as exc:
+            await it.__anext__()
+    assert route.called
+    assert "synthesis failed midway" in str(exc.value)
+
+
+async def test_aiter_v3_audio_buffers_object_split_across_reads():
+    import base64
+    import json
+
+    # The decoder must buffer a JSON object split across two network reads: a
+    # tiny fake response whose aiter_text() hands back half an object, then the
+    # rest, must still yield exactly one decoded block.
+    payload = b"\xff\xf3split-frame"
+    obj = json.dumps({"result": {"audioChunk": {"data": base64.b64encode(payload).decode()}}})
+    half = len(obj) // 2
+
+    class _FakeResp:
+        async def aiter_text(self):
+            yield obj[:half]
+            yield obj[half:]
+
+    got = [block async for block in _aiter_v3_audio(_FakeResp())]
+    assert got == [payload]
 
 
 async def test_default_synthesize_stream_adapter_yields_single_chunk():

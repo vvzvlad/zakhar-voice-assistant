@@ -2,6 +2,7 @@
 
 import base64
 import json
+from collections.abc import AsyncIterator
 
 import httpx
 from pydantic import BaseModel, Field, model_validator
@@ -105,6 +106,74 @@ def _decode_v3_audio(body: str) -> bytes:
     return bytes(chunks)
 
 
+async def _aiter_v3_audio(resp) -> AsyncIterator[bytes]:
+    """Incrementally decode a SpeechKit v3 utteranceSynthesis streaming response:
+    parse complete JSON objects from the body as text arrives over the wire and
+    yield each audioChunk's decoded MP3 bytes, so playback can start before the
+    request finishes. Same object shapes and {"error": ...} -> RuntimeError
+    handling as _decode_v3_audio, but single-pass and safe across chunk
+    boundaries (a JSON object split between two network reads is buffered until
+    complete). Tolerant to NDJSON, concatenated objects, or a JSON array."""
+    decoder = json.JSONDecoder()
+    buf = ""
+
+    def _emit(message):
+        # Decode every audioChunk in one parsed message (a single object, or each
+        # element of a JSON array), raising on an embedded error object. Returns a
+        # list of MP3 byte blocks to yield; an async generator can't itself yield
+        # from a nested helper, so the caller does the actual `yield`.
+        out: list[bytes] = []
+        for obj in (message if isinstance(message, list) else [message]):
+            if not isinstance(obj, dict):
+                continue
+            if "error" in obj:
+                raise RuntimeError(f"Yandex TTS v3 error: {obj['error']}")
+            data = (obj.get("result") or {}).get("audioChunk", {}).get("data")
+            if data:
+                out.append(base64.b64decode(data))
+        return out
+
+    async for piece in resp.aiter_text():
+        buf += piece
+        idx, length = 0, len(buf)
+        # Extract every COMPLETE object from the front of the buffer; stop at the
+        # first object that spans the next network read (raw_decode raises) and
+        # keep the unparsed remainder for the next iteration.
+        while idx < length:
+            while idx < length and buf[idx] in " \r\n\t":
+                idx += 1
+            if idx >= length:
+                break
+            try:
+                message, end = decoder.raw_decode(buf, idx)
+            except json.JSONDecodeError:
+                # Object split across reads -> wait for more text.
+                break
+            for block in _emit(message):
+                yield block
+            idx = end
+        buf = buf[idx:]
+
+    # Final pass: a complete trailing object without a terminating newline may
+    # still sit in the buffer. Truly-incomplete (truncated) trailing data is
+    # dropped silently — the bytes already yielded stand.
+    rest = buf.strip()
+    if rest:
+        idx, length = 0, len(rest)
+        while idx < length:
+            while idx < length and rest[idx] in " \r\n\t":
+                idx += 1
+            if idx >= length:
+                break
+            try:
+                message, end = decoder.raw_decode(rest, idx)
+            except json.JSONDecodeError:
+                break
+            for block in _emit(message):
+                yield block
+            idx = end
+
+
 class YandexTtsBackend(TtsBackend):
     """Yandex SpeechKit v3 cloud TTS (utteranceSynthesis). The v3 REST endpoint is
     server-streaming: the response is a stream of JSON objects, each carrying a
@@ -140,12 +209,15 @@ class YandexTtsBackend(TtsBackend):
         return ("audio/mpeg", bytes(audio))
 
     async def synthesize_stream(self, text: str, lang: str = "ru"):
-        """Streaming synthesis over the same <=250-char request chunking: the
-        decoded MP3 of each request is yielded as soon as that request completes,
-        so playback can start after the first chunk instead of the whole reply.
-        Per the TtsBackend streaming contract connect/auth errors must raise
-        BEFORE the iterator is returned, so the FIRST chunk request runs eagerly
-        here; the rest are synthesized lazily inside the generator."""
+        """Streaming synthesis over the same <=250-char request chunking, but each
+        request is consumed as a LIVE server stream (see _aiter_v3_audio): v3
+        utteranceSynthesis is itself server-streaming, so the per-request MP3
+        frames flow to the caller as Yandex produces them, instead of buffering a
+        whole request body first. Per the TtsBackend streaming contract the FIRST
+        request is opened+validated eagerly so connect/auth/4xx errors raise
+        BEFORE the iterator is returned; the rest are opened lazily as the stream
+        is consumed. The concatenated byte stream is identical to the buffered
+        synthesize(), just delivered incrementally."""
         marked = sanitize_plus_stress(expand_units(text))
         chunks = _chunk_for_v3(marked, YANDEX_V3_TEXT_LIMIT)
         if not chunks:
@@ -155,16 +227,33 @@ class YandexTtsBackend(TtsBackend):
                 yield  # pragma: no cover - marks this as an async generator
 
             return ("audio/mpeg", _empty())
-        first = await self._synthesize_chunk(chunks[0])
+        # Open (and validate) the first request eagerly: the connect/auth/4xx gate.
+        first_resp = await self._open_chunk(chunks[0])
 
+        # Each opened streamed response is released by the generator's finally,
+        # which only runs if the generator is iterated or aclose()d. The caller
+        # (Pipeline.serve_audio_stream) owns the returned iterator and guarantees
+        # exactly that — fully consumed or explicitly closed.
         async def _gen():
-            yield first
+            try:
+                async for audio in _aiter_v3_audio(first_resp):
+                    yield audio
+            finally:
+                await first_resp.aclose()
             for chunk in chunks[1:]:
-                yield await self._synthesize_chunk(chunk)
+                resp = await self._open_chunk(chunk)
+                try:
+                    async for audio in _aiter_v3_audio(resp):
+                        yield audio
+                finally:
+                    await resp.aclose()
 
         return ("audio/mpeg", _gen())
 
-    async def _synthesize_chunk(self, text: str) -> bytes:
+    def _chunk_payload(self, text: str) -> dict:
+        """Build the v3 utteranceSynthesis request body for one <=250-char chunk
+        (voice/role/speed hints + MP3 output spec). Shared by the buffered and
+        streaming paths."""
         # `text` is already adapted (units expanded, stray '+' dropped) and within
         # the length limit; it carries Yandex-native "+vowel" stress markup as-is.
         # v3 carries voice/role/speed as "hints"; the role hint is sent only when a
@@ -172,12 +261,15 @@ class YandexTtsBackend(TtsBackend):
         hints = [{"voice": self.voice}, {"speed": self.speed}]
         if self.role:
             hints.insert(1, {"role": self.role})
-        payload = {
+        return {
             "text": text,
             "hints": hints,
             "outputAudioSpec": {"containerAudio": {"containerAudioType": "MP3"}},
             "loudnessNormalizationType": "LUFS",
         }
+
+    async def _synthesize_chunk(self, text: str) -> bytes:
+        payload = self._chunk_payload(text)
         headers = {"Authorization": f"Api-Key {self.api_key}"}
         resp = await self.client.post(YANDEX_V3_URL, headers=headers, json=payload, timeout=self.timeout)
         try:
@@ -190,6 +282,26 @@ class YandexTtsBackend(TtsBackend):
                 f"Yandex TTS v3 {resp.status_code}: {resp.text[:500]}"
             ) from e
         return _decode_v3_audio(resp.text)
+
+    async def _open_chunk(self, text: str):
+        """Open ONE streaming v3 request for an already-adapted <=250-char chunk and
+        return the open httpx.Response after validating its status. Mirrors
+        fishaudio: build_request + send(stream=True); on a non-2xx status read the
+        body and aclose() before raising RuntimeError with the status + body excerpt
+        (same diagnostic shaping as the buffered _synthesize_chunk)."""
+        payload = self._chunk_payload(text)
+        headers = {"Authorization": f"Api-Key {self.api_key}"}
+        req = self.client.build_request(
+            "POST", YANDEX_V3_URL, headers=headers, json=payload, timeout=self.timeout
+        )
+        resp = await self.client.send(req, stream=True)
+        if resp.status_code >= 400:
+            body = await resp.aread()
+            await resp.aclose()
+            raise RuntimeError(
+                f"Yandex TTS v3 {resp.status_code}: {body.decode(errors='replace')[:500]}"
+            )
+        return resp
 
 
 # Static ru-RU catalog for Yandex SpeechKit v3 (utteranceSynthesis): voice -> list
