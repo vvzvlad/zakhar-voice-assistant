@@ -631,9 +631,10 @@ function CaptureControl({ device, online }) {
 // Short per-control hint shown under the slider label, keyed by firmware object_id.
 const CONTROL_HINTS = {
   wake_probability_cutoff: "Higher = fewer false-fires, may miss wake word",
+  vad_cutoff: "Lower = fewer dropped wakes, slightly more non-speech leak",
 };
 
-// Live per-device controls (wake-word probability cutoff + speaker volume) shown
+// Live per-device controls (wake-word probability cutoff + VAD cutoff + speaker volume) shown
 // inside the Edit-speaker modal, next to CaptureControl. Each is a 0..100 Slider:
 // the value is read live from the device and written back debounced; a background
 // poll keeps the slider in sync with external changes (e.g. the physical volume
@@ -692,7 +693,7 @@ function DeviceControls({ device, online: onlineProp }) {
   };
 
   if (controls.length === 0) {
-    return <Field label="Device controls" hint="Wake-word cutoff & speaker volume">
+    return <Field label="Device controls" hint="Wake-word cutoff, VAD cutoff & speaker volume">
       <div className="z-fh">{online ? "Re-flash the firmware to enable device controls." : "Speaker offline."}</div>
     </Field>;
   }

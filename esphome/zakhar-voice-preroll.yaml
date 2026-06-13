@@ -32,7 +32,7 @@
 substitutions:
   # Bump on EVERY change to this device config — the Config Version entity lets you
   # verify which config is actually flashed (catches a stale / wrong-file flash).
-  config_version: "v18_preroll"
+  config_version: "v19_preroll"
   # micro_wake_word model version flashed; keep in sync with the model path in
   # packages.zakhar_wake_word below
   model_version: "zakhar_v27"
@@ -394,6 +394,43 @@ number:
             // runtime knob behaves identically to re-flashing with the same %.
             const float frac = x / 100.0f;
             id(zakhar)->set_probability_cutoff((uint8_t) (frac * 255.0f));
+  # Runtime VAD pre-gate sensitivity (object_id vad_cutoff) — the server exposes it as a
+  # 0..100 slider on the Devices page; tune live, no re-flash. The on-device VAD model is a
+  # generic speech/non-speech pre-gate: it BLOCKS a wake-word fire when the averaged
+  # speech-probability over its window is below this cutoff (logged as "VAD model doesn't").
+  # The stock VAD cutoff is 0.5 (50%), which sometimes drops a short/quiet «Захар». LOWER
+  # this to make the gate more permissive (fewer dropped wakes, slightly more non-speech
+  # leak); RAISE it to gate harder. initial_value applies only on a fresh flash; thereafter
+  # restore_value keeps the last value set from the panel.
+  #
+  # IMPORTANT: Native API object_id = slugify(name), so this name MUST slugify to
+  # `vad_cutoff` (the server matches on that object_id). The slider reaches the VAD model
+  # through the component (id `mww`) + the fork's get_vad_model() accessor, because the VAD
+  # model itself has no referenceable ESPHome id. Relies on the device VAD being configured
+  # (it is, via the stock home-assistant-voice package -> USE_MICRO_WAKE_WORD_VAD defined).
+  - platform: template
+    name: "VAD Cutoff"
+    id: vad_cutoff
+    optimistic: true
+    restore_value: true
+    initial_value: 30
+    min_value: 0
+    max_value: 100
+    step: 1
+    unit_of_measurement: "%"
+    mode: slider
+    on_value:
+      then:
+        - lambda: |-
+            // The VAD model stores its cutoff as a uint8 (probability * 255), same as the
+            // wake model. Convert this percentage (0..100) to that 0..255 scale and push it
+            // to the device VAD pre-gate at runtime. Truncate (not round) to match ESPHome's
+            // codegen, which bakes the static cutoff as int(probability * 255).
+            auto *vad = id(mww)->get_vad_model();
+            if (vad != nullptr) {
+              const float frac = x / 100.0f;
+              vad->set_probability_cutoff((uint8_t) (frac * 255.0f));
+            }
   # Runtime speaker-volume control (object_id speaker_volume) on a plain 0..100 scale.
   # optimistic + set_action: writing it (panel/HA) runs media_player.volume_set AND
   # publishes the set value immediately. The REAL volume (incl. the physical dial) is

@@ -69,6 +69,11 @@ class MicroWakeWord : public Component
 
   // Intended for the voice assistant component to fetch VAD status
   bool get_vad_state() { return this->vad_state_; }
+
+  // Intended for runtime tuning of the VAD pre-gate cutoff from a panel slider.
+  // Returns the VAD model so its probability_cutoff can be adjusted live; the
+  // unique_ptr is set during setup, so this is null only very briefly before then.
+  VADModel *get_vad_model() { return this->vad_model_.get(); }
 #endif
 
   // Intended for the voice assistant component to access which wake words are available

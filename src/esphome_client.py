@@ -43,11 +43,13 @@ CAPTURE_SECONDS_OBJECT_ID = "capture_seconds"
 CAPTURE_SAMPLE_OBJECT_ID = "capture_sample"
 
 # Native API object_ids of the live device-control number entities exposed to our
-# panel (wake-word probability cutoff + speaker volume), both on a plain 0..100
-# scale. As above these MUST equal slugify(name) from esphome/zakhar-voice-preroll.yaml.
+# panel (wake-word probability cutoff + VAD pre-gate cutoff + speaker volume), all on a
+# plain 0..100 scale. As above these MUST equal slugify(name) from
+# esphome/zakhar-voice-preroll.yaml.
 WAKE_CUTOFF_OBJECT_ID = "wake_probability_cutoff"
+VAD_CUTOFF_OBJECT_ID = "vad_cutoff"
 SPEAKER_VOLUME_OBJECT_ID = "speaker_volume"
-CONTROL_OBJECT_IDS = (WAKE_CUTOFF_OBJECT_ID, SPEAKER_VOLUME_OBJECT_ID)
+CONTROL_OBJECT_IDS = (WAKE_CUTOFF_OBJECT_ID, VAD_CUTOFF_OBJECT_ID, SPEAKER_VOLUME_OBJECT_ID)
 
 # Native API object_ids of the read-only firmware version text_sensors exposed to
 # our panel (config + model versions). As above these MUST equal slugify(name).
@@ -95,7 +97,7 @@ class DeviceClient:
         # on connect by object_id. None when the firmware predates these entities.
         self._capture_button_key = None
         self._capture_seconds_key = None
-        # Discovered number-control entities (cutoff, volume) by object_id, plus a live
+        # Discovered number-control entities (wake cutoff, vad cutoff, volume) by object_id, plus a live
         # value cache keyed by Native API entity key (filled from subscribe_states).
         self._control_info = {}   # object_id -> {"key","name","min","max","step","unit"}
         self._control_keys = set()  # Native API keys we care about (fast filter in _on_state)
@@ -133,7 +135,7 @@ class DeviceClient:
             self._discover_wake_prob_keys(entities)
             self._discover_thinking_key(entities)
             # Re-subscribe to entity states each (re)connect so the panel can read current
-            # control values (cutoff %, volume %) without its own device round-trip.
+            # control values (wake cutoff %, vad cutoff %, volume %) without its own device round-trip.
             self._control_value = {}
             self._version_value = {}
             self._wake_prob_value = None
@@ -235,7 +237,7 @@ class DeviceClient:
             )
 
     def _discover_control_keys(self, entities) -> None:
-        """Map our number-control template entities (cutoff, volume) by object_id.
+        """Map our number-control template entities (wake cutoff, vad cutoff, volume) by object_id.
 
         Stores per-control {key,name,min,max,step,unit} from the NumberInfo; leaves the
         maps empty for controls the firmware doesn't expose (older flash)."""
@@ -314,7 +316,8 @@ class DeviceClient:
     def controls(self) -> list[dict]:
         """Current control snapshot for the panel: id/name/value/min/max/step/unit.
 
-        value is None until the first state arrives. Order is stable (cutoff, volume)."""
+        value is None until the first state arrives. Order is stable (wake cutoff, vad
+        cutoff, volume)."""
         out = []
         for object_id in CONTROL_OBJECT_IDS:
             info = self._control_info.get(object_id)
