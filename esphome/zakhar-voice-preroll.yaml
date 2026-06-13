@@ -32,7 +32,7 @@
 substitutions:
   # Bump on EVERY change to this device config — the Config Version entity lets you
   # verify which config is actually flashed (catches a stale / wrong-file flash).
-  config_version: "v14_preroll"
+  config_version: "v18_preroll"
   # micro_wake_word model version flashed; keep in sync with the model path in
   # packages.zakhar_wake_word below
   model_version: "zakhar_v27"
@@ -100,6 +100,20 @@ esphome:
 # Set 0ms to disable.
 voice_assistant:
   preroll_duration: 2000ms
+  # The "thinking" LED indicator is now driven EXPLICITLY by the server via the
+  # "Thinking Indicator" template switch below (object_id thinking_indicator), NOT by
+  # the voice_assistant on_* triggers. Rationale: the server plays the ack ("блям") and
+  # the slow-tool filler via the ANNOUNCEMENT API, whose firmware handler fires
+  # on_tts_start/on_tts_end/on_end and drives voice_assistant_phase to replying/idle
+  # MID-THINKING — corrupting any phase- or VA-event-based indicator (this is why the
+  # old on_stt_*/on_intent_* bracketing died after ~1 blink). The server knows the exact
+  # thinking window (STT_VAD_END -> TTS_START) and flips the switch, so the indicator is
+  # immune to the announce-driven phase churn. on_error clears the flag as a safety net
+  # in case a run aborts between the server's ON and OFF.
+  on_error:
+    - globals.set:
+        id: thinking_active
+        value: 'false'
 
 # Disable the wake-word confirmation chime ("блям"). With pre-roll the user speaks
 # «Захар <команда>» continuously, so the stock chime overlaps and corrupts the
@@ -129,6 +143,33 @@ switch:
     on_turn_off:
       then:
         - lambda: 'id(zakhar)->set_stream_enabled(false);'
+
+  # Server-driven "thinking" indicator. The server turns this ON the moment the user
+  # stops speaking (STT_VAD_END) and OFF when the spoken reply begins (TTS_START). While
+  # ON, thinking_blink holds the LED ring SOLID white (see the script) — visible
+  # regardless of led_ring's colour, unlike the stock "Thinking" effect which samples
+  # led_ring (RESTORE_DEFAULT_OFF == black) and renders to darkness. optimistic: the
+  # state follows the command, no device feedback path. ALWAYS_OFF: never light after a
+  # reboot.
+  #
+  # IMPORTANT: the Native API object_id = slugify(name), NOT the YAML `id:` field — the
+  # server matches on object_id, so this name MUST slugify to `thinking_indicator`.
+  - platform: template
+    name: "Thinking Indicator"
+    id: thinking_indicator
+    optimistic: true
+    restore_mode: ALWAYS_OFF
+    on_turn_on:
+      then:
+        - globals.set:
+            id: thinking_active
+            value: 'true'
+        - script.execute: thinking_blink
+    on_turn_off:
+      then:
+        - globals.set:
+            id: thinking_active
+            value: 'false'
 
 # --- Firmware versioning: config + model version as separate read-only diagnostic
 # entities, so you can confirm exactly what's flashed and catch config/file drift.
@@ -215,6 +256,13 @@ globals:
     type: bool
     restore_value: no
     initial_value: 'false'
+  # thinking_active gates thinking_blink — set true on STT_VAD_END (end of the user's
+  # speech) and false on TTS_START / on_end / on_error (see the voice_assistant block).
+  # restore_value: no so a reboot mid-run never leaves a stale "thinking" blink.
+  - id: thinking_active
+    type: bool
+    restore_value: no
+    initial_value: 'false'
 
 # While capture_active, re-assert a solid RED ring every ~300ms so the stock LED
 # ring reads as a camera-style "recording" light. We re-assert on a loop because
@@ -241,6 +289,53 @@ script:
             - light.turn_off: voice_assistant_leds
             - delay: 300ms
       - light.turn_off: voice_assistant_leds
+  # While the assistant is "thinking" (between the user's question and the spoken reply),
+  # hold the ring SOLID WHITE. Three deliberate choices, each forced by the stock design:
+  #   1) NOT the stock "Thinking" effect — it colours its LEDs from led_ring.current_values,
+  #      and led_ring is RESTORE_DEFAULT_OFF (== black), so the effect renders to darkness.
+  #   2) NOT touching `led_ring` — it is the user-facing ambient ring light (exposed in HA,
+  #      usable as a lamp); led_ring and voice_assistant_leds are two partition lights over
+  #      the SAME 12 physical LEDs, so driving led_ring would clobber the user's ambient
+  #      state. We write the explicit white straight onto voice_assistant_leds (effect:none).
+  #   3) SOLID, not a blink. The strip is powered through `power_supply: led_power` (GPIO45),
+  #      a reference-counted rail that powers down when NO light is on. In the IDLE phase —
+  #      where the device sits for most of the LLM turn — nothing else holds a light on, so a
+  #      blink's `turn_off` between pulses drops the rail and the short white pulses never
+  #      light (proven on-device: the loop ran 14 iterations yet the ring stayed dark). The
+  #      identical capture_blink IS visible only because a capture session keeps a light — and
+  #      thus the rail — continuously on. Holding voice_assistant_leds solid keeps the rail up.
+  # Re-asserted every 50ms (NOT a slow blink) for two reasons: it keeps the power rail up
+  # (note 3), and it SWALLOWS the brief LED churn from the end-of-phrase ack ("блям"). The
+  # ack is played as an announcement, which makes the stock firmware flash its "replying"
+  # render (on_tts_start) and then turn the ring off (idle on_end) — both fire control_leds.
+  # A 50ms re-assert overrides each of those within ~50ms, so the ack is heard but not seen
+  # as a separate spin: the ring just stays white from when the user stops talking until the
+  # reply. Gated on OUR thinking_active flag, set by the server-driven Thinking Indicator
+  # switch above. mode: restart so a fast OFF->ON between back-to-back runs re-enters cleanly
+  # (default `single` would silently drop the re-execute while the tail delay runs). On exit
+  # we turn the ring off (we held it solid) and hand it back to the stock control_leds
+  # renderer (which then shows the "replying" effect for the spoken answer).
+  - id: thinking_blink
+    mode: restart
+    then:
+      - while:
+          condition:
+            lambda: 'return id(thinking_active);'
+          then:
+            # Solid white, re-asserted every 50ms. NO turn_off inside the loop, so the
+            # power rail stays up for the whole window (see note 3 above).
+            - light.turn_on:
+                id: voice_assistant_leds
+                red: 100%
+                green: 100%
+                blue: 100%
+                brightness: 100%
+                effect: none
+            - delay: 50ms
+      # Loop exited (thinking_active went false): we held the ring solid, so turn it off
+      # explicitly, then hand back to control_leds (which renders the current phase).
+      - light.turn_off: voice_assistant_leds
+      - script.execute: control_leds
 
 # --- Manual "record X seconds" capture trigger ---
 #

@@ -315,6 +315,8 @@ async def test_happy_path(tmp_path, monkeypatch):
     assert types_of(events) == [
         StageEvent.RUN_START,
         StageEvent.STT_START,
+        StageEvent.STT_VAD_START,
+        StageEvent.STT_VAD_END,
         StageEvent.STT_END,
         StageEvent.INTENT_START,
         StageEvent.INTENT_END,
@@ -383,6 +385,7 @@ async def test_empty_audio(tmp_path, monkeypatch):
     assert types_of(events) == [
         StageEvent.RUN_START,
         StageEvent.STT_START,
+        StageEvent.STT_VAD_START,
         StageEvent.RUN_END,
     ]
     assert_all_str(events)
@@ -399,6 +402,8 @@ async def test_empty_stt(tmp_path, monkeypatch):
     assert types_of(events) == [
         StageEvent.RUN_START,
         StageEvent.STT_START,
+        StageEvent.STT_VAD_START,
+        StageEvent.STT_VAD_END,
         StageEvent.STT_END,
         StageEvent.RUN_END,
     ]
@@ -562,6 +567,8 @@ FRAME = b"\x00" * 640
 FULL_SEQUENCE = [
     StageEvent.RUN_START,
     StageEvent.STT_START,
+    StageEvent.STT_VAD_START,
+    StageEvent.STT_VAD_END,
     StageEvent.STT_END,
     StageEvent.INTENT_START,
     StageEvent.INTENT_END,
@@ -644,6 +651,7 @@ async def test_vad_no_speech_finalize(tmp_path, monkeypatch):
     assert types_of(events) == [
         StageEvent.RUN_START,
         StageEvent.STT_START,
+        StageEvent.STT_VAD_START,
         StageEvent.STT_END,
         StageEvent.RUN_END,
     ]
@@ -750,6 +758,7 @@ async def test_finalize_once_race(tmp_path, monkeypatch):
     await pipeline._run("a", pcm, pipeline._conversation_id)
     after_first = list(types_of(events))
     assert after_first == [
+        StageEvent.STT_VAD_END,
         StageEvent.STT_END,
         StageEvent.INTENT_START,
         StageEvent.INTENT_END,
@@ -1295,6 +1304,8 @@ async def test_llm_stage_error_speaks_reply_error(tmp_path, monkeypatch):
     assert types_of(events) == [
         StageEvent.RUN_START,
         StageEvent.STT_START,
+        StageEvent.STT_VAD_START,
+        StageEvent.STT_VAD_END,
         StageEvent.STT_END,
         StageEvent.INTENT_START,
         StageEvent.INTENT_END,
@@ -1372,6 +1383,8 @@ async def test_stt_stage_error_records_error_and_stays_silent(tmp_path, monkeypa
     assert types_of(events) == [
         StageEvent.RUN_START,
         StageEvent.STT_START,
+        StageEvent.STT_VAD_START,
+        StageEvent.STT_VAD_END,
         StageEvent.STT_END,
         StageEvent.RUN_END,
     ]

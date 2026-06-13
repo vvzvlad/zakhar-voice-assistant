@@ -381,6 +381,10 @@ class Pipeline:
         logger.info(f"{self.name}: ▶️ run started (cid={conversation_id})")
         self._emit(StageEvent.RUN_START, {})
         self._emit(StageEvent.STT_START, {})
+        # Speech is already in-stream (pre-roll captured the command), so the device
+        # should show the active "listening for command" LED right away; the matching
+        # STT_VAD_END (thinking) is emitted in _run once VAD finalizes the utterance.
+        self._emit(StageEvent.STT_VAD_START, {})
         return 0  # 0 = audio comes in-band over the API connection.
 
     async def on_audio(self, data: bytes, data2=None) -> None:
@@ -712,6 +716,11 @@ class Pipeline:
                         self._emit(StageEvent.STT_END, {"text": ""})
                         self._emit(StageEvent.RUN_END, {})
                         return
+                    # Utterance ended and there IS speech to process: tell the device to
+                    # enter the "thinking" LED phase now. It stays in thinking through STT
+                    # and the LLM until TTS_START switches it to "replying" — this is the
+                    # indicator shown to the user between their question and the answer.
+                    self._emit(StageEvent.STT_VAD_END, {})
                     # Read the backend property ONCE: the same ref both executes the
                     # call and labels the log lines, so they can never diverge.
                     stt = self.stt_backend

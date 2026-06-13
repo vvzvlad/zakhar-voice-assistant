@@ -19,6 +19,8 @@ from src.pipeline_events import StageEvent
 _EVENT_TO_VAET = {
     StageEvent.RUN_START: VoiceAssistantEventType.VOICE_ASSISTANT_RUN_START,
     StageEvent.STT_START: VoiceAssistantEventType.VOICE_ASSISTANT_STT_START,
+    StageEvent.STT_VAD_START: VoiceAssistantEventType.VOICE_ASSISTANT_STT_VAD_START,
+    StageEvent.STT_VAD_END: VoiceAssistantEventType.VOICE_ASSISTANT_STT_VAD_END,
     StageEvent.STT_END: VoiceAssistantEventType.VOICE_ASSISTANT_STT_END,
     StageEvent.INTENT_START: VoiceAssistantEventType.VOICE_ASSISTANT_INTENT_START,
     StageEvent.INTENT_END: VoiceAssistantEventType.VOICE_ASSISTANT_INTENT_END,
@@ -60,6 +62,13 @@ VERSION_OBJECT_IDS = (CONFIG_VERSION_OBJECT_ID, MODEL_VERSION_OBJECT_ID)
 # entities named "Wake Probability Stream" / "Wake Probability".
 WAKE_PROB_STREAM_OBJECT_ID = "wake_probability_stream"
 WAKE_PROB_SENSOR_OBJECT_ID = "wake_probability"
+
+# Native API object_id of the server-driven "thinking" indicator switch. The server
+# turns it ON at STT_VAD_END and OFF at TTS_START / RUN_END / ERROR so the firmware
+# shows the visible thinking blink for exactly the STT->LLM->tools window — immune to
+# the announce-driven voice_assistant_phase churn that corrupts any VA-event/phase
+# based indicator.
+THINKING_INDICATOR_OBJECT_ID = "thinking_indicator"
 
 
 class DeviceClient:
@@ -103,6 +112,9 @@ class DeviceClient:
         self._wake_prob_switch_key = None
         self._wake_prob_sensor_key = None
         self._wake_prob_value = None  # latest reported percent (float) or None
+        # Server-driven "thinking" indicator switch, discovered by object_id on connect.
+        # None when the firmware predates the entity (older flash).
+        self._thinking_switch_key = None
         self._states_unsub = None
 
     async def _on_connect(self) -> None:
@@ -119,6 +131,7 @@ class DeviceClient:
             self._discover_control_keys(entities)
             self._discover_version_keys(entities)
             self._discover_wake_prob_keys(entities)
+            self._discover_thinking_key(entities)
             # Re-subscribe to entity states each (re)connect so the panel can read current
             # control values (cutoff %, volume %) without its own device round-trip.
             self._control_value = {}
@@ -154,8 +167,40 @@ class DeviceClient:
         self.online = False
 
     def _send_stage_event(self, event, data):
-        """Translate a transport-neutral StageEvent to the ESPHome VAET wire enum."""
+        """Translate a transport-neutral StageEvent to the ESPHome VAET wire enum,
+        and drive the server-controlled "thinking" indicator switch across the
+        STT->LLM->tools window."""
         self.cli.send_voice_assistant_event(_EVENT_TO_VAET[event], data)
+        self._drive_thinking_indicator(event)
+
+    def _drive_thinking_indicator(self, event) -> None:
+        """Turn the firmware "thinking" indicator ON the moment the user stops talking
+        (STT_VAD_END) and OFF when the reply phase begins (TTS_START), so the white glow
+        marks the ENTIRE wait (ack + STT + LLM + tools) as one continuous "I'm working".
+
+        ON at STT_VAD_END means the glow also spans the end-of-phrase ack ("блям", see
+        Pipeline._schedule_ack), whose announcement makes the firmware briefly flash its
+        stock "replying" render. The firmware holds the white SOLID and re-asserts it
+        every ~50 ms, which swallows that flash (and the ack's idle-on-end repaint) down
+        to sub-frame blips — the ack is heard but not seen as a separate spin. (Fully
+        removing it would mean not playing the ack through the announce path; covering it
+        with the glow is the cheaper choice.) OFF at TTS_START, NOT TTS_END: the stock
+        firmware enters "replying" on its own on_tts_start, so holding the white past that
+        point makes the two fight over the ring. Also clear on ERROR and RUN_END so it can
+        never stick on across the no-text / empty / STT-error paths that never reach
+        TTS_START. Best-effort: absent on older firmware, hot event path, errors swallowed."""
+        if self._thinking_switch_key is None:
+            return
+        if event == StageEvent.STT_VAD_END:
+            on = True
+        elif event in (StageEvent.TTS_START, StageEvent.RUN_END, StageEvent.ERROR):
+            on = False
+        else:
+            return
+        try:
+            self.cli.switch_command(self._thinking_switch_key, on)
+        except Exception as e:  # noqa: BLE001 - indicator is best-effort, never break the run
+            logger.debug(f"{self.cfg.name}: thinking indicator switch failed: {e}")
 
     async def _handle_start(self, conversation_id, flags, audio_settings, wake_word_phrase):
         return await self.pipeline.on_start(
@@ -235,6 +280,16 @@ class DeviceClient:
                 self._wake_prob_switch_key = ent.key
             elif object_id == WAKE_PROB_SENSOR_OBJECT_ID:
                 self._wake_prob_sensor_key = ent.key
+
+    def _discover_thinking_key(self, entities) -> None:
+        """Map the server-driven "thinking" indicator switch by object_id.
+
+        Sets _thinking_switch_key from the entity list; leaves it None when the
+        firmware does not expose the entity (older flash)."""
+        self._thinking_switch_key = None
+        for ent in entities:
+            if getattr(ent, "object_id", None) == THINKING_INDICATOR_OBJECT_ID:
+                self._thinking_switch_key = ent.key
 
     def _on_state(self, state) -> None:
         """Cache the latest value for our control entities (called from subscribe_states)."""

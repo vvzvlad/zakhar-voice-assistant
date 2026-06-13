@@ -899,6 +899,9 @@ def test_send_stage_event_translates_to_vaet():
     c.cli = types.SimpleNamespace(
         send_voice_assistant_event=lambda et, data: sent.append((et, data))
     )
+    # No thinking-indicator switch discovered (matches __init__ default); the indicator
+    # drive is a no-op here, so this test still asserts only the VAET translation.
+    c._thinking_switch_key = None
     c._send_stage_event(StageEvent.STT_END, {"text": "hi"})
     assert sent == [(VAET.VOICE_ASSISTANT_STT_END, {"text": "hi"})]
 
