@@ -301,3 +301,66 @@ total hours over {silence, music, speech, vacuum, radio}. (`nr2/det_final.py`, `
 & FAPH frontier PLUS it fixes the short-«захар» false-trigger. The synthetic-short-neg recipe (light 4/5
 weight) is now tuned and ready to swap synthetic→REAL short-«захар» recordings when they arrive (expected to
 push the short-fire rate further down at the same recall). NOT pushed to repo — operator collects output_v27/.
+
+# ============ NIGHT PROGRAM (beat v27) — HONEST FRESH-STATE RE-BASELINE ============
+predict_clip state-leak fixed: ALL eval now uses FRESH model state per clip (nr2/eval_fresh.py).
+| model | FRR | recall | silence | music | speech | vacuum | radio | faph_all | shortfire@1.0 |
+|-------|----:|-------:|--------:|------:|-------:|-------:|------:|---------:|--------------:|
+| **v27 (target)** | **19.6%** [15.9–24.0] | 80.4% | 0.8 | 2.9 | 0 | 0 | **1.3** | 1.03 | 0.643 |
+| v16 | 21.3% [17.4–25.8] | 78.7% | 0.0 | 5.8 | 0 | 0 | 1.3 | 1.03 | 0.674 |
+Corrections vs published: (a) radio FAPH 2.3→**1.3** (the 2.3 was state-leak inflation on back-to-back
+dense speech; long silence/music FAPH unaffected). (b) short-fire is NOT v27's advantage — v27 0.643 ≈
+v16 0.674; the synthetic short-negs did NOT reduce short-firing. v27 STILL beats v16 honestly via **recall
+(80.4 vs 78.7) and music-FAPH (2.9 vs 5.8)** — the short-neg recipe helped those, not short-fire.
+TARGET TO BEAT (strict): FRR ≤19.6% AND faph_all ≤1.03 (esp. music ≤2.9), no recall/FAPH regression.
+
+## NIGHT ROUND 1 — curriculum + target-list (vs honest v27: FRR 19.6, music 2.9, radio 1.3, faph_all 1.03)
+- **#2 Curriculum (SpecAugment intensity ramp gentle→aggressive, v27 data):** REGRESSED on all metrics —
+  curric FRR 20.7% / silence 3.3 / music 2.9 / radio 1.7 / faph_all 1.71 / shortfire 0.738. Aggressive
+  late-stage masking hurts this near-field task (echoes #9 multicond regression). Does NOT beat v27. (nr2/curriculum_train.py)
+- **#1 Target-list (analysis only, confusables training deferred to bench):** ran v27 over 839 leakage-safe
+  device-tract radio_train clips. Only **57 near-miss windows total, max score 0.67 (<0.9 cutoff), DIFFUSE**
+  (top words: <none>/я/перепроверять/виду/думаю… NOT «за»-confusables). → v27 has no confusable weakness on
+  device-tract speech; even bench confusable-recording has limited expected payoff. List: nr2/v27_falsefire_targets.txt.
+
+## NIGHT ROUND 2 — augmentation-intensity sweep (recall↔FAPH tradeoff)
+| model | aug (time/freq mask) | FRR | recall | faph_all | silence | music | radio |
+|-------|----------------------|----:|-------:|---------:|--------:|------:|------:|
+| **v27 (target)** | 5/2 (mild) | **19.6%** | 80.4% | **1.03** | 0.8 | 2.9 | 1.3 |
+| curriculum | 2→10 ramp (aggressive) | 20.7% | 79.3% | 1.71 | 3.3 | 2.9 | 1.7 |
+| lightaug | 2/1 (minimal) | 17.7% | 82.3% | 5.30 | 8.3 | 11.6 | 5.3 |
+- **lightaug**: less regularisation → recall UP (FRR 17.7) but FAPH ×5 (faph_all 5.3) — does NOT strictly beat
+  v27 (FAPH regression). **curriculum**: more aug → worse both. → aug intensity is a recall↔FAPH tradeoff and
+  **v27's mild aug sits at the frontier knee**; you can't move along the curve to strictly dominate v27.
+- Useful pointer for the bench: recall headroom (82.3% at FRR 17.7) EXISTS — to realise it without the FAPH
+  blow-up needs MORE/DIVERSE negatives + positives (shift the whole frontier), i.e. the bench data round, not
+  model-side aug knobs.
+
+## NIGHT VERDICT (model-side, on current data): v27 STANDS — not beaten.
+Exhausted tonight (all on honest fresh-state device-eval, target FRR≤19.6 & faph_all≤1.03):
+curriculum (regress), aug-min/lighter (recall+ but FAPH×5), short-neg lever (doesn't reduce short-fire),
+confusables (v27 has no «за»-weakness on device-tract radio — 57 diffuse sub-0.9 near-misses). Free-research
+(tavily) surfaced no new lever that fits ≤45KB and isn't already in the discarded registry. Real gains need
+the BENCH: diverse real positives, device-tract confusables (target list ready: nr2/v27_falsefire_targets.txt),
+real short «захар». NOT shipping anything — nothing strictly beats v27.
+
+## NIGHT ROUND 3 — EMA (weight averaging) — REGRESS
+ema (v27 mild aug + EMA decay 0.999): FRR 27.1% / recall 72.9% / music 14.5 / faph_all 1.88 — much worse
+than v27 (likely BN-stat / mid-trajectory averaging interaction). Does NOT beat v27.
+
+## ============ NIGHT FINAL — «идеи кончились» (model-side), v27 NOT beaten ============
+Honest fresh-state device-eval throughout. Target = v27: FRR 19.6%, faph_all 1.03 (music 2.9, radio 1.3),
+shortfire 0.643. Tonight's attempts (none strictly beats v27):
+| attempt | FRR | faph_all | verdict |
+| v27 (target) | 19.6% | 1.03 | — |
+| curriculum (aggressive aug ramp) | 20.7% | 1.71 | regress |
+| lightaug (minimal aug) | 17.7% | 5.30 | recall+ but FAPH×5 → worse |
+| EMA (decay 0.999) | 27.1% | 1.88 | regress |
+Plus (no training): short-neg lever does NOT reduce short-fire (v27 0.643 ≈ v16 0.674); v27 has no «за»-
+confusable weakness on device-tract radio (57 diffuse sub-0.9 near-misses). Free-research (tavily): no new
+lever fitting ≤45KB outside the discarded registry.
+CONCLUSION: v27 is well-tuned at the recall↔FAPH frontier knee; model-side knobs on the CURRENT data can't
+strictly dominate it. Productive model-side ideas are EXHAUSTED tonight. The real levers need the BENCH:
+(1) diverse real «захааар» positives (shift the recall frontier — lightaug proved 82%+ recall is reachable
+if FAPH is controlled by more/diverse negatives), (2) device-tract confusables targeted by
+nr2/v27_falsefire_targets.txt, (3) real short «захар» recordings. NOTHING SHIPPED — v27 remains prod.
