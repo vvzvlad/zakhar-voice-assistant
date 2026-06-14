@@ -57,11 +57,13 @@ flashing it.
 
 ## Tuning (no retrain needed)
 
-- The current model is **v27** (v16 recipe + synthetic short-«захар» negatives). It is the
-  first single model to beat v16: on the honest device eval it slightly improves drawn-out
-  recall (FRR 21→**19.3%** @0.90) AND fixes the field **short-«захар» false-trigger** — firing
-  on the plain name «Захар» dropped **65%→23%** — while keeping every FAPH class low (music
-  5.8→2.9/h). Same size as v16. Synthetic shorts will be swapped for REAL ones next round.
+- The current model is **v27** (v16 recipe + synthetic short-«захар» negatives). On the honest
+  device eval (fresh-state) it is a **small improvement over v16**: slightly better drawn-out
+  recall (FRR ~21.3→**19.6%** @0.90) and notably lower **music-FAPH (5.8→2.9/h)**; other FAPH
+  classes similar. Same size as v16. **Correction:** the earlier "fixes short-«захар» 65→23%"
+  was an eval **state-leak artifact** — fresh-state scoring shows BOTH v16 and v27 fire ~65% on
+  short «захар»; v27 does NOT fix the plain-name false-trigger (short-vs-drawn discrimination
+  still unsolved). See [`../microWakeWord/STATE_LEAK_BUG.md`](../microWakeWord/STATE_LEAK_BUG.md).
 - `probability_cutoff` defaults to `90%` in `zakhar-voice-preroll.yaml` — v27's eval knee
   (FRR 19.3%, FAPH ~1.2/h with VAD). The DET sweep showed v16's old `95%` was OVER-tightening
   (its FAPH plateaus 0.85→0.95), so v27 ships at `90%`. v27's silence-FAPH @0.90 is ~0.8/h
