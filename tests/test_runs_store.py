@@ -206,6 +206,45 @@ def test_list_omits_rounds_and_orders_newest_first(tmp_path):
     store.close()
 
 
+def test_list_before_id_keyset_cursor(tmp_path):
+    # Keyset pagination: list(before_id=cursor) returns ONLY rows with id strictly
+    # less than the cursor (older runs), newest-first by id DESC. Default list()
+    # (no cursor) still orders newest-first.
+    store = _store(tmp_path)
+    now = time.time()
+    ids = [store.insert(_rec(ts=now + i, stt_text=f"q{i}")) for i in range(5)]
+    # AUTOINCREMENT ids are monotonic with insertion order.
+    assert ids == sorted(ids)
+
+    # No cursor: full feed, newest id first.
+    full = [r["id"] for r in store.list()]
+    assert full == sorted(ids, reverse=True)
+
+    # Cursor at the 3rd id: only ids strictly smaller, still id DESC.
+    cursor = ids[2]
+    older = store.list(before_id=cursor)
+    older_ids = [r["id"] for r in older]
+    assert all(i < cursor for i in older_ids)
+    assert older_ids == sorted([i for i in ids if i < cursor], reverse=True)
+    store.close()
+
+
+def test_list_before_id_combines_with_filters_and_limit(tmp_path):
+    # before_id stacks with the device/result/search filters and LIMIT: paging only
+    # ever walks back through rows that also match the active filters.
+    store = _store(tmp_path)
+    now = time.time()
+    ids = [store.insert(_rec(ts=now + i, device="kitchen", stt_text=f"q{i}")) for i in range(4)]
+    store.insert(_rec(ts=now + 99, device="bedroom", stt_text="other"))
+
+    cursor = ids[3]
+    page = store.list(device="kitchen", before_id=cursor, limit=2)
+    page_ids = [r["id"] for r in page]
+    # Only kitchen rows older than the cursor, newest-first, capped at 2.
+    assert page_ids == [ids[2], ids[1]]
+    store.close()
+
+
 def test_list_filters(tmp_path):
     store = _store(tmp_path)
     store.insert(_rec(device="kitchen", result="ok", stt_text="свет на кухне"))

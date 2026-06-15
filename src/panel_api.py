@@ -830,7 +830,7 @@ class PanelServer:
     # --- observability (run log + metrics) -----------------------------------
     async def _get_runs(self, request: web.Request) -> web.Response:
         if self.runs_store is None:
-            return web.json_response({"runs": []})
+            return web.json_response({"runs": [], "has_more": False})
         device = request.query.get("device") or None
         result = request.query.get("result") or None
         search = request.query.get("search") or None
@@ -839,11 +839,22 @@ class PanelServer:
         except (TypeError, ValueError):
             limit = 100
         limit = max(1, min(limit, 500))
-        runs = await asyncio.to_thread(
+        # Keyset cursor: id of the oldest already-loaded run. Missing/malformed ->
+        # first page (no cursor), not an error.
+        try:
+            before_id = int(request.query["before"])
+        except (KeyError, TypeError, ValueError):
+            before_id = None
+        # Over-fetch one row to detect whether older pages exist, then trim it off.
+        rows = await asyncio.to_thread(
             self.runs_store.list,
-            device=device, result=result, search=search, limit=limit,
+            device=device, result=result, search=search, limit=limit + 1,
+            before_id=before_id,
         )
-        return web.json_response({"runs": runs})
+        has_more = len(rows) > limit
+        if has_more:
+            rows = rows[:limit]
+        return web.json_response({"runs": rows, "has_more": has_more})
 
     async def _get_run(self, request: web.Request) -> web.Response:
         if self.runs_store is None:

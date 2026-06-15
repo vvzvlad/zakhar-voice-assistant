@@ -1371,6 +1371,52 @@ async def test_get_runs_list_and_filters(tmp_path):
         store.close()
 
 
+async def test_get_runs_keyset_pagination(tmp_path):
+    # /api/runs paginates by keyset cursor: the first page returns the newest
+    # `limit` runs plus has_more, and ?before=<oldest loaded id> walks back to the
+    # older runs without overlap. Seed enough rows for a multi-page walk.
+    store = _seed_runs(tmp_path)  # 2 rows: ids 1 and 2
+    now = time.time()
+    for i in range(4):  # ids 3..6 -> 6 rows total
+        store.insert({
+            "ts": now, "device": "kitchen", "result": "ok", "reason": "endpoint",
+            "stt_text": f"page q{i}", "llm_text": "ok", "model": "m1", "tokens": 1,
+            "t_vad": 1, "t_stt": 1, "t_llm": 1, "t_stress": 0, "t_tts": 1,
+            "t_total": 4, "audio_ms": None, "audio_bytes": None, "audio_fmt": None,
+            "error_stage": None, "error_text": None, "rounds": [],
+        })
+    client, _svc_ = await _client(tmp_path, runs_store=store)
+    try:
+        # First page of 4 (newest-first by id): ids 6,5,4,3, more remains.
+        first = await (await client.get("/api/runs", params={"limit": "4"})).json()
+        assert first["has_more"] is True
+        first_ids = [r["id"] for r in first["runs"]]
+        assert first_ids == [6, 5, 4, 3]
+
+        # Second page via the oldest loaded id (3): the remaining older rows 2,1.
+        cursor = first_ids[-1]
+        second = await (await client.get("/api/runs", params={"limit": "4", "before": str(cursor)})).json()
+        assert second["has_more"] is False
+        second_ids = [r["id"] for r in second["runs"]]
+        assert second_ids == [2, 1]
+        # No overlap between the two pages.
+        assert set(first_ids) & set(second_ids) == set()
+
+        # A full-coverage first page (limit >= total) reports no more pages.
+        full = await (await client.get("/api/runs", params={"limit": "100"})).json()
+        assert full["has_more"] is False
+        assert [r["id"] for r in full["runs"]] == [6, 5, 4, 3, 2, 1]
+
+        # Malformed `before` is treated as the first page, not an error.
+        bad = await client.get("/api/runs", params={"before": "not-an-int"})
+        assert bad.status == 200
+        bad_body = await bad.json()
+        assert [r["id"] for r in bad_body["runs"]] == [6, 5, 4, 3, 2, 1]
+    finally:
+        await client.close()
+        store.close()
+
+
 async def test_get_run_by_id_and_404(tmp_path):
     store = _seed_runs(tmp_path)
     client, _svc_ = await _client(tmp_path, runs_store=store)
@@ -1594,7 +1640,7 @@ async def test_runs_endpoints_empty_without_store(tmp_path):
     client, _svc_ = await _client(tmp_path)
     try:
         runs = await (await client.get("/api/runs")).json()
-        assert runs == {"runs": []}
+        assert runs == {"runs": [], "has_more": False}
 
         metrics = await (await client.get("/api/metrics")).json()
         assert metrics["requests_24h"] == 0
@@ -1806,9 +1852,10 @@ class _LimitSpyStore:
         self._inner = inner
         self.limits = []
 
-    def list(self, *, device=None, result=None, search=None, limit=100):
+    def list(self, *, device=None, result=None, search=None, limit=100, before_id=None):
         self.limits.append(limit)
-        return self._inner.list(device=device, result=result, search=search, limit=limit)
+        return self._inner.list(device=device, result=result, search=search,
+                                limit=limit, before_id=before_id)
 
     # Delegate anything else the server might touch to the real store.
     def __getattr__(self, name):
@@ -1816,28 +1863,29 @@ class _LimitSpyStore:
 
 
 async def test_get_runs_limit_is_clamped_and_falls_back(tmp_path):
-    # The handler clamps limit into [1, 500] and falls back to 100 on a non-integer.
-    # Assert the VALUE that reached the store, not merely the status code.
+    # The handler clamps limit into [1, 500] and falls back to 100 on a non-integer,
+    # THEN over-fetches one extra row (limit + 1) to detect more pages. Assert the
+    # VALUE that reached the store (clamped limit + 1), not merely the status code.
     inner = _seed_runs(tmp_path)
     spy = _LimitSpyStore(inner)
     client, _svc_ = await _client(tmp_path, runs_store=spy)
     try:
-        # Non-integer limit -> fallback 100.
+        # Non-integer limit -> fallback 100 -> store sees 100 + 1.
         r1 = await client.get("/api/runs", params={"limit": "abc"})
         assert r1.status == 200
-        assert spy.limits[-1] == 100
+        assert spy.limits[-1] == 101
 
-        # Below the floor -> clamped up to 1.
+        # Below the floor -> clamped up to 1 -> store sees 1 + 1.
         r2 = await client.get("/api/runs", params={"limit": "0"})
         assert r2.status == 200
-        assert spy.limits[-1] == 1
+        assert spy.limits[-1] == 2
 
-        # Above the ceiling -> clamped down to 500.
+        # Above the ceiling -> clamped down to 500 -> store sees 500 + 1.
         r3 = await client.get("/api/runs", params={"limit": "99999"})
         assert r3.status == 200
-        assert spy.limits[-1] == 500
+        assert spy.limits[-1] == 501
 
-        assert spy.limits == [100, 1, 500]
+        assert spy.limits == [101, 2, 501]
     finally:
         await client.close()
         inner.close()

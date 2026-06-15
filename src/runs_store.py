@@ -203,14 +203,18 @@ class RunsStore:
         """On-disk size of this store's SQLite file (+ WAL/SHM sidecars), in bytes."""
         return db_file_size(self._path)
 
-    def list(self, *, device=None, result=None, search=None, limit=100) -> list[dict]:
+    def list(self, *, device=None, result=None, search=None, limit=100, before_id=None) -> list[dict]:
         """Recent runs (newest first) as summary dicts, with optional filters.
 
         - device: exact match.
         - result: "errors" -> result='error'; "ok" -> result IN ('ok','tool');
           anything else -> exact match.
         - search: LIKE on stt_text or llm_text.
-        rounds_json is omitted from the summary payload.
+        - before_id: keyset cursor — when set, return only rows with strictly
+          smaller id (i.e. OLDER than the cursor row), so callers can page
+          backward through the feed without rows shifting as new runs arrive.
+        Rows are ordered by id DESC (newest-first, stable and unique, consistent
+        with the before_id cursor). rounds_json is omitted from the summary payload.
         """
         where = []
         params: list = []
@@ -230,11 +234,14 @@ class RunsStore:
             where.append("(stt_text LIKE ? OR llm_text LIKE ?)")
             like = f"%{search}%"
             params.extend([like, like])
+        if before_id is not None:
+            where.append("id < ?")
+            params.append(before_id)
         clause = (" WHERE " + " AND ".join(where)) if where else ""
         sql = (
             f"SELECT {', '.join(_LIST_COLS)}, "
             "EXISTS(SELECT 1 FROM run_audio WHERE run_audio.run_id = runs.id) "
-            f"AS has_audio FROM runs{clause} ORDER BY ts DESC LIMIT ?"
+            f"AS has_audio FROM runs{clause} ORDER BY id DESC LIMIT ?"
         )
         params.append(limit)
         # Reads share the same Connection as writes and run on to_thread worker

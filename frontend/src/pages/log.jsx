@@ -11,6 +11,8 @@ import { matchesFilters } from "../runsFilters.js";
 
 const SC = STAGE_COLOR;
 
+const PAGE_SIZE = 100; // runs fetched per page (keyset pagination)
+
 // Stage rows for the drawer Gantt, in pipeline order. The accent (RuAccent)
 // stage sits between LLM and TTS; the Gantt only renders stages whose timing is
 // > 0 (see `present` below), so it shows up only on runs where it actually ran.
@@ -217,6 +219,8 @@ function Log() {
   const [result, setResult] = useState("all");       // all → errors → ok
   const [search, setSearch] = useState("");
   const [device, setDevice] = useState("");
+  const [hasMore, setHasMore] = useState(false);     // older pages exist beyond loaded runs
+  const [loadingMore, setLoadingMore] = useState(false);
 
   // Drawer state: selected summary row + lazily-fetched detail.
   const [openId, setOpenId] = useState(null);
@@ -224,19 +228,76 @@ function Log() {
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState(null);
 
+  // Generation token: bumped on every fresh `load`. Async results (from `load`
+  // or an in-flight `loadMore`) captured under an older generation are dropped
+  // when they resolve, so a filter change mid-flight can't pollute the new list
+  // with stale rows or set a stale `hasMore`.
+  const genRef = useRef(0);
+  // Mirror of `runs` so `loadMore` can read the tail without depending on the
+  // `runs` array (which the live SSE stream mutates on every frame).
+  const runsRef = useRef(runs);
+  useEffect(() => { runsRef.current = runs; }, [runs]);
+  const loadingMoreRef = useRef(false); // synchronous in-flight guard so a double click can't fire two identical loadMore requests
+
   const load = useCallback(() => {
+    genRef.current += 1;
+    const gen = genRef.current;
+    // A fresh load supersedes any in-flight loadMore: release its guard and spinner
+    // so the next "Load more" click isn't swallowed while the orphaned request drains.
+    loadingMoreRef.current = false;
+    setLoadingMore(false);
     setLoading(true);
-    const params = { limit: 100 };
+    const params = { limit: PAGE_SIZE };
     if (result !== "all") params.result = result;
     if (search.trim()) params.search = search.trim();
     if (device.trim()) params.device = device.trim();
     getRuns(params)
-      .then((data) => { setRuns((data.runs || []).map(mapRun)); setError(null); })
-      .catch((e) => setError(e))
+      .then((data) => {
+        if (gen !== genRef.current) return; // superseded by a newer load
+        setRuns((data.runs || []).map(mapRun));
+        setHasMore(!!data.has_more);
+        setError(null);
+      })
+      .catch((e) => { if (gen === genRef.current) setError(e); })
       .finally(() => setLoading(false));
   }, [result, search, device]);
 
   useEffect(() => { load(); }, [load]);
+
+  // Keyset "Load more": page backward from the tail (oldest loaded) row by its id.
+  // The tail is always a finalized DB row with a real id — live rows only sit at
+  // the top and never carry an id — so the cursor is well-defined.
+  const loadMore = useCallback(() => {
+    if (loadingMoreRef.current) return;
+    const list = runsRef.current;
+    const tail = list[list.length - 1];
+    const beforeId = tail && tail.id;
+    if (beforeId == null) return;
+    const gen = genRef.current;
+    loadingMoreRef.current = true;
+    setLoadingMore(true);
+    const params = { limit: PAGE_SIZE, before: beforeId };
+    if (result !== "all") params.result = result;
+    if (search.trim()) params.search = search.trim();
+    if (device.trim()) params.device = device.trim();
+    getRuns(params)
+      .then((data) => {
+        if (gen !== genRef.current) return; // filters changed mid-flight: drop stale page
+        const older = (data.runs || []).map(mapRun);
+        setRuns((prev) => {
+          const seen = new Set(prev.map((r) => r.key));
+          return [...prev, ...older.filter((r) => !seen.has(r.key))];
+        });
+        setHasMore(!!data.has_more);
+      })
+      .catch((e) => { if (gen === genRef.current) setError(e); })
+      .finally(() => {
+        // Only clear the in-flight flag if this request is still the current generation.
+        // If a load() superseded us, it already reset the guard (and a newer loadMore may
+        // now own it), so clearing here would race that newer request.
+        if (gen === genRef.current) { loadingMoreRef.current = false; setLoadingMore(false); }
+      });
+  }, [result, search, device]);
 
   // Keep the latest filter values in a ref so the single live subscription below
   // always matches against current filters without re-subscribing per keystroke.
@@ -247,7 +308,9 @@ function Log() {
     const stop = openRunsStream((row) => {
       const mapped = mapRun(row);
       const match = matchesFilters(row, filtersRef.current);
-      setRuns((prev) => applyStreamedRun(prev, mapped, match, 100));
+      // No cap: live runs prepend at the top and must never truncate older pages
+      // the user loaded via "Load more" (keyset pagination).
+      setRuns((prev) => applyStreamedRun(prev, mapped, match, Infinity));
     });
     return stop;
   }, []);
@@ -314,7 +377,10 @@ function Log() {
                   </tbody>
                 </table>
               </div>
-              <div className="z-tfoot">{runs.length} runs</div>
+              <div className="z-tfoot" style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                <span>{runs.length} runs{hasMore ? "+" : ""}</span>
+                {hasMore && <button className="z-btn" onClick={loadMore} disabled={loadingMore}>{loadingMore ? "Loading…" : "Load more"}</button>}
+              </div>
             </>}
     </div>
     {openId != null && <Drawer r={detail} loading={detailLoading} error={detailError} onClose={close} />}
