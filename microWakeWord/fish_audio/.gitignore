@@ -1,0 +1,3 @@
+# regenerable data caches — do not commit (large)
+fish_catalog_ru.jsonl
+fish_voices_clean.tsv

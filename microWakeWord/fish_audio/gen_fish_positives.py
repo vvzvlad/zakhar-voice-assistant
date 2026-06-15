@@ -19,7 +19,9 @@ TEXT TRICKS (from operator):
   - drawn-out length comes from the NUMBER of «а» in the text: «зах»+«а»*N+«рр».
   - a DOUBLE «рр» at the end helps the trailing «р» render.
   - emotion tags work well, written in brackets BEFORE the text: «[sobbing] Захаааарр».
-    Supported: emphasis | angry | laughing | sobbing (plus neutral). We cycle them.
+    Supported: emphasis | angry | laughing | sobbing (plus neutral). DRAWN positives get
+    ONE clip per tag (voice × every tag) for intonation variety; SHORT negatives are
+    NEUTRAL only — sobbing/laughing stretch «захар» so it stops being short.
   - `normalize` is OFF so «ааа» / «рр» / «[tag]» are preserved verbatim.
 
 IMPORTANT — these are CLEAN studio wavs. Raw synthetic HURTS (v11b); only device-tract
@@ -42,15 +44,16 @@ Usage:
 import argparse, json, os, sys, time, wave, urllib.request, urllib.parse, urllib.error
 
 API = "https://api.fish.audio"
-REPO = os.path.join(os.path.dirname(__file__), os.pardir)
+REPO = os.path.join(os.path.dirname(__file__), os.pardir, os.pardir)  # fish_audio/ -> microWakeWord/ -> repo root
 PRICE_PER_MB = 15.0  # USD per 1,000,000 UTF-8 bytes of input text
 TAGS = ["", "emphasis", "angry", "laughing", "sobbing"]  # "" = neutral
 VOSK_DIR = os.path.join(REPO, "models", "vosk-model-small-ru-0.22")
 
 
 def build_text(n_a, tag):
-    """«зах»+«а»*n_a+«рр» (double р helps), optional [tag] prefix. n_a=1 => short «захарр»."""
-    word = "зах" + "а" * n_a + "рр"
+    """«зах»+«а»*n_a+«р», optional [tag] prefix. n_a=1 => short «захар».
+    (Single trailing «р» + moderate «а» — double «рр» and many «а» sounded unnatural.)"""
+    word = "зах" + "а" * n_a + "р"
     return (f"[{tag}] {word}" if tag else word), word
 
 
@@ -113,13 +116,26 @@ def iter_catalog(key, language, sort_by, tag, title, page_size=50):
         page += 1
 
 
+def iter_file(path):
+    """Yield (voice_id, title, task_count) from a curated TSV (id\\tgender\\tage\\ttask_count\\ttitle),
+    e.g. fish_voices_clean.tsv produced by fish_dedup.py --export-clean."""
+    with open(path, encoding="utf-8") as f:
+        for i, line in enumerate(f):
+            if line.startswith("#") or (i == 0 and line.lower().startswith("id\t")):
+                continue
+            p = line.rstrip("\n").split("\t")
+            if p and p[0]:
+                tc = int(p[3]) if len(p) > 3 and p[3].isdigit() else 0
+                yield p[0], (p[4] if len(p) > 4 else ""), tc
+
+
 def tts(key, text, reference_id, model, normalize, retries=3):
     """POST /v1/tts -> raw 16 kHz mono PCM bytes. Retries on transient errors."""
     body = json.dumps({
         "text": text, "reference_id": reference_id,
         "format": "pcm", "sample_rate": 16000,
         "normalize": normalize, "latency": "normal",
-        "temperature": 0.7, "top_p": 0.7, "chunk_length": 200,
+        "temperature": 0.3, "top_p": 0.7, "chunk_length": 200,
     }).encode("utf-8")
     headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json", "model": model}
     last = None
@@ -192,7 +208,8 @@ def vet_ok(text):
 def collect_voices(key, args, want, asr):
     """Pull voices from the catalog; if asr is set, VET each with one short «захар»
     probe (large-v3 + strict match) and keep only clean voices. -> (voices, tried, rejected)."""
-    cat = iter_catalog(key, args.language, args.sort_by, args.tag, args.title)
+    cat = iter_file(args.voices_file) if args.voices_file else \
+        iter_catalog(key, args.language, args.sort_by, args.tag, args.title)
     if asr is None:
         good = []
         for v in cat:
@@ -242,19 +259,20 @@ def synth_one(key, args, vid, k, n_a, tag, out_dir, form):
 
 def main():
     ap = argparse.ArgumentParser(description="Generate «захааар»/«захар» via fish.audio.")
-    ap.add_argument("--out", default=os.path.join(os.path.dirname(__file__), "samples", "positive_fish_src"))
+    ap.add_argument("--out", default=os.path.join(os.path.dirname(__file__), os.pardir, "samples", "positive_fish_src"))
     ap.add_argument("--out-short", default=None, help="short NEGATIVES dir (default: <out>_short)")
     ap.add_argument("--mode", choices=["drawn", "short", "both"], default="both")
     ap.add_argument("--voices", type=int, default=400, help="how many GOOD (vetted) voices")
-    ap.add_argument("--per-voice", type=int, default=4, help="drawn clips per voice")
-    ap.add_argument("--short-per-voice", type=int, default=2, help="short clips per voice")
+    ap.add_argument("--voices-file", default=None, help="curated voice TSV (fish_voices_clean.tsv); use instead of pulling the catalog")
+    ap.add_argument("--per-voice", type=int, default=1, help="drawn tag-sweeps per voice (each sweep = 1 clip per tag)")
+    ap.add_argument("--short-per-voice", type=int, default=1, help="short tag-sweeps per voice (each sweep = 1 clip per tag)")
     ap.add_argument("--language", default="ru")
     ap.add_argument("--tag", default=None, help="voice TAG filter (e.g. for children)")
     ap.add_argument("--title", default=None, help="voice TITLE search (e.g. детск / child)")
     ap.add_argument("--sort-by", default="task_count", help="score | task_count | created_at")
-    ap.add_argument("--model", default="s1", help="fish backend model: s1 | s2-pro")
-    ap.add_argument("--a-min", type=int, default=4, help="min «а» count for drawn")
-    ap.add_argument("--a-max", type=int, default=7, help="max «а» count for drawn")
+    ap.add_argument("--model", default="s2-pro", help="fish synth model: s2-pro (v2, says «захар» well) | s1 (v1 — mangles «захар», do NOT use)")
+    ap.add_argument("--a-min", type=int, default=2, help="min «а» count for drawn (a2..a9 = full drawl spread; a2 overlaps short «захар» in length)")
+    ap.add_argument("--a-max", type=int, default=9, help="max «а» count for drawn (a3..a9 all sound drawn-out by ear)")
     ap.add_argument("--no-tags", action="store_true")
     ap.add_argument("--no-verify", action="store_true", help="skip Vosk voice vetting (keep all)")
     ap.add_argument("--max-candidates", type=int, default=0, help="cap vetted candidates (0 = voices*5)")
@@ -270,7 +288,8 @@ def main():
         return 2
 
     out_short = args.out_short or (args.out.rstrip("/") + "_short")
-    tags = [""] if args.no_tags else TAGS
+    tags = [""] if args.no_tags else TAGS  # drawn positives: every emotion (variety)
+    short_tags = [""]  # short negatives: NEUTRAL only — sobbing/laughing stretch «захар» => not short
     a_counts = list(range(args.a_min, args.a_max + 1))
 
     asr = None if (args.dry_run or args.no_verify) else load_asr()
@@ -281,8 +300,8 @@ def main():
     if not voices:
         return 1
 
-    n_d = len(voices) * args.per_voice if args.mode in ("drawn", "both") else 0
-    n_s = len(voices) * args.short_per_voice if args.mode in ("short", "both") else 0
+    n_d = len(voices) * args.per_voice * len(tags) if args.mode in ("drawn", "both") else 0
+    n_s = len(voices) * args.short_per_voice * len(short_tags) if args.mode in ("short", "both") else 0
     sample = build_text(a_counts[len(a_counts) // 2], "sobbing")[0]
     est = (n_d + n_s) * len(sample.encode("utf-8")) / 1_000_000 * PRICE_PER_MB
     print(f"[fish] plan: {len(voices)} voices -> drawn {n_d} + short {n_s}; est. ${est:.3f}", flush=True)
@@ -300,13 +319,20 @@ def main():
     made_d = made_s = 0
     for vi, (vid, _t, _tc) in enumerate(voices):
         if args.mode in ("drawn", "both"):
-            for k in range(args.per_voice):
-                made_d += synth_one(key, args, vid, k, a_counts[k % len(a_counts)], tags[k % len(tags)], args.out, f"a{a_counts[k % len(a_counts)]}")
-                time.sleep(args.sleep)
+            ci = 0  # per-voice clip index: each sweep covers EVERY tag once
+            for _ in range(args.per_voice):
+                for tag in tags:
+                    n_a = a_counts[ci % len(a_counts)]  # vary vowel length across the sweep
+                    made_d += synth_one(key, args, vid, ci, n_a, tag, args.out, f"a{n_a}")
+                    ci += 1
+                    time.sleep(args.sleep)
         if args.mode in ("short", "both"):
-            for k in range(args.short_per_voice):
-                made_s += synth_one(key, args, vid, k, 1, tags[k % len(tags)], out_short, "short")
-                time.sleep(args.sleep)
+            ci = 0
+            for _ in range(args.short_per_voice):
+                for tag in short_tags:  # neutral only — keep short «захар» genuinely short
+                    made_s += synth_one(key, args, vid, ci, 1, tag, out_short, "short")
+                    ci += 1
+                    time.sleep(args.sleep)
         if (vi + 1) % 25 == 0:
             print(f"  ...{vi + 1}/{len(voices)} voices | drawn {made_d} short {made_s}", flush=True)
 
