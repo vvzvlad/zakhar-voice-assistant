@@ -4,14 +4,15 @@
 // the existing CSS (z-tbl/z-gantt/z-drawer/...).
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import { Ic } from "../components/icons.jsx";
-import { PageHeader, Waterfall, KV, Loading, ErrorBox } from "../components/primitives.jsx";
+import { PageHeader, Waterfall, KV, Loading, ErrorBox, Select } from "../components/primitives.jsx";
 import { getRuns, getRun, openRunsStream, runAudioUrl, downloadRunAudio, runTtsAudioUrl, downloadRunTtsAudio } from "../api.js";
-import { RESULT_META, STAGE_COLOR, fmtSec, mapRun, totalMs, statusMeta, applyStreamedRun } from "../runsModel.js";
+import { RESULT_META, STAGE_COLOR, fmtSec, mapRun, totalMs, statusMeta, applyStreamedRun, pageWindow } from "../runsModel.js";
 import { matchesFilters } from "../runsFilters.js";
 
 const SC = STAGE_COLOR;
 
-const PAGE_SIZE = 100; // runs fetched per page (keyset pagination)
+const PAGE_SIZES = [50, 100, 200]; // selectable rows-per-page for numbered pagination
+const DEFAULT_PAGE_SIZE = 100;
 
 // Stage rows for the drawer Gantt, in pipeline order. The accent (RuAccent)
 // stage sits between LLM and TTS; the Gantt only renders stages whose timing is
@@ -219,8 +220,9 @@ function Log() {
   const [result, setResult] = useState("all");       // all → errors → ok
   const [search, setSearch] = useState("");
   const [device, setDevice] = useState("");
-  const [hasMore, setHasMore] = useState(false);     // older pages exist beyond loaded runs
-  const [loadingMore, setLoadingMore] = useState(false);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
+  const [total, setTotal] = useState(0);              // total matching rows across all pages
 
   // Drawer state: selected summary row + lazily-fetched detail.
   const [openId, setOpenId] = useState(null);
@@ -228,89 +230,54 @@ function Log() {
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState(null);
 
-  // Generation token: bumped on every fresh `load`. Async results (from `load`
-  // or an in-flight `loadMore`) captured under an older generation are dropped
-  // when they resolve, so a filter change mid-flight can't pollute the new list
-  // with stale rows or set a stale `hasMore`.
-  const genRef = useRef(0);
-  // Mirror of `runs` so `loadMore` can read the tail without depending on the
-  // `runs` array (which the live SSE stream mutates on every frame).
+  // Mirror of `runs` so the live SSE subscription can read it without depending on
+  // the `runs` array (which the stream itself mutates on every frame).
   const runsRef = useRef(runs);
   useEffect(() => { runsRef.current = runs; }, [runs]);
-  const loadingMoreRef = useRef(false); // synchronous in-flight guard so a double click can't fire two identical loadMore requests
+  // Generation token: each load() bumps it; only the latest load may apply its
+  // response, so stale out-of-order fetches (rapid typing/page changes) are dropped.
+  const genRef = useRef(0);
 
   const load = useCallback(() => {
-    genRef.current += 1;
-    const gen = genRef.current;
-    // A fresh load supersedes any in-flight loadMore: release its guard and spinner
-    // so the next "Load more" click isn't swallowed while the orphaned request drains.
-    loadingMoreRef.current = false;
-    setLoadingMore(false);
+    genRef.current += 1; const gen = genRef.current;
     setLoading(true);
-    const params = { limit: PAGE_SIZE };
+    const params = { limit: pageSize, offset: (page - 1) * pageSize };
     if (result !== "all") params.result = result;
     if (search.trim()) params.search = search.trim();
     if (device.trim()) params.device = device.trim();
     getRuns(params)
       .then((data) => {
-        if (gen !== genRef.current) return; // superseded by a newer load
-        setRuns((data.runs || []).map(mapRun));
-        setHasMore(!!data.has_more);
-        setError(null);
+        if (gen !== genRef.current) return;            // a newer load superseded this one
+        setRuns((data.runs || []).map(mapRun)); setTotal(data.total || 0); setError(null);
       })
       .catch((e) => { if (gen === genRef.current) setError(e); })
-      .finally(() => setLoading(false));
-  }, [result, search, device]);
+      .finally(() => { if (gen === genRef.current) setLoading(false); }); // a newer load owns the spinner otherwise
+  }, [result, search, device, page, pageSize]);
 
   useEffect(() => { load(); }, [load]);
-
-  // Keyset "Load more": page backward from the tail (oldest loaded) row by its id.
-  // The tail is always a finalized DB row with a real id — live rows only sit at
-  // the top and never carry an id — so the cursor is well-defined.
-  const loadMore = useCallback(() => {
-    if (loadingMoreRef.current) return;
-    const list = runsRef.current;
-    const tail = list[list.length - 1];
-    const beforeId = tail && tail.id;
-    if (beforeId == null) return;
-    const gen = genRef.current;
-    loadingMoreRef.current = true;
-    setLoadingMore(true);
-    const params = { limit: PAGE_SIZE, before: beforeId };
-    if (result !== "all") params.result = result;
-    if (search.trim()) params.search = search.trim();
-    if (device.trim()) params.device = device.trim();
-    getRuns(params)
-      .then((data) => {
-        if (gen !== genRef.current) return; // filters changed mid-flight: drop stale page
-        const older = (data.runs || []).map(mapRun);
-        setRuns((prev) => {
-          const seen = new Set(prev.map((r) => r.key));
-          return [...prev, ...older.filter((r) => !seen.has(r.key))];
-        });
-        setHasMore(!!data.has_more);
-      })
-      .catch((e) => { if (gen === genRef.current) setError(e); })
-      .finally(() => {
-        // Only clear the in-flight flag if this request is still the current generation.
-        // If a load() superseded us, it already reset the guard (and a newer loadMore may
-        // now own it), so clearing here would race that newer request.
-        if (gen === genRef.current) { loadingMoreRef.current = false; setLoadingMore(false); }
-      });
-  }, [result, search, device]);
 
   // Keep the latest filter values in a ref so the single live subscription below
   // always matches against current filters without re-subscribing per keystroke.
   const filtersRef = useRef({ result, search, device });
   useEffect(() => { filtersRef.current = { result, search, device }; }, [result, search, device]);
+  // Mirror page/pageSize so the single live subscription can read them without
+  // resubscribing (same pattern as filtersRef).
+  const pageRef = useRef(page);
+  useEffect(() => { pageRef.current = page; }, [page]);
+  const pageSizeRef = useRef(pageSize);
+  useEffect(() => { pageSizeRef.current = pageSize; }, [pageSize]);
 
   useEffect(() => {
     const stop = openRunsStream((row) => {
+      if (pageRef.current !== 1) return;             // only page 1 reflects live runs
       const mapped = mapRun(row);
       const match = matchesFilters(row, filtersRef.current);
-      // No cap: live runs prepend at the top and must never truncate older pages
-      // the user loaded via "Load more" (keyset pagination).
-      setRuns((prev) => applyStreamedRun(prev, mapped, match, Infinity));
+      // A brand-new finalized matching run grows the dataset -> bump total. Compute
+      // newness from the runs ref BEFORE the state update (no side effects inside the
+      // setRuns updater, which React may invoke twice).
+      const isNew = match && !mapped.live && !runsRef.current.some((r) => r.key === mapped.key);
+      setRuns((prev) => applyStreamedRun(prev, mapped, match, pageSizeRef.current));
+      if (isNew) setTotal((t) => t + 1);
     });
     return stop;
   }, []);
@@ -334,28 +301,37 @@ function Log() {
 
   const close = () => { setOpenId(null); setDetail(null); setDetailError(null); };
 
+  // Numbered pagination math: a filter/page-size change always resets `page` to 1
+  // (see the handlers below), so `offset` can never point past the dataset end.
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const from = total === 0 ? 0 : (page - 1) * pageSize + 1;
+  const to = Math.min(page * pageSize, total);
+
+  // Safety net: if the dataset shrinks (e.g. retention pruning) so the current page
+  // is now past the end, snap back to the last valid page. totalPages is always >= 1,
+  // so this converges in one step and never loops.
+  useEffect(() => { if (page > totalPages) setPage(totalPages); }, [page, totalPages]);
+
   return <div className="z-page">
     <PageHeader title="Request log" desc="Every pipeline run with per-stage timings. Click a row for the full waterfall, tool calls and metadata." />
     <div className="z-card">
       <div className="z-filters">
         <div className="z-search"><Ic n="search" w={13} />
           <input placeholder="Search recognized / response…" value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter") load(); }} />
+            onChange={(e) => { setSearch(e.target.value); setPage(1); }} />
         </div>
         <div className="z-search" style={{ maxWidth: 180 }}>
           <input placeholder="Device…" value={device}
-            onChange={(e) => setDevice(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter") load(); }} />
+            onChange={(e) => { setDevice(e.target.value); setPage(1); }} />
         </div>
-        <div className="z-fchip" onClick={() => setResult(result === "all" ? "errors" : result === "errors" ? "ok" : "all")}>Result · <b>{result}</b> ▾</div>
+        <div className="z-fchip" onClick={() => { setResult(result === "all" ? "errors" : result === "errors" ? "ok" : "all"); setPage(1); }}>Result · <b>{result}</b> ▾</div>
         <span style={{ flex: 1 }} />
-        <span style={{ fontSize: 11, color: "var(--mut2)", fontFamily: "var(--mono)" }}>{runs.length} runs</span>
+        <span style={{ fontSize: 11, color: "var(--mut2)", fontFamily: "var(--mono)" }}>{total} runs</span>
       </div>
 
       {loading ? <Loading />
         : error ? <ErrorBox error={error} onRetry={load} />
-          : runs.length === 0 ? <div className="z-empty"><div className="ic"><Ic n="log" w={20} /></div><b>No recorded runs yet</b>Once the assistant processes a request, it will appear here.</div>
+          : runs.length === 0 && total === 0 ? <div className="z-empty"><div className="ic"><Ic n="log" w={20} /></div><b>No recorded runs yet</b>Once the assistant processes a request, it will appear here.</div>
             : <>
               <div className="z-tblwrap">
                 <table className="z-tbl">
@@ -377,9 +353,26 @@ function Log() {
                   </tbody>
                 </table>
               </div>
-              <div className="z-tfoot" style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                <span>{runs.length} runs{hasMore ? "+" : ""}</span>
-                {hasMore && <button className="z-btn" onClick={loadMore} disabled={loadingMore}>{loadingMore ? "Loading…" : "Load more"}</button>}
+              <div className="z-tfoot" style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                <span>{from}–{to} of {total}</span>
+                <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  Rows:
+                  <Select w={90} value={String(pageSize)} options={PAGE_SIZES.map(String)}
+                    onChange={(v) => { setPageSize(Number(v)); setPage(1); }} />
+                </span>
+                <span style={{ flex: 1 }} />
+                {totalPages > 1 && <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                  <button className="z-btn g sm" disabled={page <= 1}
+                    onClick={() => setPage((p) => Math.max(1, p - 1))} aria-label="Previous page">‹</button>
+                  {pageWindow(page, totalPages).map((p, i) => (
+                    p === "…"
+                      ? <span key={"gap" + i} style={{ padding: "0 4px", color: "var(--mut2)" }}>…</span>
+                      : <button key={p} className={"z-btn sm " + (p === page ? "p" : "g")}
+                          onClick={() => setPage(p)} aria-current={p === page ? "page" : undefined}>{p}</button>
+                  ))}
+                  <button className="z-btn g sm" disabled={page >= totalPages}
+                    onClick={() => setPage((p) => Math.min(totalPages, p + 1))} aria-label="Next page">›</button>
+                </span>}
               </div>
             </>}
     </div>

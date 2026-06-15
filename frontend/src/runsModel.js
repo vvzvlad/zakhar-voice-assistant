@@ -95,3 +95,20 @@ export function applyStreamedRun(prev, mapped, match, cap = 100) {
   if (mapped.live) return match ? [mapped, ...rest].slice(0, cap) : prev;
   return match ? [mapped, ...rest].slice(0, cap) : rest;
 }
+
+// Compact page list for numbered pagination: always show first + last + a window
+// around the current page, collapsing gaps to "…". Returns a mix of page numbers
+// and "…" strings (the ellipsis is non-clickable in the UI).
+export function pageWindow(current, totalPages) {
+  if (totalPages <= 7) return Array.from({ length: Math.max(totalPages, 0) }, (_, i) => i + 1);
+  const wanted = new Set([1, totalPages, current, current - 1, current + 1]);
+  const pages = [...wanted].filter((p) => p >= 1 && p <= totalPages).sort((a, b) => a - b);
+  const out = [];
+  let prev = 0;
+  for (const p of pages) {
+    if (p - prev > 1) out.push("…");
+    out.push(p);
+    prev = p;
+  }
+  return out;
+}

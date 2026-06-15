@@ -1,6 +1,6 @@
 // Unit tests for the backend-row -> UI-run adapter (src/runsModel.js).
 import { describe, it, expect } from "vitest";
-import { mapRun, totalMs, fmtSec, statusMeta, applyStreamedRun } from "../runsModel.js";
+import { mapRun, totalMs, fmtSec, statusMeta, applyStreamedRun, pageWindow } from "../runsModel.js";
 
 describe("mapRun", () => {
   it("returns null for a null row (pass-through)", () => {
@@ -118,6 +118,26 @@ describe("totalMs", () => {
 
   it("falls back to summing r.t when t_total is absent", () => {
     expect(totalMs({ t: { vad: 1, stt: 2, llm: 3 } })).toBe(6);
+  });
+});
+
+describe("pageWindow", () => {
+  it("returns the full 1..n list for small totals (<= 7), no ellipsis", () => {
+    expect(pageWindow(1, 1)).toEqual([1]);
+    expect(pageWindow(3, 5)).toEqual([1, 2, 3, 4, 5]);
+    expect(pageWindow(4, 7)).toEqual([1, 2, 3, 4, 5, 6, 7]);
+  });
+
+  it("collapses gaps to a single '…' for large totals", () => {
+    // Current 7 of 13: first, a gap, the 6/7/8 window, a gap, then last.
+    expect(pageWindow(7, 13)).toEqual([1, "…", 6, 7, 8, "…", 13]);
+  });
+
+  it("renders the first/last edges without a stray ellipsis next to consecutive pages", () => {
+    // At page 1 the leading 1,2 are consecutive -> no leading "…".
+    expect(pageWindow(1, 13)).toEqual([1, 2, "…", 13]);
+    // At the last page the trailing 12,13 are consecutive -> no trailing "…".
+    expect(pageWindow(13, 13)).toEqual([1, "…", 12, 13]);
   });
 });
 

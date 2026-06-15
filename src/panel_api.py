@@ -830,7 +830,7 @@ class PanelServer:
     # --- observability (run log + metrics) -----------------------------------
     async def _get_runs(self, request: web.Request) -> web.Response:
         if self.runs_store is None:
-            return web.json_response({"runs": [], "has_more": False})
+            return web.json_response({"runs": [], "total": 0})
         device = request.query.get("device") or None
         result = request.query.get("result") or None
         search = request.query.get("search") or None
@@ -839,22 +839,23 @@ class PanelServer:
         except (TypeError, ValueError):
             limit = 100
         limit = max(1, min(limit, 500))
-        # Keyset cursor: id of the oldest already-loaded run. Missing/malformed ->
-        # first page (no cursor), not an error.
+        # Offset for numbered pagination. Missing/malformed -> first page (0), not
+        # an error; clamped to >= 0 so a negative value can't walk past the start.
         try:
-            before_id = int(request.query["before"])
-        except (KeyError, TypeError, ValueError):
-            before_id = None
-        # Over-fetch one row to detect whether older pages exist, then trim it off.
-        rows = await asyncio.to_thread(
+            offset = int(request.query.get("offset", 0))
+        except (TypeError, ValueError):
+            offset = 0
+        offset = max(0, offset)
+        # Fetch the page and the total sequentially: both reads share the store's
+        # write lock, so gathering them would only contend on that lock.
+        runs = await asyncio.to_thread(
             self.runs_store.list,
-            device=device, result=result, search=search, limit=limit + 1,
-            before_id=before_id,
+            device=device, result=result, search=search, limit=limit, offset=offset,
         )
-        has_more = len(rows) > limit
-        if has_more:
-            rows = rows[:limit]
-        return web.json_response({"runs": rows, "has_more": has_more})
+        total = await asyncio.to_thread(
+            self.runs_store.count, device=device, result=result, search=search,
+        )
+        return web.json_response({"runs": runs, "total": total})
 
     async def _get_run(self, request: web.Request) -> web.Response:
         if self.runs_store is None:

@@ -206,42 +206,45 @@ def test_list_omits_rounds_and_orders_newest_first(tmp_path):
     store.close()
 
 
-def test_list_before_id_keyset_cursor(tmp_path):
-    # Keyset pagination: list(before_id=cursor) returns ONLY rows with id strictly
-    # less than the cursor (older runs), newest-first by id DESC. Default list()
-    # (no cursor) still orders newest-first.
+def test_list_offset_paginates(tmp_path):
+    # Offset pagination: list(limit, offset) returns disjoint newest-first slices.
     store = _store(tmp_path)
     now = time.time()
     ids = [store.insert(_rec(ts=now + i, stt_text=f"q{i}")) for i in range(5)]
-    # AUTOINCREMENT ids are monotonic with insertion order.
+    # AUTOINCREMENT ids are monotonic with insertion order; newest id is last.
     assert ids == sorted(ids)
+    desc = sorted(ids, reverse=True)
 
-    # No cursor: full feed, newest id first.
-    full = [r["id"] for r in store.list()]
-    assert full == sorted(ids, reverse=True)
-
-    # Cursor at the 3rd id: only ids strictly smaller, still id DESC.
-    cursor = ids[2]
-    older = store.list(before_id=cursor)
-    older_ids = [r["id"] for r in older]
-    assert all(i < cursor for i in older_ids)
-    assert older_ids == sorted([i for i in ids if i < cursor], reverse=True)
+    page0 = [r["id"] for r in store.list(limit=2, offset=0)]
+    page1 = [r["id"] for r in store.list(limit=2, offset=2)]
+    # First page is the 2 newest; second page is the next 2 — newest-first, disjoint.
+    assert page0 == desc[:2]
+    assert page1 == desc[2:4]
+    assert set(page0) & set(page1) == set()
     store.close()
 
 
-def test_list_before_id_combines_with_filters_and_limit(tmp_path):
-    # before_id stacks with the device/result/search filters and LIMIT: paging only
-    # ever walks back through rows that also match the active filters.
+def test_count_matches_filters(tmp_path):
+    # count() returns the total matching rows and honors the same device/result/search
+    # filters as list() (mirrors the cases in test_list_filters).
     store = _store(tmp_path)
-    now = time.time()
-    ids = [store.insert(_rec(ts=now + i, device="kitchen", stt_text=f"q{i}")) for i in range(4)]
-    store.insert(_rec(ts=now + 99, device="bedroom", stt_text="other"))
+    store.insert(_rec(device="kitchen", result="ok", stt_text="свет на кухне"))
+    store.insert(_rec(device="bedroom", result="tool", stt_text="музыка"))
+    store.insert(_rec(device="bedroom", result="error", stt_text="ошибка тут",
+                      error_stage="LLM"))
 
-    cursor = ids[3]
-    page = store.list(device="kitchen", before_id=cursor, limit=2)
-    page_ids = [r["id"] for r in page]
-    # Only kitchen rows older than the cursor, newest-first, capped at 2.
-    assert page_ids == [ids[2], ids[1]]
+    # No filter -> all inserted rows.
+    assert store.count() == 3
+    # device exact.
+    assert store.count(device="bedroom") == 2
+    # result "errors" -> only error rows.
+    assert store.count(result="errors") == 1
+    # result "ok" -> ok + tool.
+    assert store.count(result="ok") == 2
+    # result exact passthrough.
+    assert store.count(result="tool") == 1
+    # search LIKE on stt_text/llm_text.
+    assert store.count(search="кухн") == 1
     store.close()
 
 

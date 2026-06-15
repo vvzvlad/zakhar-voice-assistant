@@ -189,12 +189,12 @@ export const streamTtsVoice = async (provider, settings, text, signal) => {
 export const getTools = () => request("/api/tools");
 
 // --- observability (run log + metrics) -------------------------------------
-// Builds /api/runs?device=&result=&search=&limit=&before= from the given params,
-// dropping empty/undefined ones so the backend sees a clean query string. `before`
-// is the keyset cursor (id of the oldest already-loaded run) for paging backward.
+// Builds /api/runs?device=&result=&search=&limit=&offset= from the given params,
+// dropping empty/undefined ones so the backend sees a clean query string. `offset`
+// is the number of matching rows to skip for offset-based numbered pagination.
 export const getRuns = (params = {}) => {
   const q = new URLSearchParams();
-  for (const k of ["device", "result", "search", "limit", "before"]) {
+  for (const k of ["device", "result", "search", "limit", "offset"]) {
     const v = params[k];
     if (v !== undefined && v !== null && v !== "") q.set(k, String(v));
   }

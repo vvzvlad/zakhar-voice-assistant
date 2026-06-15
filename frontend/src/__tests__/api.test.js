@@ -108,10 +108,10 @@ describe("getRuns query builder", () => {
     expect(urls[0]).toBe("/api/runs?search=a+%26+b");
   });
 
-  it("includes the `before` keyset cursor in fixed order (device,result,search,limit,before)", async () => {
-    await getRuns({ before: 42, limit: 100 });
-    // `before` is last in the allow-list, so limit precedes it regardless of object key order.
-    expect(urls[0]).toBe("/api/runs?limit=100&before=42");
+  it("includes the `offset` in fixed order (device,result,search,limit,offset)", async () => {
+    await getRuns({ offset: 200, limit: 100 });
+    // `offset` is last in the allow-list, so limit precedes it regardless of object key order.
+    expect(urls[0]).toBe("/api/runs?limit=100&offset=200");
   });
 });
 
