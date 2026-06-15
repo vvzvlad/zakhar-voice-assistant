@@ -42,12 +42,35 @@ Usage:
   python gen_fish_positives.py --title детск --mode both          # target children's voices
 """
 import argparse, json, os, sys, time, wave, urllib.request, urllib.parse, urllib.error
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from itertools import islice
 
 API = "https://api.fish.audio"
 REPO = os.path.join(os.path.dirname(__file__), os.pardir, os.pardir)  # fish_audio/ -> microWakeWord/ -> repo root
 PRICE_PER_MB = 15.0  # USD per 1,000,000 UTF-8 bytes of input text
 TAGS = ["", "emphasis", "angry", "laughing", "sobbing"]  # "" = neutral
 VOSK_DIR = os.path.join(REPO, "models", "vosk-model-small-ru-0.22")
+
+
+class Log:
+    """Thread-safe logger: timestamps each line, writes to stdout and (optionally) a file."""
+
+    def __init__(self, path):
+        self.f = open(path, "a", encoding="utf-8") if path else None
+        self.lock = threading.Lock()
+
+    def __call__(self, msg):
+        line = f"{time.strftime('%H:%M:%S')} {msg}"
+        with self.lock:
+            print(line, flush=True)
+            if self.f:
+                self.f.write(line + "\n")
+                self.f.flush()
+
+    def close(self):
+        if self.f:
+            self.f.close()
 
 
 def build_text(n_a, tag):
@@ -205,9 +228,10 @@ def vet_ok(text):
     return len(t) == 1 and t[0].startswith("захар") and len(t[0]) <= 6
 
 
-def collect_voices(key, args, want, asr):
-    """Pull voices from the catalog; if asr is set, VET each with one short «захар»
-    probe (large-v3 + strict match) and keep only clean voices. -> (voices, tried, rejected)."""
+def collect_voices(key, args, want, asr, log=print):
+    """Pull voices; if asr is set, VET each with one short «захар» probe (large-v3 + strict
+    match), keeping only clean voices. Probe TTS runs in parallel (--workers); STT stays serial
+    (the model is not thread-safe). -> (voices, tried, rejected)."""
     cat = iter_file(args.voices_file) if args.voices_file else \
         iter_catalog(key, args.language, args.sort_by, args.tag, args.title)
     if asr is None:
@@ -219,27 +243,34 @@ def collect_voices(key, args, want, asr):
         return good, len(good), 0
     good, tried, rejected = [], 0, 0
     max_c = args.max_candidates or want * 5
-    for vid, title, tc in cat:
-        if len(good) >= want or tried >= max_c:
-            break
-        tried += 1
+
+    def probe(v):
         try:
-            pcm = tts(key, build_text(1, "")[0], vid, args.model, args.normalize)  # short probe
+            return v, tts(key, build_text(1, "")[0], v[0], args.model, args.normalize)
         except Exception:
-            rejected += 1
-            continue
-        if 0.3 < pcm_dur(pcm) < 30 and vet_ok(vet_text(asr, pcm)):
-            good.append((vid, title, tc))
-        else:
-            rejected += 1
-        time.sleep(args.sleep)
-        if tried % 25 == 0:
-            print(f"  [vet] tried {tried}, kept {len(good)}/{want}", flush=True)
+            return v, None
+
+    src = iter(cat)
+    with ThreadPoolExecutor(max_workers=args.workers) as ex:
+        while len(good) < want and tried < max_c:
+            chunk = list(islice(src, args.workers * 2))
+            if not chunk:
+                break
+            for (vid, title, tc), pcm in ex.map(probe, chunk):  # parallel TTS, then serial STT below
+                if len(good) >= want or tried >= max_c:
+                    break
+                tried += 1
+                if pcm is not None and 0.3 < pcm_dur(pcm) < 30 and vet_ok(vet_text(asr, pcm)):
+                    good.append((vid, title, tc))
+                else:
+                    rejected += 1
+            log(f"  [vet] tried {tried}, kept {len(good)}/{want}")
     return good, tried, rejected
 
 
-def synth_one(key, args, vid, k, n_a, tag, out_dir, form):
-    """Synthesize one clip, wrap PCM in a correct WAV, save; 1 saved / 0 else."""
+def synth_one(key, args, vid, k, n_a, tag, out_dir, form, log=print):
+    """Synthesize one clip, wrap PCM in a correct WAV, save; 1 saved / 0 else. Thread-safe
+    (independent API call + unique output filename)."""
     text = build_text(n_a, tag)[0]
     name = f"fish_{vid[:8]}_{k:02d}_{form}_{tag or 'neu'}.wav"
     dst = os.path.join(out_dir, name)
@@ -248,10 +279,10 @@ def synth_one(key, args, vid, k, n_a, tag, out_dir, form):
     try:
         pcm = tts(key, text, vid, args.model, args.normalize)
     except Exception as e:
-        print(f"  FAIL {name}: {e}", flush=True)
+        log(f"  FAIL {name}: {e}")
         return 0
     if not (0.3 < pcm_dur(pcm) < 30):
-        print(f"  bad-dur {name}: {pcm_dur(pcm):.1f}s", flush=True)
+        log(f"  bad-dur {name}: {pcm_dur(pcm):.1f}s")
         return 0
     save_wav(dst, pcm)
     return 1
@@ -274,10 +305,14 @@ def main():
     ap.add_argument("--a-min", type=int, default=2, help="min «а» count for drawn (a2..a9 = full drawl spread; a2 overlaps short «захар» in length)")
     ap.add_argument("--a-max", type=int, default=9, help="max «а» count for drawn (a3..a9 all sound drawn-out by ear)")
     ap.add_argument("--no-tags", action="store_true")
+    ap.add_argument("--drawn-tags", type=int, default=0,
+                    help="how many drawn intonations per voice (0=all 5; e.g. 2=neutral+emphasis). Fewer => more voices per recapture-night")
     ap.add_argument("--no-verify", action="store_true", help="skip Vosk voice vetting (keep all)")
     ap.add_argument("--max-candidates", type=int, default=0, help="cap vetted candidates (0 = voices*5)")
     ap.add_argument("--normalize", action="store_true")
     ap.add_argument("--api-key", default=None)
+    ap.add_argument("--workers", type=int, default=8, help="parallel fish TTS calls (threads)")
+    ap.add_argument("--log", default=None, help="log file path (default: fish_gen_<ts>.log next to --out)")
     ap.add_argument("--sleep", type=float, default=0.15)
     ap.add_argument("--dry-run", action="store_true", help="list voices + cost, synth NOTHING (no vetting)")
     args = ap.parse_args()
@@ -288,15 +323,23 @@ def main():
         return 2
 
     out_short = args.out_short or (args.out.rstrip("/") + "_short")
-    tags = [""] if args.no_tags else TAGS  # drawn positives: every emotion (variety)
+    tags = [""] if args.no_tags else (TAGS[:args.drawn_tags] if args.drawn_tags else TAGS)  # drawn intonations (see --drawn-tags)
     short_tags = [""]  # short negatives: NEUTRAL only — sobbing/laughing stretch «захар» => not short
     a_counts = list(range(args.a_min, args.a_max + 1))
 
+    log_path = args.log or os.path.join(
+        os.path.dirname(os.path.abspath(args.out.rstrip("/"))), f"fish_gen_{time.strftime('%Y%m%d_%H%M%S')}.log")
+    if not args.dry_run:
+        os.makedirs(os.path.dirname(log_path), exist_ok=True)
+    log = Log(None if args.dry_run else log_path)
+    log(f"[fish] start: voices={args.voices} mode={args.mode} model={args.model} "
+        f"a={args.a_min}..{args.a_max} workers={args.workers} src={args.voices_file or 'catalog'}")
+
     asr = None if (args.dry_run or args.no_verify) else load_asr()
-    print(f"[fish] collecting {args.voices} {args.language or 'any'} voices "
-          f"(vet={'large-v3' if asr else 'OFF'}, tag={args.tag}, title={args.title})...", flush=True)
-    voices, tried, rejected = collect_voices(key, args, args.voices, asr)
-    print(f"[fish] kept {len(voices)} voices (tried {tried}, rejected {rejected}).", flush=True)
+    log(f"[fish] collecting {args.voices} {args.language or 'any'} voices "
+        f"(vet={'large-v3' if asr else 'OFF'}, tag={args.tag}, title={args.title})...")
+    voices, tried, rejected = collect_voices(key, args, args.voices, asr, log)
+    log(f"[fish] kept {len(voices)} voices (tried {tried}, rejected {rejected}).")
     if not voices:
         return 1
 
@@ -304,11 +347,14 @@ def main():
     n_s = len(voices) * args.short_per_voice * len(short_tags) if args.mode in ("short", "both") else 0
     sample = build_text(a_counts[len(a_counts) // 2], "sobbing")[0]
     est = (n_d + n_s) * len(sample.encode("utf-8")) / 1_000_000 * PRICE_PER_MB
-    print(f"[fish] plan: {len(voices)} voices -> drawn {n_d} + short {n_s}; est. ${est:.3f}", flush=True)
+    log(f"[fish] plan: {len(voices)} voices -> drawn {n_d} + short {n_s}; est. ${est:.3f}")
 
     if args.dry_run:
-        for vid, title, tc in voices[:15]:
+        from collections import Counter
+        spread = Counter(a_counts[i % len(a_counts)] for i in range(n_d))  # mirrors the global gd cycle
+        for vid, title, tc in voices[:10]:
             print(f"   {vid}  uses={tc}  {title[:40]}")
+        print(f"[fish] drawn a-count spread: {dict(sorted(spread.items()))}")
         print(f"[fish] drawn ex: {sample!r}  short ex: {build_text(1, '')[0]!r}  (--dry-run: nothing synthesized)")
         return 0
 
@@ -316,29 +362,46 @@ def main():
         os.makedirs(args.out, exist_ok=True)
     if n_s:
         os.makedirs(out_short, exist_ok=True)
-    made_d = made_s = 0
-    for vi, (vid, _t, _tc) in enumerate(voices):
+    # build the full job list, then run TTS in parallel (network-bound) with a progress %
+    jobs = []
+    gd = 0  # GLOBAL drawn index -> a-count spans a2..a9 across the batch even at 1 clip/voice
+    for vid, _t, _tc in voices:
         if args.mode in ("drawn", "both"):
-            ci = 0  # per-voice clip index: each sweep covers EVERY tag once
+            ci = 0  # per-voice clip index (filename uniqueness within a voice)
             for _ in range(args.per_voice):
                 for tag in tags:
-                    n_a = a_counts[ci % len(a_counts)]  # vary vowel length across the sweep
-                    made_d += synth_one(key, args, vid, ci, n_a, tag, args.out, f"a{n_a}")
+                    n_a = a_counts[gd % len(a_counts)]  # vary vowel length across voices/tags
+                    jobs.append(("drawn", vid, ci, n_a, tag, args.out, f"a{n_a}"))
                     ci += 1
-                    time.sleep(args.sleep)
+                    gd += 1
         if args.mode in ("short", "both"):
             ci = 0
             for _ in range(args.short_per_voice):
                 for tag in short_tags:  # neutral only — keep short «захар» genuinely short
-                    made_s += synth_one(key, args, vid, ci, 1, tag, out_short, "short")
+                    jobs.append(("short", vid, ci, 1, tag, out_short, "short"))
                     ci += 1
-                    time.sleep(args.sleep)
-        if (vi + 1) % 25 == 0:
-            print(f"  ...{vi + 1}/{len(voices)} voices | drawn {made_d} short {made_s}", flush=True)
 
-    print(f"\n[fish] DONE: drawn(positives) {made_d} -> {args.out}")
-    print(f"[fish]       short(negatives) {made_s} -> {out_short}")
-    print("[fish] NEXT: playback-recapture BOTH through the device, then STT-filter (large-v3) + train.")
+    def run(job):
+        kind, vid, k, n_a, tag, out_dir, form = job
+        return kind, synth_one(key, args, vid, k, n_a, tag, out_dir, form, log)
+
+    total = len(jobs)
+    done = made_d = made_s = 0
+    step = max(1, total // 100)  # progress line ~every 1%
+    log(f"[fish] generating {total} clips with {args.workers} workers...")
+    with ThreadPoolExecutor(max_workers=args.workers) as ex:
+        for kind, r in (f.result() for f in as_completed([ex.submit(run, j) for j in jobs])):
+            done += 1
+            made_d += r if kind == "drawn" else 0
+            made_s += r if kind == "short" else 0
+            if done % step == 0 or done == total:
+                log(f"[fish] {done}/{total} ({100 * done / total:.1f}%) | drawn {made_d} short {made_s}")
+
+    log(f"[fish] DONE: drawn(positives) {made_d} -> {args.out}")
+    log(f"[fish]       short(negatives) {made_s} -> {out_short}")
+    log("[fish] NEXT: playback-recapture BOTH through the device, then STT-filter (large-v3) + train.")
+    log(f"[fish] log saved -> {log_path}")
+    log.close()
     return 0
 
 
