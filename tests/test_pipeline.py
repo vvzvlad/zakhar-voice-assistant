@@ -3587,3 +3587,113 @@ async def test_speak_streaming_announce_failure_cancels_feed_task(tmp_path, monk
     [feed] = pipeline.audio_server.streams
     assert feed.failed is True
     assert pipeline.audio_server.calls == []
+
+
+# --- streaming STT disconnect cleanup (Pipeline.on_disconnect) ---------------------
+
+
+class _FakeStreamSession:
+    """Streaming STT session double: records whether aclose() was called so the
+    on_disconnect tests can assert the lingering gRPC session was released."""
+
+    def __init__(self):
+        self.closed = False
+
+    def feed(self, pcm):
+        pass
+
+    async def finish(self):
+        return ""
+
+    async def aclose(self):
+        self.closed = True
+
+
+class _StreamingSttBackend:
+    """STT double whose open_stream() returns a fake live session, so the pipeline
+    opens a streaming STT session in on_start (the streaming-capable path)."""
+
+    def __init__(self):
+        self.session = _FakeStreamSession()
+
+    async def transcribe(self, pcm):
+        return ""
+
+    def open_stream(self):
+        return self.session
+
+
+async def test_on_disconnect_closes_unfinalized_streaming_session(tmp_path, monkeypatch):
+    # Speaker vanished mid-utterance: on_start opened a streaming session but the run
+    # was never finalized. on_disconnect() must close that session and drop the ref so
+    # the gRPC stream/channel don't linger until the next run.
+    stt = _StreamingSttBackend()
+    pipeline, _events = make_pipeline(tmp_path, monkeypatch, stt_backend=stt)
+    install_fake_vad(pipeline, [False])  # no endpoint -> run never finalizes
+    await pipeline.on_start("cid", 0, None, None)
+    assert pipeline._stt_stream is stt.session
+    assert pipeline._finalized is False
+
+    await pipeline.on_disconnect()
+    assert stt.session.closed is True
+    assert pipeline._stt_stream is None
+
+
+async def test_on_disconnect_skips_finalized_run(tmp_path, monkeypatch):
+    # A FINALIZED run owns the streaming session and closes it itself in _run's
+    # finally; on_disconnect() must NOT touch it (avoid racing finish() vs aclose()).
+    stt = _StreamingSttBackend()
+    pipeline, _events = make_pipeline(tmp_path, monkeypatch, stt_backend=stt)
+    install_fake_vad(pipeline, [False])
+    await pipeline.on_start("cid", 0, None, None)
+    # Simulate _claim() having taken the run (the run is being processed by _run).
+    pipeline._finalized = True
+
+    await pipeline.on_disconnect()
+    assert stt.session.closed is False
+    assert pipeline._stt_stream is stt.session
+
+
+# --- streaming STT open: non-streaming backend vs genuine open failure -----------
+
+
+class _RaisingStreamSttBackend:
+    """STT double that DOES expose open_stream() but whose open_stream() raises —
+    a streaming-capable backend that fails during live channel setup. Records the
+    call so the test can prove on_start took the warn-and-fall-back-to-batch path."""
+
+    def __init__(self):
+        self.open_called = False
+
+    async def transcribe(self, pcm):
+        return ""
+
+    def open_stream(self):
+        self.open_called = True
+        raise RuntimeError("channel setup failed")
+
+
+async def test_on_start_non_streaming_backend_falls_back_silently(tmp_path, monkeypatch):
+    # FakeSttBackend is a duck-typed double WITHOUT open_stream() (a non-streaming
+    # backend): on_start must treat it as "no streaming session", leaving _stt_stream
+    # None for the batch route — NOT as an open failure to warn about.
+    stt = FakeSttBackend()
+    assert not hasattr(stt, "open_stream")
+    pipeline, _events = make_pipeline(tmp_path, monkeypatch, stt_backend=stt)
+    install_fake_vad(pipeline, [False])
+
+    assert await pipeline.on_start("cid", 0, None, None) == 0
+    assert pipeline._stt_stream is None
+
+
+async def test_on_start_streaming_open_failure_falls_back_to_batch(tmp_path, monkeypatch):
+    # A streaming-capable backend whose open_stream() raises is a GENUINE failure
+    # (the warn path): on_start must still swallow it and leave _stt_stream None so
+    # the run continues via the batch transcribe() route.
+    stt = _RaisingStreamSttBackend()
+    pipeline, _events = make_pipeline(tmp_path, monkeypatch, stt_backend=stt)
+    install_fake_vad(pipeline, [False])
+
+    assert await pipeline.on_start("cid", 0, None, None) == 0
+    assert stt.open_called is True
+    assert pipeline._stt_stream is None

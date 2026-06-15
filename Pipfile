@@ -16,6 +16,7 @@ ruaccent = "==1.5.8.3"
 lameenc = "==1.8.2"
 mcp = "==1.27.2"
 caldav = "==3.2.1"
+yandexcloud = "==0.394.0"
 
 [dev-packages]
 

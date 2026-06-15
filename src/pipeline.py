@@ -104,6 +104,7 @@ class Pipeline:
         # end-pointing state (framing, counters); the pipeline only feeds it
         # chunks and acts on the returned reason.
         self._vad_session = None
+        self._stt_stream = None  # live streaming STT session (only for streaming-capable backends)
         # Running utterance peak driving the optional decision-only VAD boost
         # (core.vad.mic_auto_gain); reset per run in on_start.
         self._vad_peak = 0
@@ -314,6 +315,15 @@ class Pipeline:
         self._conversation_id = conversation_id or ""
         self._buffer.clear()
         self._buffer2.clear()
+        # Best-effort close a lingering streaming STT session from a prior aborted
+        # run before starting this one (await is fine here — on_start is not the hot
+        # path). Then null it so this run opens its own.
+        if self._stt_stream is not None:
+            try:
+                await self._stt_stream.aclose()
+            except Exception:  # noqa: BLE001 - defensive cleanup, never break a new run
+                pass
+            self._stt_stream = None
         self._vad_session = None
         self._vad_peak = 0
         self._finalized = False
@@ -385,6 +395,21 @@ class Pipeline:
         # should show the active "listening for command" LED right away; the matching
         # STT_VAD_END (thinking) is emitted in _run once VAD finalizes the utterance.
         self._emit(StageEvent.STT_VAD_START, {})
+        # Streaming STT (optional): if the selected backend supports a live session,
+        # open it now and feed it chunks in on_audio so recognition runs DURING
+        # speech. VAD still owns end-pointing; on finalize _run calls finish().
+        # A backend without open_stream() (or one returning None) is simply
+        # non-streaming — NOT an error — so it falls back to batch transcribe()
+        # SILENTLY; only a genuine open failure warns. Both paths leave
+        # _stt_stream None for the batch route.
+        self._stt_stream = None
+        opener = getattr(self.stt_backend, "open_stream", None)
+        if opener is not None:
+            try:
+                self._stt_stream = opener()
+            except Exception as e:  # noqa: BLE001 - never let STT setup break the run; batch-fallback
+                logger.warning(f"{self.name}: streaming STT open failed, using batch: {e}")
+                self._stt_stream = None
         return 0  # 0 = audio comes in-band over the API connection.
 
     async def on_audio(self, data: bytes, data2=None) -> None:
@@ -460,6 +485,10 @@ class Pipeline:
         # The full utterance audio (everything streamed, silence included) is what
         # we send to STT.
         self._buffer.extend(data)
+        # Feed the live streaming STT session (if any) the same selected-channel bytes
+        # that go into the buffer. feed() is synchronous and never raises.
+        if self._stt_stream is not None:
+            self._stt_stream.feed(data)
         if other:
             self._buffer2.extend(other)
         elif self._buffer2:
@@ -568,6 +597,26 @@ class Pipeline:
             return self.llm_cfg.reply_rate_limit
         return self.llm_cfg.reply_error
 
+    async def _close_stt_stream(self) -> None:
+        """Idempotently close and drop the live streaming STT session, if any."""
+        if self._stt_stream is None:
+            return
+        stream = self._stt_stream
+        self._stt_stream = None
+        try:
+            await stream.aclose()
+        except Exception as e:  # noqa: BLE001 - cleanup must never break the run
+            logger.debug(f"{self.name}: streaming STT close failed: {e}")
+
+    async def on_disconnect(self) -> None:
+        """Device dropped its connection. If a streaming STT session is open for a
+        run that was never finalized (the speaker vanished mid-utterance), close it
+        so the gRPC stream/channel don't linger until the next run. A FINALIZED run
+        owns the session and closes it in _run's finally, so skip it here to avoid
+        racing finish() against aclose()."""
+        if not self._finalized:
+            await self._close_stt_stream()
+
     async def _run(self, reason, pcm, conversation_id, pcm2: bytes = b"") -> None:
         """Run STT -> LLM -> TTS -> events on the already-claimed audio, once.
 
@@ -589,6 +638,7 @@ class Pipeline:
                 if not pcm:
                     # Truly-empty audio: nothing to transcribe and nothing to record.
                     logger.info(f"{self.name}: empty audio, ending run")
+                    await self._close_stt_stream()
                     self._emit(StageEvent.RUN_END, {})
                     return
 
@@ -713,6 +763,9 @@ class Pipeline:
                         logger.info(
                             f"{self.name}: 😶 no speech detected by VAD, skipping STT"
                         )
+                        # Discard any streaming session WITHOUT reading its result —
+                        # we never want a transcript for silence.
+                        await self._close_stt_stream()
                         self._emit(StageEvent.STT_END, {"text": ""})
                         self._emit(StageEvent.RUN_END, {})
                         return
@@ -726,7 +779,13 @@ class Pipeline:
                     stt = self.stt_backend
                     stt_t = time.perf_counter()
                     try:
-                        text = await stt.transcribe(pcm)
+                        # Streaming-capable backends already recognized DURING speech
+                        # (fed in on_audio): finish() forces the final transcript.
+                        # Otherwise fall back to a one-shot batch transcribe().
+                        if self._stt_stream is not None:
+                            text = await self._stt_stream.finish()
+                        else:
+                            text = await stt.transcribe(pcm)
                     except StageError as e:
                         # STT failed: record the run honestly as an error (not "empty"),
                         # balance the STT_START emitted in on_start with an empty
@@ -1036,6 +1095,12 @@ class Pipeline:
                     )
                     self._emit(StageEvent.RUN_END, {})
                 finally:
+                    # Single cleanup point for the streaming STT session covering every
+                    # path out of the inner try (no_speech, STT error, empty/non-empty
+                    # success, later-stage exceptions). finish() already drains/closes
+                    # the gRPC call, so this is an idempotent ref-nulling no-op there;
+                    # for the error/early-exit paths it actually closes the session.
+                    await self._close_stt_stream()
                     # Record the run on every non-empty-pcm path (empty-STT return,
                     # success, TTS-fail, exception). A recording failure must never
                     # break the run or swallow RUN_END, so it is fully wrapped.

@@ -42,6 +42,60 @@ def contains_stt_hallucination(text: str) -> bool:
     return any(marker in folded for marker in STT_HALLUCINATION_MARKERS)
 
 
+class StreamingSttSession(ABC):
+    """A live STT session fed PCM chunks as they are captured. The pipeline VAD
+    owns end-pointing: it feed()s chunks during speech, then calls finish() to
+    force the final transcript, or aclose() to abandon (silence/error)."""
+
+    @abstractmethod
+    def feed(self, pcm: bytes) -> None:
+        """Enqueue a PCM chunk. Synchronous and non-blocking; never raises."""
+
+    @abstractmethod
+    async def finish(self) -> str:
+        """Signal end-of-utterance and return the final transcript. Raises
+        StageError('stt', ...) on failure."""
+
+    @abstractmethod
+    async def aclose(self) -> None:
+        """Abandon the session and release resources. Idempotent; never raises."""
+
+
+class StreamingTranscript:
+    """Accumulates streaming STT events into a final transcript.
+    Finals are keyed by final_index; final_refinement (normalized) overrides the
+    raw final at the same index. result() joins finals in index order; if no
+    final ever arrived, falls back to the last partial."""
+
+    def __init__(self):
+        self._finals: dict[int, str] = {}
+        self._normalized: dict[int, str] = {}
+        self._last_partial = ""
+
+    def add_partial(self, text: str) -> None:
+        if text:
+            self._last_partial = text
+
+    def add_final(self, index: int, text: str) -> None:
+        self._finals[index] = text
+
+    def add_normalized(self, index: int, text: str) -> None:
+        self._normalized[index] = text
+
+    def result(self) -> str:
+        if self._finals:
+            parts = [
+                (self._normalized.get(i) or self._finals.get(i, "")).strip()
+                for i in sorted(self._finals)
+            ]
+            joined = " ".join(p for p in parts if p).strip()
+            # An empty/whitespace-only final must not clobber a valid partial:
+            # Yandex v3 can emit a final/final_refinement with empty alternatives.
+            if joined:
+                return joined
+        return self._last_partial.strip()
+
+
 class SttBackend(ABC):
     """Abstract STT backend: raw 16 kHz/16-bit/mono PCM -> transcript.
 
@@ -52,3 +106,8 @@ class SttBackend(ABC):
     @abstractmethod
     async def transcribe(self, pcm: bytes) -> str:
         ...
+
+    def open_stream(self) -> "StreamingSttSession | None":
+        """Return a live streaming session, or None if this backend only does
+        batch transcribe(). Default: no streaming."""
+        return None

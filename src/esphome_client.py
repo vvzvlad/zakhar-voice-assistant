@@ -167,6 +167,12 @@ class DeviceClient:
         # The states subscription dies with the connection too; re-made on reconnect.
         self._states_unsub = None
         self.online = False
+        # Close any lingering streaming STT session from a run that never finalized
+        # (speaker vanished mid-utterance); best-effort, must not break disconnect.
+        try:
+            await self.pipeline.on_disconnect()
+        except Exception as e:  # noqa: BLE001 - cleanup must never break disconnect handling
+            logger.debug(f"{self.cfg.name}: streaming STT disconnect cleanup failed: {e}")
 
     def _send_stage_event(self, event, data):
         """Translate a transport-neutral StageEvent to the ESPHome VAET wire enum,
