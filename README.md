@@ -13,6 +13,32 @@ node-red-contrib-mcp-server) configured under `core.mcp_servers` in
 `data/config.json`, advertises its tools to the model and runs an agentic
 tool-calling loop.
 
+## Screenshots
+
+The admin panel (served on `PANEL_PORT`, default 8201) is a single-page app: a live
+pipeline overview, a searchable request log, and a per-run drill-down.
+
+### Dashboard — pipeline overview
+
+Stage-by-stage service map (VAD → STT → LLM → Accents → TTS) with live metrics and the
+most recent requests.
+
+![Dashboard](docs/screenshots/dashboard.png)
+
+### Request log
+
+Every pipeline run with per-stage timing waterfalls, token counts and status, filterable
+by text, device and result.
+
+![Request log](docs/screenshots/request-log.png)
+
+### Run detail
+
+Click a row for the full stage timeline, the STT/LLM transcript, the captured utterance
+audio and the per-round LLM tool calls.
+
+![Run detail](docs/screenshots/run-detail.png)
+
 ## Quick start
 
 Everything routine is wrapped in the `Makefile` (`make help` lists all targets):
