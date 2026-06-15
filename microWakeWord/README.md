@@ -4,6 +4,13 @@ On-device wake word для протяжного **«захааар»** (рус.;
 microWakeWord (INT8 streaming TFLite, ESP32-S3 / Home Assistant Voice PE, ESPHome
 `micro_wake_word`). Каталог способов и вердиктов — [v10/HYPOTHESIS_REGISTRY.md](v10/HYPOTHESIS_REGISTRY.md).
 
+> ⚠️ **АУДИТ 2026-06-14 пересмотрел несколько выводов** (субагенты-скептики, [v27/AUDIT_2026-06-14.md](v27/AUDIT_2026-06-14.md)):
+> eval был ~88% протёкшим → **реальный recall ~65%, а не ~80%** (truly-clean held-out — всего 43 клипа);
+> «v27 строго бьёт v16» по recall — НЕ значимо (реальный выигрыш только music-FAPH); «angular 2-ступень
+> мертва» — **ОПРОВЕРГНУТО** (был баг стандартизации logreg; с ней 81% reject @95% recall — пересмотреть);
+> «модель игнорирует длительность» — переоценено (модель length-sensitive). Харнесс измерения ЧИСТ.
+> Числа ниже частью со старого протёкшего eval — идёт пересборка truly-clean. v27 остаётся прод.
+
 ## Деплой: v27
 - В проде/[../esphome/zakhar-voice-preroll.yaml](../esphome/zakhar-voice-preroll.yaml) стоит
   **[v27/model/](v27/model/)**, **`probability_cutoff 0.90`** (колено v27), окно = манифест (5), VAD on.
@@ -83,8 +90,8 @@ microWakeWord (INT8 streaming TFLite, ESP32-S3 / Home Assistant Voice PE, ESPHom
 
 ## Путь дальше (стенд-раунд)
 1. **Fish-разнообразные позитивы** (сотни голосов, вкл. детские) через устройство → главный
-   непробованный рычаг против потолка recall (обобщение на незнакомые голоса). Генератор:
-   [gen_fish_positives.py](gen_fish_positives.py).
+   непробованный рычаг против потолка recall (обобщение на незнакомые голоса). Пайплайн
+   (каталог → энтити-дедуп → генерация): [fish_audio/](fish_audio/README.md).
 2. **Реальный короткий «захар»** через устройство → hard-негативы (путь A, duration-aware). ⚠️
    синтетические короткие short-fire НЕ снизили (артефакт метрики, [STATE_LEAK_BUG.md](STATE_LEAK_BUG.md)) —
    реальные надо честно ре-тестить; различение короткий/протяжный пока НЕ решено.
