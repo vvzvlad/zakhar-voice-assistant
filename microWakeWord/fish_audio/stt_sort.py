@@ -30,11 +30,20 @@ MLX_MODELS = {
 }
 
 
-def is_zakhar(text):
-    """One word, «заха...р» family (захар / захаар / захаааар). Rejects сахар, захаров,
-    захарка, multi-word and empty."""
+def is_zakhar(text, match="loose"):
+    """«заха...» family check.
+    strict  — exactly ONE word, starts «заха» and ends «р» (захар/захаар/захааар).
+    relaxed — any token starts «заха» AND contains «р», ≤2 tokens total.
+    loose   — any token starts «заха» (drawn «захааар» often drops the final «р» or splits
+              into >2 tokens in STT, so the «р»/token-count requirements FALSE-reject good
+              positives — confirmed on device-tract: reject was full of fine «захааар»).
+    All modes reject сахар («саха»), закат («зака»), empty."""
     t = [w for w in re.sub(r"[^а-яё ]", " ", text.lower()).split() if w]
-    return len(t) == 1 and t[0].startswith("заха") and t[0].endswith("р")
+    if match == "strict":
+        return len(t) == 1 and t[0].startswith("заха") and t[0].endswith("р")
+    if match == "relaxed":
+        return len(t) <= 2 and any(w.startswith("заха") and "р" in w for w in t)
+    return any(w.startswith("заха") for w in t)  # loose
 
 
 def safe(s):
@@ -77,6 +86,8 @@ def main():
     ap.add_argument("--out", required=True, help="output dir (recognized/ + not_recognized/ created inside)")
     ap.add_argument("--backend", choices=["mlx", "faster"], default="mlx", help="mlx=Apple GPU (Mac), faster=CPU (.128)")
     ap.add_argument("--model", default="turbo", help="mlx model: turbo | large | small")
+    ap.add_argument("--match", choices=["strict", "relaxed", "loose"], default="relaxed",
+                    help="zakhar match; «р» required (relaxed). loose drops the «р» req but ADMITS «захааа» без «р» = truncated word -> bad positives, do NOT use for filtering positives")
     ap.add_argument("--threads", type=int, default=8, help="faster-whisper cpu_threads")
     args = ap.parse_args()
 
@@ -105,7 +116,7 @@ def main():
     for f in files:
         t0 = time.time()
         txt = recognize(f)
-        ok = is_zakhar(txt)
+        ok = is_zakhar(txt, args.match)
         base = os.path.basename(f)
         shutil.copy2(f, os.path.join(rec if ok else non, f"{safe(txt)}__{base}"))
         man.write(f"{'OK' if ok else 'NO'}\t{txt}\t{base}\n")
