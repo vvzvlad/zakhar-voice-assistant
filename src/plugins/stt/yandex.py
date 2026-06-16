@@ -30,6 +30,20 @@ YANDEX_STT_ENDPOINT = "stt.api.cloud.yandex.net:443"
 # mono) so a single utterance never arrives as one oversized AudioChunk.
 _BATCH_CHUNK_BYTES = 32000
 
+# Recognition models valid for RecognizeStreaming (SpeechKit STT v3). Static list
+# (no runtime "list models" endpoint), kept in sync with the proto/docs by hand.
+YANDEX_STT_MODELS = ["general", "general:rc", "general:deprecated"]
+
+# Languages supported by the v3 "general" streaming model. "auto" enables Yandex's
+# automatic language detection. Curated from the SpeechKit STT docs (kept in sync by
+# hand, like the Yandex TTS voice catalog); ru-RU is the default. The language is
+# passed as a WHITELIST hint (a guideline, not a strict rule), so the list does not
+# need to be exhaustive.
+YANDEX_STT_LANGUAGES = [
+    "ru-RU", "en-US", "auto", "kk-KZ", "de-DE", "es-ES", "fi-FI", "fr-FR",
+    "it-IT", "nl-NL", "pl-PL", "pt-PT", "pt-BR", "sv-SE", "tr-TR",
+]
+
 
 class YandexSttStream(StreamingSttSession):
     """Live SpeechKit STT v3 gRPC session.
@@ -46,9 +60,8 @@ class YandexSttStream(StreamingSttSession):
     when this backend is actually selected at runtime.
     """
 
-    def __init__(self, *, api_key, folder_id, model, language, normalize, timeout, transport=None):
+    def __init__(self, *, api_key, model, language, normalize, timeout, transport=None):
         self.api_key = api_key
-        self.folder_id = folder_id
         self.model = model
         self.language = language
         self.normalize = normalize
@@ -74,12 +87,9 @@ class YandexSttStream(StreamingSttSession):
             transport = stub.RecognizeStreaming
         self._transport = transport
 
-        # Auth metadata: Api-Key auth (service-account key); the folder id is sent
-        # only when configured (Api-Key auth usually scopes the folder itself).
-        md = [("authorization", f"Api-Key {self.api_key}")]
-        if self.folder_id:
-            md.append(("x-folder-id", self.folder_id))
-        self._metadata = tuple(md)
+        # Auth metadata: Api-Key auth only (service-account key); the folder is
+        # scoped by the key, so no x-folder-id is sent.
+        self._metadata = (("authorization", f"Api-Key {self.api_key}"),)
 
         self._queue: asyncio.Queue = asyncio.Queue()
         self._accumulator = StreamingTranscript()
@@ -231,13 +241,12 @@ class YandexSttBackend(SttBackend):
     transcribe() is a batch fallback used only when streaming wasn't started
     (e.g. open_stream() failed)."""
 
-    def __init__(self, *, api_key, folder_id, model, language, normalize, timeout, transport=None):
+    def __init__(self, *, api_key, model, language, normalize, timeout, transport=None):
         if not api_key:
             raise ValueError(
                 "Yandex STT api_key is required (set stt.instances.yandex.api_key in data/config.json)"
             )
         self.api_key = api_key
-        self.folder_id = folder_id
         self.model = model
         self.language = language
         self.normalize = normalize
@@ -249,7 +258,6 @@ class YandexSttBackend(SttBackend):
     def open_stream(self):
         return YandexSttStream(
             api_key=self.api_key,
-            folder_id=self.folder_id,
             model=self.model,
             language=self.language,
             normalize=self.normalize,
@@ -279,9 +287,8 @@ class YandexSttBackend(SttBackend):
 
 class YandexSttConfig(BaseModel):
     api_key: str = Field("", json_schema_extra=SECRET_FIELD_EXTRA)
-    folder_id: str = ""
-    model: str = "general"
-    language: str = "ru-RU"
+    model: str = Field("general", json_schema_extra={"widget": "select", "options": "dynamic"})
+    language: str = Field("ru-RU", json_schema_extra={"widget": "select", "options": "dynamic"})
     normalize: bool = Field(
         True,
         title="Text normalization",
@@ -301,9 +308,15 @@ class YandexSttProvider(Provider):
     def create(self, cfg: YandexSttConfig, deps: Deps):
         return YandexSttBackend(
             api_key=cfg.api_key,
-            folder_id=cfg.folder_id,
             model=cfg.model,
             language=cfg.language,
             normalize=cfg.normalize,
             timeout=cfg.timeout,
         )
+
+    def options(self, field: str, cfg: YandexSttConfig, deps: Deps, query: str = ""):
+        if field == "model":
+            return list(YANDEX_STT_MODELS)
+        if field == "language":
+            return list(YANDEX_STT_LANGUAGES)
+        return None

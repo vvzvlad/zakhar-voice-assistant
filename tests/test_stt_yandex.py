@@ -11,7 +11,12 @@ import pytest
 
 import src.plugins  # noqa: F401  register all providers
 from src.plugins.base import Deps, get_provider
-from src.plugins.stt.yandex import YandexSttBackend, YandexSttConfig
+from src.plugins.stt.yandex import (
+    YANDEX_STT_LANGUAGES,
+    YANDEX_STT_MODELS,
+    YandexSttBackend,
+    YandexSttConfig,
+)
 from src.stage_errors import StageError
 from src.stt import StreamingTranscript
 
@@ -88,14 +93,13 @@ def test_yandex_stt_config_defaults():
     assert cfg.model == "general"
     assert cfg.language == "ru-RU"
     assert cfg.normalize is True
-    assert cfg.folder_id == ""
     assert cfg.timeout == 30
 
 
 def test_yandex_stt_backend_requires_api_key():
     with pytest.raises(ValueError):
         YandexSttBackend(
-            api_key="", folder_id="", model="general", language="ru-RU",
+            api_key="", model="general", language="ru-RU",
             normalize=True, timeout=30,
         )
 
@@ -114,6 +118,30 @@ async def test_registry_yandex_stt_provider_creates_backend():
         assert backend.api_key == "k"
         assert backend.model == "general"
         assert backend.language == "ru-RU"
+
+
+async def test_yandex_stt_provider_options_model_and_language():
+    # model/language render as dynamic selects; options() returns the curated
+    # provider-defined lists (no network), and an unknown field returns None.
+    import httpx
+
+    async with httpx.AsyncClient(verify=False) as cloud, httpx.AsyncClient(verify=False) as local:
+        deps = Deps(http_cloud=cloud, http_local=local)
+        provider = get_provider("stt", "yandex")
+        cfg = YandexSttConfig()
+
+        models = provider.options("model", cfg, deps)
+        assert isinstance(models, list)
+        assert "general" in models
+        assert models == YANDEX_STT_MODELS
+
+        languages = provider.options("language", cfg, deps)
+        assert isinstance(languages, list)
+        assert "ru-RU" in languages
+        assert "en-US" in languages
+        assert languages == YANDEX_STT_LANGUAGES
+
+        assert provider.options("api_key", cfg, deps) is None
 
 
 # --- Session tests: fake transport over REAL proto messages --------------------
@@ -184,7 +212,7 @@ def _make_transport(responses, *, sink=None, raises=None):
 
 def _new_stream(transport, *, timeout=5):
     return YandexSttStream(
-        api_key="k", folder_id="", model="general", language="ru-RU",
+        api_key="k", model="general", language="ru-RU",
         normalize=True, timeout=timeout, transport=transport,
     )
 
@@ -203,6 +231,21 @@ async def test_stream_request_ordering_session_options_chunks_eou():
     assert sink[0] == "session_options"
     assert sink[-1] == "eou"
     assert sink.count("chunk") == 2
+
+
+@_requires_yandexcloud
+async def test_stream_metadata_is_api_key_only_no_folder_id():
+    # Auth is Api-Key only (folder scoped by the key): the metadata carries exactly
+    # the authorization header and NO x-folder-id key.
+    transport = _make_transport([_final_response(0, "привет")])
+    stream = _new_stream(transport)
+    try:
+        keys = [k for k, _ in stream._metadata]
+        assert keys == ["authorization"]
+        assert stream._metadata[0][1] == "Api-Key k"
+        assert all(k != "x-folder-id" for k, _ in stream._metadata)
+    finally:
+        await stream.aclose()
 
 
 @_requires_yandexcloud
@@ -256,7 +299,7 @@ async def test_backend_transcribe_batch_path_returns_final_text():
     # transport through the backend so transcribe() returns the final text.
     transport = _make_transport([_final_response(0, "привет из батча")])
     backend = YandexSttBackend(
-        api_key="k", folder_id="", model="general", language="ru-RU",
+        api_key="k", model="general", language="ru-RU",
         normalize=True, timeout=5, transport=transport,
     )
     text = await backend.transcribe(b"\x01\x02" * 1000)
@@ -267,7 +310,7 @@ async def test_backend_transcribe_batch_path_returns_final_text():
 async def test_backend_transcribe_empty_pcm_returns_empty():
     transport = _make_transport([_final_response(0, "unused")])
     backend = YandexSttBackend(
-        api_key="k", folder_id="", model="general", language="ru-RU",
+        api_key="k", model="general", language="ru-RU",
         normalize=True, timeout=5, transport=transport,
     )
     assert await backend.transcribe(b"") == ""
