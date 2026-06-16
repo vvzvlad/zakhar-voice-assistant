@@ -233,6 +233,10 @@ export function segsFor(r) {
   const tot = total(r.t) || 1;
   const arr = STAGE_ORDER.filter((k) => r.t[k] > 0).map((k) => { const pct = r.t[k] / tot * 100; return { label: pct >= 15 ? `${k} ${r.t[k]}` : String(r.t[k]), pct, bg: SC[k], col: SC[k] }; });
   if (r.result === "error") arr.push({ label: "fail", pct: 24, bg: "repeating-linear-gradient(45deg,#dc2626,#dc2626 3px,#fecaca 3px,#fecaca 6px)", col: "#dc2626" });
+  // A wake-word reject stops the pipeline after the verify stage: tag the bar with a
+  // muted "rejected" segment (amber, matching the wakeword stage accent) so the row
+  // reads as a deliberate block, distinct from an error's hatched fail segment.
+  if (r.result === "rejected") arr.push({ label: "rejected", pct: 24, bg: SC.wakeword, col: SC.wakeword });
   return arr;
 }
 // Left offset (% of the waterfall bar) of the "early filler" marker, or null when

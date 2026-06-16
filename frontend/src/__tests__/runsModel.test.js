@@ -9,8 +9,16 @@ describe("mapRun", () => {
 
   it("coerces every t_* timing to 0 when missing/null", () => {
     const out = mapRun({ id: 1, ts: 0, t_vad: 10, t_stt: null, t_llm: 20 });
-    // t_stt is null -> 0; t_tts/t_stress absent -> 0; provided ones kept.
-    expect(out.t).toEqual({ vad: 10, stt: 0, llm: 20, stress: 0, tts: 0 });
+    // t_stt is null -> 0; t_tts/t_stress/t_wakeword absent -> 0; provided ones kept.
+    expect(out.t).toEqual({ vad: 10, wakeword: 0, stt: 0, llm: 20, stress: 0, tts: 0 });
+  });
+
+  it("maps t_wakeword into r.t.wakeword and wakeword_score (null when absent)", () => {
+    const out = mapRun({ id: 1, ts: 0, t_wakeword: 7, wakeword_score: 0.82 });
+    expect(out.t.wakeword).toBe(7);
+    expect(out.wakeword_score).toBe(0.82);
+    // Absent score -> null (the stage did not run / no confidence reported).
+    expect(mapRun({ id: 1, ts: 0 }).wakeword_score).toBeNull();
   });
 
   it("maps stt_text/llm_text into stt/llm", () => {
@@ -59,6 +67,10 @@ describe("statusMeta", () => {
 
   it("maps a finalized result to its RESULT_META entry", () => {
     expect(statusMeta({ result: "ok" })).toEqual({ label: "OK", tone: "good" });
+  });
+
+  it("maps a wake-word-rejected result to a muted 'Rejected' pill", () => {
+    expect(statusMeta({ result: "rejected" })).toEqual({ label: "Rejected", tone: "muted" });
   });
 });
 

@@ -2,22 +2,28 @@
 // the Log/Dashboard components expect, plus the presentation consts they read.
 //
 // Backend row (list)  : { id, ts, device, result, reason, stt_text, llm_text,
-//                         tokens, t_vad, t_stt, t_llm, t_stress, t_tts, t_total }
+//                         tokens, t_vad, t_wakeword, t_stt, t_llm, t_stress, t_tts,
+//                         t_total, wakeword_score }
 // Backend row (detail): the above PLUS model, rounds[], audio_*, error_*.
 
 import { total } from "./components/primitives.jsx";
 
 // result -> { label, tone }; tone drives the pill/dot color (good|muted|bad).
+// "rejected" is a run the server-side wake-word verifier blocked before STT —
+// it produced no transcript on purpose, so it reads as muted (like "empty"),
+// not as a hard error.
 export const RESULT_META = {
-  ok:    { label: "OK",        tone: "good" },
-  tool:  { label: "OK · tool", tone: "good" },
-  empty: { label: "Empty",     tone: "muted" },
-  error: { label: "Error",     tone: "bad" },
+  ok:       { label: "OK",        tone: "good" },
+  tool:     { label: "OK · tool", tone: "good" },
+  empty:    { label: "Empty",     tone: "muted" },
+  rejected: { label: "Rejected",  tone: "muted" },
+  error:    { label: "Error",     tone: "bad" },
 };
 
 // Per-stage accent colors for the waterfall / gantt segments.
 export const STAGE_COLOR = {
   vad:      "#64748b",
+  wakeword: "#d97706",
   stt:      "#0891b2",
   llm:      "#4f46e5",
   stress:   "#9333ea",
@@ -61,11 +67,14 @@ export function mapRun(row) {
     stress: row.stress_text,
     t: {
       vad: row.t_vad || 0,
+      wakeword: row.t_wakeword || 0,
       stt: row.t_stt || 0,
       llm: row.t_llm || 0,
       stress: row.t_stress || 0,
       tts: row.t_tts || 0,
     },
+    // Wake-word verifier confidence (float, 0..1) or null when the stage did not run.
+    wakeword_score: row.wakeword_score != null ? row.wakeword_score : null,
     audio: row.audio_bytes
       ? { ms: row.audio_ms, bytes: row.audio_bytes, fmt: row.audio_fmt }
       : null,

@@ -86,8 +86,8 @@ def action_for(path: str) -> str:
     if path.startswith("core.devices") or path.startswith("core.esphome"):
         return "rebuild_devices"
     # stage providers
-    if (path.startswith("vad") or path.startswith("stt") or path.startswith("tts")
-            or path.startswith("stress")):
+    if (path.startswith("vad") or path.startswith("wakeword") or path.startswith("stt")
+            or path.startswith("tts") or path.startswith("stress")):
         return "rebuild_backends"
     if path.startswith("llm"):
         leaf = path.rsplit(".", 1)[-1]
@@ -105,13 +105,13 @@ ASYNC_ACTIONS = {"rebuild_backends", "rebuild_audio", "rebuild_runs",
 
 
 def backend_categories(paths) -> set[str]:
-    """Subset of {'vad','stt','llm','stress','tts'} whose backend must be rebuilt for these paths."""
+    """Subset of {'vad','wakeword','stt','llm','stress','tts'} whose backend must be rebuilt for these paths."""
     cats = set()
     for p in paths:
         if action_for(p) != "rebuild_backends":
             continue
         top = p.split(".", 1)[0]
-        if top in ("vad", "stt", "llm", "stress", "tts"):
+        if top in ("vad", "wakeword", "stt", "llm", "stress", "tts"):
             cats.add(top)
         elif p == "core.tts_timeout":
             cats.add("tts")
@@ -226,7 +226,7 @@ class Reconfigurator:
         await self._rebuild_backend_cats(backend_categories(paths))
 
     async def _rebuild_backend_cats(self, cats) -> None:
-        """Rebuild the given backend categories (subset of {'vad','stt','llm','stress','tts'}) and swap
+        """Rebuild the given backend categories (subset of {'vad','wakeword','stt','llm','stress','tts'}) and swap
         them into the runtime. Shared by path-driven rebuilds (_rebuild_backends) and the
         http rebuild (which rebuilds all cloud backends off the new client). Same
         contracts as _rebuild_backends: tts_timeout push-before-create, per-category
@@ -382,10 +382,10 @@ class Reconfigurator:
         # Rebuild the cloud stages (their client changed) UNION the stages whose own config
         # changed in this job (incl. offline backends), so nothing is silently dropped.
         svc = self.rt.svc
-        # stress is intentionally absent from this tuple: it is offline
-        # (uses_http_cloud defaults False), so a proxy change never needs to rebuild
-        # it. A coalesced patch that also touches stress config is still picked up
-        # via backend_categories(paths) below.
+        # stress and wakeword are intentionally absent from this tuple: they are
+        # offline (uses_http_cloud defaults False), so a proxy change never needs to
+        # rebuild them. A coalesced patch that also touches their config is still
+        # picked up via backend_categories(paths) below.
         cloud_cats = {c for c in ("vad", "stt", "llm", "tts") if svc.provider(c).uses_http_cloud}
         cats = cloud_cats | backend_categories(paths)
         await self._rebuild_backend_cats(cats)

@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS runs (
   model TEXT,
   tokens INTEGER,
   t_filler INTEGER,
+  t_wakeword INTEGER, wakeword_score REAL,
   t_vad INTEGER, t_stt INTEGER, t_llm INTEGER, t_stress INTEGER, t_tts INTEGER, t_total INTEGER,
   audio_ms INTEGER, audio_bytes INTEGER, audio_fmt TEXT,
   error_stage TEXT, error_text TEXT,
@@ -59,6 +60,7 @@ _INSERT_COLS = [
     "ts", "device", "result", "reason", "stt_text", "llm_text", "stress_text",
     "filler_text",
     "model", "tokens",
+    "t_wakeword", "wakeword_score",
     "t_vad", "t_stt", "t_llm", "t_stress", "t_tts", "t_filler", "t_total",
     "audio_ms", "audio_bytes", "audio_fmt", "error_stage", "error_text",
 ]
@@ -67,6 +69,7 @@ _INSERT_COLS = [
 _LIST_COLS = [
     "id", "ts", "device", "result", "reason", "stt_text", "llm_text", "filler_text",
     "tokens",
+    "t_wakeword", "wakeword_score",
     "t_vad", "t_stt", "t_llm", "t_stress", "t_tts", "t_filler", "t_total",
 ]
 
@@ -106,7 +109,8 @@ class RunsStore:
             existing.add("t_stress")
         for col, decl in (("filler_text", "TEXT"), ("t_filler", "INTEGER"),
                           ("request_json", "TEXT"), ("t_stress", "INTEGER"),
-                          ("stress_text", "TEXT")):
+                          ("stress_text", "TEXT"),
+                          ("t_wakeword", "INTEGER"), ("wakeword_score", "REAL")):
             if col not in existing:
                 self._conn.execute(f"ALTER TABLE runs ADD COLUMN {col} {decl}")
         self._conn.commit()
@@ -215,6 +219,9 @@ class RunsStore:
             if result == "errors":
                 where.append("result = ?")
                 params.append("error")
+            elif result == "rejected":
+                where.append("result = ?")
+                params.append("rejected")
             elif result == "ok":
                 where.append("result IN ('ok', 'tool')")
             else:
@@ -231,8 +238,9 @@ class RunsStore:
         """Recent runs (newest first) as summary dicts, with optional filters.
 
         - device: exact match.
-        - result: "errors" -> result='error'; "ok" -> result IN ('ok','tool');
-          anything else -> exact match.
+        - result: "errors" -> result='error'; "rejected" -> result='rejected'
+          (wakeword-gated runs); "ok" -> result IN ('ok','tool'); anything else ->
+          exact match.
         - search: LIKE on stt_text or llm_text.
         - offset: number of matching rows to skip before the page (for offset-based
           numbered pagination); paired with limit as LIMIT ? OFFSET ?.
@@ -300,34 +308,63 @@ class RunsStore:
         # Same Connection as writes from a worker thread: hold the write lock.
         with self._lock:
             rows = self._conn.execute(
-                "SELECT result, t_total, t_vad, t_stt, t_llm, t_stress, t_tts "
+                "SELECT result, t_total, t_wakeword, t_vad, t_stt, t_llm, t_stress, t_tts "
                 "FROM runs WHERE ts >= ?",
                 (since,),
             ).fetchall()
-        requests = len(rows)
-        if requests == 0:
+        if len(rows) == 0:
             return {
                 "requests_24h": 0,
                 "p50_ms": None,
                 "p95_ms": None,
                 "error_rate": 0.0,
-                "per_stage_avg_ms": {"vad": None, "stt": None, "llm": None, "stress": None, "tts": None},
+                "rejected_24h": 0,
+                "per_stage_avg_ms": {"vad": None, "wakeword": None, "stt": None, "llm": None, "stress": None, "tts": None},
             }
 
-        totals = sorted(r["t_total"] for r in rows if r["t_total"] is not None)
-        errors = sum(1 for r in rows if r["result"] == "error")
+        # Gated wake-word rejects abort before STT/LLM/TTS. They must NOT distort the
+        # served-request KPIs (request count, latency percentiles, error rate) — those
+        # describe runs the pipeline actually served. They ARE still counted in
+        # rejected_24h for FAPH (false-accept-per-hour) auditing. The verifier (and the
+        # captured-utterance duration t_vad) DID run for rejected runs, so vad/wakeword
+        # averages span ALL rows; the never-run downstream stages span served only.
+        served = [r for r in rows if r["result"] != "rejected"]
+        rejected = sum(1 for r in rows if r["result"] == "rejected")
+
+        if len(served) == 0:
+            # Only rejected runs in the window: no served KPIs, but still report the
+            # reject count and the per-stage averages that DID run on rejects.
+            return {
+                "requests_24h": 0,
+                "p50_ms": None,
+                "p95_ms": None,
+                "error_rate": 0.0,
+                "rejected_24h": rejected,
+                "per_stage_avg_ms": {
+                    "vad": _avg(r["t_vad"] for r in rows),
+                    "wakeword": _avg(r["t_wakeword"] for r in rows),
+                    "stt": None, "llm": None, "stress": None, "tts": None,
+                },
+            }
+
+        totals = sorted(r["t_total"] for r in served if r["t_total"] is not None)
+        errors = sum(1 for r in served if r["result"] == "error")
 
         return {
-            "requests_24h": requests,
+            "requests_24h": len(served),
             "p50_ms": _percentile(totals, 50),
             "p95_ms": _percentile(totals, 95),
-            "error_rate": errors / requests,
+            "error_rate": errors / len(served),
+            "rejected_24h": rejected,
             "per_stage_avg_ms": {
+                # vad/wakeword DID run on rejected runs -> average over ALL rows.
                 "vad": _avg(r["t_vad"] for r in rows),
-                "stt": _avg(r["t_stt"] for r in rows),
-                "llm": _avg(r["t_llm"] for r in rows),
-                "stress": _avg(r["t_stress"] for r in rows),
-                "tts": _avg(r["t_tts"] for r in rows),
+                "wakeword": _avg(r["t_wakeword"] for r in rows),
+                # stt/llm/stress/tts never ran on rejected runs -> served only.
+                "stt": _avg(r["t_stt"] for r in served),
+                "llm": _avg(r["t_llm"] for r in served),
+                "stress": _avg(r["t_stress"] for r in served),
+                "tts": _avg(r["t_tts"] for r in served),
             },
         }
 

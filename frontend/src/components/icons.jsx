@@ -3,6 +3,7 @@ import React from "react";
 export const ICONS = {
   dashboard: "M3 3h7v7H3zM14 3h7v5h-7zM14 11h7v10h-7zM3 14h7v7H3z",
   vad: "M12 3v18M8 7v10M16 7v10M4 10v4M20 10v4",
+  wakeword: "M12 3l7 3v5c0 4-3 7-7 9-4-2-7-5-7-9V6zM9 11l2 2 4-4",
   stt: "M4 7h16M4 12h16M4 17h9",
   llm: "M12 3a4 4 0 014 4 4 4 0 010 8 3.5 3.5 0 01-8 0 4 4 0 010-8 4 4 0 014-4zM12 7v10",
   stress: "M7 17l5-11 5 11M9 13h6M10 3.5l3-1.5",

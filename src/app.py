@@ -94,11 +94,16 @@ async def main() -> None:
     # panel + drain loop are up (see request_initial_load below), so boot stays
     # responsive and the load is surfaced via reloading() in the UI.
     stress_backend = None
+    # Defer the wakeword backend too: the Vosk grammar verifier loads a model from
+    # disk, which would block boot. Start with no wakeword backend (the pipeline
+    # accepts/skips the gate) and load it in the background after boot (see
+    # request_initial_load below), like the stress stage.
+    wakeword_backend = None
     # Startup log: name the exact backend ("provider/model") behind every stage.
     for cat, b in (("vad", vad_backend), ("stt", stt_backend), ("llm", llm_backend),
                    ("tts", tts_backend)):
         logger.info(f"{cat} backend: {getattr(b, 'backend_desc', type(b).__name__)}")
-    logger.info("stress backend: deferred — loads in the background after boot (if enabled)")
+    logger.info("stress/wakeword backends: deferred — load in the background after boot (if enabled)")
 
     # Observability: persist every finalized pipeline run to SQLite (gated on config).
     # Pruned once at boot; the panel API serves the run log + 24h metrics from it.
@@ -156,7 +161,7 @@ async def main() -> None:
         svc,
         vad_backend=vad_backend,
         stt_backend=stt_backend, llm_backend=llm_backend, tts_backend=tts_backend,
-        stress_backend=stress_backend,
+        stress_backend=stress_backend, wakeword_backend=wakeword_backend,
         hub=hub, audio_server=audio_server,
         runs_store=runs_store, run_events=run_events,
         prompt_store=prompt_store,
@@ -240,7 +245,7 @@ async def main() -> None:
         # accent (stress) model load in the background. It rebuilds via the hot-reload
         # path: marks reloading() (the panel shows "Loading… Accents") and swaps the real
         # backend into the runtime when ready; the stage is skipped until then.
-        reconf.request_initial_load({"stress"})
+        reconf.request_initial_load({"stress", "wakeword"})
         # There is no in-app restart trigger anymore: block on a never-fired event
         # so the process runs until cancelled by a signal (SIGINT/SIGTERM).
         await asyncio.Event().wait()

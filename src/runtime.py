@@ -11,10 +11,14 @@ rebuilding the pipelines.
 class Runtime:
     def __init__(self, svc, *, vad_backend, stt_backend, llm_backend, tts_backend,
                  hub, audio_server, runs_store=None, run_events=None,
-                 prompt_store=None, stress_backend=None):
+                 prompt_store=None, stress_backend=None, wakeword_backend=None):
         self.svc = svc
         # Swappable runtime objects (rebuilt by the reconfigurator in later tiers).
         self.vad_backend = vad_backend
+        # Wakeword verification stage backend, the second-stage gate between VAD and
+        # STT. Defaults to None so the pipeline guards a None/passthrough backend and
+        # simply accepts (skips the gate) until a real verifier is loaded.
+        self.wakeword_backend = wakeword_backend
         self.stt_backend = stt_backend
         self.llm_backend = llm_backend
         # Accent (Russian stress) stage backend, between LLM and TTS. Defaults to

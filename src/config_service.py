@@ -18,7 +18,7 @@ from src import config_store
 from src.core_config import CoreConfig
 from src.plugins.base import Deps, get_provider, providers
 
-STAGE_CATEGORIES = ("vad", "stt", "llm", "stress", "tts")
+STAGE_CATEGORIES = ("vad", "wakeword", "stt", "llm", "stress", "tts")
 
 
 class StageSlot(BaseModel):
@@ -31,6 +31,9 @@ class ConfigDoc(BaseModel):
     # vad has a default slot (unlike stt/llm/tts) so configs written before the VAD
     # stage existed still parse; the webrtc provider's own defaults then apply.
     vad: StageSlot = StageSlot(selected="webrtc")
+    # wakeword has a default slot (like vad/stress) so configs written before the
+    # wakeword stage existed still parse; the vosk provider's own defaults apply.
+    wakeword: StageSlot = StageSlot(selected="vosk")
     stt: StageSlot
     llm: StageSlot
     # stress has a default slot (like vad) so configs written before the stress

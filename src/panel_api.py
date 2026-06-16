@@ -966,7 +966,8 @@ class PanelServer:
                 "p50_ms": None,
                 "p95_ms": None,
                 "error_rate": 0.0,
-                "per_stage_avg_ms": {"vad": None, "stt": None, "llm": None, "tts": None},
+                "rejected_24h": 0,
+                "per_stage_avg_ms": {"vad": None, "wakeword": None, "stt": None, "llm": None, "stress": None, "tts": None},
             })
         metrics = await asyncio.to_thread(self.runs_store.metrics, now=time.time())
         return web.json_response(metrics)

@@ -51,6 +51,15 @@ describe("segsFor", () => {
     const segs = segsFor({ result: "ok", t: { vad: 100, stt: 0, llm: 0, tts: 0 } });
     expect(segs.some((s) => s.label === "fail")).toBe(false);
   });
+
+  it("appends a 'rejected' segment for a wake-word-rejected result", () => {
+    const segs = segsFor({ result: "rejected", t: { vad: 100, wakeword: 20, stt: 0, llm: 0, tts: 0 } });
+    const last = segs[segs.length - 1];
+    expect(last.label).toBe("rejected");
+    expect(last.pct).toBe(24);
+    // The wakeword stage timing still renders its own segment before the marker.
+    expect(segs.some((s) => s.label === "20" || s.label === "wakeword 20")).toBe(true);
+  });
 });
 
 describe("fillerMarkerPct", () => {

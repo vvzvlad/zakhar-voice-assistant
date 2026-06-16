@@ -18,9 +18,9 @@ const DEFAULT_PAGE_SIZE = 100;
 // stage sits between LLM and TTS; the Gantt only renders stages whose timing is
 // > 0 (see `present` below), so it shows up only on runs where it actually ran.
 const GSTAGES = [
-  { k: "vad", label: "VAD capture" }, { k: "stt", label: "STT" },
-  { k: "llm", label: "LLM + tools" }, { k: "stress", label: "Accents" },
-  { k: "tts", label: "TTS synth" },
+  { k: "vad", label: "VAD capture" }, { k: "wakeword", label: "Wakeword verify" },
+  { k: "stt", label: "STT" }, { k: "llm", label: "LLM + tools" },
+  { k: "stress", label: "Accents" }, { k: "tts", label: "TTS synth" },
 ];
 
 // matchesFilters lives in ../runsFilters.js (extracted for unit tests); it is the
@@ -91,8 +91,26 @@ function Drawer({ r, loading, error, onClose }) {
             <Ic n="restart" w={15} /><span><b>{r.error.stage} error.</b> {r.error.text}</span>
           </div>}
 
+          {/* The server-side wake-word verifier blocked this run before STT (a false
+              trigger). Mirrors the error banner, but muted — it is an expected reject,
+              not a failure. reason is wakeword_reject (low score) or wakeword_error. */}
+          {r.result === "rejected" && <div className="z-banner" style={{ background: "var(--panel2)", border: "1px solid var(--line)", color: "var(--mut)", marginBottom: 16 }}>
+            <Ic n="wakeword" w={15} /><span><b>Rejected by wake-word verify.</b> {r.reason === "wakeword_error" ? "verifier error" : "wake word not confirmed"}{r.wakeword_score != null ? ` · score ${r.wakeword_score.toFixed(2)}` : ""}</span>
+          </div>}
+
           <div className="z-sl" style={{ marginTop: 0 }}>Stage timeline</div>
           <div className="z-card"><div style={{ padding: "15px 17px" }}><Gantt r={r} /></div></div>
+
+          {/* Wake-word verifier confidence + time, shown whenever the stage produced a
+              score (a passed run) or actively rejected the phrase. */}
+          {(r.wakeword_score != null || r.result === "rejected") && <>
+            <div className="z-sl">Wake-word verify<div className="ln" />{r.t && r.t.wakeword ? <span style={{ fontFamily: "var(--mono)", fontSize: 10.5, color: "var(--mut2)", textTransform: "none", letterSpacing: 0 }}>{fmtSec(r.t.wakeword)}</span> : null}</div>
+            <div className="z-card"><div style={{ padding: "6px 17px" }}>
+              <KV k="Score" v={r.wakeword_score != null ? r.wakeword_score.toFixed(3) : "—"} />
+              <KV k="Verdict" v={r.result === "rejected" ? "Rejected" : "Passed"} />
+              <KV k="Verify time" v={fmtSec(r.t && r.t.wakeword)} />
+            </div></div>
+          </>}
 
           <div className="z-sl">Transcript</div>
           <div className="z-card"><div style={{ padding: "4px 17px" }}>
@@ -217,7 +235,7 @@ function Log() {
   const [runs, setRuns] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [result, setResult] = useState("all");       // all → errors → ok
+  const [result, setResult] = useState("all");       // all → errors → ok → rejected
   const [search, setSearch] = useState("");
   const [device, setDevice] = useState("");
   const [page, setPage] = useState(1);
@@ -324,7 +342,7 @@ function Log() {
           <input placeholder="Device…" value={device}
             onChange={(e) => { setDevice(e.target.value); setPage(1); }} />
         </div>
-        <div className="z-fchip" onClick={() => { setResult(result === "all" ? "errors" : result === "errors" ? "ok" : "all"); setPage(1); }}>Result · <b>{result}</b> ▾</div>
+        <div className="z-fchip" onClick={() => { setResult(result === "all" ? "errors" : result === "errors" ? "ok" : result === "ok" ? "rejected" : "all"); setPage(1); }}>Result · <b>{result}</b> ▾</div>
         <span style={{ flex: 1 }} />
         <span style={{ fontSize: 11, color: "var(--mut2)", fontFamily: "var(--mono)" }}>{total} runs</span>
       </div>

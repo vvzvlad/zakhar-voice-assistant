@@ -280,20 +280,24 @@ function ProviderStage({ cat, title, crumb, desc }) {
   </div>;
 }
 
+export function Wakeword() {
+  return <ProviderStage cat="wakeword" title="Wakeword · Verify" crumb="Pipeline / Stage 02"
+    desc="Server-side wake-word verifier. Re-checks the captured phrase actually started with the wake word and rejects false triggers before STT." />;
+}
 export function STT() {
-  return <ProviderStage cat="stt" title="STT · Speech to text" crumb="Pipeline / Stage 02"
+  return <ProviderStage cat="stt" title="STT · Speech to text" crumb="Pipeline / Stage 03"
     desc="Recognize the captured phrase. Cloud Whisper or offline Vosk." />;
 }
 export function LLM() {
-  return <ProviderStage cat="llm" title="LLM · Reasoning & tools" crumb="Pipeline / Stage 03"
+  return <ProviderStage cat="llm" title="LLM · Reasoning & tools" crumb="Pipeline / Stage 04"
     desc="Generates the reply and calls smart-home tools over MCP. OpenAI-compatible chat completions." />;
 }
 export function Accents() {
-  return <ProviderStage cat="stress" title="Accents · Stress placement" crumb="Pipeline / Stage 04"
+  return <ProviderStage cat="stress" title="Accents · Stress placement" crumb="Pipeline / Stage 05"
     desc="Place Russian word stress on the reply text so TTS pronounces it correctly." />;
 }
 export function TTS() {
-  return <ProviderStage cat="tts" title="TTS · Text to speech" crumb="Pipeline / Stage 05"
+  return <ProviderStage cat="tts" title="TTS · Text to speech" crumb="Pipeline / Stage 06"
     desc="Synthesize the reply to audio served to the speakers." />;
 }
 

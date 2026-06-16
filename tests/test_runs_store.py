@@ -308,6 +308,80 @@ def test_metrics_over_window(tmp_path):
     store.close()
 
 
+def test_metrics_rejected_runs_dont_skew_served_kpis(tmp_path):
+    # Gated wake-word rejects must NOT distort served-request KPIs: they don't change
+    # the request count, the latency percentiles, or the error_rate denominator — but
+    # they DO increment rejected_24h. The verifier (and the captured-utterance t_vad)
+    # ran for rejects, so vad/wakeword averages span them; stt/llm/stress/tts never ran
+    # on a reject, so their averages span served runs only.
+    store = _store(tmp_path)
+    now = time.time()
+    # Two served runs (the KPI baseline).
+    store.insert(_rec(ts=now, result="ok", t_total=100, t_wakeword=8, t_vad=10,
+                      t_stt=20, t_llm=30, t_stress=0, t_tts=40))
+    store.insert(_rec(ts=now, result="ok", t_total=300, t_wakeword=12, t_vad=14,
+                      t_stt=24, t_llm=34, t_stress=0, t_tts=44))
+
+    base = store.metrics(now=now)
+    assert base["requests_24h"] == 2
+    assert base["p50_ms"] == 100  # nearest-index pick over [100, 300]
+    assert base["p95_ms"] == 300
+    assert base["error_rate"] == 0.0
+    assert base["rejected_24h"] == 0
+
+    # Add a rejected run: gate ran (t_wakeword/t_vad set) but STT/LLM/TTS never did.
+    store.insert(_rec(result="rejected", reason="wakeword_reject", ts=now,
+                      t_total=None, t_wakeword=20, t_vad=22,
+                      t_stt=0, t_llm=0, t_stress=0, t_tts=0,
+                      stt_text="", llm_text="", model=None, tokens=None))
+
+    m = store.metrics(now=now)
+    # Served KPIs are UNCHANGED by the reject.
+    assert m["requests_24h"] == 2
+    assert m["p50_ms"] == base["p50_ms"]
+    assert m["p95_ms"] == base["p95_ms"]
+    assert m["error_rate"] == base["error_rate"]
+    # But the reject IS counted.
+    assert m["rejected_24h"] == 1
+    # vad/wakeword averages span ALL rows (incl. the reject).
+    assert m["per_stage_avg_ms"]["vad"] == (10 + 14 + 22) / 3
+    assert m["per_stage_avg_ms"]["wakeword"] == (8 + 12 + 20) / 3
+    # stt/llm/tts never ran on the reject -> averaged over served only (its zeros excluded).
+    assert m["per_stage_avg_ms"]["stt"] == (20 + 24) / 2
+    assert m["per_stage_avg_ms"]["llm"] == (30 + 34) / 2
+    assert m["per_stage_avg_ms"]["tts"] == (40 + 44) / 2
+    store.close()
+
+
+def test_metrics_only_rejected_runs_in_window(tmp_path):
+    # A window with ONLY rejected runs: no served KPIs (requests_24h=0, p50/p95=None,
+    # error_rate=0.0), but rejected_24h counts them and the vad/wakeword averages that
+    # DID run on rejects are still reported.
+    store = _store(tmp_path)
+    now = time.time()
+    store.insert(_rec(result="rejected", reason="wakeword_reject", ts=now,
+                      t_total=None, t_wakeword=20, t_vad=22,
+                      t_stt=0, t_llm=0, t_stress=0, t_tts=0))
+    store.insert(_rec(result="rejected", reason="wakeword_error", ts=now,
+                      t_total=None, t_wakeword=30, t_vad=18,
+                      t_stt=0, t_llm=0, t_stress=0, t_tts=0))
+
+    m = store.metrics(now=now)
+    assert m["requests_24h"] == 0
+    assert m["p50_ms"] is None
+    assert m["p95_ms"] is None
+    assert m["error_rate"] == 0.0
+    assert m["rejected_24h"] == 2
+    assert m["per_stage_avg_ms"]["vad"] == (22 + 18) / 2
+    assert m["per_stage_avg_ms"]["wakeword"] == (20 + 30) / 2
+    # Downstream stages never ran on a reject -> None even though rows exist.
+    assert m["per_stage_avg_ms"]["stt"] is None
+    assert m["per_stage_avg_ms"]["llm"] is None
+    assert m["per_stage_avg_ms"]["stress"] is None
+    assert m["per_stage_avg_ms"]["tts"] is None
+    store.close()
+
+
 def test_metrics_all_none_timings_in_nonempty_window(tmp_path):
     # Rows that errored before any timing was set (t_total + all stage timings None)
     # still count toward requests_24h, but every percentile/average degrades to None.
@@ -329,7 +403,7 @@ def test_metrics_all_none_timings_in_nonempty_window(tmp_path):
     assert m["p50_ms"] is None
     assert m["p95_ms"] is None
     # No per-stage values -> _avg over all-None -> None for every stage.
-    assert m["per_stage_avg_ms"] == {"vad": None, "stt": None, "llm": None, "stress": None, "tts": None}
+    assert m["per_stage_avg_ms"] == {"vad": None, "wakeword": None, "stt": None, "llm": None, "stress": None, "tts": None}
     # All 3 in-window rows are errors.
     assert m["error_rate"] == 1.0
     store.close()
@@ -343,7 +417,8 @@ def test_metrics_empty(tmp_path):
         "p50_ms": None,
         "p95_ms": None,
         "error_rate": 0.0,
-        "per_stage_avg_ms": {"vad": None, "stt": None, "llm": None, "stress": None, "tts": None},
+        "rejected_24h": 0,
+        "per_stage_avg_ms": {"vad": None, "wakeword": None, "stt": None, "llm": None, "stress": None, "tts": None},
     }
     store.close()
 

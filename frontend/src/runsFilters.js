@@ -5,8 +5,8 @@
 // over recognized/response text.
 //
 // Two known, intentional points to keep in sync with the backend (src/runs_store.py list()):
-// 1. The UI's `result` filter domain is only "all" | "errors" | "ok" (the chip cycles
-//    those three). The backend list() also supports an exact-match branch for any other
+// 1. The UI's `result` filter domain is only "all" | "errors" | "ok" | "rejected" (the chip
+//    cycles those four). The backend list() also supports an exact-match branch for any other
 //    value, but the UI never sends one, so this client mirror covers exactly the UI's domain.
 // 2. Search here is case-insensitive via toLowerCase(), which lowercases Cyrillic too;
 //    the backend uses SQLite LIKE, which is case-insensitive only for ASCII (Cyrillic is
@@ -17,6 +17,8 @@ export function matchesFilters(row, { result, search, device }) {
   if (device.trim() && row.device !== device.trim()) return false;
   if (result === "errors" && row.result !== "error") return false;
   if (result === "ok" && !(row.result === "ok" || row.result === "tool")) return false;
+  // "rejected" surfaces only runs the wake-word verifier blocked.
+  if (result === "rejected" && row.result !== "rejected") return false;
   const s = search.trim().toLowerCase();
   if (s) {
     const hay = `${row.stt_text || ""}\n${row.llm_text || ""}`.toLowerCase();

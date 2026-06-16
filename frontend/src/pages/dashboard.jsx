@@ -78,6 +78,7 @@ function Dashboard() {
     { k: "p50 latency", v: fmtSec(m.p50_ms) },
     { k: "p95 latency", v: fmtSec(m.p95_ms) },
     { k: "Error rate", v: m.error_rate != null ? (m.error_rate * 100).toFixed(1) + "%" : "—" },
+    { k: "Rejected · 24h", v: m.rejected_24h != null ? m.rejected_24h : 0 },
   ];
 
   // Backend categories whose hot-reload is in flight (from the system heartbeat).

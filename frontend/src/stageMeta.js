@@ -1,12 +1,13 @@
 // Static stage presentation metadata (colors / order / labels / icons).
 export const STAGE_COLOR = {
   vad: "#64748b",
+  wakeword: "#d97706",
   stt: "#0891b2",
   llm: "#4f46e5",
   stress: "#9333ea",
   tts: "#0d9488",
 };
-export const STAGE_ORDER = ["vad", "stt", "llm", "stress", "tts"];
+export const STAGE_ORDER = ["vad", "wakeword", "stt", "llm", "stress", "tts"];
 
 // Accent for the "early filler" marker (an announcement spoken mid-run, not a
 // pipeline stage). Distinct from the STAGE_COLOR palette so it reads as an event.
@@ -18,6 +19,7 @@ export const FILLER_COLOR = "#f59e0b";
 // (end-pointing thresholds, mic conditioning).
 export const STAGES = [
   { key: "vad", name: "VAD", role: "Voice capture", cat: "vad" },
+  { key: "wakeword", name: "Wakeword", role: "Wake-word verify", cat: "wakeword" },
   { key: "stt", name: "STT", role: "Speech → text", cat: "stt" },
   { key: "llm", name: "LLM", role: "Reasoning + tools", cat: "llm" },
   { key: "stress", name: "Accents", role: "Stress placement", cat: "stress" },

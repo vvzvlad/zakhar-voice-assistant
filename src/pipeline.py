@@ -43,6 +43,7 @@ from src.prompt import build_system_prompt
 from src.runs_store import live_row, summary_row
 from src.chime import build_ack_clip
 from src.stage_errors import StageError
+from src.wakeword import PassthroughVerifier
 # SAMPLE_RATE now lives in the VAD stage contract module; re-exported here so the
 # many existing `from src.pipeline import SAMPLE_RATE` users keep working.
 from src.vad import SAMPLE_RATE, EndpointPolicy  # noqa: F401  (SAMPLE_RATE re-export)
@@ -105,6 +106,21 @@ class Pipeline:
         # chunks and acts on the returned reason.
         self._vad_session = None
         self._stt_stream = None  # live streaming STT session (only for streaming-capable backends)
+
+        # Server-side second-stage wake-word gate (see _run_wakeword_verify). While
+        # the gate is pending we hold back STT_VAD_START + the STT stream and don't
+        # finalize the utterance: a grammar-Vosk keyword spotter verifies the pre-roll
+        # head and either confirms (proceed exactly as normal) or rejects (abort the
+        # run silently — no STT/LLM/TTS, no ack — and stop the device). Inactive for
+        # capture runs, non-wake runs, and a None/passthrough backend.
+        self._wakeword_pending = False     # gate active, verdict not yet in
+        self._wakeword_confirmed = False   # verdict accepted OR gate inactive -> normal streaming
+        self._wakeword_task: asyncio.Task | None = None
+        self._wakeword_t = 0               # verify latency (ms), into the run record
+        self._wakeword_score: float | None = None
+        # VAD endpoint reason seen WHILE the gate is still verifying: the utterance
+        # ended before the verdict landed, so the finalize is deferred until confirm.
+        self._vad_finalize_pending: str | None = None
         # Running utterance peak driving the optional decision-only VAD boost
         # (core.vad.mic_auto_gain); reset per run in on_start.
         self._vad_peak = 0
@@ -181,6 +197,10 @@ class Pipeline:
     @property
     def stt_backend(self):
         return self.rt.stt_backend
+
+    @property
+    def wakeword_backend(self):
+        return self.rt.wakeword_backend
 
     @property
     def llm_backend(self):
@@ -324,6 +344,17 @@ class Pipeline:
             except Exception:  # noqa: BLE001 - defensive cleanup, never break a new run
                 pass
             self._stt_stream = None
+        # Best-effort cancel a leftover wake-word verify task from a prior aborted
+        # run before resetting the gate state, so an in-flight verdict can't act on
+        # this fresh run. Cancellation of an already-finished task is a no-op.
+        if self._wakeword_task is not None:
+            self._wakeword_task.cancel()
+        self._wakeword_pending = False
+        self._wakeword_confirmed = False
+        self._wakeword_task = None
+        self._wakeword_t = 0
+        self._wakeword_score = None
+        self._vad_finalize_pending = None
         self._vad_session = None
         self._vad_peak = 0
         self._finalized = False
@@ -391,17 +422,48 @@ class Pipeline:
         logger.info(f"{self.name}: ▶️ run started (cid={conversation_id})")
         self._emit(StageEvent.RUN_START, {})
         self._emit(StageEvent.STT_START, {})
+        # Server-side wake-word gate decision. Gate only a REAL wake-word run
+        # (non-empty phrase), never a capture run, and only when a real verifier is
+        # loaded — a None backend (warm-up not done) or a PassthroughVerifier (stage
+        # disabled) skips the gate entirely so behavior is unchanged. RUN_START /
+        # STT_START above fire for BOTH paths (they don't light the LED).
+        wb = self.rt.wakeword_backend
+        gate = (
+            bool(wake_word_phrase)
+            and not self._capture_run
+            and wb is not None
+            and not isinstance(wb, PassthroughVerifier)
+        )
+        if gate:
+            # Hold the run: do NOT emit STT_VAD_START and do NOT open the STT stream
+            # until the verdict lands. The VAD session opened above still tracks the
+            # end-point; on_audio buffers + defers any finalize until confirm/reject.
+            self._wakeword_pending = True
+            self._wakeword_confirmed = False
+            self._stt_stream = None
+            logger.info(f"{self.name}: 🛡️ wake-word gate pending (cid={conversation_id})")
+            return 0  # 0 = audio comes in-band over the API connection.
+        # Ungated (disabled/None/passthrough/non-wake/capture): proceed exactly as
+        # before — confirm immediately, emit STT_VAD_START and open the STT stream.
+        self._wakeword_confirmed = True
         # Speech is already in-stream (pre-roll captured the command), so the device
         # should show the active "listening for command" LED right away; the matching
         # STT_VAD_END (thinking) is emitted in _run once VAD finalizes the utterance.
         self._emit(StageEvent.STT_VAD_START, {})
-        # Streaming STT (optional): if the selected backend supports a live session,
-        # open it now and feed it chunks in on_audio so recognition runs DURING
-        # speech. VAD still owns end-pointing; on finalize _run calls finish().
-        # A backend without open_stream() (or one returning None) is simply
-        # non-streaming — NOT an error — so it falls back to batch transcribe()
-        # SILENTLY; only a genuine open failure warns. Both paths leave
-        # _stt_stream None for the batch route.
+        self._open_stt_stream()
+        return 0  # 0 = audio comes in-band over the API connection.
+
+    def _open_stt_stream(self) -> None:
+        """Open the optional live streaming STT session for this run (synchronous).
+
+        If the selected backend supports a live session, open it now so on_audio can
+        feed it chunks while speech is still arriving (VAD still owns end-pointing; on
+        finalize _run calls finish()). A backend without open_stream() (or one
+        returning None) is simply non-streaming — NOT an error — so it falls back to
+        batch transcribe() SILENTLY; only a genuine open failure warns. Both paths
+        leave _stt_stream None for the batch route. Shared by on_start's ungated path
+        and _wakeword_confirm so the open logic stays identical.
+        """
         self._stt_stream = None
         opener = getattr(self.stt_backend, "open_stream", None)
         if opener is not None:
@@ -410,7 +472,6 @@ class Pipeline:
             except Exception as e:  # noqa: BLE001 - never let STT setup break the run; batch-fallback
                 logger.warning(f"{self.name}: streaming STT open failed, using batch: {e}")
                 self._stt_stream = None
-        return 0  # 0 = audio comes in-band over the API connection.
 
     async def on_audio(self, data: bytes, data2=None) -> None:
         """Accumulate mic PCM and run VAD end-pointing on the configured channel.
@@ -475,6 +536,44 @@ class Pipeline:
                 await self._finish_capture("maxlen")
             elif time.monotonic() >= self._capture_deadline:
                 await self._finish_capture("deadline")
+            return
+
+        # Wake-word gate pending: the verifier hasn't ruled yet. Keep accumulating
+        # the buffer (channel-select below feeds _buffer/_buffer2) but DON'T feed the
+        # STT stream (it's None anyway) and DON'T finalize the utterance — if VAD
+        # end-points, stash the reason and stop feeding VAD; the finalize is deferred
+        # until the verdict (_wakeword_confirm replays it). Trigger the verify task
+        # EXACTLY once, when enough pre-roll is buffered (window_bytes) or the
+        # utterance already ended. This branch is fully SYNCHRONOUS (every await lives
+        # inside the task) so the eager-on_audio atomicity invariant holds.
+        if self._wakeword_pending and not self._wakeword_confirmed:
+            if not self._audio_logged:
+                self._audio_logged = True
+                logger.info(f"{self.name}: 🎤 receiving audio (gate pending)...")
+            self._buffer.extend(data)
+            if other:
+                self._buffer2.extend(other)
+            elif self._buffer2:
+                self._buffer2.extend(b"\x00" * len(data))
+            if len(self._buffer2) >= HARD_CAP_BYTES:
+                del self._buffer2[HARD_CAP_BYTES:]
+            if len(self._buffer) >= HARD_CAP_BYTES:
+                del self._buffer[HARD_CAP_BYTES:]
+            # Track the end-point while gating, but DON'T finalize here: stash the
+            # reason and stop feeding VAD (the utterance end is replayed on confirm).
+            if self._vad_finalize_pending is None and self._vad_session is not None:
+                reason = self._vad_session.feed(data)
+                if reason is not None:
+                    self._vad_finalize_pending = reason
+            wb = self.rt.wakeword_backend
+            if self._wakeword_task is None and wb is not None:
+                window_bytes = wb.window_ms * SAMPLE_RATE * 2 // 1000
+                if len(self._buffer) >= window_bytes or self._vad_finalize_pending is not None:
+                    # Snapshot the pre-roll head SYNCHRONOUSLY; the task then awaits.
+                    pcm = bytes(self._buffer[:window_bytes])
+                    self._wakeword_task = asyncio.create_task(
+                        self._run_wakeword_verify(pcm)
+                    )
             return
 
         # Log once per run on the first chunk; the speaker streams many chunks.
@@ -558,6 +657,100 @@ class Pipeline:
         self._buffer2.clear()
         return pcm, pcm2
 
+    async def _run_wakeword_verify(self, pcm: bytes) -> None:
+        """Run the second-stage wake-word verifier on the pre-roll head, then gate.
+
+        Spawned exactly once per gated run (from on_audio). All the awaits live here,
+        so the on_audio gating branch that schedules this stays synchronous and the
+        eager-on_audio atomicity invariant holds. verify() never raises, but we still
+        bound it with the backend's timeout and treat a timeout/None as the configured
+        fail policy (fail_open accepts, fail_closed rejects). Decides confirm vs reject.
+        """
+        t0 = time.perf_counter()
+        wb = self.rt.wakeword_backend
+        if wb is None or self._finalized:
+            return  # backend vanished, or the run is already gone.
+        try:
+            verdict = await asyncio.wait_for(wb.verify(pcm), timeout=wb.timeout_ms / 1000)
+        except (asyncio.TimeoutError, Exception):  # noqa: BLE001 - timeout/error -> fail policy
+            verdict = None
+        self._wakeword_t = int((time.perf_counter() - t0) * 1000)
+        self._wakeword_score = verdict.score if verdict is not None else None
+        # A timeout / internal error has no verdict -> apply the fail policy.
+        accepted = verdict.accepted if verdict is not None else wb.fail_open
+        if verdict is None:
+            logger.warning(
+                f"{self.name}: 🛡️ wake-word verify timed out/errored "
+                f"(fail_open={wb.fail_open}) -> {'accept' if accepted else 'reject'} "
+                f"({self._wakeword_t} ms)"
+            )
+        elif accepted:
+            logger.info(
+                f"{self.name}: ✅ wake word confirmed (score={self._wakeword_score}, "
+                f"{self._wakeword_t} ms)"
+            )
+        else:
+            logger.info(
+                f"{self.name}: 🚫 wake word rejected (score={self._wakeword_score}, "
+                f"{self._wakeword_t} ms)"
+            )
+        if self._finalized:
+            return  # the run was finalized while we were verifying.
+        if accepted:
+            await self._wakeword_confirm()
+        else:
+            await self._wakeword_reject(error=(verdict is None))
+
+    async def _wakeword_confirm(self) -> None:
+        """Accept verdict: lift the gate and resume the normal streaming path.
+
+        Synchronously flips the gate, emits the held-back STT_VAD_START, opens the
+        STT stream and replays the whole buffered backlog into it once — no await
+        between opening, feeding and clearing _pending, so a concurrent on_audio can't
+        double-feed or lose the chunk. THEN, if the utterance already ended while we
+        were verifying (_vad_finalize_pending), finalize it now; otherwise subsequent
+        on_audio drives the normal VAD finalize.
+        """
+        if self._finalized:
+            return
+        # --- synchronous gate lift (no await) ---
+        self._wakeword_pending = False
+        self._wakeword_confirmed = True
+        self._emit(StageEvent.STT_VAD_START, {})
+        self._open_stt_stream()
+        if self._stt_stream is not None:
+            # Feed the whole backlog buffered during verification once, so streaming
+            # STT sees the same audio the batch path would.
+            self._stt_stream.feed(bytes(self._buffer))
+        # --- now (await allowed): replay a deferred utterance end, if any ---
+        if self._vad_finalize_pending is not None:
+            claimed = self._claim()
+            if claimed is not None:
+                await self._run(
+                    self._vad_finalize_pending,
+                    claimed[0],
+                    self._conversation_id,
+                    pcm2=claimed[1],
+                )
+
+    async def _wakeword_reject(self, error: bool) -> None:
+        """Reject verdict: abort the run silently and stop the device.
+
+        Claims the run (so a concurrent device-stop / VAD finalize can't also run it)
+        and funnels through _run with a reject reason. _run records the run as
+        'rejected', skips STT/LLM/TTS and the ack chime, and emits RUN_END — which is
+        what makes the device stop streaming mid-utterance (the confirmed abort on this
+        firmware). `error` distinguishes a timeout/internal error (wakeword_error) from
+        a genuine non-match (wakeword_reject).
+        """
+        if self._finalized:
+            return
+        reason = "wakeword_error" if error else "wakeword_reject"
+        claimed = self._claim()
+        if claimed is None:
+            return  # already finalized by a concurrent path.
+        await self._run(reason, claimed[0], self._conversation_id, pcm2=claimed[1])
+
     def _emit_live(self, record) -> None:
         """Schedule a best-effort broadcast of the current in-progress run snapshot.
 
@@ -614,6 +807,10 @@ class Pipeline:
         so the gRPC stream/channel don't linger until the next run. A FINALIZED run
         owns the session and closes it in _run's finally, so skip it here to avoid
         racing finish() against aclose()."""
+        # Best-effort cancel an in-flight wake-word verify for the vanished speaker so
+        # a late verdict can't act on (confirm/reject) a dead run. No-op if already done.
+        if self._wakeword_task is not None:
+            self._wakeword_task.cancel()
         if not self._finalized:
             await self._close_stt_stream()
 
@@ -658,7 +855,11 @@ class Pipeline:
                 # run — and the FINAL TTS reply uses a SEPARATE VA-event channel
                 # (TTS_START/TTS_END), so only ack<->filler can transiently overlap, never
                 # the real answer.
-                self._schedule_ack()
+                #
+                # A wake-word REJECT aborts the run silently — no ack chime — so the
+                # mis-trigger never beeps at the user.
+                if reason not in ("wakeword_reject", "wakeword_error"):
+                    self._schedule_ack()
 
                 # Trim the configured lead-in (wake-word tail / button-press click) off the
                 # start of the captured sample. The trim is applied ONCE here, so every
@@ -701,7 +902,7 @@ class Pipeline:
                 # trimmed by core.vad.trim_start_ms above) as a 16 kHz / mono / 16-bit WAV.
                 # Off by default; enabled per capture session. A capture failure must NEVER
                 # break the run, so it is fully wrapped.
-                if self.core.capture.enabled:
+                if self.core.capture.enabled and reason not in ("wakeword_reject", "wakeword_error"):
                     try:
                         capture_dir = self.core.capture.dir
                         safe_name = "".join(
@@ -750,8 +951,29 @@ class Pipeline:
                     "error_stage": None, "error_text": None,
                     "rounds": [],
                     "request": None,
+                    # Second-stage wake-word gate: verify latency + score. Stay 0/None
+                    # for ungated (non-wake / disabled / passthrough) runs.
+                    "t_wakeword": self._wakeword_t,
+                    "wakeword_score": self._wakeword_score,
                 }
                 try:
+                    # Wake-word REJECT: the second-stage verifier did not confirm the
+                    # wake word. Abort the run silently — NO STT/LLM/TTS, NO ack (guarded
+                    # above), NO STT_VAD_END (that would trigger the thinking indicator).
+                    # Emit an empty STT_END (to balance STT_START) and RUN_END (which
+                    # stops the device streaming mid-utterance). Placed INSIDE the inner
+                    # try so the finally still records the run + stores its audio.
+                    if reason in ("wakeword_reject", "wakeword_error"):
+                        logger.info(
+                            f"{self.name}: 🚫 wake word rejected by verifier "
+                            f"(reason={reason}, score={self._wakeword_score})"
+                        )
+                        record["result"] = "rejected"
+                        record["reason"] = reason
+                        await self._close_stt_stream()
+                        self._emit(StageEvent.STT_END, {"text": ""})
+                        self._emit(StageEvent.RUN_END, {})
+                        return
                     # VAD found no speech in the whole window — this is silence/noise,
                     # not an utterance. Skip STT entirely: Whisper hallucinates stray
                     # phrases on non-speech audio (e.g. "Продолжение следует..."), which
@@ -1648,6 +1870,14 @@ class Pipeline:
         """Explicit device stop: finalize the run (exactly once)."""
         if self._capture_run:
             await self._finish_capture("device_stop")
+            return
+        if self._wakeword_pending and not self._wakeword_confirmed:
+            # A stop before the verdict must NOT bypass the gate into STT/LLM/TTS.
+            # Cancel the in-flight verify and abort this run as a reject.
+            task = self._wakeword_task
+            if task is not None and not task.done():
+                task.cancel()
+            await self._wakeword_reject(error=False)
             return
         claimed = self._claim()
         if claimed is not None:

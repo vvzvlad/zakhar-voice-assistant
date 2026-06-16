@@ -30,6 +30,13 @@ describe("matchesFilters", () => {
     expect(matchesFilters({ device: "d", result: "tool" }, { ...NO_FILTERS, result: "ok" })).toBe(true);
     expect(matchesFilters({ device: "d", result: "error" }, { ...NO_FILTERS, result: "ok" })).toBe(false);
     expect(matchesFilters({ device: "d", result: "empty" }, { ...NO_FILTERS, result: "ok" })).toBe(false);
+    expect(matchesFilters({ device: "d", result: "rejected" }, { ...NO_FILTERS, result: "ok" })).toBe(false);
+  });
+
+  it("result 'rejected' accepts only wake-word-rejected rows", () => {
+    expect(matchesFilters({ device: "d", result: "rejected" }, { ...NO_FILTERS, result: "rejected" })).toBe(true);
+    expect(matchesFilters({ device: "d", result: "ok" }, { ...NO_FILTERS, result: "rejected" })).toBe(false);
+    expect(matchesFilters({ device: "d", result: "error" }, { ...NO_FILTERS, result: "rejected" })).toBe(false);
   });
 
   it("search is a case-insensitive substring over stt_text + llm_text", () => {
