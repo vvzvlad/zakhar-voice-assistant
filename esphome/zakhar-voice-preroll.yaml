@@ -376,6 +376,19 @@ script:
       - light.turn_off: voice_assistant_leds
       - script.execute: control_leds
 
+  # Suppress the LOCAL "waiting for command" LED on wake. micro_wake_word fires
+  # on_listening locally and sets voice_assistant_phase=waiting BEFORE the server's
+  # second-stage wake-word verifier has confirmed anything; we must not light the ring
+  # until the SERVER confirms (it defers STT_VAD_START / the "listening" phase until
+  # then). ESPHome concatenates `then:` under !extend, so this runs right after the
+  # stock "Waiting for Command" turn_on, in the same script execution before the light
+  # loop renders — so the stock effect never appears and the ring renders idle (off /
+  # ambient restored). The "listening" phase (server-driven) and all device-lifecycle
+  # LED states (red no-connection, timers, mute, buttons) are unchanged.
+  - id: !extend control_leds_voice_assistant_waiting_for_command_phase
+    then:
+      - script.execute: control_leds_voice_assistant_idle_phase
+
 # --- Manual "record X seconds" capture trigger ---
 #
 # A device-side, self-timed sample capture exposed to our server over the Native
