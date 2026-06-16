@@ -7,7 +7,7 @@ import httpx
 from loguru import logger
 from pydantic import BaseModel, Field
 
-from src.plugins.base import MODEL_FIELD_EXTRA, Deps, Provider, register
+from src.plugins.base import MODEL_FIELD_EXTRA, SECRET_FIELD_EXTRA, Deps, Provider, register
 from src.stage_errors import StageError
 from src.stt import SttBackend, contains_stt_hallucination, pcm_to_wav
 
@@ -104,7 +104,7 @@ class OpenRouterSttBackend(SttBackend):
 
 
 class OpenRouterSttConfig(BaseModel):
-    api_key: str = ""
+    api_key: str = Field("", json_schema_extra=SECRET_FIELD_EXTRA)
     # Dynamic select: the option list is fetched from OpenRouter's model catalog
     # (see MODEL_FIELD_EXTRA in src/plugins/base.py).
     model: str = Field("openai/whisper-large-v3-turbo", json_schema_extra=MODEL_FIELD_EXTRA)

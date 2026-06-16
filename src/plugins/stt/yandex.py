@@ -18,7 +18,7 @@ import contextlib
 from loguru import logger
 from pydantic import BaseModel, Field
 
-from src.plugins.base import Deps, Provider, register
+from src.plugins.base import SECRET_FIELD_EXTRA, Deps, Provider, register
 from src.stage_errors import StageError
 from src.stt import SttBackend, StreamingSttSession, StreamingTranscript
 
@@ -278,7 +278,7 @@ class YandexSttBackend(SttBackend):
 
 
 class YandexSttConfig(BaseModel):
-    api_key: str = ""
+    api_key: str = Field("", json_schema_extra=SECRET_FIELD_EXTRA)
     folder_id: str = ""
     model: str = "general"
     language: str = "ru-RU"

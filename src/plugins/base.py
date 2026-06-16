@@ -37,6 +37,11 @@ MODEL_FIELD_EXTRA: dict = {"widget": "select", "options": "dynamic", "freeform":
 # provider API. Convention: the companion field is named "<field>_label".
 LABEL_FIELD_EXTRA: dict = {"hidden": True}
 
+# Marks a genuine credential field (api_key/token/password/psk/...): rendered as a
+# masked reveal input by the panel. The panel masks ONLY fields carrying this flag —
+# never by guessing from the field name — so attach it to every secret config field.
+SECRET_FIELD_EXTRA: dict = {"secret": True}
+
 
 class Provider:
     """Base for all stage providers. Subclasses set the class attrs and implement create()."""

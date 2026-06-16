@@ -7,7 +7,7 @@ from collections.abc import AsyncIterator
 import httpx
 from pydantic import BaseModel, Field, model_validator
 
-from src.plugins.base import Deps, Provider, register
+from src.plugins.base import SECRET_FIELD_EXTRA, Deps, Provider, register
 # The canonical LLM->TTS text is the model's own notation: plain text with "+"
 # before the stressed vowel (e.g. "прив+ет") — Yandex's native stress markup, so
 # only unit expansion and stray-'+' cleanup are needed.
@@ -343,7 +343,7 @@ def _default_role(voice: str) -> str:
 
 class YandexTtsConfig(BaseModel):
     # apply class is computed centrally (reconfig.action_for) and injected by catalog().
-    api_key: str = ""
+    api_key: str = Field("", json_schema_extra=SECRET_FIELD_EXTRA)
     voice: str = Field("zahar", json_schema_extra={"widget": "select", "options": "dynamic"})
     # Role (amplua) is voice-dependent, so its option list is computed from the
     # selected voice (see options()); it is stored as a free string and coerced to

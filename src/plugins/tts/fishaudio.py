@@ -6,7 +6,7 @@ import time
 import httpx
 from pydantic import BaseModel, Field
 
-from src.plugins.base import Deps, LABEL_FIELD_EXTRA, Provider, register
+from src.plugins.base import Deps, LABEL_FIELD_EXTRA, SECRET_FIELD_EXTRA, Provider, register
 # The canonical LLM->TTS text arrives in "+vowel" stress notation (e.g.
 # "прив+ет"). Fish Audio's neural models take plain unannotated text — they do
 # not understand Yandex "+" markup, and a literal '+' could be voiced — so the
@@ -145,7 +145,7 @@ class FishAudioTtsBackend(TtsBackend):
 
 
 class FishAudioTtsConfig(BaseModel):
-    api_key: str = ""
+    api_key: str = Field("", json_schema_extra=SECRET_FIELD_EXTRA)
     # Voice model id. The option list is fetched from the fish.audio catalog
     # and is server-searchable ("search": "remote"): the panel re-queries the
     # catalog with the typed text instead of filtering the preloaded list.

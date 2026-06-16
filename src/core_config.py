@@ -9,6 +9,10 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+# Marks a genuine credential field: the panel renders it as a masked reveal input.
+# Imported from src.plugins.base (no circular import — base imports nothing from here).
+from src.plugins.base import SECRET_FIELD_EXTRA
+
 
 class ContextConfig(BaseModel):
     max_turns: int = Field(5, ge=1)
@@ -107,7 +111,7 @@ class NetworkConfig(BaseModel):
 class OpenWeatherMapConfig(BaseModel):
     # Master switch: a disabled source is removed from the ToolHub and its prompt block is dropped.
     enabled: bool = True
-    api_key: str = ""
+    api_key: str = Field("", json_schema_extra=SECRET_FIELD_EXTRA)
     city: str = "Moscow"
     # Appended to the system prompt to describe this built-in MCP's tools to the model.
     prompt: str = Field("", json_schema_extra={"widget": "textarea"})
@@ -121,7 +125,7 @@ class McpServerConfig(BaseModel):
     enabled: bool = True
     name: str
     url: str = ""
-    token: str = ""
+    token: str = Field("", json_schema_extra=SECRET_FIELD_EXTRA)
     transport: Literal["auto", "streamable_http", "sse"] = "auto"
     prompt: str = ""
     slow: bool = Field(
@@ -138,7 +142,7 @@ class CalendarConfig(BaseModel):
     enabled: bool = True
     url: str = ""
     username: str = ""
-    password: str = ""
+    password: str = Field("", json_schema_extra=SECRET_FIELD_EXTRA)
     calendar: str = ""
     # Appended to the system prompt to describe this built-in MCP's tools to the model.
     prompt: str = Field("", json_schema_extra={"widget": "textarea"})
@@ -147,7 +151,7 @@ class CalendarConfig(BaseModel):
 class DeviceConfig(BaseModel):
     name: str
     host: str
-    psk: str
+    psk: str = Field(json_schema_extra=SECRET_FIELD_EXTRA)
     # When False the server does NOT build a client for this speaker (no connection
     # attempts); flipping it is hot-applied via DeviceManager.reconfigure().
     enabled: bool = True

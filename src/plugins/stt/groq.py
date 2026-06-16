@@ -6,7 +6,7 @@ import httpx
 from loguru import logger
 from pydantic import BaseModel, Field
 
-from src.plugins.base import MODEL_FIELD_EXTRA, Deps, Provider, register
+from src.plugins.base import MODEL_FIELD_EXTRA, SECRET_FIELD_EXTRA, Deps, Provider, register
 from src.stage_errors import StageError
 # The hallucination filter now lives in src.stt (shared pure helpers); re-exported
 # here so existing `from src.plugins.stt.groq import ...` imports keep working.
@@ -118,7 +118,7 @@ class GroqSttBackend(SttBackend):
 
 
 class GroqSttConfig(BaseModel):
-    api_key: str = ""
+    api_key: str = Field("", json_schema_extra=SECRET_FIELD_EXTRA)
     # Dynamic select: the option list is fetched from Groq's model-list API
     # (see MODEL_FIELD_EXTRA in src/plugins/base.py).
     model: str = Field("whisper-large-v3-turbo", json_schema_extra=MODEL_FIELD_EXTRA)

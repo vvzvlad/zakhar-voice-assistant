@@ -21,8 +21,10 @@ function renderField(name, node, value, onChange = () => {}) {
 }
 
 describe("SchemaField widget selection", () => {
-  it("renders a masked password input (KeyInput) for a secret-named string", () => {
-    const c = renderField("api_key", { type: "string" }, "sk-123");
+  it("renders a masked password input (KeyInput) for a node carrying secret:true", () => {
+    // Masking is EXPLICIT: it is driven by the resolved node's `secret` flag (set by
+    // the backend via json_schema_extra), NOT by the field name.
+    const c = renderField("api_key", { type: "string", secret: true }, "sk-123");
     const input = c.querySelector("input");
     expect(input).toBeTruthy();
     // KeyInput identity: a password-type input (masked) rather than a plaintext one.
@@ -31,10 +33,20 @@ describe("SchemaField widget selection", () => {
     expect(screen.getByText("SHOW")).toBeInTheDocument();
   });
 
-  it("renders a plaintext input (NOT masked) for a non-secret string", () => {
+  it("renders a plaintext input (NOT masked) for a string WITHOUT the secret flag", () => {
     const c = renderField("endpoint", { type: "string" }, "http://x");
     const input = c.querySelector("input");
     // No password masking, and no SHOW/HIDE button -> not a KeyInput.
+    expect(input.getAttribute("type")).not.toBe("password");
+    expect(screen.queryByText("SHOW")).toBeNull();
+  });
+
+  it("does NOT mask a 'key'-ish field name without the secret flag (e.g. keywords)", () => {
+    // Regression guard for the dropped name heuristic: the old KEYISH regex masked
+    // any name containing "key", wrongly hiding the wakeword `keywords` field. With
+    // explicit masking, a field that lacks secret:true is a plain text input.
+    const c = renderField("keywords", { type: "string" }, "computer, alexa");
+    const input = c.querySelector("input");
     expect(input.getAttribute("type")).not.toBe("password");
     expect(screen.queryByText("SHOW")).toBeNull();
   });

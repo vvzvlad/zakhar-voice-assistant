@@ -50,8 +50,9 @@ export function enumOf(node, root) {
   return null;
 }
 
-const KEYISH = /(api_key|token|psk|secret|key|password|passwd|pwd)/i;
-export const isSecret = (name) => KEYISH.test(name);
+// Secret masking is no longer guessed from the field name: a field is masked iff
+// its resolved schema node carries the explicit `secret: true` flag (set in the
+// backend via json_schema_extra). SchemaForm reads `r.secret === true` directly.
 
 // Title-case a snake_case field name as a fallback label.
 export function humanize(name) {

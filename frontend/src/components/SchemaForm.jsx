@@ -13,10 +13,10 @@
 //
 // Field → widget mapping follows settings-storage-design: enum→Seg/Select,
 // options:"dynamic"→Select(fetched), slider numbers→Slider, other numbers→Stepper,
-// boolean→Toggle, secret-looking strings→masked key input, else text input.
+// boolean→Toggle, explicit `secret:true` strings→masked key input, else text input.
 import React, { useEffect, useRef, useState } from "react";
 import { Field, KeyInput, ScaleSeg, Seg, Select, Slider, Stepper, Toggle } from "./primitives.jsx";
-import { resolve, enumOf, isSecret, humanize } from "../schema.js";
+import { resolve, enumOf, humanize } from "../schema.js";
 
 function DynamicSelect({ value, currentLabel, onChange, load, itemAction, itemActionBusy, allowCustom, remoteSearch }) {
   const norm = (o) => (o && typeof o === "object" ? o : { value: o, label: String(o) });
@@ -193,7 +193,11 @@ function SchemaField({ name, node, root, value, labelValue, onLabelChange, onCha
         style={{ width: "100%", minHeight: 90, resize: "vertical", border: "1px solid var(--line)", borderRadius: 8, padding: "10px 12px", fontFamily: "var(--mono)", fontSize: 12, lineHeight: 1.6, color: "var(--ink)", outline: "none", background: "var(--panel2)" }}
       />
     );
-  } else if (isSecret(name)) {
+  } else if (r.secret === true) {
+    // Masking is EXPLICIT: only fields the backend tags with json_schema_extra
+    // {"secret": true} (api_key/token/password/psk/...) render as a masked reveal
+    // input. We never guess from the field name, so e.g. wakeword `keywords` or
+    // `keyboard_layout` stay plain text.
     control = <KeyInput value={value} onChange={set} />;
   } else {
     control = (

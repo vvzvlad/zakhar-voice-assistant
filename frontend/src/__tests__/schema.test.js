@@ -1,8 +1,10 @@
 // Unit tests for the pydantic-JSON-Schema resolver (src/schema.js).
 // This is security-relevant: a wrong resolution can cause a secret-typed field
-// to be rendered as a plaintext text input instead of a masked key input.
+// to be rendered as a plaintext text input instead of a masked key input. Masking
+// itself is now driven by the explicit `secret` flag on the resolved node, not by a
+// name heuristic; the widget-selection tests for that live in SchemaForm.widgets.test.jsx.
 import { describe, it, expect } from "vitest";
-import { deref, resolve, enumOf, isSecret, humanize } from "../schema.js";
+import { deref, resolve, enumOf, humanize } from "../schema.js";
 
 describe("deref", () => {
   it("follows a #/$defs/Name $ref to its target", () => {
@@ -92,27 +94,6 @@ describe("enumOf", () => {
 
   it("returns null when no enum is present anywhere", () => {
     expect(enumOf({ type: "string" }, { $defs: {} })).toBeNull();
-  });
-});
-
-describe("isSecret", () => {
-  it("flags api_key / token / psk / password / OPENAI_API_KEY as secret", () => {
-    expect(isSecret("api_key")).toBe(true);
-    expect(isSecret("token")).toBe(true);
-    expect(isSecret("psk")).toBe(true);
-    expect(isSecret("password")).toBe(true);
-    expect(isSecret("OPENAI_API_KEY")).toBe(true);
-  });
-
-  it("documents the /key/i false positive: 'keyboard_layout' is treated as secret", () => {
-    // The KEYISH regex contains a bare `key` alternative, so any field whose name
-    // merely CONTAINS "key" (e.g. keyboard_layout) is masked. This asserts the
-    // ACTUAL current behaviour rather than the intuitively-correct one.
-    expect(isSecret("keyboard_layout")).toBe(true);
-  });
-
-  it("returns false for a clearly non-secret field name", () => {
-    expect(isSecret("endpoint")).toBe(false);
   });
 });
 
