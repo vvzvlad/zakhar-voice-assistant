@@ -139,6 +139,53 @@ async def test_verify_grammar_recognizer_gets_words_and_waveform():
     assert rec.accepted == b"pcmbytes"
 
 
+async def test_verify_any_of_several_single_word_keywords_matches():
+    # Several single-word keywords configured (OR): the recognized token matching
+    # ANY of them accepts.
+    result = {"text": "алиса", "result": [{"word": "алиса", "conf": 0.9}]}
+    v = _verifier(result, keywords=["захар", "алиса", "окей"])
+    verdict = await v.verify(b"pcmbytes")
+    assert verdict.accepted is True
+    assert verdict.score == pytest.approx(0.9)
+
+
+async def test_verify_multiword_keyword_phrase_matches_when_contiguous():
+    # A multi-word keyword ("окей захар") matches when the recognizer returns that
+    # phrase as contiguous tokens. The score is the max per-word conf of the run.
+    result = {
+        "text": "окей захар",
+        "result": [{"word": "окей", "conf": 0.7}, {"word": "захар", "conf": 0.82}],
+    }
+    v = _verifier(result, keywords=["окей захар"])
+    verdict = await v.verify(b"pcmbytes")
+    assert verdict.accepted is True
+    assert verdict.score == pytest.approx(0.82)
+
+
+async def test_verify_multiword_keyword_does_not_match_on_single_word():
+    # Only ONE word of a multi-word phrase appears -> the contiguous run is absent,
+    # so the phrase keyword does NOT match.
+    result = {"text": "захар", "result": [{"word": "захар", "conf": 0.9}]}
+    v = _verifier(result, keywords=["окей захар"])
+    verdict = await v.verify(b"pcmbytes")
+    assert verdict.accepted is False
+    assert verdict.score == 0.0
+
+
+async def test_verify_empty_keywords_accepts():
+    # An operator who cleared the keyword list disables the gate: verify accepts
+    # (score None) rather than rejecting every wake. Built directly (not via the
+    # _verifier helper, which would substitute the default keyword for an empty list).
+    v = VoskWakewordVerifier(
+        model_path="unused", keywords=[], window_ms=1500,
+        timeout_ms=300, on_error="closed", model=object(),
+    )
+    # The guard must hold even under the strict fail-closed policy.
+    assert v._keywords == []
+    verdict = await v.verify(b"pcmbytes")
+    assert verdict == WakewordVerdict(accepted=True, score=None)
+
+
 async def test_verify_empty_pcm_applies_fail_policy():
     # No audio -> fail-open accepts, fail-closed rejects; score is None either way.
     open_v = _verifier({"text": "захар"}, on_error="open")

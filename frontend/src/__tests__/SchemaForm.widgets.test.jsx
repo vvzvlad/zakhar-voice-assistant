@@ -183,6 +183,48 @@ describe("SchemaField widget selection", () => {
     expect(onChange).toHaveBeenCalledWith("model", "vendor/not-in-list");
   });
 
+  it("renders a string-array field as a joined text input and emits a real array on edit", () => {
+    // A list[str] field (e.g. wakeword `keywords`) must NOT fall through to the plain
+    // text input (which would store a string and 422 on pydantic list[str]). It renders
+    // the array joined by ", " and, on edit, stores a trimmed array with empties dropped.
+    const onChange = vi.fn();
+    const c = renderField(
+      "keywords",
+      { type: "array", items: { type: "string" } },
+      ["окей захар", "захар"],
+      onChange
+    );
+    const input = c.querySelector(".z-inp input");
+    expect(input).toBeTruthy();
+    // The current array is shown joined by ", " (not coerced via String([...]) with bare commas).
+    expect(input.value).toBe("окей захар, захар");
+    // Typing "a, b, c" stores ["a","b","c"] — a real array, trimmed, no empties.
+    fireEvent.change(input, { target: { value: "a, b, c" } });
+    expect(onChange).toHaveBeenCalledWith("keywords", ["a", "b", "c"]);
+    const emitted = onChange.mock.calls[onChange.mock.calls.length - 1][1];
+    expect(Array.isArray(emitted)).toBe(true);
+    // Trailing/empty fragments and stray whitespace are dropped (commas + newlines).
+    fireEvent.change(input, { target: { value: " x , ,\n y ,," } });
+    expect(onChange).toHaveBeenLastCalledWith("keywords", ["x", "y"]);
+  });
+
+  it("treats an array field with unspecified item type as a string array", () => {
+    // No `items` schema -> default to string-array handling (joined text input), not
+    // the generic plaintext fallback.
+    const onChange = vi.fn();
+    const c = renderField("tags", { type: "array" }, ["one", "two"], onChange);
+    const input = c.querySelector(".z-inp input");
+    expect(input.value).toBe("one, two");
+    fireEvent.change(input, { target: { value: "p, q" } });
+    expect(onChange).toHaveBeenCalledWith("tags", ["p", "q"]);
+  });
+
+  it("shows the comma-separated hint for a string-array field", () => {
+    renderField("keywords", { type: "array", items: { type: "string" }, description: "Wake words." }, ["захар"]);
+    // The widget format note is appended to the schema description.
+    expect(screen.getByText(/Comma-separated/)).toBeInTheDocument();
+  });
+
   it("renders a textarea for a string field with widget:'textarea'", () => {
     const onChange = vi.fn();
     const c = renderField("prompt", { type: "string", widget: "textarea" }, "hello", onChange);

@@ -126,8 +126,30 @@ function SchemaField({ name, node, root, value, labelValue, onLabelChange, onCha
   // server-side: typing re-queries the provider instead of filtering locally.
   const remoteSearch = (node.search || r.search) === "remote";
 
+  // A string array (e.g. wakeword `keywords`: list[str]) is edited as a single
+  // comma/newline-separated text control whose STORED value stays a real array,
+  // so pydantic list[str] validation passes on save (a plain text input would
+  // write back a string and 422). Detect: resolved type "array" whose item type
+  // resolves to "string" (or is unspecified — default to string-array handling).
+  const itemsNode = r.items ? resolve(r.items, root) : null;
+  const isStringArray = type === "array" && (!itemsNode || itemsNode.type == null || itemsNode.type === "string");
+
   let control;
-  if (dynamic && optionsFor) {
+  let hintSuffix = "";
+  if (isStringArray) {
+    // text <-> list mapping: render the array joined by ", "; on edit split the
+    // typed text on commas and newlines, trim, drop empties, and store the array.
+    const arr = Array.isArray(value) ? value : [];
+    hintSuffix = "Comma-separated; one entry per item.";
+    control = (
+      <div className="z-inp mono">
+        <input
+          value={arr.join(", ")}
+          onChange={(e) => set(e.target.value.split(/[\n,]+/).map((s) => s.trim()).filter(Boolean))}
+        />
+      </div>
+    );
+  } else if (dynamic && optionsFor) {
     const itemAction = itemActionFor ? itemActionFor(name) : null;
     // Persist the picked option's human label into the <name>_label companion
     // field (when the field has one) so it renders immediately next load; the
@@ -212,8 +234,11 @@ function SchemaField({ name, node, root, value, labelValue, onLabelChange, onCha
   // min/max range and widget "slider" stay full-width stacked) and numeric enums, which
   // render as a Seg/Select (handled above) and lay out like the other enum selects.
   const row = !segOptions && (type === "boolean" || ((type === "integer" || type === "number") && !enums && !(r.minimum != null && r.maximum != null && widget === "slider")));
+  // Append any widget-specific format note (e.g. the array editor's comma hint)
+  // to the schema description so the user sees the expected input format.
+  const fullHint = [hint, hintSuffix].filter(Boolean).join(" ") || undefined;
   return (
-    <Field label={label} hint={hint} row={row}>
+    <Field label={label} hint={fullHint} row={row}>
       {control}
     </Field>
   );
