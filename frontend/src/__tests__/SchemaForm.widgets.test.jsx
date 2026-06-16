@@ -208,6 +208,103 @@ describe("SchemaField widget selection", () => {
     expect(onChange).toHaveBeenLastCalledWith("keywords", ["x", "y"]);
   });
 
+  it("preserves an in-progress separator while typing (controlled round-trip): 'захар, ' is NOT reset to 'захар'", () => {
+    // Reproduces the controlled-input bug: the input is re-rendered from the value
+    // its own onChange just emitted (the real SchemaForm round-trip). With the old
+    // inline input (value={arr.join(", ")} + parse on every keystroke) the trailing
+    // ", " is stripped immediately, so a comma/space could never be typed. The
+    // StringListInput holds the raw text locally, so the separator survives while
+    // the STORED value stays a real array.
+    function Controlled() {
+      // Mirror renderField's one-property schema, but keep the value in local state
+      // and feed the emitted array back in — exactly how SchemaForm is driven.
+      const [val, setVal] = React.useState(["захар"]);
+      const schema = { properties: { keywords: { type: "array", items: { type: "string" } } } };
+      return (
+        <SchemaForm
+          schema={schema}
+          values={{ keywords: val }}
+          onChange={(_f, v) => setVal(v)}
+        />
+      );
+    }
+    const { container } = render(<Controlled />);
+    const input = container.querySelector(".z-inp input");
+    expect(input.value).toBe("захар");
+    // Typing a trailing comma+space: the displayed text keeps the separator (so the
+    // user can keep typing), while the emitted/stored value is the parsed ["захар"].
+    fireEvent.change(input, { target: { value: "захар, " } });
+    expect(input.value).toBe("захар, ");
+    // Continuing to a second entry parses to a two-element array.
+    fireEvent.change(input, { target: { value: "захар, оскар" } });
+    expect(input.value).toBe("захар, оскар");
+  });
+
+  it("emits the parsed array across a controlled round-trip (separator typed, then second entry)", () => {
+    // Companion assertion to the test above, focused on the emitted PARSED value:
+    // 'захар, ' -> ['захар'] (trailing empty fragment dropped), then
+    // 'захар, оскар' -> ['захар','оскар'].
+    const emitted = [];
+    function Controlled() {
+      const [val, setVal] = React.useState(["захар"]);
+      const schema = { properties: { keywords: { type: "array", items: { type: "string" } } } };
+      return (
+        <SchemaForm
+          schema={schema}
+          values={{ keywords: val }}
+          onChange={(_f, v) => { emitted.push(v); setVal(v); }}
+        />
+      );
+    }
+    const { container } = render(<Controlled />);
+    const input = container.querySelector(".z-inp input");
+    fireEvent.change(input, { target: { value: "захар, " } });
+    // The trailing comma+space contributes no entry: still a single-element array.
+    expect(emitted[emitted.length - 1]).toEqual(["захар"]);
+    fireEvent.change(input, { target: { value: "захар, оскар" } });
+    expect(emitted[emitted.length - 1]).toEqual(["захар", "оскар"]);
+  });
+
+  it("re-syncs displayed text on a BIDIRECTIONAL external value reset (multi-word phrase vs split entries)", () => {
+    // Regression for the space-join comparison bug: keyword entries may contain a SPACE
+    // (a multi-word wake phrase, e.g. "окей захар" — a documented feature). The re-sync
+    // effect must compare STRUCTURALLY, because join(" ") makes ["окей захар"] (one phrase)
+    // and ["окей","захар"] (two entries) look EQUAL — so a genuine external value reset
+    // (e.g. after save/reload re-seeds the form via useStageForm WITHOUT a remount) would
+    // be wrongly skipped and the input keeps showing stale text. We drive the external
+    // value via `rerender` (NOT a fresh render) so the StringListInput is NOT remounted.
+    const schema = { properties: { keywords: { type: "array", items: { type: "string" } } } };
+    const onChange = vi.fn();
+    const { container, rerender } = render(
+      <SchemaForm schema={schema} values={{ keywords: ["окей захар"] }} onChange={onChange} />
+    );
+    const input = container.querySelector(".z-inp input");
+    // One-phrase value renders as the single phrase (its inner space is NOT a separator).
+    expect(input.value).toBe("окей захар");
+
+    // The user edits the text to two comma-separated entries; the parsed array is emitted.
+    fireEvent.change(input, { target: { value: "окей, захар" } });
+    expect(input.value).toBe("окей, захар");
+    expect(onChange).toHaveBeenLastCalledWith("keywords", ["окей", "захар"]);
+
+    // EXTERNAL reset back to the ONE-phrase value (same component instance, no remount).
+    // With the old join(" ") comparison both sides stringify to "окей захар", so the
+    // effect skips the re-sync and the input keeps the stale "окей, захар". With the
+    // JSON.stringify comparison the parsed ["окей","захар"] != ["окей захар"], so it
+    // re-syncs and the input shows the canonical "окей захар".
+    rerender(
+      <SchemaForm schema={schema} values={{ keywords: ["окей захар"] }} onChange={onChange} />
+    );
+    expect(input.value).toBe("окей захар");
+
+    // The reverse direction: external reset from a one-phrase value to a two-entry value
+    // updates the displayed text (joined by ", ").
+    rerender(
+      <SchemaForm schema={schema} values={{ keywords: ["окей", "захар"] }} onChange={onChange} />
+    );
+    expect(input.value).toBe("окей, захар");
+  });
+
   it("treats an array field with unspecified item type as a string array", () => {
     // No `items` schema -> default to string-array handling (joined text input), not
     // the generic plaintext fallback.

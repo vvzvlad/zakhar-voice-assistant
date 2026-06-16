@@ -18,6 +18,11 @@ import React, { useEffect, useRef, useState } from "react";
 import { Field, KeyInput, ScaleSeg, Seg, Select, Slider, Stepper, Toggle } from "./primitives.jsx";
 import { resolve, enumOf, humanize } from "../schema.js";
 
+// Parse a comma/newline-separated text blob into a trimmed list[str] (empties dropped).
+// Module-scoped because it depends on nothing from any component, so it isn't recreated
+// each render and doesn't need to be reasoned about in effect dependency arrays.
+const parseStringList = (t) => t.split(/[\n,]+/).map((s) => s.trim()).filter(Boolean);
+
 function DynamicSelect({ value, currentLabel, onChange, load, itemAction, itemActionBusy, allowCustom, remoteSearch }) {
   const norm = (o) => (o && typeof o === "object" ? o : { value: o, label: String(o) });
   // The current value's seed option: its persisted human label when known
@@ -100,6 +105,31 @@ function DynamicSelect({ value, currentLabel, onChange, load, itemAction, itemAc
     searchable={opts.length > 10} allowCustom={allowCustom} onQuery={remoteSearch ? onQuery : undefined} />;
 }
 
+// Editable string-array control (e.g. the wakeword `keywords` list). Holds the raw
+// typed text LOCALLY so separators (comma/space) and in-progress entries aren't
+// clobbered by re-normalization on every keystroke; pushes the PARSED array up so
+// the stored value stays a real list[str] (pydantic list[str] validates on save).
+function StringListInput({ value, onChange }) {
+  const arr = Array.isArray(value) ? value : [];
+  const [text, setText] = useState(arr.join(", "));
+  // Re-sync local text ONLY when the external value diverges from what the current
+  // text already parses to (provider switch / external reset) — a no-op while the
+  // user types, since their text parses to exactly `arr`, so typing is never clobbered.
+  // Compare STRUCTURALLY (JSON.stringify of the parsed list vs `arr`): a space inside
+  // an entry (a multi-word wake phrase, e.g. "окей захар") must not collide with a
+  // join separator. A space-join would make ["окей захар"] and ["окей","захар"] look
+  // equal and wrongly skip a genuine external reset, leaving stale text on screen.
+  useEffect(() => {
+    if (JSON.stringify(parseStringList(text)) !== JSON.stringify(arr)) setText(arr.join(", "));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [value]);
+  return (
+    <div className="z-inp mono">
+      <input value={text} onChange={(e) => { setText(e.target.value); onChange(parseStringList(e.target.value)); }} />
+    </div>
+  );
+}
+
 // One property → one <Field> with the right widget.
 function SchemaField({ name, node, root, value, labelValue, onLabelChange, onChange, optionsFor, itemActionFor, itemActionBusy }) {
   const r = resolve(node, root);
@@ -137,18 +167,8 @@ function SchemaField({ name, node, root, value, labelValue, onLabelChange, onCha
   let control;
   let hintSuffix = "";
   if (isStringArray) {
-    // text <-> list mapping: render the array joined by ", "; on edit split the
-    // typed text on commas and newlines, trim, drop empties, and store the array.
-    const arr = Array.isArray(value) ? value : [];
     hintSuffix = "Comma-separated; one entry per item.";
-    control = (
-      <div className="z-inp mono">
-        <input
-          value={arr.join(", ")}
-          onChange={(e) => set(e.target.value.split(/[\n,]+/).map((s) => s.trim()).filter(Boolean))}
-        />
-      </div>
-    );
+    control = <StringListInput value={value} onChange={set} />;
   } else if (dynamic && optionsFor) {
     const itemAction = itemActionFor ? itemActionFor(name) : null;
     // Persist the picked option's human label into the <name>_label companion
