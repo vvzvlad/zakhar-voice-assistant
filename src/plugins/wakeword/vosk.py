@@ -64,11 +64,28 @@ class VoskWakewordVerifier(WakewordVerifier):
         rec.AcceptWaveform(pcm)
         result = json.loads(rec.FinalResult())
         tokens = result.get("text", "").split()
-        keyset = set(self._keywords)
-        accepted = any(tok in keyset for tok in tokens)
-        # Prefer the per-word confidence of a matched keyword when present.
-        confs = [w["conf"] for w in result.get("result", [])
-                 if w.get("word") in keyset and "conf" in w]
+        # Match each keyword as a CONTIGUOUS run of words in the recognized token
+        # list. A single-word keyword reduces to the old "word in tokens" check; a
+        # multi-word phrase (e.g. "окей захар") matches only when all of its words
+        # appear contiguously — the whole phrase string is never a token by itself.
+        # Collect the per-word "conf" of every matched run so the score reflects the
+        # confidence of the actual hit; `result["result"]` is aligned 1:1 with
+        # `text.split()`, so it is only usable when the lengths agree.
+        words = result.get("result", [])
+        aligned = words if len(words) == len(tokens) else None
+        accepted = False
+        confs = []
+        for kw in self._keywords:
+            kw_words = kw.split()
+            if not kw_words:
+                continue
+            n = len(kw_words)
+            for i in range(len(tokens) - n + 1):
+                if tokens[i:i + n] == kw_words:
+                    accepted = True
+                    if aligned is not None:
+                        confs += [aligned[j]["conf"] for j in range(i, i + n)
+                                  if "conf" in aligned[j]]
         if confs:
             score = max(confs)
         else:
@@ -76,6 +93,11 @@ class VoskWakewordVerifier(WakewordVerifier):
         return WakewordVerdict(accepted=accepted, score=score)
 
     async def verify(self, pcm: bytes) -> WakewordVerdict:
+        if not self._keywords:
+            # No keywords configured: an unconfigured gate must not silently reject
+            # every wake (which would make the assistant deaf). Accept without even
+            # building the empty-grammar recognizer.
+            return WakewordVerdict(True, None)
         if not pcm:
             # No audio -> apply the configured fail policy (open accepts, closed rejects).
             return WakewordVerdict(self.fail_open, None)
@@ -104,14 +126,21 @@ class VoskWakewordConfig(BaseModel):
     keywords: list[str] = Field(
         default_factory=lambda: ["захар"],
         title="Keywords",
-        description="Wake words: the grammar vocabulary AND the accept set. The "
-        "decode is constrained to these (plus an unknown token); a verdict accepts "
-        "when any keyword is recognised.",
+        description="Wake words: the grammar vocabulary AND the accept set. One "
+        "entry per wake word; the gate accepts when ANY entry is recognised (OR). "
+        "A multi-word entry is treated as a phrase — all of its words must be "
+        "recognised contiguously for it to match. Leave empty to accept every wake "
+        "(the gate is disabled).",
     )
     window_ms: int = Field(
-        1500,
+        2500,
         title="Window (ms)",
-        description="Length of the pre-roll audio window decoded for verification.",
+        description="Length of the pre-roll audio window decoded for verification. "
+        "MUST be >= the device firmware's preroll_duration (currently 2000 ms): the "
+        "wake word sits at the TAIL of the pre-roll, so a window shorter than the "
+        "pre-roll decodes only the START of the keyword (e.g. 'заха') and the gate "
+        "rejects every wake. Kept with a margin above preroll_duration so the whole "
+        "keyword is always inside the decoded window.",
     )
     timeout_ms: int = Field(
         300,

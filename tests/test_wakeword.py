@@ -242,7 +242,7 @@ def test_config_defaults():
     cfg = VoskWakewordConfig()
     assert cfg.enabled is True
     assert cfg.keywords == ["захар"]
-    assert cfg.window_ms == 1500
+    assert cfg.window_ms == 2500
     assert cfg.timeout_ms == 300
     assert cfg.on_error == "open"
 
