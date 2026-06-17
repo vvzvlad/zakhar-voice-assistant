@@ -1,11 +1,13 @@
 # zakhar-voice-assistant
 
+*Also available in [Russian](README.ru.md).*
+
 Client-side voice assistant for a "HA Voice PE" ESP32 speaker that replaces Home
 Assistant in the voice loop. The server connects to the speaker over the ESPHome
 Native API (as the client) and runs the pipeline: STT (cloud Whisper, default
 Groq) → LLM (default Claude Haiku 4.5 via OpenRouter) → smart-home tools via an
 external MCP server → RuAccent (Russian stress placement) → TTS (offline Piper /
-cloud Yandex SpeechKit / Fish Audio), returning the generated audio to N speakers.
+offline Silero / cloud Yandex SpeechKit / Fish Audio), returning the generated audio to N speakers.
 
 Smart-home control is an MCP integration: the app is an MCP client that connects
 to an external smart-home MCP server (hosted in Node-RED via
@@ -46,12 +48,26 @@ Everything routine is wrapped in the `Makefile` (`make help` lists all targets):
 ```bash
 make install                # create .venv + install dev/test deps
 make config                 # seed data/config.json from the template, then edit it
+make models                 # download the offline models (Vosk/Piper/Silero) into models/
 make test                   # run tests
 make run                    # run the app
 ```
 
 Python targets (`make test`, `make run`) create and reuse a local `.venv`
 automatically — you never need the system Python.
+
+The offline backends need their model files under `models/`. `make models` fetches
+them all; grab just one with `make models-vosk` / `make models-piper` /
+`make models-silero-vad` / `make models-silero-tts` (each skips a file that is
+already present). The Silero TTS voice runs on PyTorch — an optional dependency
+deliberately NOT in `requirements.txt` or the Docker image — so install it
+yourself (e.g. `pip install torch`) to use that provider.
+
+Docker note: the published image ships WITHOUT model files (the Dockerfile neither
+downloads nor bundles `models/`) and the compose volume mounts only `/app/data`, so
+a container runs only the cloud providers out of the box. To use the offline
+backends in Docker, provide a populated `models/` directory (e.g. run `make models`
+on the host and mount it into the container).
 
 ## Configuration
 
@@ -76,7 +92,7 @@ Shape (see `templates/default_config.json` for the full default):
   - `stress`: `ruaccent` (offline Russian stress placement) — runs between LLM and TTS,
     marks the stressed vowels in the reply (the canonical `+vowel` text every TTS backend
     already adapts); `enabled` (on by default) + model size.
-  - `tts`: `piper` (offline) | `yandex` (SpeechKit) | `fishaudio` (cloud) — voice/key/etc. per provider.
+  - `tts`: `piper` (offline) | `silero` (offline, needs PyTorch) | `yandex` (SpeechKit) | `fishaudio` (cloud) — voice/key/etc. per provider.
   Each provider declares its own settings schema (`src/plugins/<stage>/<id>.py`); adding a
   provider is one file, no changes to the config core.
 - **`core`** — non-provider settings: `context` (max_turns / ttl_seconds / dir), `audio`
@@ -116,10 +132,11 @@ like the admin panel). Tools:
 
 | Path | Purpose |
 |------|---------|
-| `Makefile` | Single entry point for repeated actions: `install`, `test`, `run`. Run `make help`. |
+| `Makefile` | Single entry point for repeated actions: `install`, `config`, `models`, `test`, `run`. Run `make help`. |
 | `src/` | Application code. Config core: `config_store.py` + `config_service.py`; providers under `src/plugins/`. |
 | `tests/` | pytest suite (runs in CI before the image is built). |
 | `data/` | Runtime state: `config.json`, per-device context, `prompts.db` (named system-prompt profiles). Gitignored, mounted as a volume. |
+| `models/` | Offline model files (Vosk / Piper / Silero), fetched by `make models`. Gitignored; not bundled in the Docker image. |
 | `templates/` | Committed reference assets (`default_prompt.md`, `default_config.json`) seeded into `data/` on first boot. |
 | `Dockerfile` | Slim single-stage build; deps cached before code; no `EXPOSE`. |
 | `docker-compose.yml` | Deploy template — image from `ghcr.io`, volume, audio port published to LAN, watchtower label. |
