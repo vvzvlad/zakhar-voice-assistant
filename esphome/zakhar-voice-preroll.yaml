@@ -35,7 +35,7 @@ substitutions:
   config_version: "v20_preroll"
   # micro_wake_word model version flashed; keep in sync with the model path in
   # packages.zakhar_wake_word below
-  model_version: "zakhar_v27"
+  model_version: "zakhar_v28"
 
 # --- Pre-roll fork: overrides the built-in voice_assistant with the patched copy ---
 # We now ALSO fork micro_wake_word from the SAME local source. The micro_wake_word fork
@@ -62,28 +62,32 @@ packages:
       models:
         # Local path to the model committed in this repo. ESPHome resolves the
         # manifest's relative "model": "zakhar.tflite" against this file's dir, so
-        # both .json and .tflite are read straight from microWakeWord/v27/model/.
+        # both .json and .tflite are read straight from microWakeWord/v28/model/.
         # (A remote github:// / raw URL fails here: ESPHome can't resolve the
         # relative .tflite inside a manifest fetched that way.)
         #
-        # v27 = v16 recipe + SYNTHETIC short-«захар» negatives (light weight 4/5). On the
-        # honest device eval it is a SMALL improvement over v16: slightly better drawn-out
-        # recall (FRR 21.0%->~19.6% @0.90, fresh-state) and notably lower music-FAPH
-        # (5.8->2.9/h); other FAPH classes similar. Same size (77848 B) & firmware config as v16.
-        # CORRECTION: the earlier "fixes short-«захар» 65->23%" was a HARNESS state-leakage
-        # artifact — with correct fresh-state scoring BOTH v16 and v27 fire ~65% on short
-        # «захар». v27 does NOT fix the plain-name false-trigger; short-vs-drawn discrimination
-        # is still UNSOLVED (needs REAL short-«захар» negatives + honest re-test).
-        # See ../microWakeWord/v27/{TRAINING_REPORT_v27,SUMMARY_real_eval}.md.
-        # Music false-accepts stay ~0 via the stock VAD pre-gate (inherited here).
-        - model: ../microWakeWord/v27/model/zakhar.json
+        # v28 = angmax: MAX-RECALL model. A SERVER-side gate-wakeword verifies «захар»
+        # downstream, so on-device FALSE accepts are cheap (≈ a server call) and FAPH is no
+        # longer the constraint. The on-device job is to MISS as little «захар» as possible —
+        # short OR drawn, any voice/condition (short/drawn distinction DROPPED, short «захар»
+        # is now a POSITIVE). Recipe: angular (AM-Softmax s=10 m=0.20, annealed) + ALL diverse
+        # positives (fish device-tract drawn 5729 voices + fish short + section real-device + v8).
+        # 78992 B, same firmware budget/config as v16/v19/v27.
+        # Recall @0.90 vs the previous prod v27: fish device-tract 0.995, off-channel clean ~0.93,
+        # clean-16 0.88 — +32 pp over v27 (0.673), beats v27 on EVERY channel. Red-teamed:
+        # fires on 99.3% of «захар» but only 6.6% of generic speech (AUC 0.995) — a real
+        # discriminator, NOT saturation; leakage-free (voice-disjoint, MFCC-independent).
+        # Server-call-rate post-VAD ~8.7/h worst-case (continuous TV/radio); real homes far less.
+        # CAVEAT: the 0.995 is on the fish RECAPTURE tract; off a different tract recall ~0.93.
+        # v19 is the channel-robust fallback (~0.96 everywhere, but ~21 calls/h).
+        # See ../microWakeWord/v28/TRAINING_REPORT_v28.md.
+        - model: ../microWakeWord/v28/model/zakhar.json
           id: zakhar
-          # Operating point: cutoff 0.90 — v27's eval knee (FRR 19.3%, FAPH ~1.2/h with VAD).
-          # The DET sweep showed v16's old 0.95 was OVER-tightening (its FAPH plateaus
-          # 0.85->0.95), so v27 ships at its proper knee 0.90. v27's silence-FAPH @0.90 is
-          # ~0.8/h (low); if real silence false-fires appear in the field, raise to 0.95 via
-          # the panel (Wake Probability Cutoff, below) -> FRR 22.7%, FAPH 0.86/h. (sliding
-          # window = v27 manifest default 5.) Keep device VAD on — halves FAPH at no recall cost.
+          # Operating point: cutoff 0.90 / window 5 (angmax manifest default; recall ~0.995
+          # on-channel, ~8.7 server-calls/h post-VAD). MAX-RECALL regime: the SERVER gate
+          # absorbs false accepts, so do NOT over-tighten. For EVEN more recall, LOWER the cutoff
+          # (e.g. 0.80) via the panel (Wake Probability Cutoff, below) — the gate eats the extra
+          # false accepts. Keep device VAD on (removes the non-speech FAPH bulk at no recall cost).
           probability_cutoff: 90%
 
   # Official Home Assistant Voice PE firmware, pinned to a release tag.
