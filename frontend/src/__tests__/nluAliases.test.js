@@ -5,10 +5,15 @@ import {
   parseActions,
   entitySlotsFromTools,
   allEnumSlots,
+  enumSlotsWithSource,
+  numberSlotsFromTools,
   classifySlotKind,
   parseAliasText,
   serializeAliasText,
   serializeActions,
+  splitWords,
+  joinWords,
+  groupSlots,
 } from "../nluAliases.js";
 
 describe("parseActionNames", () => {
@@ -325,5 +330,174 @@ describe("serializeAliasText", () => {
     const out = serializeAliasText(entities, map, [], known);
     expect(out).not.toContain("on");
     expect(out).toContain("свет = unknown_id");
+  });
+});
+
+describe("splitWords / joinWords", () => {
+  it("splits on comma, trims, drops empties and dedups", () => {
+    expect(splitWords("свет в зале,  люстра , свет в зале,, ")).toEqual(["свет в зале", "люстра"]);
+  });
+
+  it("strips '=' so an input word can't corrupt the `phrases = value` line", () => {
+    // The `=` is removed and the surrounding words are joined by a single space,
+    // NOT split into two entries (which would mis-bind the value on round-trip).
+    expect(splitWords("свет = люстра")).toEqual(["свет люстра"]);
+  });
+
+  it("collapses a newline within a word (no comma -> single entry)", () => {
+    expect(splitWords("a\nb")).toEqual(["a b"]);
+  });
+
+  it("still splits on comma and trims after sanitizing", () => {
+    expect(splitWords("ванная,  ванна ")).toEqual(["ванная", "ванна"]);
+  });
+
+  it("dedups identical words", () => {
+    expect(splitWords("свет, свет")).toEqual(["свет"]);
+  });
+
+  it("handles empty/undefined input", () => {
+    expect(splitWords("")).toEqual([]);
+    expect(splitWords(undefined)).toEqual([]);
+    expect(splitWords("   ")).toEqual([]);
+  });
+
+  it("joinWords joins with comma-space", () => {
+    expect(joinWords(["включи", "зажги"])).toBe("включи, зажги");
+    expect(joinWords([])).toBe("");
+  });
+
+  it("round-trips split -> join (trimmed, deduped)", () => {
+    expect(joinWords(splitWords("a, b ,a , c"))).toBe("a, b, c");
+  });
+});
+
+describe("enumSlotsWithSource", () => {
+  const sources = [
+    {
+      id: "home",
+      tools: [
+        {
+          name: "set_light",
+          parameters: {
+            type: "object",
+            properties: {
+              device_id: { type: "string", enum: ["bright_room_light"] },
+              state: { type: "string", enum: ["on", "off"] },
+              brightness: { type: "integer" }, // no enum -> omitted
+            },
+          },
+        },
+      ],
+    },
+    {
+      id: "garden",
+      tools: [
+        { name: "set_pump", parameters: { type: "object", properties: { action: { type: "string", enum: ["start", "stop"] } } } },
+      ],
+    },
+  ];
+
+  it("carries the owning source id on every enum slot, in encounter order", () => {
+    expect(enumSlotsWithSource(sources)).toEqual([
+      { server: "home", tool: "set_light", slot: "device_id", type: "string", values: ["bright_room_light"] },
+      { server: "home", tool: "set_light", slot: "state", type: "string", values: ["on", "off"] },
+      { server: "garden", tool: "set_pump", slot: "action", type: "string", values: ["start", "stop"] },
+    ]);
+  });
+
+  it("tolerates missing sources", () => {
+    expect(enumSlotsWithSource(undefined)).toEqual([]);
+  });
+});
+
+describe("numberSlotsFromTools", () => {
+  const sources = [
+    {
+      id: "home",
+      tools: [
+        {
+          name: "set_dimmer",
+          parameters: {
+            type: "object",
+            required: ["device_id", "brightness"],
+            properties: {
+              device_id: { type: "string", enum: ["night_light"] }, // has enum -> not numeric
+              brightness: { type: "integer" }, // required, no enum, integer -> numeric
+            },
+          },
+        },
+        {
+          name: "set_climate",
+          parameters: {
+            type: "object",
+            required: ["temperature"],
+            properties: {
+              temperature: { type: "string" }, // required string -> off-capable number
+              note: { type: "string" }, // not required -> skipped
+            },
+          },
+        },
+      ],
+    },
+  ];
+
+  it("emits required, enum-less, number/integer/string slots with their source", () => {
+    expect(numberSlotsFromTools(sources)).toEqual([
+      { server: "home", tool: "set_dimmer", slot: "brightness", type: "integer" },
+      { server: "home", tool: "set_climate", slot: "temperature", type: "string" },
+    ]);
+  });
+
+  it("skips optional (non-required) properties even when enum-less and numeric", () => {
+    const out = numberSlotsFromTools([
+      {
+        id: "x",
+        tools: [{ name: "t", parameters: { type: "object", properties: { n: { type: "integer" } } } }],
+      },
+    ]);
+    expect(out).toEqual([]); // n is not in `required`
+  });
+
+  it("tolerates missing sources", () => {
+    expect(numberSlotsFromTools(undefined)).toEqual([]);
+  });
+});
+
+describe("groupSlots", () => {
+  // Classify by slot name (state/action -> action; otherwise entity).
+  const kindOf = (s) => classifySlotKind(s.slot, s.values, []);
+
+  it("merges identical ACTION value-sets across tools (union of tools = used-in)", () => {
+    const slots = [
+      { server: "home", tool: "set_light", slot: "state", type: "string", values: ["on", "off"] },
+      { server: "home", tool: "set_switch", slot: "state", type: "string", values: ["off", "on"] }, // same set, different order
+    ];
+    const groups = groupSlots(slots, kindOf);
+    expect(groups).toHaveLength(1);
+    expect(groups[0].kind).toBe("action");
+    expect(groups[0].key).toBe("off on"); // sorted(values).join(" ")
+    expect(groups[0].tools).toEqual(["set_light", "set_switch"]); // union
+    expect(groups[0].values).toEqual(["on", "off"]); // first-seen order preserved
+  });
+
+  it("keeps ENTITY slots separate per tool.slot even with identical values", () => {
+    const slots = [
+      { server: "home", tool: "set_light", slot: "device_id", type: "string", values: ["lamp"] },
+      { server: "home", tool: "set_switch", slot: "device_id", type: "string", values: ["lamp"] },
+    ];
+    const groups = groupSlots(slots, kindOf);
+    expect(groups).toHaveLength(2);
+    expect(groups.map((g) => g.key)).toEqual(["set_light.device_id", "set_switch.device_id"]);
+  });
+
+  it("accumulates servers across merged action groups", () => {
+    const slots = [
+      { server: "home", tool: "set_light", slot: "state", type: "string", values: ["on", "off"] },
+      { server: "garden", tool: "set_pump", slot: "state", type: "string", values: ["on", "off"] },
+    ];
+    const groups = groupSlots(slots, kindOf);
+    expect(groups).toHaveLength(1);
+    expect(groups[0].servers).toEqual(["home", "garden"]);
   });
 });

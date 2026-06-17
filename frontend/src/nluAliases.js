@@ -91,6 +91,112 @@ export function allEnumSlots(sources) {
   return out;
 }
 
+// Discover EVERY enum slot in the live tool catalog, carrying the OWNING source's
+// id alongside the tool/slot. Same shape + traversal as allEnumSlots but adds
+// `server` (the source id) so the catalog editor can group/filter by MCP source.
+// For every tool property with a non-empty `enum`, emit
+// `{server, tool, slot, type, values}` in stable encounter order.
+export function enumSlotsWithSource(sources) {
+  const out = [];
+  for (const source of sources || []) {
+    for (const tool of (source && source.tools) || []) {
+      const props = (tool && tool.parameters && tool.parameters.properties) || {};
+      for (const [slot, prop] of Object.entries(props)) {
+        const values = prop && Array.isArray(prop.enum) ? prop.enum : [];
+        if (values.length === 0) continue; // no enum -> not a mappable slot
+        out.push({ server: source && source.id, tool: tool.name, slot, type: prop.type, values });
+      }
+    }
+  }
+  return out;
+}
+
+// Discover the NUMERIC slots: every REQUIRED tool property that has NO enum and a
+// type in ("integer", "number", "string"). These are filled by a number spoken in
+// the command itself (brightness/temperature) — there is no value dictionary, so
+// they are shown as read-only info cards. A `string` type signals an off-capable
+// number ("set X to 30" or "off"). Only properties listed in the tool's `required`
+// array are emitted: an optional free-form arg is not a slot the operator must map.
+// Emits `{server, tool, slot, type}` in stable encounter order.
+const NUMBER_SLOT_TYPES = new Set(["integer", "number", "string"]);
+export function numberSlotsFromTools(sources) {
+  const out = [];
+  for (const source of sources || []) {
+    for (const tool of (source && source.tools) || []) {
+      const params = (tool && tool.parameters) || {};
+      const props = params.properties || {};
+      const required = new Set(Array.isArray(params.required) ? params.required : []);
+      for (const [slot, prop] of Object.entries(props)) {
+        if (!required.has(slot)) continue; // only required args are mandatory slots
+        const hasEnum = prop && Array.isArray(prop.enum) && prop.enum.length > 0;
+        if (hasEnum) continue; // enum -> a dictionary slot, handled elsewhere
+        if (!NUMBER_SLOT_TYPES.has(prop && prop.type)) continue;
+        out.push({ server: source && source.id, tool: tool.name, slot, type: prop.type });
+      }
+    }
+  }
+  return out;
+}
+
+// Split a comma-separated phrase string into an array of trimmed, de-duplicated,
+// non-empty words. The inverse of joinWords. Used by the chip input to turn the
+// stored `aliases`/`actions` RHS text into removable tags. Each part is sanitized
+// so it can never break the line-based `phrases = value` / `name = verbs` format on
+// round-trip: any `=`, `\r`, or `\n` (which would mis-split the line or inject a new
+// one) is replaced with a space, runs of whitespace are collapsed to one, and the
+// result is trimmed — then empties are dropped and the existing de-dup is kept.
+export function splitWords(s) {
+  const out = [];
+  const seen = new Set();
+  for (const part of String(s || "").split(",")) {
+    const w = part.replace(/[=\r\n]+/g, " ").replace(/\s+/g, " ").trim();
+    if (!w || seen.has(w)) continue;
+    seen.add(w);
+    out.push(w);
+  }
+  return out;
+}
+
+// Join an array of words back into the comma-separated RHS text the field stores.
+export function joinWords(arr) {
+  return (arr || []).join(", ");
+}
+
+// Group raw enum slots (from enumSlotsWithSource) into the catalog editor's display
+// groups, classifying each slot via `kindOf`. Two grouping rules:
+//   - ACTION-kind slots merge by their VALUE SET: `groupKey = sorted(values).join(" ")`.
+//     Identical action sets across tools collapse into one group; `tools`/`servers`
+//     accumulate the union (rendered as "used in: a, b"). This dedups e.g. set_light
+//     and set_switch both exposing {on, off}.
+//   - ENTITY-kind slots never merge: `groupKey = "${tool}.${slot}"` (one group per
+//     tool's slot), even if two tools share a value set.
+// `kindOf(slot)` receives the raw slot and returns "entity" | "action"; the caller
+// keys overrides by GROUP key, so the resolver must already factor that in.
+// Emits `[{key, kind, slotName, tools:[], servers:[], values:[]}]` in first-seen order.
+export function groupSlots(slots, kindOf) {
+  const groups = [];
+  const byKey = new Map();
+  for (const s of slots || []) {
+    const kind = kindOf(s);
+    const key =
+      kind === "action"
+        ? [...s.values].sort().join(" ")
+        : `${s.tool}.${s.slot}`;
+    let g = byKey.get(key);
+    if (!g) {
+      g = { key, kind, slotName: s.slot, tools: [], servers: [], values: [] };
+      byKey.set(key, g);
+      groups.push(g);
+    }
+    if (!g.tools.includes(s.tool)) g.tools.push(s.tool);
+    if (s.server != null && !g.servers.includes(s.server)) g.servers.push(s.server);
+    // Union the values (action groups merge identical sets; this also keeps any
+    // out-of-order duplicates from re-adding a value).
+    for (const v of s.values) if (!g.values.includes(v)) g.values.push(v);
+  }
+  return groups;
+}
+
 // Action slot names: these conventionally hold a state/command verb (their enum
 // values are actions, not entity ids), so they map to verbs in `actions` rather
 // than phrases in `aliases`. Used as a name-based hint by classifySlotKind.

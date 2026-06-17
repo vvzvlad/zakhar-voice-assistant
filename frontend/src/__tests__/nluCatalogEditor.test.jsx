@@ -1,30 +1,24 @@
 // @vitest-environment jsdom
-// Integration test (jsdom) for the offline-NLU inline catalog editor. Pins:
-//   - a `state` enum value (e.g. "on") renders as an ACTION input prefilled with
-//     its verbs and typing re-serializes the `actions` field via onChange,
-//   - a `device_id` id renders as an ENTITY input writing to `aliases`,
-//   - a `set_lock.action` value (lock/unlock) is classified action by slot name,
-//   - the per-slot kind toggle flips a slot's inputs between aliases/actions.
+// Integration test (jsdom) for the offline-NLU catalog editor (ported from the
+// designer mockup). Drives the REAL component against a mocked getTools() catalog
+// and asserts on the chip-input DOM + the persistence calls it makes via onChange.
+//
+// Catalog under test:
+//   set_light  : device_id {bright_room_light, table_light}, state {on, off}
+//   set_switch : state {on, off}                              (dedups with set_light)
+//   set_lock   : action {lock, unlock}
+//   set_scene  : scene {night, morning}
+//   set_dimmer : device_id {night_light}, brightness (integer, required, no enum)
 import React from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
-import { NluCatalogEditor } from "../pages/stages.jsx";
+import { render, screen, fireEvent, cleanup } from "@testing-library/react";
+import NluCatalogEditor from "../components/NluCatalogEditor.jsx";
 import * as api from "../api.js";
 
-// Mirror stages.vad.test.jsx: mock the api + appData modules. appData is mocked
-// only to keep the module graph self-contained (NluCatalogEditor never calls it).
-vi.mock("../appData.jsx", () => ({ useAppData: vi.fn() }));
-vi.mock("../api.js", () => ({
-  getOptions: vi.fn(async () => ({ options: [] })),
-  getChimes: vi.fn(async () => ({ options: [] })),
-  playChime: vi.fn(async () => ({ played: [], offline: [] })),
-  getTools: vi.fn(),
-}));
+vi.mock("../api.js", () => ({ getTools: vi.fn() }));
 
 afterEach(cleanup);
 
-// Small live catalog: set_light (device_id enum + state enum) and set_lock
-// (device_id enum + action enum {lock,unlock}).
 function makeSources() {
   return {
     sources: [
@@ -36,18 +30,40 @@ function makeSources() {
             parameters: {
               type: "object",
               properties: {
-                device_id: { type: "string", enum: ["bright_room_light", "night_light"] },
+                device_id: { type: "string", enum: ["bright_room_light", "table_light"] },
                 state: { type: "string", enum: ["on", "off"] },
               },
+            },
+          },
+          {
+            name: "set_switch",
+            parameters: {
+              type: "object",
+              properties: { state: { type: "string", enum: ["on", "off"] } },
             },
           },
           {
             name: "set_lock",
             parameters: {
               type: "object",
+              properties: { action: { type: "string", enum: ["lock", "unlock"] } },
+            },
+          },
+          {
+            name: "set_scene",
+            parameters: {
+              type: "object",
+              properties: { scene: { type: "string", enum: ["night", "morning"] } },
+            },
+          },
+          {
+            name: "set_dimmer",
+            parameters: {
+              type: "object",
+              required: ["device_id", "brightness"],
               properties: {
-                device_id: { type: "string", enum: ["main_lock"] },
-                action: { type: "string", enum: ["lock", "unlock"] },
+                device_id: { type: "string", enum: ["night_light"] },
+                brightness: { type: "integer" },
               },
             },
           },
@@ -62,121 +78,185 @@ beforeEach(() => {
   api.getTools.mockResolvedValue(makeSources());
 });
 
-const draft = { aliases: "", actions: "on = включи\noff = выключи" };
+const draft = { aliases: "", actions: "" };
 
-// Find the <input> sitting in the row whose <code> chip text === value.
-function inputForValue(value) {
+// The chip-input row: a `.e-row` whose left `<code>` text === value. Returns the
+// row element so callers can query its trailing `<input>` or chip tags.
+function rowForValue(value) {
   const code = screen.getByText(value);
-  const row = code.closest("div");
-  return row.querySelector("input");
+  return code.closest(".e-row");
+}
+function inputForValue(value) {
+  return rowForValue(value).querySelector(".e-chips input");
+}
+// Type a chip phrase and commit it with Enter.
+function typeChip(value, phrase) {
+  const input = inputForValue(value);
+  fireEvent.change(input, { target: { value: phrase } });
+  fireEvent.keyDown(input, { key: "Enter" });
 }
 
-describe("NluCatalogEditor", () => {
-  it("renders a state value as an ACTION input prefilled with its verbs; typing writes actions", async () => {
-    const onChange = vi.fn();
-    render(<NluCatalogEditor draft={draft} onChange={onChange} />);
-    await waitFor(() => expect(screen.getByText("on")).toBeInTheDocument());
-
-    // "on" is a state-slot value -> action input prefilled with "включи".
-    const input = inputForValue("on");
-    expect(input).toBeTruthy();
-    expect(input.value).toBe("включи");
-
-    fireEvent.change(input, { target: { value: "включи, зажги" } });
-    expect(onChange).toHaveBeenCalledTimes(1);
-    expect(onChange.mock.calls[0][0]).toBe("actions");
-    expect(onChange.mock.calls[0][1]).toContain("on = включи, зажги");
+describe("NluCatalogEditor (catalog port)", () => {
+  it("places device ids under the Devices & scenes zone", async () => {
+    render(<NluCatalogEditor draft={draft} onChange={vi.fn()} />);
+    // device ids resolve to ENTITY rows under the dev zone.
+    const code = await screen.findByText("bright_room_light");
+    const zone = code.closest(".e-zone");
+    expect(zone).toHaveClass("dev");
+    expect(screen.getByText("table_light")).toBeInTheDocument();
+    expect(screen.getByText("night_light")).toBeInTheDocument();
   });
 
-  it("renders a device_id id as an ENTITY input; typing writes aliases", async () => {
+  it("dedups on/off across set_light + set_switch into a single Commands group", async () => {
+    render(<NluCatalogEditor draft={draft} onChange={vi.fn()} />);
+    // "on" and "off" appear exactly once each despite two tools exposing the slot.
+    expect(await screen.findAllByText("on")).toHaveLength(1);
+    expect(screen.getAllByText("off")).toHaveLength(1);
+    // They live in the Commands (cmd) zone.
+    const cmdZone = screen.getByText("on").closest(".e-zone");
+    expect(cmdZone).toHaveClass("cmd");
+    // The merged action group advertises both tools via "used in:" <i> tags.
+    const usedIn = Array.from(cmdZone.querySelectorAll(".e-used i")).map((el) => el.textContent);
+    expect(usedIn).toEqual(["set_light", "set_switch"]);
+  });
+
+  it("classifies set_lock.action lock/unlock as Commands", async () => {
+    render(<NluCatalogEditor draft={draft} onChange={vi.fn()} />);
+    const lock = await screen.findByText("lock");
+    expect(lock.closest(".e-zone")).toHaveClass("cmd");
+    expect(screen.getByText("unlock").closest(".e-zone")).toHaveClass("cmd");
+  });
+
+  it("typing a device phrase chip writes aliases as '<phrase> = <id>'", async () => {
     const onChange = vi.fn();
     render(<NluCatalogEditor draft={draft} onChange={onChange} />);
-    await waitFor(() => expect(screen.getByText("bright_room_light")).toBeInTheDocument());
+    await screen.findByText("bright_room_light");
 
-    const input = inputForValue("bright_room_light");
-    expect(input).toBeTruthy();
-    expect(input.value).toBe("");
-
-    fireEvent.change(input, { target: { value: "свет в зале" } });
+    typeChip("bright_room_light", "свет в зале");
     expect(onChange).toHaveBeenCalledTimes(1);
     expect(onChange.mock.calls[0][0]).toBe("aliases");
     expect(onChange.mock.calls[0][1]).toContain("свет в зале = bright_room_light");
   });
 
-  it("classifies set_lock.action lock/unlock as ACTION inputs writing to actions", async () => {
+  it("typing a verb chip for 'on' writes actions as 'on = <verb>'", async () => {
     const onChange = vi.fn();
     render(<NluCatalogEditor draft={draft} onChange={onChange} />);
-    await waitFor(() => expect(screen.getByText("lock")).toBeInTheDocument());
+    await screen.findByText("on");
 
-    // lock/unlock are classified action by SLOT NAME ("action"), not by verbs.
-    expect(screen.getByText("unlock")).toBeInTheDocument();
-
-    const input = inputForValue("lock");
-    fireEvent.change(input, { target: { value: "запри" } });
+    typeChip("on", "включи");
     expect(onChange).toHaveBeenCalledTimes(1);
     expect(onChange.mock.calls[0][0]).toBe("actions");
-    expect(onChange.mock.calls[0][1]).toContain("lock = запри");
+    expect(onChange.mock.calls[0][1]).toContain("on = включи");
   });
 
-  it("the kind toggle flips a slot's inputs between aliases and actions targets", async () => {
+  it("renders a scene value with the scene tone in the Devices zone", async () => {
+    render(<NluCatalogEditor draft={draft} onChange={vi.fn()} />);
+    const night = await screen.findByText("night");
+    expect(night.closest(".e-zone")).toHaveClass("dev");
+    // scene chips use the scene tone — the empty input row marks it as empty.
+    expect(rowForValue("night").querySelector(".e-rid")).toHaveClass("is-empty");
+  });
+
+  it("shows brightness as a numeric info card, not a chip input", async () => {
+    render(<NluCatalogEditor draft={draft} onChange={vi.fn()} />);
+    const brightness = await screen.findByText(/brightness/);
+    const numCard = brightness.closest(".e-num");
+    expect(numCard).toBeTruthy();
+    // It is an info card — no chip input inside it.
+    expect(numCard.querySelector(".e-chips")).toBeNull();
+    // brightness (integer) is a plain number, not off-capable.
+    expect(numCard.querySelector(".tag").textContent).toBe("number");
+  });
+
+  it("prefills existing words as removable chips and marks the row filled", async () => {
     const onChange = vi.fn();
-    render(<NluCatalogEditor draft={draft} onChange={onChange} />);
-    await waitFor(() => expect(screen.getByText("main_lock")).toBeInTheDocument());
+    render(<NluCatalogEditor draft={{ aliases: "свет в зале, люстра = bright_room_light", actions: "" }} onChange={onChange} />);
+    await screen.findByText("bright_room_light");
 
-    // set_lock.device_id (main_lock) is an ENTITY by default -> typing writes aliases.
-    fireEvent.change(inputForValue("main_lock"), { target: { value: "замок" } });
+    const row = rowForValue("bright_room_light");
+    // Two chips, full marker (not empty).
+    const chips = row.querySelectorAll(".e-chip");
+    expect(chips).toHaveLength(2);
+    expect(row.querySelector(".e-rid")).not.toHaveClass("is-empty");
+    expect(row.querySelector(".e-rid .mk")).toHaveClass("full");
+
+    // Remove the first chip -> aliases re-serialized WITHOUT "свет в зале".
+    fireEvent.click(chips[0].querySelector(".x"));
+    expect(onChange).toHaveBeenCalledTimes(1);
     expect(onChange.mock.calls[0][0]).toBe("aliases");
-    onChange.mockClear();
-
-    // Four enum slots in encounter order -> four toggle rows, each with a
-    // "Действие" button: [0]=set_light.device_id, [1]=set_light.state,
-    // [2]=set_lock.device_id, [3]=set_lock.action. Flip set_lock.device_id.
-    const actionButtons = screen.getAllByText("Действие");
-    expect(actionButtons.length).toBe(4);
-    fireEvent.click(actionButtons[2]);
-
-    // Now main_lock is an ACTION input -> typing writes actions.
-    fireEvent.change(inputForValue("main_lock"), { target: { value: "замок" } });
-    expect(onChange.mock.calls[0][0]).toBe("actions");
-    expect(onChange.mock.calls[0][1]).toContain("main_lock = замок");
+    expect(onChange.mock.calls[0][1]).toBe("люстра = bright_room_light");
   });
 
-  it("toggling an entity slot to action strips its stale alias so the value is not in both fields", async () => {
-    // One entity slot (set_light.device_id, enum ["lamp"]) with a pre-typed alias
-    // in `aliases`. Flipping it to "Действие" must re-emit `aliases` WITHOUT "lamp".
+  it("removing the last chip empties the value out of the field", async () => {
+    const onChange = vi.fn();
+    render(<NluCatalogEditor draft={{ aliases: "люстра = bright_room_light", actions: "" }} onChange={onChange} />);
+    await screen.findByText("bright_room_light");
+
+    const chip = rowForValue("bright_room_light").querySelector(".e-chip");
+    fireEvent.click(chip.querySelector(".x"));
+    // Empty words -> the value drops out of aliases entirely.
+    expect(onChange.mock.calls[0][0]).toBe("aliases");
+    expect(onChange.mock.calls[0][1]).not.toContain("bright_room_light");
+  });
+
+  it("flipping a group entity→action strips its values from the OLD field", async () => {
+    // set_scene.scene starts as an ENTITY with a pre-typed alias. Flipping it to
+    // Action via the type override must re-emit `aliases` WITHOUT the scene values.
+    const onChange = vi.fn();
+    render(<NluCatalogEditor draft={{ aliases: "ночь = night", actions: "" }} onChange={onChange} />);
+    await screen.findByText("night");
+
+    // Open the scene group's TypeOverride dropdown and pick "Action".
+    const sceneGroup = screen.getByText("night").closest(".e-slot");
+    fireEvent.click(sceneGroup.querySelector(".e-typ-btn"));
+    const actionOpt = Array.from(sceneGroup.querySelectorAll(".e-typ-opt")).find((o) =>
+      o.textContent.includes("Action")
+    );
+    fireEvent.click(actionOpt);
+
+    const aliasCall = onChange.mock.calls.find((c) => c[0] === "aliases");
+    expect(aliasCall).toBeTruthy();
+    expect(aliasCall[1]).not.toContain("night"); // stale alias stripped
+  });
+
+  it("hides the Sources bar when only one source owns slots", async () => {
+    render(<NluCatalogEditor draft={draft} onChange={vi.fn()} />);
+    await screen.findByText("bright_room_light");
+    // Single source "home" -> no Sources bar.
+    expect(screen.queryByText("Sources")).toBeNull();
+  });
+
+  it("shows the Sources bar and a per-source value count with two slot-owning sources", async () => {
     api.getTools.mockResolvedValue({
       sources: [
         {
           id: "home",
-          tools: [
-            {
-              name: "set_light",
-              parameters: { type: "object", properties: { device_id: { type: "string", enum: ["lamp"] } } },
-            },
-          ],
+          tools: [{ name: "set_light", parameters: { type: "object", properties: { device_id: { type: "string", enum: ["lamp"] } } } }],
+        },
+        {
+          id: "garden",
+          tools: [{ name: "set_pump", parameters: { type: "object", properties: { device_id: { type: "string", enum: ["fountain"] } } } }],
         },
       ],
     });
-    const onChange = vi.fn();
-    render(<NluCatalogEditor draft={{ aliases: "свет = lamp", actions: "" }} onChange={onChange} />);
-    await waitFor(() => expect(screen.getByText("lamp")).toBeInTheDocument());
-
-    // Single enum slot -> single "Действие" toggle. Click it to reclassify.
-    const actionButtons = screen.getAllByText("Действие");
-    expect(actionButtons.length).toBe(1);
-    fireEvent.click(actionButtons[0]);
-
-    // toggleKind must emit the cleaned `aliases` field with the stale alias gone.
-    const aliasCall = onChange.mock.calls.find((c) => c[0] === "aliases");
-    expect(aliasCall).toBeTruthy();
-    expect(aliasCall[1]).not.toContain("lamp");
+    render(<NluCatalogEditor draft={draft} onChange={vi.fn()} />);
+    await screen.findByText("lamp");
+    expect(screen.getByText("Sources")).toBeInTheDocument();
+    // Both sources are listed by id; both default to active so both ids render.
+    expect(screen.getByText("home")).toBeInTheDocument();
+    expect(screen.getByText("garden")).toBeInTheDocument();
+    expect(screen.getByText("fountain")).toBeInTheDocument();
   });
 
-  it("shows a hint when no MCP tools are discovered", async () => {
-    api.getTools.mockResolvedValue({ sources: [] });
+  it("shows an offline card with Retry when getTools fails, then refetches", async () => {
+    api.getTools.mockRejectedValueOnce(new Error("boom"));
     render(<NluCatalogEditor draft={draft} onChange={vi.fn()} />);
-    await waitFor(() =>
-      expect(screen.getByText(/Инструменты из MCP не обнаружены/)).toBeInTheDocument()
-    );
+    const retry = await screen.findByText("Retry");
+    expect(screen.getByText("No devices found")).toBeInTheDocument();
+
+    // Retry refetches: the second call resolves with the catalog.
+    fireEvent.click(retry);
+    expect(await screen.findByText("bright_room_light")).toBeInTheDocument();
+    expect(api.getTools).toHaveBeenCalledTimes(2);
   });
 });

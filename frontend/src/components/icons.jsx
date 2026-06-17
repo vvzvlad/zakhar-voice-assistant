@@ -21,6 +21,12 @@ export const ICONS = {
   test: "M9 12l2 2 4-4M12 3a9 9 0 100 18 9 9 0 000-18z",
   add: "M12 5v14M5 12h14", trash: "M4 6h16M9 6V4h6v2M6 6l1 14h10l1-14",
   ext: "M7 13l6-6M8 7h5v5", clock: "M12 3a9 9 0 100 18 9 9 0 000-18zM12 7v5l3 2",
+  // Catalog editor (entities & commands): lex = device/entity, bolt = action,
+  // hash = numeric slot, check = filled marker.
+  lex: "M4 4h12l4 4v12H4zM12 4v4h4M8 12h8M8 16h5",
+  bolt: "M13 2L4 14h7l-1 8 9-12h-7z",
+  hash: "M9 3L7 21M17 3l-2 18M4 8h16M3 16h16",
+  check: "M3 8l3.5 3.5L13 4",
 };
 
 export function Ic({ n, w = 16 }) {
