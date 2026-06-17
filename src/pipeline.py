@@ -852,9 +852,10 @@ class Pipeline:
                 # slow-tool filler fires while the ~300 ms ack announce is still playing,
                 # the two announces may duck/queue against each other on the device. This
                 # is non-fatal — both are isolated, best-effort, and never awaited by the
-                # run — and the FINAL TTS reply uses a SEPARATE VA-event channel
-                # (TTS_START/TTS_END), so only ack<->filler can transiently overlap, never
-                # the real answer.
+                # run. The FINAL TTS reply (TTS_END) ALSO reaches the device's single
+                # media-player announcement slot, so to avoid dropping the reply the run
+                # serializes it behind a still-playing filler in _await_filler_playback()
+                # (awaited just before emitting TTS_END).
                 #
                 # A wake-word REJECT aborts the run silently — no ack chime — so the
                 # mis-trigger never beeps at the user.
@@ -1218,6 +1219,13 @@ class Pipeline:
                                     f"stream start ({time.perf_counter() - tts_t:.2f}s) "
                                     f"▶ serving {url}"
                                 )
+                                # Serialize the final reply behind any still-playing early
+                                # filler: both reach the device's single media-player
+                                # announcement slot, so overlapping them makes the device
+                                # drop the reply. (Streaming branch: the stream URL is already
+                                # live and buffering, so the device plays the moment we emit
+                                # TTS_END below.)
+                                await self._await_filler_playback()
                                 self._emit(StageEvent.TTS_END, {"url": url})  # speaker starts fetching NOW
                                 try:
                                     # Synthesis is still running; wait for the whole
@@ -1286,6 +1294,13 @@ class Pipeline:
                             tts_audio = audio
                             tts_mime = mime
                             logger.info(f"{self.name}: ▶ serving {url}")
+                            # Serialize the final reply behind any still-playing early
+                            # filler: both reach the device's single media-player
+                            # announcement slot, so overlapping them makes the device
+                            # drop the reply. (Buffered branch: the clip is already fully
+                            # synthesized and served, so the device plays it the moment we
+                            # emit TTS_END below.)
+                            await self._await_filler_playback()
                             self._emit(StageEvent.TTS_END, {"url": url})
                     except Exception as e:
                         # No TTS_END on failure; the run still ends cleanly.
@@ -1774,6 +1789,33 @@ class Pipeline:
             await self.speak(text)
         except Exception as e:
             logger.error(f"{self.name}: filler announce failed: {e}")
+
+    async def _await_filler_playback(self, timeout: float = 30.0) -> None:
+        """Block until any in-flight early-filler announcement has finished PLAYING
+        on the device, before the final answer's TTS is handed to the device.
+
+        Why this is required: on the speaker firmware the early filler (delivered via
+        send_announcement / send_voice_assistant_announcement_await_response) and the
+        final reply (delivered via the StageEvent.TTS_END event) BOTH play through the
+        SAME media-player 'announcement' slot and share ONE device-side playback-state
+        machine. When they overlap in time the device drops the reply — the filler is
+        heard, the answer is silent. The reply's synthesis already overlapped most of
+        the filler's playback, so by the time the reply is ready the filler is usually
+        nearly done; waiting out the small remainder here removes the race.
+
+        Fully isolated: a filler that errors or never finishes must never break or hang
+        the run. The wait is bounded by `timeout`, and asyncio.wait does NOT cancel
+        still-pending tasks on timeout (a stuck announce keeps running and self-reaps
+        via its done-callback). The filler tasks swallow their own exceptions (see
+        _deliver_filler), so nothing propagates here.
+        """
+        pending = [t for t in self._filler_tasks if not t.done()]
+        if not pending:
+            return
+        try:
+            await asyncio.wait(pending, timeout=timeout)
+        except Exception as e:  # noqa: BLE001 - waiting on the filler must never break the run
+            logger.debug(f"{self.name}: filler playback wait skipped: {e!r}")
 
     def _ack_clip_bytes(self) -> tuple[str, bytes]:
         """Return (mime, audio) for the end-of-phrase ack clip, building/caching once.

@@ -2189,6 +2189,42 @@ async def test_filler_fires_when_any_tool_in_round_is_slow(tmp_path, monkeypatch
     assert len(announcer.calls) == 1
 
 
+async def test_final_reply_waits_for_filler_playback(tmp_path, monkeypatch):
+    # Regression: the early filler and the final reply both play through the device's
+    # single media-player announcement slot, so the run must not emit the final TTS_END
+    # while the filler announce is still playing. Here a gated announcer blocks; the run
+    # must park before TTS_END until it is released.
+    import asyncio
+    patch_llm_with_filler(
+        monkeypatch, tool_names=["search_events"],
+        content="Щас гляну…", reply="готово",
+    )
+    pipeline, events = make_pipeline(tmp_path, monkeypatch, stt_text="погода")
+
+    class GatedAnnouncer:
+        def __init__(self):
+            self.called = asyncio.Event()
+            self.release = asyncio.Event()
+        async def __call__(self, **kwargs):
+            self.called.set()
+            await self.release.wait()
+
+    announcer = GatedAnnouncer()
+    pipeline.send_announcement = announcer
+
+    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_audio(b"\x01\x02" * 100)
+    run = asyncio.create_task(pipeline.on_stop(False))
+    # The run reaches the filler announce and parks there (the fix awaits it before TTS_END).
+    await asyncio.wait_for(announcer.called.wait(), timeout=2.0)
+    # The final reply must NOT have been emitted while the filler is still playing.
+    assert StageEvent.TTS_END not in [et for et, _ in events]
+    # Release the filler; the run then emits the final reply.
+    announcer.release.set()
+    await asyncio.wait_for(run, timeout=2.0)
+    assert StageEvent.TTS_END in [et for et, _ in events]
+
+
 class FakeAnnouncer:
     """Async recorder for the announcement channel: records the kwargs of each call."""
 
