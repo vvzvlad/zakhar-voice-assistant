@@ -32,10 +32,10 @@
 substitutions:
   # Bump on EVERY change to this device config — the Config Version entity lets you
   # verify which config is actually flashed (catches a stale / wrong-file flash).
-  config_version: "v20_preroll"
+  config_version: "v21_preroll"
   # micro_wake_word model version flashed; keep in sync with the model path in
   # packages.zakhar_wake_word below
-  model_version: "zakhar_v27"
+  model_version: "zakhar_v28"
 
 # --- Pre-roll fork: overrides the built-in voice_assistant with the patched copy ---
 # We now ALSO fork micro_wake_word from the SAME local source. The micro_wake_word fork
@@ -62,36 +62,32 @@ packages:
       models:
         # Local path to the model committed in this repo. ESPHome resolves the
         # manifest's relative "model": "zakhar.tflite" against this file's dir, so
-        # both .json and .tflite are read straight from microWakeWord/v27/model/.
+        # both .json and .tflite are read straight from microWakeWord/v28/model/.
         # (A remote github:// / raw URL fails here: ESPHome can't resolve the
         # relative .tflite inside a manifest fetched that way.)
         #
-        # v28 = angmax: MAX-RECALL model. A SERVER-side gate-wakeword verifies «захар»
-        # downstream, so on-device FALSE accepts are cheap (≈ a server call) and FAPH is no
-        # longer the constraint. The on-device job is to MISS as little «захар» as possible —
-        # short OR drawn, any voice/condition (short/drawn distinction DROPPED, short «захар»
-        # is now a POSITIVE). Recipe: angular (AM-Softmax s=10 m=0.20, annealed) + ALL diverse
-        # positives (fish device-tract drawn 5729 voices + fish short + section real-device + v8).
-        # 78992 B, same firmware budget/config as v16/v19/v27.
-        # Recall @0.90 vs the previous prod v27: fish device-tract 0.995, off-channel clean ~0.93,
-        # clean-16 0.88 — +32 pp over v27 (0.673), beats v27 on EVERY channel. Red-teamed:
-        # fires on 99.3% of «захар» but only 6.6% of generic speech (AUC 0.995) — a real
-        # discriminator, NOT saturation; leakage-free (voice-disjoint, MFCC-independent).
+        # v28 = angmax: MAX-RECALL model, DEPLOYED 2026-06-17. A SERVER-side gate-wakeword verifies
+        # «захар» downstream, so on-device FALSE accepts are cheap (≈ a server call) and FAPH is no
+        # longer the on-device constraint. The on-device job is to MISS as little «захар» as possible —
+        # short OR drawn, any voice/condition (short/drawn distinction DROPPED, short «захар» is now a
+        # POSITIVE). Recipe: angular (AM-Softmax s=10 m=0.20, annealed) + ALL diverse positives (fish
+        # device-tract drawn ~5700 voices + fish short + section real-device + v8). INT8 streaming,
+        # 77728 B, deployable full-INT8 (op-set == v27, NO DEQUANTIZE — loads fine).
+        # Recall vs the previous prod v27 (0.67): on-channel (this recapture tract) 0.991,
+        # off-channel ~0.846 — beats v27 on EVERY channel. Red-teamed: fires on 99.3% of «захар»
+        # but 6.6% of generic speech (AUC 0.995) — a real discriminator, not saturation; leakage-free.
         # Server-call-rate post-VAD ~8.7/h worst-case (continuous TV/radio); real homes far less.
-        # CAVEAT: the 0.995 is on the fish RECAPTURE tract; off a different tract recall ~0.93.
-        # v19 is the channel-robust fallback (~0.96 everywhere, but ~21 calls/h).
-        # See ../microWakeWord/v28/TRAINING_REPORT_v28.md.
-        # ⚠️ v28 REVERTED 2026-06-17 — NOT deployed. The angmax tflite contains a DEQUANTIZE op
-        # the on-device micro_wake_word resolver doesn't register ("Didn't find op for builtin
-        # opcode DEQUANTIZE" → LoadProhibited boot-loop, safe-mode after 4 fails); the angular
-        # export isn't full-INT8. .226 is re-exporting angmax deployable (int8 output, NO
-        # DEQUANTIZE, op-set == v27). PROD STAYS ON v27 below until the fixed tflite lands —
-        # then flip model + model_version back to v28.
-        - model: ../microWakeWord/v27/model/zakhar.json
+        # NB: the FIRST export crashed the device (boot-loop on a DEQUANTIZE the resolver lacks);
+        # re-exported full-INT8. Cost: per-sample L2-norm (RSQRT, not in resolver) dropped, so
+        # off-channel recall 0.93->0.846 (on-channel ~unchanged). Full 0.93 off-channel would need
+        # Dequantize/RSQRT in the fork resolver (a firmware change, skipped). v19 = robust fallback.
+        # See ../microWakeWord/v28/{TRAINING_REPORT_v28,DEPLOY_v28}.md.
+        - model: ../microWakeWord/v28/model/zakhar.json
           id: zakhar
-          # Operating point: cutoff 0.90 — v27's eval knee (window 5, VAD on). If real silence
-          # false-fires appear in the field, raise to 0.95 via the panel (Wake Probability Cutoff).
-          probability_cutoff: 90%
+          # Operating point: cutoff 0.80 / window 5 (v28 manifest; MAX-RECALL — the SERVER gate
+          # absorbs false accepts, so do NOT over-tighten). For even more recall, LOWER via the panel
+          # (Wake Probability Cutoff). Keep device VAD on (removes the non-speech FAPH bulk for free).
+          probability_cutoff: 80%
 
   # Official Home Assistant Voice PE firmware, pinned to a release tag.
   # Bump the @ref to update the base firmware later.
