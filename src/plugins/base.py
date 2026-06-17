@@ -42,6 +42,12 @@ LABEL_FIELD_EXTRA: dict = {"hidden": True}
 # never by guessing from the field name — so attach it to every secret config field.
 SECRET_FIELD_EXTRA: dict = {"secret": True}
 
+# Shared annotation for a local-filesystem path field (Piper voice file, Vosk
+# model directory): rendered as a dynamic select whose options the provider
+# scans from disk, while still accepting an arbitrary typed path (freeform) for
+# installs outside the conventional models/ dir.
+LOCAL_MODEL_FIELD_EXTRA: dict = {"widget": "select", "options": "dynamic", "freeform": True}
+
 
 class Provider:
     """Base for all stage providers. Subclasses set the class attrs and implement create()."""

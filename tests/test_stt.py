@@ -20,7 +20,12 @@ from src.plugins.stt.openrouter import (
     OpenRouterSttBackend,
     OpenRouterSttConfig,
 )
-from src.plugins.stt.vosk import VoskSttBackend
+from src.plugins.stt.vosk import (
+    VoskSttBackend,
+    VoskSttConfig,
+    VoskSttProvider,
+    _list_vosk_models,
+)
 from src.stage_errors import StageError
 from src.stt import pcm_to_wav
 
@@ -538,3 +543,45 @@ async def test_registry_openrouter_stt_provider_creates_backend():
         assert backend.client is cloud
         assert backend.api_key == "k"
         assert backend.model == "openai/whisper-large-v3-turbo"
+
+
+# --- _list_vosk_models / VoskSttProvider.options (local model enumeration) ----
+
+
+def _make_vosk_model(dir_path, name: str):
+    """Create a fake Vosk model dir <name> with the structural am/ and conf/
+    subdirectories that mark a standard model. Returns the model dir path."""
+    model_dir = dir_path / name
+    (model_dir / "am").mkdir(parents=True)
+    (model_dir / "conf").mkdir(parents=True)
+    return model_dir
+
+
+def test_list_vosk_models_includes_dir_with_am_and_conf(tmp_path):
+    m1 = _make_vosk_model(tmp_path, "m1")
+    out = _list_vosk_models(str(tmp_path))
+    assert out == [{"value": str(m1), "label": "m1"}]
+
+
+def test_list_vosk_models_excludes_non_model_dir_and_plain_file(tmp_path):
+    _make_vosk_model(tmp_path, "m1")
+    (tmp_path / "notmodel").mkdir()  # missing am/ and conf/
+    (tmp_path / "plain.txt").write_text("x")  # a file, not a dir
+    out = _list_vosk_models(str(tmp_path))
+    assert [o["label"] for o in out] == ["m1"]
+
+
+def test_list_vosk_models_missing_dir_returns_empty(tmp_path):
+    assert _list_vosk_models(str(tmp_path / "nope")) == []
+
+
+def test_vosk_provider_options_model_path_scans_configured_dir(tmp_path):
+    m1 = _make_vosk_model(tmp_path, "m1")
+    # options() ignores deps (no network); pass None.
+    out = VoskSttProvider().options("model_path", VoskSttConfig(model_path=str(m1)), None)
+    assert out == [{"value": str(m1), "label": "m1"}]
+
+
+def test_vosk_provider_options_other_field_returns_none(tmp_path):
+    m1 = _make_vosk_model(tmp_path, "m1")
+    assert VoskSttProvider().options("nope", VoskSttConfig(model_path=str(m1)), None) is None

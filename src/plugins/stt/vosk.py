@@ -2,12 +2,13 @@
 
 import asyncio
 import json
+import os
 
 from loguru import logger
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from src.logging_setup import capture_native_stderr
-from src.plugins.base import Deps, Provider, register
+from src.plugins.base import LOCAL_MODEL_FIELD_EXTRA, Deps, Provider, register
 from src.stage_errors import StageError
 from src.stt import SttBackend
 
@@ -68,7 +69,31 @@ class VoskSttBackend(SttBackend):
 
 
 class VoskSttConfig(BaseModel):
-    model_path: str = "models/vosk-model-small-ru-0.22"
+    model_path: str = Field("models/vosk-model-small-ru-0.22", json_schema_extra=LOCAL_MODEL_FIELD_EXTRA)
+
+
+def _list_vosk_models(base_dir: str) -> list[dict]:
+    """Scan base_dir for Vosk model directories: immediate subdirs that contain
+    both an `am` and a `conf` subdirectory (the structural markers of a standard
+    Vosk model). Returns [{"value": <dir path>, "label": <dir name>}, ...] sorted
+    by label (case-insensitive). Any filesystem error yields an empty list."""
+    try:
+        names = os.listdir(base_dir)
+    except OSError:
+        return []
+    out = []
+    for name in names:
+        if name.startswith("."):
+            continue
+        path = os.path.join(base_dir, name)
+        if (
+            os.path.isdir(path)
+            and os.path.isdir(os.path.join(path, "am"))
+            and os.path.isdir(os.path.join(path, "conf"))
+        ):
+            out.append({"value": path, "label": name})
+    out.sort(key=lambda o: o["label"].lower())
+    return out
 
 
 @register
@@ -80,3 +105,12 @@ class VoskSttProvider(Provider):
 
     def create(self, cfg: VoskSttConfig, deps: Deps):
         return VoskSttBackend(cfg.model_path)
+
+    def options(self, field: str, cfg: VoskSttConfig, deps: Deps, query: str = ""):
+        # Local-disk scan of installed Vosk models next to the configured path
+        # (defaults to models/). Synchronous: return a plain list. The model path
+        # is a directory; strip any trailing slash before dirname() so a value like
+        # "models/foo/" scans "models" (its siblings) rather than descending into it.
+        if field == "model_path":
+            return _list_vosk_models(os.path.dirname(cfg.model_path.rstrip("/")) or "models")
+        return None

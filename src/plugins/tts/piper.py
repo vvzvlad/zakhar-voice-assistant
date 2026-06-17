@@ -2,12 +2,13 @@
 
 import asyncio
 import io
+import os
 import wave
 
 from loguru import logger
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
-from src.plugins.base import Deps, Provider, register
+from src.plugins.base import LOCAL_MODEL_FIELD_EXTRA, Deps, Provider, register
 # The canonical LLM->TTS text is the model's own notation: plain text with "+"
 # before the stressed vowel (e.g. "прив+ет"). The backend adapts that canon to
 # its engine via the shared opt-in helpers.
@@ -89,8 +90,29 @@ class PiperTtsBackend(TtsBackend):
 
 
 class PiperConfig(BaseModel):
-    voice_path: str = "models/ru_RU-ruslan-medium.onnx"
+    voice_path: str = Field("models/ru_RU-ruslan-medium.onnx", json_schema_extra=LOCAL_MODEL_FIELD_EXTRA)
     sentence_silence: float = 0.4
+
+
+def _list_piper_voices(base_dir: str) -> list[dict]:
+    """Scan base_dir for Piper voices: *.onnx files that have a sibling
+    <name>.onnx.json config (the pair create() loads). Returns
+    [{"value": <onnx path>, "label": <name without .onnx>}, ...] sorted by
+    label (case-insensitive). Any filesystem error yields an empty list."""
+    try:
+        names = os.listdir(base_dir)
+    except OSError:
+        return []
+    out = []
+    for name in names:
+        if name.startswith(".") or not name.endswith(".onnx"):
+            continue
+        onnx_path = os.path.join(base_dir, name)
+        if not os.path.isfile(onnx_path) or not os.path.isfile(onnx_path + ".json"):
+            continue
+        out.append({"value": onnx_path, "label": name[: -len(".onnx")]})
+    out.sort(key=lambda o: o["label"].lower())
+    return out
 
 
 @register
@@ -102,3 +124,12 @@ class PiperProvider(Provider):
 
     def create(self, cfg: PiperConfig, deps: Deps):
         return PiperTtsBackend(cfg.voice_path, sentence_silence=cfg.sentence_silence)
+
+    def options(self, field: str, cfg: PiperConfig, deps: Deps, query: str = ""):
+        # Local-disk scan of installed Piper voices next to the configured path
+        # (defaults to models/). Synchronous: return a plain list. rstrip the
+        # trailing slash for symmetry with the Vosk scan (no-op for a real voice
+        # file path, which never ends in a slash).
+        if field == "voice_path":
+            return _list_piper_voices(os.path.dirname(cfg.voice_path.rstrip("/")) or "models")
+        return None

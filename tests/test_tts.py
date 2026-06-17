@@ -9,7 +9,12 @@ from src.audio_codec import to_playable, wav_to_mp3
 from src.chime import build_ack_clip, make_ack_chime_mp3
 from src.plugins.tts._ru_text import expand_units, sanitize_plus_stress
 from src.plugins.tts.fishaudio import FISH_TTS_URL, FishAudioTtsBackend
-from src.plugins.tts.piper import PiperTtsBackend
+from src.plugins.tts.piper import (
+    PiperConfig,
+    PiperProvider,
+    PiperTtsBackend,
+    _list_piper_voices,
+)
 from src.plugins.tts.teratts import TeraTtsHttpBackend
 from src.plugins.tts.yandex import (
     YANDEX_V3_URL,
@@ -1131,3 +1136,62 @@ async def test_default_synthesize_stream_adapter_skips_empty_audio():
     mime, chunks = await _Silent().synthesize_stream("…")
     assert mime == "audio/mpeg"
     assert [c async for c in chunks] == []
+
+
+# --- _list_piper_voices / PiperProvider.options (local voice enumeration) -----
+
+
+def _make_piper_voice(dir_path, name: str, *, with_json: bool = True):
+    """Create a fake Piper voice in dir_path: <name>.onnx and (optionally) its
+    sibling <name>.onnx.json config. Returns the .onnx file path."""
+    onnx = dir_path / f"{name}.onnx"
+    onnx.write_bytes(b"onnx")
+    if with_json:
+        (dir_path / f"{name}.onnx.json").write_text("{}")
+    return onnx
+
+
+def test_list_piper_voices_returns_paired_onnx_sorted_by_label(tmp_path):
+    _make_piper_voice(tmp_path, "b")
+    _make_piper_voice(tmp_path, "a")
+    out = _list_piper_voices(str(tmp_path))
+    assert out == [
+        {"value": str(tmp_path / "a.onnx"), "label": "a"},
+        {"value": str(tmp_path / "b.onnx"), "label": "b"},
+    ]
+    # The value points at the .onnx file create() loads (PiperVoice.load(value, ...)).
+    assert all(o["value"].endswith(".onnx") for o in out)
+
+
+def test_list_piper_voices_excludes_onnx_without_sibling_json(tmp_path):
+    _make_piper_voice(tmp_path, "good")
+    _make_piper_voice(tmp_path, "orphan", with_json=False)
+    out = _list_piper_voices(str(tmp_path))
+    assert [o["label"] for o in out] == ["good"]
+
+
+def test_list_piper_voices_excludes_hidden_entries(tmp_path):
+    _make_piper_voice(tmp_path, ".x")  # ".x.onnx" + ".x.onnx.json"
+    _make_piper_voice(tmp_path, "visible")
+    out = _list_piper_voices(str(tmp_path))
+    assert [o["label"] for o in out] == ["visible"]
+
+
+def test_list_piper_voices_missing_dir_returns_empty(tmp_path):
+    assert _list_piper_voices(str(tmp_path / "nope")) == []
+
+
+def test_piper_provider_options_voice_path_scans_configured_dir(tmp_path):
+    onnx = _make_piper_voice(tmp_path, "a")
+    _make_piper_voice(tmp_path, "b")
+    # options() ignores deps (no network); pass None.
+    out = PiperProvider().options("voice_path", PiperConfig(voice_path=str(onnx)), None)
+    assert out == [
+        {"value": str(tmp_path / "a.onnx"), "label": "a"},
+        {"value": str(tmp_path / "b.onnx"), "label": "b"},
+    ]
+
+
+def test_piper_provider_options_other_field_returns_none(tmp_path):
+    onnx = _make_piper_voice(tmp_path, "a")
+    assert PiperProvider().options("sentence_silence", PiperConfig(voice_path=str(onnx)), None) is None
