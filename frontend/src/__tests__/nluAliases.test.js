@@ -2,9 +2,13 @@
 import { describe, it, expect } from "vitest";
 import {
   parseActionNames,
+  parseActions,
   entitySlotsFromTools,
+  allEnumSlots,
+  classifySlotKind,
   parseAliasText,
   serializeAliasText,
+  serializeActions,
 } from "../nluAliases.js";
 
 describe("parseActionNames", () => {
@@ -22,6 +26,140 @@ describe("parseActionNames", () => {
   it("handles empty/undefined input", () => {
     expect(parseActionNames("")).toEqual([]);
     expect(parseActionNames(undefined)).toEqual([]);
+  });
+});
+
+describe("parseActions", () => {
+  it("maps lowercased name -> verbs verbatim and preserves blank/# / no-= lines", () => {
+    const text = [
+      "on = включи, включай",
+      "  OFF =выключи  ",
+      "",
+      "# comment line",
+      "no equals sign here",
+    ].join("\n");
+    const { map, extraLines } = parseActions(text);
+    // Name is lowercased+trimmed; RHS is trimmed verbatim (case/spacing kept).
+    expect(map).toEqual({ on: "включи, включай", off: "выключи" });
+    expect(extraLines).toEqual(["", "# comment line", "no equals sign here"]);
+  });
+
+  it("last duplicate name key wins", () => {
+    expect(parseActions("on = a\non = b").map.on).toBe("b");
+  });
+
+  it("handles empty/undefined input", () => {
+    expect(parseActions("").map).toEqual({});
+    expect(parseActions(undefined).map).toEqual({});
+  });
+});
+
+describe("serializeActions", () => {
+  const actionSlots = [
+    { tool: "set_light", slot: "state", values: ["on", "off"] },
+    { tool: "set_lock", slot: "action", values: ["lock", "unlock"] },
+  ];
+
+  it("emits 'value = verbs' in order, skips blank, appends custom + extras, dedups", () => {
+    const nameToVerbs = {
+      on: "включи",
+      off: "   ", // whitespace-only -> skipped
+      lock: "запри",
+      unlock: "отопри",
+      custom: "сделай", // not in any action slot -> appended after
+    };
+    const extraLines = ["# note"];
+    const out = serializeActions(actionSlots, nameToVerbs, extraLines);
+    expect(out).toBe(
+      [
+        "on = включи",
+        "lock = запри",
+        "unlock = отопри",
+        "custom = сделай",
+        "# note",
+      ].join("\n")
+    );
+  });
+
+  it("dedups a value shared across action slots (one line per unique value)", () => {
+    const slots = [
+      { tool: "a", slot: "state", values: ["on", "off"] },
+      { tool: "b", slot: "state", values: ["on", "off"] }, // same values
+    ];
+    const out = serializeActions(slots, { on: "включи", off: "выключи" }, []);
+    expect(out).toBe(["on = включи", "off = выключи"].join("\n"));
+  });
+
+  it("round-trips through parseActions + serializeActions", () => {
+    const { map, extraLines } = parseActions("on = включи\noff = выключи\n# note");
+    const out = serializeActions(actionSlots, map, extraLines);
+    expect(out).toBe(["on = включи", "off = выключи", "# note"].join("\n"));
+  });
+});
+
+describe("allEnumSlots", () => {
+  const sources = [
+    {
+      tools: [
+        {
+          name: "set_light",
+          parameters: {
+            type: "object",
+            properties: {
+              device_id: { type: "string", enum: ["bright_room_light", "night_light"] },
+              state: { type: "string", enum: ["on", "off"] },
+            },
+          },
+        },
+        {
+          name: "set_dimmer",
+          parameters: {
+            type: "object",
+            properties: {
+              device_id: { type: "string", enum: ["night_light"] },
+              brightness: { type: "integer" }, // no enum -> omitted
+            },
+          },
+        },
+        { name: "no_params" }, // missing parameters -> tolerated
+      ],
+    },
+  ];
+
+  it("returns EVERY enum slot incl. the state slot, in encounter order", () => {
+    expect(allEnumSlots(sources)).toEqual([
+      { tool: "set_light", slot: "device_id", type: "string", values: ["bright_room_light", "night_light"] },
+      { tool: "set_light", slot: "state", type: "string", values: ["on", "off"] },
+      { tool: "set_dimmer", slot: "device_id", type: "string", values: ["night_light"] },
+    ]);
+  });
+
+  it("tolerates missing/undefined sources", () => {
+    expect(allEnumSlots(undefined)).toEqual([]);
+    expect(allEnumSlots([])).toEqual([]);
+  });
+});
+
+describe("classifySlotKind", () => {
+  it("classifies a slot named 'state'/'action' as action regardless of values", () => {
+    expect(classifySlotKind("state", ["red", "green"], [])).toBe("action");
+    expect(classifySlotKind("action", ["lock", "unlock"], [])).toBe("action");
+  });
+
+  it("classifies values ⊆ actionNames as action (case-insensitive)", () => {
+    expect(classifySlotKind("mystery", ["on", "off"], ["ON", "OFF"])).toBe("action");
+  });
+
+  it("classifies device_id / scene as entity", () => {
+    expect(classifySlotKind("device_id", ["bright_room_light"], ["on", "off"])).toBe("entity");
+    expect(classifySlotKind("scene", ["night", "morning"], ["on", "off"])).toBe("entity");
+  });
+
+  it("an explicit override wins over the heuristics", () => {
+    // slot named 'state' would be action, but override forces entity.
+    expect(classifySlotKind("state", ["on", "off"], ["on", "off"], "entity")).toBe("entity");
+    // device_id would be entity, but override forces action.
+    expect(classifySlotKind("device_id", ["x"], [], "action")).toBe("action");
   });
 });
 
@@ -175,5 +313,17 @@ describe("serializeAliasText", () => {
     const out = serializeAliasText(entities, map, extraLines);
     expect(out).toContain("свет = unknown_id");
     expect(out).toContain("# note");
+  });
+
+  it("knownCatalogValues suppresses an in-catalog action value but keeps an out-of-catalog alias", () => {
+    // `on` is a real catalog value living in an ACTION slot (its verbs are in
+    // `actions`), so its map entry must NOT be re-emitted into aliases. The
+    // out-of-catalog `unknown_id` manual alias must still survive.
+    const map = { on: "включи", unknown_id: "свет" };
+    const known = new Set(["on", "off", "bright_room_light", "night_light", "night"]);
+    // entities is the ENTITY slots only (no `on`), so `on` reaches the safety-net loop.
+    const out = serializeAliasText(entities, map, [], known);
+    expect(out).not.toContain("on");
+    expect(out).toContain("свет = unknown_id");
   });
 });

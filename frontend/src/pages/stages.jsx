@@ -1,12 +1,12 @@
 import React, { useState, useEffect, useRef } from "react";
-import { Selector, PageHeader, FormSaveBar } from "../components/primitives.jsx";
+import { Selector, PageHeader, FormSaveBar, Seg } from "../components/primitives.jsx";
 import SchemaForm from "../components/SchemaForm.jsx";
 import { useAppData } from "../appData.jsx";
 import { useStageForm, errorLines } from "../useStageForm.js";
 import { getOptions, getChimes, playChime, streamTtsVoice, getTools } from "../api.js";
 import { playAudioResponse } from "../streamAudio.js";
 import { buildVoiceMarker } from "../voiceMarker.js";
-import { parseActionNames, entitySlotsFromTools, parseAliasText, serializeAliasText } from "../nluAliases.js";
+import { parseActions, parseAliasText, serializeAliasText, serializeActions, allEnumSlots, classifySlotKind } from "../nluAliases.js";
 
 function Card({ title, sub, children, foot }) {
   return <div className="z-card">
@@ -225,17 +225,24 @@ function VoiceMarkerCard({ provider, settings }) {
   </Card>;
 }
 
-// Inline alias editor for the offline-NLU (simple-nlu) provider. Instead of
-// hand-editing the raw `aliases` textarea, it discovers the smart-home entities
-// live from the MCP tool catalog (enum slots) and offers one input per entity in
-// which the operator types Russian synonyms. The source of truth stays
-// `draft.aliases`: every keystroke re-serializes the whole field via
-// serializeAliasText, so this editor and the SchemaForm textarea stay in sync.
-// `actions` is read (not written) to know which enum slots are verb-driven.
-export function NluAliasEditor({ draft, onChange }) {
+// Inline catalog editor for the offline-NLU (simple-nlu) provider. Instead of
+// hand-editing the raw `aliases`/`actions` textareas, it discovers every enum slot
+// live from the MCP tool catalog and offers one input per unique enum VALUE. Each
+// slot is classified as an ENTITY (device/scene id → Russian phrases in `aliases`)
+// or an ACTION (state/command verb → Russian verbs in `actions`); a per-slot toggle
+// lets the operator reclassify an ambiguous slot. The source of truth stays
+// `draft.aliases`/`draft.actions`: every keystroke re-serializes the whole field,
+// so this editor and the SchemaForm textareas stay in sync.
+export function NluCatalogEditor({ draft, onChange }) {
   const [sources, setSources] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null); // soft hint, never thrown
+  // `overrides` is transient (local, not persisted): keyed by "<tool>.<slot>" →
+  // "entity"|"action". The slot-name / ⊆actionNames heuristic in classifySlotKind
+  // classifies correctly by default for this catalog (state/action → action;
+  // device_id/scene → entity), so the toggle is only needed to reclassify an
+  // ambiguous slot. It resets on remount — acceptable for a manual override.
+  const [overrides, setOverrides] = useState({});
 
   useEffect(() => {
     let alive = true;
@@ -253,45 +260,117 @@ export function NluAliasEditor({ draft, onChange }) {
   }, []);
 
   // Derive everything from props each render — no duplicate local copy of the
-  // alias text, so the textarea in SchemaForm remains the single source of truth.
-  const actionNames = parseActionNames(draft.actions || "");
-  const entities = entitySlotsFromTools(sources, actionNames);
-  const { map, extraLines } = parseAliasText(draft.aliases || "");
+  // text, so the textareas in SchemaForm remain the single source of truth.
+  const { map: nameToVerbs, extraLines: actionExtras } = parseActions(draft.actions || "");
+  const actionNames = Object.keys(nameToVerbs);
+  const { map: aliasMap, extraLines: aliasExtras } = parseAliasText(draft.aliases || "");
+  const slots = allEnumSlots(sources);
+  const kindOf = (s) => classifySlotKind(s.slot, s.values, actionNames, overrides[`${s.tool}.${s.slot}`]);
+  const entitySlots = slots.filter((s) => kindOf(s) === "entity");
+  const actionSlots = slots.filter((s) => kindOf(s) === "action");
+  // ALL catalog values — used to keep an action-slot value out of `aliases`.
+  const catalogValues = new Set(slots.flatMap((s) => s.values));
 
-  // Apply a single entity's edit: rebuild the whole aliases field from the live
-  // map + this value's new phrases, preserving the extra/advanced lines.
-  const setPhrases = (value, phrases) => {
-    const next = { ...map, [value]: phrases };
-    onChange("aliases", serializeAliasText(entities, next, extraLines));
+  // Apply an entity value's edit: rebuild the whole aliases field, preserving the
+  // extra/advanced lines and never re-emitting a value owned by an action slot.
+  const setAliasPhrase = (value, text) => {
+    onChange("aliases", serializeAliasText(entitySlots, { ...aliasMap, [value]: text }, aliasExtras, catalogValues));
   };
 
-  // One row per unique enum VALUE; group rows under their owning tool header.
+  // Apply an action value's edit: rebuild the whole actions field from the live
+  // verb map + this value's new verbs, preserving the extra lines.
+  const setActionVerbs = (value, text) => {
+    onChange("actions", serializeActions(actionSlots, { ...nameToVerbs, [value]: text }, actionExtras));
+  };
+
+  // Flip a slot's classification (entity <-> action) via a transient override.
+  const toggleKind = (s) => {
+    const key = `${s.tool}.${s.slot}`;
+    const cur = kindOf(s);
+    const next = cur === "entity" ? "action" : "entity";
+    // Strip this slot's values from the field of the OLD kind so a value never
+    // lives in both `aliases` and `actions` after a reclassification.
+    if (cur === "entity") {
+      const cleaned = { ...aliasMap };
+      let changed = false;
+      for (const v of s.values) { if (v in cleaned) { delete cleaned[v]; changed = true; } }
+      if (changed) onChange("aliases", serializeAliasText(entitySlots, cleaned, aliasExtras, catalogValues));
+    } else {
+      const cleaned = { ...nameToVerbs };
+      let changed = false;
+      for (const v of s.values) { if (v in cleaned) { delete cleaned[v]; changed = true; } }
+      if (changed) onChange("actions", serializeActions(actionSlots, cleaned, actionExtras));
+    }
+    setOverrides((prev) => ({ ...prev, [key]: next }));
+  };
+
+  // One row per unique enum VALUE across ALL slots; group rows under their owning
+  // tool header. Each slot carries a small kind toggle; each value's input follows
+  // the OWNING slot's classification (entity → aliases, action → actions).
   const rows = [];
   let lastTool = null;
+  let lastSlot = null;
   const seen = new Set();
-  for (const entity of entities) {
-    if (entity.tool !== lastTool) {
+  for (const s of slots) {
+    if (s.tool !== lastTool) {
+      // Tool header doubles as a section divider: the first tool sits flush, every
+      // later tool gets a top rule so the value groups read as distinct sections.
+      const firstTool = rows.length === 0;
       rows.push(
-        <div key={`h-${entity.tool}`} className="z-fh" style={{ marginTop: rows.length ? 12 : 0, fontWeight: 600 }}>
-          {entity.tool}
+        <div
+          key={`h-${s.tool}`}
+          style={{
+            fontSize: 12.5,
+            fontWeight: 600,
+            color: "var(--ink2)",
+            ...(firstTool
+              ? { marginTop: 0 }
+              : { marginTop: 18, paddingTop: 14, borderTop: "1px solid var(--line2)" }),
+          }}
+        >
+          {s.tool}
         </div>
       );
-      lastTool = entity.tool;
+      lastTool = s.tool;
+      lastSlot = null;
     }
-    for (const value of entity.values) {
+    const kind = kindOf(s);
+    // Per-slot kind toggle, rendered once per slot (above its value inputs).
+    if (`${s.tool}.${s.slot}` !== lastSlot) {
+      lastSlot = `${s.tool}.${s.slot}`;
+      // The server treats a slot as a state slot only if EVERY enum value is an
+      // action name (set(enum) <= action_names). A partially-filled action slot
+      // (some verbs present, some empty) silently breaks the command — warn.
+      const anyFilled = s.values.some((v) => String(nameToVerbs[v] || "").trim() !== "");
+      const anyEmpty = s.values.some((v) => String(nameToVerbs[v] || "").trim() === "");
+      const partial = kind === "action" && anyFilled && anyEmpty;
+      // Slot header: mono slot label + compact Seg kind toggle + (if partial) a warn pill.
+      rows.push(
+        <div key={`k-${s.tool}.${s.slot}`} style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 12 }}>
+          <span style={{ fontFamily: "var(--mono)", fontSize: 11, color: "var(--mut2)" }}>{s.slot}</span>
+          <Seg
+            options={["Устройство", "Действие"]}
+            value={kind === "entity" ? "Устройство" : "Действие"}
+            onChange={(v) => { const want = v === "Действие" ? "action" : "entity"; if (want !== kind) toggleKind(s); }}
+          />
+          {partial && <span className="z-pill warn">не все значения заполнены</span>}
+        </div>
+      );
+    }
+    for (const value of s.values) {
       if (seen.has(value)) continue; // one input per unique value
       seen.add(value);
+      const isEntity = kind === "entity";
+      // Value row: bare enum value chip (the slot name already shows in the header) + a
+      // compact input following the owning slot's kind (entity → aliases, action → actions).
       rows.push(
-        <div key={value} style={{ display: "grid", gridTemplateColumns: "minmax(140px, 0.5fr) 1fr", gap: 12, alignItems: "center" }}>
-          <span className="z-fh" style={{ marginTop: 0 }}>
-            <span style={{ opacity: 0.7 }}>{entity.slot} · </span>
-            <code>{value}</code>
-          </span>
-          <div className="z-inp">
+        <div key={value} style={{ display: "grid", gridTemplateColumns: "180px 1fr", gap: 10, alignItems: "center", padding: "3px 0" }}>
+          <code style={{ fontSize: 11.5, color: "var(--mut)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{value}</code>
+          <div className="z-inp sm">
             <input
-              value={map[value] || ""}
-              placeholder="русские названия через запятую"
-              onChange={(e) => setPhrases(value, e.target.value)}
+              value={isEntity ? (aliasMap[value] || "") : (nameToVerbs[value] || "")}
+              placeholder={isEntity ? "русские названия через запятую" : "глаголы-команды через запятую"}
+              onChange={(e) => (isEntity ? setAliasPhrase(value, e.target.value) : setActionVerbs(value, e.target.value))}
             />
           </div>
         </div>
@@ -299,13 +378,13 @@ export function NluAliasEditor({ draft, onChange }) {
     }
   }
 
-  return <Card title="Сущности умного дома (из MCP)" sub="введите русские названия — алиасы соберутся автоматически">
+  return <Card title="Сущности и команды (из MCP)" sub="устройства/сцены → русские названия; состояния (on/off, lock/unlock) → глаголы; переключатель меняет тип слота">
     <div className="z-f">
       {loading ? (
         <div className="z-fh" style={{ marginTop: 0 }}>Загрузка…</div>
       ) : error ? (
         <div className="z-fh" style={{ marginTop: 0, color: "#b91c1c" }}>{error}</div>
-      ) : entities.length === 0 ? (
+      ) : slots.length === 0 ? (
         <div className="z-fh" style={{ marginTop: 0 }}>
           Инструменты из MCP не обнаружены — проверь, что сервер умного дома доступен и включён.
         </div>
@@ -367,8 +446,8 @@ function ProviderStage({ cat, title, crumb, desc }) {
             so every DynamicSelect refetches for the newly selected provider. */}
         <SchemaForm key={selected} schema={prov.schema} values={draft} onChange={onChange} optionsFor={optionsFor} />
       </Card>
-      {/* Offline-NLU only: per-entity alias inputs sourced live from the MCP catalog. */}
-      {cat === "llm" && selected === "simple-nlu" && <NluAliasEditor draft={draft} onChange={onChange} />}
+      {/* Offline-NLU only: per-value entity/action inputs sourced live from the MCP catalog. */}
+      {cat === "llm" && selected === "simple-nlu" && <NluCatalogEditor draft={draft} onChange={onChange} />}
       {/* TTS only: test the CURRENT (unsaved) draft settings with an in-browser playback. */}
       {cat === "tts" && <VoiceTestCard provider={selected} settings={draft} />}
       {/* TTS only: ready-to-copy prompt marker built from the same live draft. */}
