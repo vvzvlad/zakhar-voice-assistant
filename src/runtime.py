@@ -36,7 +36,7 @@ class Runtime:
         self.scheduler = None       # ReminderScheduler | None (Tier 3c reminders toggle)
         self.reminders_store = None  # RemindersStore | None (swapped by a reminders toggle)
         self.panel = None           # PanelServer (so a runs-store swap reaches its endpoints)
-        self.zc = None              # zeroconf.Zeroconf (Tier 3c device rebuild)
+        self.zc = None              # zeroconf AsyncZeroconf (Tier 3c device rebuild)
 
     @property
     def core(self):

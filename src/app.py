@@ -7,8 +7,8 @@ import os
 import time
 
 import httpx
-import zeroconf
 from loguru import logger
+from zeroconf.asyncio import AsyncZeroconf
 
 import src.plugins  # noqa: F401  triggers provider registration
 from src import config_store
@@ -167,7 +167,10 @@ async def main() -> None:
         prompt_store=prompt_store,
     )
 
-    zc = zeroconf.Zeroconf()
+    # Async instance: aioesphomeapi consumes it directly, and shutdown below awaits
+    # async_close() so unregister runs inside the loop (a sync Zeroconf.close() would
+    # skip it with a blocking-i/o warning).
+    zc = AsyncZeroconf()
     manager = DeviceManager(zc, rt)
     # Back-refs so the Reconfigurator can reach these subsystems on hot-reload.
     rt.zc = zc
@@ -277,4 +280,4 @@ async def main() -> None:
         prompt_store.close()
         if rt.reminders_store is not None:
             rt.reminders_store.close()
-        zc.close()
+        await zc.async_close()
