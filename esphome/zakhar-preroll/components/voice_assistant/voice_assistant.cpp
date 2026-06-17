@@ -51,17 +51,29 @@ void VoiceAssistant::setup() {
       });
     }
   } else {
-    // Pre-roll path: the ring buffers are persistent (allocated below, never freed)
-    // and are fed exclusively by the passive taps, which receive audio the whole time
-    // the microphone is running - on Voice PE that is 24/7, because micro_wake_word
-    // keeps it open. RingBuffer::write() overwrites the oldest samples when full, so
-    // outside of a session each buffer always holds the newest `preroll_duration`
-    // (+ margin) of audio. Only the taps write, so sample order is guaranteed (the
-    // session sources' callbacks are not registered at all to avoid double writes).
-    // mic_source_/mic_source2_ are still started/stopped by the state machine: that
-    // keeps the mic alive for sessions started while micro_wake_word is stopped
-    // (e.g. manual captures).
+    // Pre-roll path: the ring buffers are persistent (allocated below, never freed).
+    // EXACTLY ONE writer feeds them at a time, gated by session_capturing_:
+    //  - idle (between sessions): the passive look-back taps write, so each buffer holds
+    //    the newest preroll_duration of audio (micro_wake_word keeps the mic open 24/7).
+    //  - during a session (session_capturing_ == true): the session sources write the
+    //    LIVE audio. While the session source drives the mic the passive taps deliver
+    //    realtime silence, so if only they wrote, the in-session command would be lost
+    //    (captured as silence) - routing the live audio through the session source fixes
+    //    that. Single-writer at any instant keeps sample order intact and avoids double
+    //    writes. mic_source_/mic_source2_ are started/stopped by the state machine.
     this->preroll_source_->add_data_callback([this](const std::vector<uint8_t> &data) {
+      if (this->session_capturing_) {
+        return;  // a session is capturing: the session source owns the buffer
+      }
+      std::shared_ptr<ring_buffer::RingBuffer> temp_ring_buffer = this->ring_buffer_;
+      if (temp_ring_buffer != nullptr) {
+        temp_ring_buffer->write((void *) data.data(), data.size());
+      }
+    });
+    this->mic_source_->add_data_callback([this](const std::vector<uint8_t> &data) {
+      if (!this->session_capturing_) {
+        return;  // idle: the passive look-back tap owns the buffer
+      }
       std::shared_ptr<ring_buffer::RingBuffer> temp_ring_buffer = this->ring_buffer_;
       if (temp_ring_buffer != nullptr) {
         temp_ring_buffer->write((void *) data.data(), data.size());
@@ -70,6 +82,20 @@ void VoiceAssistant::setup() {
 
     if (this->preroll_source2_ != nullptr) {
       this->preroll_source2_->add_data_callback([this](const std::vector<uint8_t> &data) {
+        if (this->session_capturing_) {
+          return;
+        }
+        std::shared_ptr<ring_buffer::RingBuffer> temp_ring_buffer = this->ring_buffer2_;
+        if (temp_ring_buffer != nullptr) {
+          temp_ring_buffer->write((void *) data.data(), data.size());
+        }
+      });
+    }
+    if (this->mic_source2_ != nullptr) {
+      this->mic_source2_->add_data_callback([this](const std::vector<uint8_t> &data) {
+        if (!this->session_capturing_) {
+          return;
+        }
         std::shared_ptr<ring_buffer::RingBuffer> temp_ring_buffer = this->ring_buffer2_;
         if (temp_ring_buffer != nullptr) {
           temp_ring_buffer->write((void *) data.data(), data.size());
@@ -329,6 +355,8 @@ void VoiceAssistant::loop() {
   }
   switch (this->state_) {
     case State::IDLE: {
+      // Pre-roll fork: idle -> the passive look-back taps own the ring buffers.
+      this->session_capturing_ = false;
       if (this->continuous_ && this->desired_state_ == State::IDLE) {
         this->idle_trigger_.trigger();
         this->set_state_(State::START_MICROPHONE, State::START_PIPELINE);
@@ -350,6 +378,9 @@ void VoiceAssistant::loop() {
       }
       this->clear_buffers_();
 
+      // Pre-roll fork: from here the session mic sources own the ring buffers and write
+      // the LIVE audio; the passive look-back taps stand down until the session stops.
+      this->session_capturing_ = true;
       this->mic_source_->start();
       if (this->mic_source2_) {
         this->mic_source2_->start();
@@ -462,6 +493,9 @@ void VoiceAssistant::loop() {
       break;
     }
     case State::STOP_MICROPHONE: {
+      // Pre-roll fork: session over -> hand the ring buffers back to the passive
+      // look-back taps so the next utterance starts with fresh pre-roll.
+      this->session_capturing_ = false;
       // Check both microphone channels
       bool is_running = this->mic_source_->is_running();
       bool is_running2 = false;

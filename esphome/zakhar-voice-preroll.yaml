@@ -35,7 +35,7 @@ substitutions:
   config_version: "v20_preroll"
   # micro_wake_word model version flashed; keep in sync with the model path in
   # packages.zakhar_wake_word below
-  model_version: "zakhar_v28"
+  model_version: "zakhar_v27"
 
 # --- Pre-roll fork: overrides the built-in voice_assistant with the patched copy ---
 # We now ALSO fork micro_wake_word from the SAME local source. The micro_wake_word fork
@@ -62,7 +62,7 @@ packages:
       models:
         # Local path to the model committed in this repo. ESPHome resolves the
         # manifest's relative "model": "zakhar.tflite" against this file's dir, so
-        # both .json and .tflite are read straight from microWakeWord/v28/model/.
+        # both .json and .tflite are read straight from microWakeWord/v27/model/.
         # (A remote github:// / raw URL fails here: ESPHome can't resolve the
         # relative .tflite inside a manifest fetched that way.)
         #
@@ -81,13 +81,16 @@ packages:
         # CAVEAT: the 0.995 is on the fish RECAPTURE tract; off a different tract recall ~0.93.
         # v19 is the channel-robust fallback (~0.96 everywhere, but ~21 calls/h).
         # See ../microWakeWord/v28/TRAINING_REPORT_v28.md.
-        - model: ../microWakeWord/v28/model/zakhar.json
+        # ⚠️ v28 REVERTED 2026-06-17 — NOT deployed. The angmax tflite contains a DEQUANTIZE op
+        # the on-device micro_wake_word resolver doesn't register ("Didn't find op for builtin
+        # opcode DEQUANTIZE" → LoadProhibited boot-loop, safe-mode after 4 fails); the angular
+        # export isn't full-INT8. .226 is re-exporting angmax deployable (int8 output, NO
+        # DEQUANTIZE, op-set == v27). PROD STAYS ON v27 below until the fixed tflite lands —
+        # then flip model + model_version back to v28.
+        - model: ../microWakeWord/v27/model/zakhar.json
           id: zakhar
-          # Operating point: cutoff 0.90 / window 5 (angmax manifest default; recall ~0.995
-          # on-channel, ~8.7 server-calls/h post-VAD). MAX-RECALL regime: the SERVER gate
-          # absorbs false accepts, so do NOT over-tighten. For EVEN more recall, LOWER the cutoff
-          # (e.g. 0.80) via the panel (Wake Probability Cutoff, below) — the gate eats the extra
-          # false accepts. Keep device VAD on (removes the non-speech FAPH bulk at no recall cost).
+          # Operating point: cutoff 0.90 — v27's eval knee (window 5, VAD on). If real silence
+          # false-fires appear in the field, raise to 0.95 via the panel (Wake Probability Cutoff).
           probability_cutoff: 90%
 
   # Official Home Assistant Voice PE firmware, pinned to a release tag.

@@ -308,6 +308,12 @@ class VoiceAssistant : public Component {
   microphone::MicrophoneSource *preroll_source2_{nullptr};
   uint32_t preroll_duration_ms_{0};
   bool preroll_enabled_{true};
+  // Pre-roll fork: which writer currently owns the ring buffers. false = idle, the
+  // passive look-back taps fill them; true = a session is capturing, so the session mic
+  // sources write the LIVE audio instead. The passive taps go silent while the session
+  // source drives the mic, so they must stand down during a session or the in-session
+  // command would be captured as silence (only the pre-session look-back would survive).
+  bool session_capturing_{false};
 #ifdef USE_SPEAKER
   void write_speaker_();
   speaker::Speaker *speaker_{nullptr};
