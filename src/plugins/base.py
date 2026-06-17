@@ -8,6 +8,7 @@ self-registers via @register on `import src.plugins`.
 
 import os
 from collections import defaultdict
+from collections.abc import Callable
 from dataclasses import dataclass
 
 import httpx
@@ -19,8 +20,14 @@ class Deps:
     """Shared runtime deps handed to provider.create()."""
 
     http_cloud: httpx.AsyncClient   # proxied client for cloud APIs (STT/LLM/Yandex TTS)
-    http_local: httpx.AsyncClient   # direct client for local services (TeraTTS)
+    http_local: httpx.AsyncClient   # direct (non-proxied) client for local services
     tts_timeout: int = 30
+    # Optional accessor returning the current closed command vocabulary (Russian
+    # words) for offline STT grammar restriction, or [] when no closed vocabulary
+    # applies (e.g. the active intent engine is a free-form LLM). Wired by the runtime
+    # (app.py) to read live config; stays None in contexts that don't provide it
+    # (tests, adhoc backend builds) — consumers must treat None as "no vocabulary".
+    command_vocabulary: Callable[[], list[str]] | None = None
 
 
 # Shared schema annotation for the `model` field: rendered as a dynamic select
@@ -90,6 +97,13 @@ class Provider:
         json_schema_extra); providers without server-side search ignore it (their
         full list is filtered client-side)."""
         return None
+
+    def vocabulary(self, cfg: BaseModel) -> list[str]:
+        """Optional closed command vocabulary this provider understands (Russian
+        words), for offline STT grammar restriction. Default: none. A provider that
+        maps utterances to a fixed command set (e.g. the offline Simple NLU intent
+        engine) overrides this; free-form LLM providers leave it empty."""
+        return []
 
 
 REGISTRY: dict[str, dict[str, Provider]] = defaultdict(dict)

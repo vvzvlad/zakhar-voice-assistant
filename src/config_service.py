@@ -141,6 +141,23 @@ class ConfigService:
         """Return the selected provider instance for a category (for runtime reconfig)."""
         return get_provider(category, self._slot(category).selected)
 
+    def command_vocabulary(self) -> list[str]:
+        """The closed command vocabulary for offline STT grammar restriction: the
+        active LLM provider's vocabulary() (e.g. Simple NLU's phrase/verb/number
+        words), or [] when the active provider offers none (a free-form LLM imposes
+        no closed vocabulary). Read live (per decode) by the Vosk STT backend."""
+        # Single atomic _doc snapshot so the provider and its config can never
+        # straddle a concurrent apply() swap (this runs in the decode worker thread
+        # and apply() may rebind self._doc on an LLM-provider switch). Any error
+        # degrades to no closed vocabulary (full-vocabulary recognition).
+        slot = self._slot("llm")
+        try:
+            prov = get_provider("llm", slot.selected)
+            cfg = prov.ConfigModel(**slot.instances.get(slot.selected, {}))
+            return list(prov.vocabulary(cfg) or [])
+        except Exception:
+            return []
+
     def options(self, category, plugin, field, query: str = ""):
         prov = get_provider(category, plugin)
         cfg = prov.ConfigModel(**self._slot(category).instances.get(plugin, {}))

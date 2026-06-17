@@ -338,6 +338,124 @@ async def test_vosk_decode_extracts_and_strips_text():
     assert rec.set_words_calls == [False]
 
 
+def test_vosk_make_recognizer_uses_grammar_when_vocab_present(monkeypatch):
+    import sys
+    import types
+
+    calls = []
+    fake = types.ModuleType("vosk")
+
+    class FakeKaldi:
+        def __init__(self, model, rate, *grammar):
+            calls.append((rate, grammar))
+
+    fake.KaldiRecognizer = FakeKaldi
+    monkeypatch.setitem(sys.modules, "vosk", fake)
+    backend = VoskSttBackend("unused/path", model=object(), vocabulary=lambda: ["привет", "захар"])
+    backend._make_recognizer()
+    # grammar arg is the JSON list of words + "[unk]"
+    assert calls == [(16000, ('["привет", "захар", "[unk]"]',))]
+
+
+def test_vosk_make_recognizer_no_grammar_when_vocab_none(monkeypatch):
+    import sys
+    import types
+
+    calls = []
+    fake = types.ModuleType("vosk")
+
+    class FakeKaldi:
+        def __init__(self, model, rate, *grammar):
+            calls.append((rate, grammar))
+
+    fake.KaldiRecognizer = FakeKaldi
+    monkeypatch.setitem(sys.modules, "vosk", fake)
+    # No accessor at all -> plain full-vocab recognizer (no grammar arg).
+    backend = VoskSttBackend("unused/path", model=object(), vocabulary=None)
+    backend._make_recognizer()
+    assert calls == [(16000, ())]
+
+
+def test_vosk_make_recognizer_no_grammar_when_vocab_empty(monkeypatch):
+    import sys
+    import types
+
+    calls = []
+    fake = types.ModuleType("vosk")
+
+    class FakeKaldi:
+        def __init__(self, model, rate, *grammar):
+            calls.append((rate, grammar))
+
+    fake.KaldiRecognizer = FakeKaldi
+    monkeypatch.setitem(sys.modules, "vosk", fake)
+    # An accessor returning [] means "no closed vocabulary" -> full-vocab recognizer.
+    backend = VoskSttBackend("unused/path", model=object(), vocabulary=lambda: [])
+    backend._make_recognizer()
+    assert calls == [(16000, ())]
+
+
+def test_vosk_current_vocab_swallows_errors_and_falls_back():
+    # A vocabulary accessor that raises must NEVER break STT: _current_vocab returns
+    # [] (full vocabulary) instead of propagating the error.
+    def boom():
+        raise RuntimeError("vocab source down")
+
+    backend = VoskSttBackend("unused/path", model=object(), vocabulary=boom)
+    assert backend._current_vocab() == []
+
+    # A callable returning a list is passed through verbatim.
+    backend2 = VoskSttBackend("unused/path", model=object(), vocabulary=lambda: ["свет"])
+    assert backend2._current_vocab() == ["свет"]
+
+    # No accessor -> [].
+    backend3 = VoskSttBackend("unused/path", model=object(), vocabulary=None)
+    assert backend3._current_vocab() == []
+
+
+async def test_vosk_decode_strips_unk_sentinel():
+    # The closed-vocab "[unk]" sentinel must never leak into the transcript fed to
+    # the NLU: it is stripped from the decoded text.
+    model = _RecordingModel()
+    backend = VoskSttBackend("unused/path", model=model)
+    backend._make_recognizer = lambda: _StubRecognizer('{"text": "включи [unk] свет"}')
+
+    result = await backend.transcribe(b"\x01\x02" * 100)
+
+    assert result == "включи свет"
+
+
+def test_vosk_provider_create_wires_vocabulary_per_flag(monkeypatch):
+    # VoskSttProvider.create() hands deps.command_vocabulary to the backend only when
+    # restrict_to_nlu is on; otherwise vocabulary=None. Use a recording stub backend
+    # so no real Vosk model is loaded.
+    import src.plugins.stt.vosk as vosk_mod
+
+    seen = []
+
+    class _RecordingBackend:
+        def __init__(self, model_path, *, model=None, vocabulary=None):
+            seen.append((model_path, vocabulary))
+
+    monkeypatch.setattr(vosk_mod, "VoskSttBackend", _RecordingBackend)
+
+    cb = lambda: ["свет"]  # noqa: E731 - terse sentinel accessor
+    deps = Deps(http_cloud=None, http_local=None, command_vocabulary=cb)
+
+    vosk_mod.VoskSttProvider().create(VoskSttConfig(restrict_to_nlu=True), deps)
+    vosk_mod.VoskSttProvider().create(VoskSttConfig(restrict_to_nlu=False), deps)
+
+    assert seen[0][1] is cb        # flag on -> the live accessor is wired
+    assert seen[1][1] is None      # flag off -> no vocabulary restriction
+
+
+def test_vosk_backend_stores_vocabulary_accessor():
+    # Backend-level wiring: the vocabulary accessor passed to the constructor is the
+    # exact object the backend reads from (no real model loaded — model is injected).
+    cb = lambda: ["захар"]  # noqa: E731
+    assert VoskSttBackend("p", model=object(), vocabulary=cb)._vocabulary is cb
+
+
 async def test_vosk_decode_missing_text_key_returns_empty():
     model = _RecordingModel()
     backend = VoskSttBackend("unused/path", model=model)

@@ -17,7 +17,9 @@ from src.plugins.base import Deps, get_provider
 from src.plugins.llm.simple_nlu import (
     SimpleNluBackend,
     SimpleNluConfig,
+    SimpleNluProvider,
     extract_number,
+    nlu_vocabulary,
     parse_actions,
     parse_aliases,
 )
@@ -335,3 +337,43 @@ async def test_training_is_cached(monkeypatch):
     await backend.complete(msgs, FAKE_TOOLS)
     assert counter["n"] == 1  # same tools -> trained once
     assert backend._fingerprint is not None
+
+
+# --- nlu_vocabulary (Vosk closed-grammar vocabulary) ------------------------ #
+
+def test_nlu_vocabulary_collects_phrase_and_verb_words_and_numbers():
+    aliases = "свет в зале, люстра = bright_room_light\nночь = night"
+    actions = "on = включи, вруби\noff = выключи"
+    vocab = nlu_vocabulary(aliases, actions)
+
+    # Every word of every alias phrase is present (phrases are split into tokens).
+    for w in ("свет", "в", "зале", "люстра", "ночь"):
+        assert w in vocab
+    # Every action verb word is present.
+    for w in ("включи", "вруби", "выключи"):
+        assert w in vocab
+    # Russian number words 0..100 are always included.
+    for w in ("ноль", "один", "сто", "двадцать"):
+        assert w in vocab
+
+    # The RHS values (entity/scene ids) are NOT spoken words -> never in the vocab.
+    assert "bright_room_light" not in vocab
+    assert "night" not in vocab
+
+    # Sorted and de-duplicated.
+    assert vocab == sorted(set(vocab))
+
+
+def test_nlu_vocabulary_empty_inputs_still_have_number_words():
+    # Empty / comment-only inputs still yield a non-empty, sorted list (the numbers).
+    vocab = nlu_vocabulary("", "# nothing here\n  ")
+    assert vocab  # non-empty
+    assert vocab == sorted(set(vocab))
+    assert "один" in vocab and "сто" in vocab
+
+
+def test_simple_nlu_provider_vocabulary_matches_pure_function():
+    aliases = "свет в зале, люстра = bright_room_light"
+    actions = "on = включи\noff = выключи"
+    cfg = SimpleNluConfig(aliases=aliases, actions=actions)
+    assert SimpleNluProvider().vocabulary(cfg) == nlu_vocabulary(aliases, actions)

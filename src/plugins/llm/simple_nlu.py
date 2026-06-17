@@ -204,6 +204,26 @@ _RU_TENS = {
 }
 
 
+def nlu_vocabulary(aliases_text: str, actions_text: str) -> list[str]:
+    """Collect the distinct spoken Russian words the NLU can match, for use as a
+    Vosk closed-vocabulary grammar. Union of: every word in every alias phrase,
+    every action-verb word, and the Russian number words 0..100. Phrases are
+    split into individual word tokens (so the decoder can recognise any sequence
+    of them); tokens are lowercased. Returns a sorted, de-duplicated list. The
+    caller appends the Vosk "[unk]" sentinel."""
+    words: set[str] = set()
+    for entry in parse_aliases(aliases_text):
+        for phrase in entry["phrases"]:
+            words.update(re.findall(r"[a-zа-яё0-9]+", phrase.lower()))
+    for verbs in parse_actions(actions_text).values():
+        for verb in verbs:
+            words.update(re.findall(r"[a-zа-яё0-9]+", verb.lower()))
+    words.update(_RU_UNITS.keys())
+    words.update(_RU_TENS.keys())
+    words.discard("")
+    return sorted(words)
+
+
 def extract_number(text: str) -> int | None:
     """Return the first number in `text`, digits first, else Russian words 0..100.
 
@@ -798,3 +818,7 @@ class SimpleNluProvider(Provider):
 
     def describe(self, cfg: SimpleNluConfig) -> str:
         return "simple-nlu"
+
+    def vocabulary(self, cfg: SimpleNluConfig) -> list[str]:
+        # The closed command vocabulary an offline STT can restrict its grammar to.
+        return nlu_vocabulary(cfg.aliases, cfg.actions)

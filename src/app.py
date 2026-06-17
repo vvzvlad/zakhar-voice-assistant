@@ -83,6 +83,9 @@ async def main() -> None:
     deps = Deps(http_cloud=client_ext, http_local=client_local, tts_timeout=core.tts_timeout)
 
     svc = ConfigService(doc, deps)
+    # Let offline STT read the active intent engine's command vocabulary live (per
+    # decode) for Vosk grammar restriction; svc was just built, deps is shared.
+    deps.command_vocabulary = svc.command_vocabulary
     core = svc.core
     vad_backend = svc.create("vad")
     stt_backend = svc.create("stt")
