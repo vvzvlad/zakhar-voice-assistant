@@ -11,8 +11,9 @@ import json
 from typing import Literal
 
 from loguru import logger
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
+from src.logging_setup import capture_native_stderr
 from src.plugins.base import Deps, Provider, register
 from src.wakeword import PassthroughVerifier, WakewordVerdict, WakewordVerifier
 
@@ -34,11 +35,16 @@ class VoskWakewordVerifier(WakewordVerifier):
             from vosk import Model, SetLogLevel
 
             SetLogLevel(-1)
-            model = Model(model_path)  # fail fast if the dir is missing
+            # The model load is where Kaldi can emit native WARN/ERR straight to
+            # fd 2; capture that window (minimal — only the load) into loguru.
+            with capture_native_stderr("vosk-wakeword"):
+                model = Model(model_path)  # fail fast if the dir is missing
         self._model = model
         # Normalize keywords (lowercase + strip) for BOTH the grammar JSON and the
         # accept-set. The Russian Vosk model emits lowercase text, so a capitalized
         # operator-configured keyword would never match the decoded tokens otherwise.
+        # Defensive: the config field_validator already normalizes; this also covers
+        # direct instantiation (e.g. in tests) that bypasses the config layer.
         self._keywords = [kw.strip().lower() for kw in keywords if kw.strip()]
         self._window_ms = window_ms
         # Read by the pipeline to size the pre-roll head it hands to verify()
@@ -47,6 +53,20 @@ class VoskWakewordVerifier(WakewordVerifier):
         # Read by the pipeline to apply the timeout + fail-open/closed policy.
         self.timeout_ms = timeout_ms
         self.fail_open = (on_error == "open")
+        # One-time grammar probe (production path only): build a single throwaway
+        # grammar recognizer now, inside the fd-2 capture window, so Kaldi's
+        # "Ignoring word missing in vocabulary" WARN for a misconfigured keyword is
+        # surfaced to loguru ONCE here at creation/config-reload instead of being
+        # emitted (and swallowed) per decode. Guarded so it never runs for an empty
+        # keyword set, and wrapped defensively: a probe failure (e.g. a missing
+        # native dependency when a sentinel model is injected) must NEVER break
+        # verifier construction, so it is logged at debug and ignored.
+        if self._keywords:
+            try:
+                with capture_native_stderr("vosk-wakeword"):
+                    self._make_recognizer()  # discard: built only to trip the WARN
+            except Exception as e:
+                logger.debug(f"Vosk wakeword grammar probe skipped: {e}")
 
     def _make_recognizer(self):
         """Build a grammar-restricted KaldiRecognizer for the shared model.
@@ -56,6 +76,14 @@ class VoskWakewordVerifier(WakewordVerifier):
         from vosk import KaldiRecognizer
 
         grammar = json.dumps(self._keywords + ["[unk]"], ensure_ascii=False)
+        # NO fd-2 capture here: this runs per verify in a worker thread, and
+        # redirecting process-global fd 2 around every decode would swallow loguru
+        # lines emitted by other threads (an observability regression). The
+        # "Ignoring word missing in vocabulary" WARN that fires at grammar parse is
+        # surfaced to loguru ONCE by the creation-time probe in __init__ instead.
+        # A per-decode recognizer built here may still emit that raw native warning
+        # to fd 2 for a misconfigured keyword until the operator fixes it, but the
+        # actionable warning is already routed to loguru at construction.
         return KaldiRecognizer(self._model, 16000, grammar)
 
     def _decode(self, pcm: bytes) -> WakewordVerdict:
@@ -132,6 +160,17 @@ class VoskWakewordConfig(BaseModel):
         "recognised contiguously for it to match. Leave empty to accept every wake "
         "(the gate is disabled).",
     )
+
+    @field_validator("keywords")
+    @classmethod
+    def _normalize_keywords(cls, v: list[str]) -> list[str]:
+        # Force keywords to stripped lowercase at the CONFIG layer so the stored
+        # value and the panel display are already normalized (not just the runtime
+        # grammar). The Russian Vosk model emits lowercase, and matching is
+        # case-insensitive, so a capitalized entry would never match otherwise.
+        # Empties (left after stripping) are dropped.
+        return [kw.strip().lower() for kw in v if kw.strip()]
+
     window_ms: int = Field(
         2500,
         title="Window (ms)",

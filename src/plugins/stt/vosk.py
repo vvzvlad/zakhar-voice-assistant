@@ -6,6 +6,7 @@ import json
 from loguru import logger
 from pydantic import BaseModel
 
+from src.logging_setup import capture_native_stderr
 from src.plugins.base import Deps, Provider, register
 from src.stage_errors import StageError
 from src.stt import SttBackend
@@ -27,13 +28,21 @@ class VoskSttBackend(SttBackend):
             from vosk import Model, SetLogLevel
 
             SetLogLevel(-1)
-            model = Model(model_path)  # fail fast if the dir is missing
+            # Capture the native WARN/ERR Kaldi can emit during the model load
+            # into loguru (minimal window — only the load itself).
+            with capture_native_stderr("vosk-stt"):
+                model = Model(model_path)  # fail fast if the dir is missing
         self._model = model
 
     def _make_recognizer(self):
         """Build a KaldiRecognizer for the shared model (overridable in tests)."""
         from vosk import KaldiRecognizer
 
+        # NO fd-2 capture here: this runs per transcribe in a worker thread, and
+        # redirecting process-global fd 2 around every decode would swallow loguru
+        # lines emitted by other threads. The model load in __init__ is the rare
+        # window that's wrapped instead. STT has no grammar, so a plain full-vocab
+        # recognizer is quiet at construction (nothing actionable to surface here).
         return KaldiRecognizer(self._model, 16000)
 
     def _decode(self, pcm: bytes) -> str:

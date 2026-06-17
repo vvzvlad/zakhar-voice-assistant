@@ -8,9 +8,11 @@ heavy dependency is not needed to run it.
 """
 
 import json
+import os
 
 import httpx
 import pytest
+from loguru import logger
 
 import src.plugins  # noqa: F401  register all providers
 from src.config_service import ConfigService
@@ -51,19 +53,35 @@ class _FakeRecognizer:
         return json.dumps(self._result, ensure_ascii=False)
 
 
-def _verifier(result: dict, *, keywords=None, on_error="open", timeout_ms=300):
-    """Build a VoskWakewordVerifier with an injected model and a stubbed recognizer
-    that always returns `result`, so no real Vosk model is ever loaded."""
-    v = VoskWakewordVerifier(
+def _stub_verifier(make_recognizer, *, keywords, on_error="open", timeout_ms=300):
+    """Build a VoskWakewordVerifier whose `_make_recognizer` is stubbed FROM
+    construction (via a subclass), so the creation-time grammar probe in __init__
+    exercises the stub instead of importing the real Vosk package. No real model
+    is ever loaded (an injected sentinel stands in for it)."""
+    class _StubbedVerifier(VoskWakewordVerifier):
+        def _make_recognizer(self):
+            return make_recognizer()
+
+    return _StubbedVerifier(
         model_path="unused",
-        keywords=keywords or ["захар"],
+        keywords=keywords,
         window_ms=1500,
         timeout_ms=timeout_ms,
         on_error=on_error,
         model=object(),  # injected sentinel -> no real model load
     )
-    v._make_recognizer = lambda: _FakeRecognizer(result)
-    return v
+
+
+def _verifier(result: dict, *, keywords=None, on_error="open", timeout_ms=300):
+    """Build a VoskWakewordVerifier with an injected model and a stubbed recognizer
+    that always returns `result`, so no real Vosk model is ever loaded. The stub is
+    in place from construction so the creation-time grammar probe is harmless."""
+    return _stub_verifier(
+        lambda: _FakeRecognizer(result),
+        keywords=keywords or ["захар"],
+        on_error=on_error,
+        timeout_ms=timeout_ms,
+    )
 
 
 # --- contract: PassthroughVerifier -------------------------------------------
@@ -129,14 +147,53 @@ async def test_verify_accepts_without_word_confs_falls_back_to_binary_score():
 async def test_verify_grammar_recognizer_gets_words_and_waveform():
     # SetWords(True) and AcceptWaveform(pcm) are invoked on the recognizer.
     rec = _FakeRecognizer({"text": "захар"})
-    v = VoskWakewordVerifier(
-        model_path="unused", keywords=["захар"], window_ms=1500,
-        timeout_ms=300, on_error="open", model=object(),
-    )
-    v._make_recognizer = lambda: rec
+    # The stub is shared across the creation-time probe and the decode; the probe
+    # only builds the recognizer (no SetWords/AcceptWaveform), so the decode-time
+    # assertions below still reflect exactly the verify() call.
+    v = _stub_verifier(lambda: rec, keywords=["захар"])
     await v.verify(b"pcmbytes")
     assert rec.words is True
     assert rec.accepted == b"pcmbytes"
+
+
+async def test_per_call_decode_does_not_redirect_fd2(tmp_path):
+    # Lock-in: the per-call recognizer path must NOT redirect process-global fd 2.
+    # We point fd 2 at a temp file ourselves around the decode and have the stub
+    # recognizer write a native-style WARNING straight to fd 2. If the decode path
+    # captured fd 2 (the old, regression-prone behaviour), it would dup2 fd 2 to its
+    # own pipe and the marker would land in loguru instead of our file. With the
+    # capture gone, the marker must land in OUR file and NOT be routed to loguru.
+    marker = b"WARNING (VoskAPI) per-call marker\n"
+
+    class _WritingRecognizer(_FakeRecognizer):
+        def AcceptWaveform(self, pcm):
+            os.write(2, marker)
+            return super().AcceptWaveform(pcm)
+
+    # Keep this independent of the creation-time probe: build the verifier first
+    # (the probe runs in __init__), then redirect fd 2 only around the decode.
+    v = _stub_verifier(lambda: _WritingRecognizer({"text": "захар"}), keywords=["захар"])
+
+    routed = []
+    sink_id = logger.add(routed.append, level="DEBUG")
+    saved = os.dup(2)
+    redirect = os.open(str(tmp_path / "fd2.log"), os.O_WRONLY | os.O_CREAT | os.O_TRUNC)
+    try:
+        os.dup2(redirect, 2)
+        try:
+            await v.verify(b"pcmbytes")
+        finally:
+            os.dup2(saved, 2)
+    finally:
+        os.close(redirect)
+        os.close(saved)
+        logger.remove(sink_id)
+
+    captured = (tmp_path / "fd2.log").read_bytes()
+    # The marker went to the real fd 2 (our file) — the decode did not capture it.
+    assert marker in captured
+    # And it was NOT routed through loguru (no per-call capture window exists).
+    assert not any("per-call marker" in str(r.record["message"]) for r in routed)
 
 
 async def test_verify_any_of_several_single_word_keywords_matches():
@@ -195,19 +252,17 @@ async def test_verify_empty_pcm_applies_fail_policy():
 
 
 async def test_verify_never_raises_on_decode_error_uses_fail_policy():
-    # A decode that raises must NOT propagate: fall back to the fail policy.
+    # A decode that raises must NOT propagate: fall back to the fail policy. The
+    # recognizer factory raises from construction onward, so the creation-time
+    # grammar probe also hits it — its defensive guard must swallow that, so
+    # building the verifier still succeeds.
     def _boom():
         raise RuntimeError("native vosk blew up")
 
-    v = VoskWakewordVerifier(
-        model_path="unused", keywords=["захар"], window_ms=1500,
-        timeout_ms=300, on_error="open", model=object(),
-    )
-    v._make_recognizer = _boom
+    v = _stub_verifier(_boom, keywords=["захар"], on_error="open")
     verdict = await v.verify(b"pcmbytes")
     assert verdict == WakewordVerdict(accepted=True, score=None)
 
-    v._make_recognizer = _boom
     v.fail_open = False
     assert (await v.verify(b"pcmbytes")) == WakewordVerdict(accepted=False, score=None)
 
@@ -245,6 +300,16 @@ def test_config_defaults():
     assert cfg.window_ms == 2500
     assert cfg.timeout_ms == 300
     assert cfg.on_error == "open"
+
+
+def test_config_keywords_force_lowercased_at_config_layer():
+    # The validator normalizes keywords to stripped lowercase at the CONFIG layer
+    # so the stored value (and panel display) is already normalized — not just the
+    # runtime grammar. Empties left after stripping are dropped.
+    cfg = VoskWakewordConfig(keywords=["Захар", " ОСКАР "])
+    assert cfg.keywords == ["захар", "оскар"]
+    cfg2 = VoskWakewordConfig(keywords=["Захар", "   ", ""])
+    assert cfg2.keywords == ["захар"]
 
 
 # --- ConfigService round-trip ------------------------------------------------
