@@ -21,6 +21,7 @@ from src.plugins.stt.openrouter import (
     OpenRouterSttConfig,
 )
 from src.plugins.stt.vosk import (
+    VoskStreamSession,
     VoskSttBackend,
     VoskSttConfig,
     VoskSttProvider,
@@ -506,6 +507,122 @@ async def test_vosk_malformed_final_result_raises_stage_error():
         await backend.transcribe(b"\x01\x02" * 100)
 
     assert ei.value.stage == "stt"
+
+
+# --- Vosk streaming session (live decode during speech) -----------------------
+
+
+class _StubStreamRecognizer:
+    """Stub KaldiRecognizer for the streaming session. `accepts` scripts what each
+    AcceptWaveform() call returns (True = internal endpoint -> Result(), False ->
+    PartialResult()); shorter than the chunk count -> defaults to False. `results`
+    is the queue of Result() JSON strings (one per True). `partial` and `final`
+    back PartialResult()/FinalResult()."""
+
+    def __init__(self, *, accepts=(), results=(), partial='{"partial": ""}',
+                 final='{"text": ""}'):
+        self._accepts = list(accepts)
+        self._results = list(results)
+        self._partial = partial
+        self._final = final
+        self.set_words_calls = []
+        self._call = 0
+
+    def SetWords(self, value):  # noqa: N802 - mirror Vosk API
+        self.set_words_calls.append(value)
+
+    def AcceptWaveform(self, pcm):  # noqa: N802 - mirror Vosk API
+        is_final = self._accepts[self._call] if self._call < len(self._accepts) else False
+        self._call += 1
+        return is_final
+
+    def Result(self):  # noqa: N802 - mirror Vosk API
+        return self._results.pop(0)
+
+    def PartialResult(self):  # noqa: N802 - mirror Vosk API
+        return self._partial
+
+    def FinalResult(self):  # noqa: N802 - mirror Vosk API
+        return self._final
+
+
+async def test_vosk_stream_finish_returns_final_with_unk_stripped():
+    # Common short-utterance path: AcceptWaveform always False, the whole transcript
+    # comes from FinalResult() at the end, with the "[unk]" sentinel stripped.
+    rec = _StubStreamRecognizer(final='{"text": "включи [unk] свет"}')
+    session = VoskStreamSession(rec)
+    session.feed(b"\x01\x02" * 100)
+    session.feed(b"\x03\x04" * 100)
+
+    result = await session.finish()
+
+    assert result == "включи свет"
+
+
+async def test_vosk_stream_joins_midutterance_segment_and_tail():
+    # An internal endpoint mid-utterance (AcceptWaveform True once -> Result segment),
+    # then more audio, then the FinalResult tail: both segments join in order.
+    rec = _StubStreamRecognizer(
+        accepts=[True],  # first chunk endpoints, rest default to False
+        results=['{"text": "включи свет"}'],
+        final='{"text": "на кухне"}',
+    )
+    session = VoskStreamSession(rec)
+    session.feed(b"\x01" * 100)  # -> Result segment "включи свет"
+    session.feed(b"\x02" * 100)  # -> partial (ignored here)
+
+    result = await session.finish()
+
+    assert result == "включи свет на кухне"
+
+
+async def test_vosk_stream_feed_after_finish_is_noop_and_aclose_idempotent():
+    # feed() after finish() must be a no-op (never raise); aclose() is idempotent.
+    rec = _StubStreamRecognizer(final='{"text": "привет"}')
+    session = VoskStreamSession(rec)
+    session.feed(b"\x01" * 100)
+
+    result = await session.finish()
+    assert result == "привет"
+
+    # Post-finish feed is silently dropped.
+    session.feed(b"\x05" * 100)  # must not raise
+
+    # aclose() twice -> idempotent, never raises.
+    await session.aclose()
+    await session.aclose()
+
+
+async def test_vosk_stream_decode_error_surfaces_as_stage_error():
+    # A decode crash (AcceptWaveform raises) must surface from finish() as
+    # StageError("stt", ...), not escape as the raw exception.
+    class _Boom(_StubStreamRecognizer):
+        def AcceptWaveform(self, pcm):  # noqa: N802
+            raise RuntimeError("native decode crashed")
+
+    session = VoskStreamSession(_Boom())
+    session.feed(b"\x01" * 100)
+
+    with pytest.raises(StageError) as ei:
+        await session.finish()
+
+    assert ei.value.stage == "stt"
+    assert "native decode crashed" in str(ei.value)
+
+
+async def test_vosk_open_stream_builds_session_with_recognizer():
+    # open_stream() builds a fresh recognizer, disables word timings, and returns a
+    # live streaming session routed through feed()/finish().
+    backend = VoskSttBackend("unused/path", model=_RecordingModel())
+    rec = _StubStreamRecognizer(final='{"text": ""}')
+    backend._make_recognizer = lambda: rec
+
+    session = backend.open_stream()
+    try:
+        assert isinstance(session, VoskStreamSession)
+        assert rec.set_words_calls == [False]
+    finally:
+        await session.aclose()
 
 
 # --- OpenRouter STT backend ----------------------------------------------------

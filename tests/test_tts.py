@@ -421,11 +421,23 @@ _STUB_WIDTH = 2  # 16-bit
 _STUB_CHANNELS = 1
 
 
+class _StubAudioChunk:
+    """Lightweight stand-in for Piper's AudioChunk, carrying the fields the
+    streaming path reads."""
+
+    def __init__(self, pcm):
+        self.audio_int16_bytes = pcm
+        self.sample_rate = _STUB_RATE
+        self.sample_width = _STUB_WIDTH
+        self.sample_channels = _STUB_CHANNELS
+
+
 class _StubVoice:
     """Stub PiperVoice. synthesize_wav(sentence, wav_file) writes a tiny WAV
     whose frame count is taken from a per-sentence map; sentences in `raises`
     raise to drive the `except Exception: continue` path. Unknown sentences
-    write a default number of frames."""
+    write a default number of frames. synthesize(sentence) is the streaming
+    generator counterpart, yielding _StubAudioChunk blocks driven by the same maps."""
 
     def __init__(self, frames_for=None, raises=(), default_frames=10):
         self.frames_for = frames_for or {}
@@ -441,6 +453,14 @@ class _StubVoice:
         wav_file.setframerate(_STUB_RATE)
         # Non-silent marker bytes so real audio is distinguishable from padding.
         wav_file.writeframes(b"\x11\x22" * n)
+
+    def synthesize(self, sentence):
+        # Streaming generator: a sentence in `raises` raises (skip path); otherwise
+        # yields one AudioChunk-like block of marker PCM driven by the frame map.
+        if sentence in self.raises:
+            raise RuntimeError("unpronounceable")
+        n = self.frames_for.get(sentence, self.default_frames)
+        yield _StubAudioChunk(b"\x11\x22" * n)
 
 
 def _synth_wav(backend, text):
@@ -527,6 +547,50 @@ async def test_piper_synthesize_returns_native_wav():
         assert r.getnchannels() == _STUB_CHANNELS
         assert r.getsampwidth() == _STUB_WIDTH
         assert r.readframes(r.getnframes()) == b"\x11\x22" * 5
+
+
+async def test_piper_synthesize_stream_yields_mp3():
+    # Native streaming: multi-sentence input -> audio/mpeg with real (lameenc)
+    # MP3 bytes flowing incrementally. The concatenated stream is a valid MP3.
+    voice = _StubVoice(default_frames=200)
+    backend = PiperTtsBackend.from_voice(voice, sentence_silence=0.0)
+
+    mime, chunks = await backend.synthesize_stream("Раз. Два.", "ru")
+    got = [c async for c in chunks]
+
+    assert mime == "audio/mpeg"
+    assert got  # at least one MP3 block was emitted
+    joined = b"".join(got)
+    assert joined  # non-empty MP3 byte stream
+    assert joined[0] == 0xFF  # MP3 frame sync byte (like test_wav_to_mp3_produces_mp3_frame)
+
+
+async def test_piper_synthesize_stream_unvoiceable_empty_stream_no_encoder():
+    # "…" is dropped by split_sentences -> nothing to synthesize: the stream yields
+    # NOTHING and no encoder is ever built (no trailing flush frames either).
+    voice = _StubVoice(default_frames=5)
+    backend = PiperTtsBackend.from_voice(voice, sentence_silence=0.4)
+
+    mime, chunks = await backend.synthesize_stream("…", "ru")
+    got = [c async for c in chunks]
+
+    assert mime == "audio/mpeg"
+    assert got == []
+
+
+async def test_piper_synthesize_stream_skips_raising_sentence():
+    # One sentence raises in synthesize() (skip path), the other still produces
+    # audio: the stream is non-empty and valid despite the skipped fragment.
+    voice = _StubVoice(frames_for={"Раз.": 200}, raises={"Два."})
+    backend = PiperTtsBackend.from_voice(voice, sentence_silence=0.0)
+
+    mime, chunks = await backend.synthesize_stream("Раз. Два.", "ru")
+    got = [c async for c in chunks]
+
+    assert mime == "audio/mpeg"
+    joined = b"".join(got)
+    assert joined  # the surviving sentence still produced MP3
+    assert joined[0] == 0xFF  # MP3 frame sync byte
 
 
 # --- Backend-side adaptation chains (canonical "+stress" contract, R3) -------

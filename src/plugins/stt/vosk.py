@@ -1,6 +1,7 @@
 """Vosk offline STT brick: config schema and in-process backend."""
 
 import asyncio
+import contextlib
 import json
 import os
 from collections.abc import Callable
@@ -11,7 +12,108 @@ from pydantic import BaseModel, Field
 from src.logging_setup import capture_native_stderr
 from src.plugins.base import LOCAL_MODEL_FIELD_EXTRA, Deps, Provider, register
 from src.stage_errors import StageError
-from src.stt import SttBackend
+from src.stt import SttBackend, StreamingSttSession, StreamingTranscript
+
+
+def _strip_unk(text: str) -> str:
+    """Drop the Vosk out-of-grammar "[unk]" sentinel tokens so they never reach NLU."""
+    return " ".join(t for t in text.split() if t != "[unk]")
+
+
+class VoskStreamSession(StreamingSttSession):
+    """Live Vosk recognition: PCM chunks are decoded DURING speech (the pipeline VAD
+    owns end-pointing). feed() enqueues chunks (sync, hot-path safe); a background
+    drive task drains the queue and runs the BLOCKING KaldiRecognizer.AcceptWaveform
+    in a worker thread, accumulating Vosk segment finals / partials into a
+    StreamingTranscript. finish() pushes a sentinel, awaits the drive task to drain
+    the backlog, flushes FinalResult(), and returns the transcript.
+
+    The recognizer is owned exclusively by this session and only ever touched from
+    the drive task (and from finish() AFTER the drive task has ended), so there is
+    never concurrent access to it."""
+
+    def __init__(self, recognizer):
+        self._rec = recognizer
+        self._queue: asyncio.Queue = asyncio.Queue()
+        self._accumulator = StreamingTranscript()
+        self._final_index = 0
+        self._error: Exception | None = None
+        self._closed = False
+        self._stopped = False  # set once the drive task ends (normally/error/cancel)
+        # open_stream() is called from on_start/_wakeword_confirm, which run on the
+        # event loop, so creating the drive task here is valid (same as Yandex).
+        self._drive_task = asyncio.create_task(self._drive())
+
+    def _decode_chunk(self, chunk: bytes) -> tuple[bool, str]:
+        """Blocking decode of one chunk inside a worker thread. Returns
+        (is_final, text): is_final True with the segment text when Vosk hits an
+        internal endpoint, else False with the running partial. ALL recognizer
+        access stays inside the worker thread (never on the loop)."""
+        if self._rec.AcceptWaveform(chunk):
+            return (True, json.loads(self._rec.Result()).get("text", ""))
+        return (False, json.loads(self._rec.PartialResult()).get("partial", ""))
+
+    def _final_text(self) -> str:
+        """Flush the trailing segment via FinalResult() (blocking; worker thread)."""
+        return json.loads(self._rec.FinalResult()).get("text", "")
+
+    async def _drive(self):
+        """Drain the queue, decoding each chunk in a worker thread and accumulating
+        results. Any error is stored on self._error (never raised out of the task) so
+        finish() converts it to a StageError. Mirrors YandexSttStream._drive."""
+        try:
+            while True:
+                chunk = await self._queue.get()
+                if chunk is None:
+                    break  # finish()/aclose() sentinel
+                is_final, text = await asyncio.to_thread(self._decode_chunk, chunk)
+                if is_final:
+                    self._accumulator.add_final(self._final_index, _strip_unk(text))
+                    self._final_index += 1
+                else:
+                    self._accumulator.add_partial(_strip_unk(text))
+        except Exception as e:  # noqa: BLE001 - surfaced via self._error in finish()
+            self._error = e
+        finally:
+            self._stopped = True
+
+    def feed(self, pcm: bytes) -> None:
+        # Hot audio path: synchronous, non-blocking, never raises.
+        if self._closed or self._stopped or not pcm:
+            return
+        try:
+            self._queue.put_nowait(pcm)
+        except Exception:  # noqa: BLE001 - feed() must never raise into on_audio
+            pass
+
+    async def finish(self) -> str:
+        if self._closed:
+            return self._accumulator.result()
+        # Push the sentinel so the drive task drains the remaining backlog and stops.
+        self._queue.put_nowait(None)
+        try:
+            await self._drive_task
+            if self._error is not None:
+                raise StageError("stt", f"Vosk STT decode failed: {self._error}")
+            # Flush the trailing segment (drive task has ended -> recognizer is free).
+            final = _strip_unk(await asyncio.to_thread(self._final_text))
+            self._accumulator.add_final(self._final_index, final)
+            return self._accumulator.result()
+        finally:
+            self._closed = True
+
+    async def aclose(self) -> None:
+        # Idempotent abandon: never raises (defensive cleanup path).
+        if self._closed:
+            return
+        self._closed = True
+        with contextlib.suppress(Exception):
+            self._queue.put_nowait(None)
+        if self._drive_task is not None:
+            self._drive_task.cancel()
+            # CancelledError is a BaseException, so suppress it explicitly.
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await self._drive_task
 
 
 class VoskSttBackend(SttBackend):
@@ -79,7 +181,17 @@ class VoskSttBackend(SttBackend):
         rec.AcceptWaveform(pcm)
         text = json.loads(rec.FinalResult()).get("text", "").strip()
         # Drop the Vosk out-of-grammar sentinel so "[unk]" never reaches the NLU.
-        return " ".join(t for t in text.split() if t != "[unk]")
+        return _strip_unk(text)
+
+    def open_stream(self):
+        """Open a live streaming session: build a fresh recognizer (reads the live
+        command vocabulary once, like the batch path) and hand it to the session.
+        Returning a session routes the pipeline through feed()/finish() instead of
+        batch transcribe(). A build failure propagates to the pipeline, which logs
+        and falls back to batch."""
+        rec = self._make_recognizer()
+        rec.SetWords(False)
+        return VoskStreamSession(rec)
 
     async def transcribe(self, pcm: bytes) -> str:
         if not pcm:

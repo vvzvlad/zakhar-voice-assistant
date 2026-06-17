@@ -8,6 +8,7 @@ import wave
 from loguru import logger
 from pydantic import BaseModel, Field
 
+from src.audio_codec import make_mp3_stream_encoder
 from src.plugins.base import LOCAL_MODEL_FIELD_EXTRA, Deps, Provider, register
 # The canonical LLM->TTS text is the model's own notation: plain text with "+"
 # before the stressed vowel (e.g. "прив+ет"). The backend adapts that canon to
@@ -87,6 +88,62 @@ class PiperTtsBackend(TtsBackend):
     async def synthesize(self, text: str, lang: str = "ru") -> tuple[str, bytes]:
         wav_bytes = await asyncio.to_thread(self._synth, text)
         return ("audio/wav", wav_bytes)
+
+    def _synth_sentence_pcm(self, sentence: str) -> tuple[bytes, int, int, int]:
+        """Synthesize ONE already-adapted sentence to raw PCM via Piper's streaming
+        generator. Returns (pcm, sample_rate, channels, sample_width); an
+        unpronounceable fragment (Piper raises, e.g. symbols only) yields (b"",0,0,0)
+        so the caller skips it — same tolerance as the buffered _synth path. Blocking
+        (onnx); call via asyncio.to_thread."""
+        pcm = bytearray()
+        sr = ch = sw = 0
+        try:
+            for chunk in self._voice.synthesize(sentence):
+                if sr == 0:
+                    sr, ch, sw = chunk.sample_rate, chunk.sample_channels, chunk.sample_width
+                pcm += chunk.audio_int16_bytes
+        except Exception:
+            # Piper produced no audio for this fragment (e.g. symbols only); skip it.
+            return (b"", 0, 0, 0)
+        return (bytes(pcm), sr, ch, sw)
+
+    async def synthesize_stream(self, text: str, lang: str = "ru"):
+        """Native streaming synthesis: synthesize sentence-by-sentence and emit
+        incremental MP3 (audio/mpeg) so the delivery boundary streams it live (WAV
+        would be buffered+transcoded whole — zero latency win). The device already
+        always gets MP3 for Piper (to_playable transcodes the buffered WAV), so this
+        produces the SAME final format, just earlier and per-sentence. The buffered
+        synthesize() stays native WAV. Inter-sentence silence matches _synth."""
+        # Same canonical "+vowel" -> engine adaptation as the buffered _synth.
+        text = phonetic_ru(expand_units(stress_to_acute(text)))
+        sentences = split_sentences(text)
+
+        async def _gen():
+            enc = None
+            silence = b""
+            emitted = False
+            for sentence in sentences:
+                pcm, sr, ch, sw = await asyncio.to_thread(self._synth_sentence_pcm, sentence)
+                if not pcm:
+                    continue
+                if enc is None:
+                    # First real audio fixes the stream format and the silence block.
+                    enc = make_mp3_stream_encoder(sr, ch, sw)
+                    if self._sentence_silence > 0:
+                        frame = sw * ch  # bytes per audio frame, so silence stays aligned
+                        silence = b"\x00" * (int(sr * self._sentence_silence) * frame)
+                # Prepend the inter-sentence gap only BETWEEN emitted sentences.
+                prefix = silence if (emitted and self._sentence_silence > 0) else b""
+                mp3 = await asyncio.to_thread(enc.encode, prefix + pcm)
+                emitted = True
+                if mp3:
+                    yield mp3
+            if enc is not None:
+                tail = await asyncio.to_thread(enc.flush)
+                if tail:
+                    yield tail
+
+        return ("audio/mpeg", _gen())
 
 
 class PiperConfig(BaseModel):

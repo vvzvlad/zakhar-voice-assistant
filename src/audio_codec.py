@@ -46,3 +46,24 @@ def wav_to_mp3(wav_bytes: bytes, bit_rate: int = 64, quality: int = 2) -> bytes:
     enc.set_bit_rate(bit_rate)
     enc.set_quality(quality)
     return bytes(enc.encode(pcm) + enc.flush())
+
+
+def make_mp3_stream_encoder(
+    sample_rate: int, channels: int, sample_width: int = 2, bit_rate: int = 64, quality: int = 2
+):
+    """Build a lameenc encoder for INCREMENTAL WAV->MP3 streaming.
+
+    Feed raw 16-bit PCM with `enc.encode(pcm)` (returns MP3 bytes for that block,
+    possibly b"") and call `enc.flush()` once at the end for the trailing frames.
+    Lives at the delivery-boundary codec module (not inside a synthesis backend),
+    next to wav_to_mp3 which shares the same lameenc config. lameenc assumes 16-bit
+    PCM input; reject other widths loudly (same guard as wav_to_mp3)."""
+    if sample_width != 2:
+        raise ValueError(f"make_mp3_stream_encoder expects 16-bit PCM, got {sample_width * 8}-bit")
+    import lameenc  # local import: pay the lameenc import cost only when streaming
+    enc = lameenc.Encoder()
+    enc.set_in_sample_rate(sample_rate)
+    enc.set_channels(channels)
+    enc.set_bit_rate(bit_rate)
+    enc.set_quality(quality)
+    return enc
