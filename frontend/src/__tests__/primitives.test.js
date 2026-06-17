@@ -75,9 +75,14 @@ describe("fillerMarkerPct", () => {
     expect(fillerMarkerPct({ t: { vad: 0, stt: 0, llm: 0, tts: 0 }, t_filler: 1500, filler_text: "щас гляну" })).toBe(null);
   });
 
-  it("computes the marker offset as (vad + t_filler) / total * 100", () => {
-    // (1000 + 1500) / 10000 * 100 = 25
+  it("computes the marker offset as (vad + wakeword + t_filler) / total * 100", () => {
+    // No wakeword key here, so wakeword=0: (1000 + 0 + 1500) / 10000 * 100 = 25
     expect(fillerMarkerPct({ t: { vad: 1000, stt: 500, llm: 8000, tts: 500 }, t_filler: 1500, filler_text: "щас гляну" })).toBe(25);
+  });
+
+  it("includes the wakeword segment in the marker offset", () => {
+    // (1000 + 200 + 1500) / 11000 * 100 = 24.5454...
+    expect(fillerMarkerPct({ t: { vad: 1000, wakeword: 200, stt: 500, llm: 8500, tts: 800 }, t_filler: 1500, filler_text: "щас гляну" })).toBeCloseTo(24.5454, 3);
   });
 
   it("clamps to 100 when the computed value exceeds 100", () => {

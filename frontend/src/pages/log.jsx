@@ -4,9 +4,10 @@
 // the existing CSS (z-tbl/z-gantt/z-drawer/...).
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import { Ic } from "../components/icons.jsx";
-import { PageHeader, Waterfall, KV, Loading, ErrorBox, Select } from "../components/primitives.jsx";
+import { PageHeader, Waterfall, KV, Loading, ErrorBox, Select, fillerMarkerPct } from "../components/primitives.jsx";
 import { getRuns, getRun, openRunsStream, runAudioUrl, downloadRunAudio, runTtsAudioUrl, downloadRunTtsAudio } from "../api.js";
 import { RESULT_META, STAGE_COLOR, fmtSec, mapRun, totalMs, statusMeta, applyStreamedRun, pageWindow } from "../runsModel.js";
+import { FILLER_COLOR } from "../stageMeta.js";
 import { matchesFilters } from "../runsFilters.js";
 
 const SC = STAGE_COLOR;
@@ -33,6 +34,10 @@ function Gantt({ r }) {
   const present = GSTAGES.filter((g) => r.t[g.k] > 0);
   const tot = present.reduce((a, g) => a + r.t[g.k], 0) || 1;
   const maxK = present.reduce((m, g) => (r.t[g.k] > r.t[m.k] ? g : m), present[0] || { k: "vad" });
+  // Early-filler marker: the announcement spoken mid-run (not a pipeline stage).
+  // fillerMarkerPct returns its x-position on the same 0..100% axis the stage
+  // bars use, or null when no filler fired.
+  const fpct = fillerMarkerPct(r);
   let off = 0;
   return <div className="z-gantt">
     {present.map((g) => {
@@ -44,6 +49,16 @@ function Gantt({ r }) {
         <div className="ms">{r.t[g.k]}<span style={{ color: "var(--mut2)", fontWeight: 400 }}> ms</span></div>
       </div>;
     })}
+    {/* Filler event row: a marker on the shared time axis so the amber tick lines
+        up under the stage during which the filler was spoken. */}
+    {fpct != null && <div className="z-grow">
+      <div className="lbl"><s style={{ background: FILLER_COLOR }} />Filler</div>
+      <div className="z-gtrack">
+        <div className="z-wffiller" style={{ left: fpct + "%", background: FILLER_COLOR }}
+          title={`🗣 «${r.filler_text}» — early reply at ${fmtSec(r.t_filler)}`} />
+      </div>
+      <div className="ms" style={{ color: FILLER_COLOR }}>{fmtSec(r.t_filler)}</div>
+    </div>}
     {r.error && <div className="z-grow">
       <div className="lbl"><s style={{ background: "#dc2626" }} />{r.error.stage}</div>
       <div className="z-gtrack"><div className="z-gseg" style={{ left: off + "%", width: (100 - off) + "%", background: "repeating-linear-gradient(45deg,#dc2626,#dc2626 4px,#fecaca 4px,#fecaca 8px)" }} /></div>

@@ -240,15 +240,17 @@ export function segsFor(r) {
   return arr;
 }
 // Left offset (% of the waterfall bar) of the "early filler" marker, or null when
-// no filler fired. The bar spans vad→stt→llm→tts normalized to total(r.t); t_filler
-// is measured from the start of STT (the right edge of the vad segment), so the
-// marker sits at (vad + t_filler) along that same normalized axis. Clamped to [0,100].
+// no filler fired. The bar spans vad→wakeword→stt→llm→stress→tts normalized to
+// total(r.t); t_filler is measured from the start of STT processing, which on the
+// axis follows BOTH the vad segment and the server-side wakeword-verify segment, so
+// the marker sits at (vad + wakeword + t_filler) along that same normalized axis.
+// Clamped to [0,100].
 export function fillerMarkerPct(r) {
   if (!r || r.t_filler == null || !r.filler_text) return null;
   const t = r.t || {};
   const tot = total(t);
   if (!tot) return null;
-  const at = ((t.vad || 0) + r.t_filler) / tot * 100;
+  const at = ((t.vad || 0) + (t.wakeword || 0) + r.t_filler) / tot * 100;
   return Math.max(0, Math.min(100, at));
 }
 export function Waterfall({ r }) {
