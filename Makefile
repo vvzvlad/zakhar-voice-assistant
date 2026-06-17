@@ -18,6 +18,10 @@ FRONTEND_DIST := $(FRONTEND_DIR)/dist
 
 .DEFAULT_GOAL := help
 
+# Remove a target file/dir whose recipe fails or is interrupted, so a partial
+# download/extraction is never mistaken for a finished artifact on the next run.
+.DELETE_ON_ERROR:
+
 # --- Help --------------------------------------------------------------------
 .PHONY: help
 help: ## Show this help
@@ -47,9 +51,60 @@ install: $(VENV)/.deps-installed ## Create .venv (if missing) and install dev/te
 config: ## Create data/config.json from the template if it does not exist
 	@test -f data/config.json || (mkdir -p data && cp templates/default_config.json data/config.json && echo "created data/config.json")
 
-.PHONY: models
-models: ## Download Vosk + Piper models into models/
-	bash scripts/download_models.sh
+# --- Models ------------------------------------------------------------------
+# In-process STT/TTS/VAD models, downloaded into $(MODELS_DIR). They are large
+# binaries and are NOT committed (see .gitignore). Each artifact is a file/dir
+# target, so Make's own up-to-date check gives "skip if already present" for free
+# — re-running is cheap and idempotent.
+MODELS_DIR ?= models
+PIPER_BASE := https://huggingface.co/rhasspy/piper-voices/resolve/main/ru/ru_RU/ruslan/medium
+
+# Vosk: small Russian model (16 kHz, CPU). The target is the extracted dir; the
+# recipe downloads the zip, unzips it (with a python3 -m zipfile fallback when
+# `unzip` is absent), then removes the zip.
+$(MODELS_DIR)/vosk-model-small-ru-0.22:
+	@mkdir -p $(MODELS_DIR)
+	@echo "Downloading Vosk model..."
+	curl -fsSL "https://alphacephei.com/vosk/models/vosk-model-small-ru-0.22.zip" -o "$(MODELS_DIR)/vosk-model-small-ru-0.22.zip"
+	@if command -v unzip >/dev/null 2>&1; then unzip -q "$(MODELS_DIR)/vosk-model-small-ru-0.22.zip" -d "$(MODELS_DIR)"; else python3 -m zipfile -e "$(MODELS_DIR)/vosk-model-small-ru-0.22.zip" "$(MODELS_DIR)"; fi
+	rm -f "$(MODELS_DIR)/vosk-model-small-ru-0.22.zip"
+
+# Piper: Russian voice (ru_RU-ruslan-medium) — model weights + config json.
+$(MODELS_DIR)/ru_RU-ruslan-medium.onnx:
+	@mkdir -p $(MODELS_DIR)
+	@echo "Downloading Piper voice (onnx)..."
+	curl -fsSL "$(PIPER_BASE)/ru_RU-ruslan-medium.onnx?download=true" -o "$@"
+
+$(MODELS_DIR)/ru_RU-ruslan-medium.onnx.json:
+	@mkdir -p $(MODELS_DIR)
+	@echo "Downloading Piper voice (config json)..."
+	curl -fsSL "$(PIPER_BASE)/ru_RU-ruslan-medium.onnx.json?download=true" -o "$@"
+
+# Silero VAD: bare ONNX model (~2 MB, run via onnxruntime, no torch). Pinned to
+# the v6.0 release tag (NOT master) so a fresh download is reproducible and can't
+# silently pick up a future model with a changed input interface; the [1, 576]
+# context-prefix interface is verified against this exact tag by the integration
+# tests in tests/test_vad_silero.py.
+$(MODELS_DIR)/silero_vad.onnx:
+	@mkdir -p $(MODELS_DIR)
+	@echo "Downloading Silero VAD model..."
+	curl -fsSL "https://github.com/snakers4/silero-vad/raw/v6.0/src/silero_vad/data/silero_vad.onnx" -o "$@"
+
+# Silero TTS: Russian v4 multi-speaker model (.pt, torch.package; ~60-100 MB).
+# Needs PyTorch at RUNTIME — torch is an OPTIONAL dependency (NOT in
+# requirements.txt / the Docker image); install it separately to use this voice.
+$(MODELS_DIR)/silero_tts_v4_ru.pt:
+	@mkdir -p $(MODELS_DIR)
+	@echo "Downloading Silero TTS model..."
+	curl -fsSL "https://models.silero.ai/models/tts/ru/v4_ru.pt" -o "$@"
+
+.PHONY: models models-vosk models-piper models-silero-vad models-silero-tts
+models-vosk: $(MODELS_DIR)/vosk-model-small-ru-0.22 ## Download the Vosk RU STT model
+models-piper: $(MODELS_DIR)/ru_RU-ruslan-medium.onnx $(MODELS_DIR)/ru_RU-ruslan-medium.onnx.json ## Download the Piper RU TTS voice
+models-silero-vad: $(MODELS_DIR)/silero_vad.onnx ## Download the Silero VAD model
+models-silero-tts: $(MODELS_DIR)/silero_tts_v4_ru.pt ## Download the Silero TTS model (needs torch at runtime)
+models: models-vosk models-piper models-silero-vad models-silero-tts ## Download Vosk + Piper + Silero (TTS & VAD) models into models/
+	@echo "Models ready in $(MODELS_DIR)/"
 
 # --- Frontend ----------------------------------------------------------------
 # The admin panel is a Vite/React app. The backend serves the built dist, so it
