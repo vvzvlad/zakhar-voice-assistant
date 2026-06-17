@@ -40,8 +40,10 @@ def changed_paths(old, new, prefix: str = "") -> set[str]:
 
 
 # Live LLM provider fields read per request (not baked into the backend).
+# `hidden_sources` is panel-only UI state (simple-nlu catalog editor) that no
+# backend reads, so a change applies "live" — it must never rebuild the NLU model.
 _LLM_LIVE_LEAVES = {"reply_rate_limit", "reply_empty", "reply_empty_after_tools",
-                    "reply_error", "max_tool_rounds"}
+                    "reply_error", "max_tool_rounds", "hidden_sources"}
 
 
 def action_for(path: str) -> str:

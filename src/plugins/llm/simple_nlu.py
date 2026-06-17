@@ -123,6 +123,18 @@ class SimpleNluConfig(BaseModel):
     reply_rate_limit: str = "Лимит запросов исчерпан. Попробуй ещё раз чуть позже."
     reply_error: str = "Что-то сломалось, попробуй ещё раз попозже."
 
+    # --- Panel UI state (no runtime effect): ids of MCP sources the operator hid in
+    # the NLU catalog editor's Sources bar. Persisted so the selection survives a
+    # reload; the NLU itself always uses every source's aliases/actions. Marked
+    # `hidden` so the generic SchemaForm never renders it, and whitelisted as a
+    # "live" leaf in reconfig so toggling it never rebuilds the NLU model. ---
+    hidden_sources: list[str] = Field(
+        default_factory=list,
+        title="Hidden MCP sources (panel UI state)",
+        description="Source ids hidden in the catalog editor's Sources bar. Panel-only; ignored at runtime.",
+        json_schema_extra={"hidden": True},
+    )
+
 
 # --------------------------------------------------------------------------- #
 # Pure helper functions (module-level, unit-testable, NO heavy imports).

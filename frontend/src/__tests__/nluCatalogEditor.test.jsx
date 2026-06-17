@@ -248,6 +248,50 @@ describe("NluCatalogEditor (catalog port)", () => {
     expect(screen.getByText("fountain")).toBeInTheDocument();
   });
 
+  it("clicking a source chip persists it into draft.hidden_sources via onChange", async () => {
+    api.getTools.mockResolvedValue({
+      sources: [
+        {
+          id: "home",
+          tools: [{ name: "set_light", parameters: { type: "object", properties: { device_id: { type: "string", enum: ["lamp"] } } } }],
+        },
+        {
+          id: "garden",
+          tools: [{ name: "set_pump", parameters: { type: "object", properties: { device_id: { type: "string", enum: ["fountain"] } } } }],
+        },
+      ],
+    });
+    const onChange = vi.fn();
+    render(<NluCatalogEditor draft={draft} onChange={onChange} />);
+    await screen.findByText("lamp");
+
+    // Toggling an active source hides it -> onChange("hidden_sources", [...includes id]).
+    fireEvent.click(screen.getByText("garden").closest(".e-srv"));
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(onChange.mock.calls[0][0]).toBe("hidden_sources");
+    expect(onChange.mock.calls[0][1]).toContain("garden");
+  });
+
+  it("hides a source's values when its id is in draft.hidden_sources", async () => {
+    api.getTools.mockResolvedValue({
+      sources: [
+        {
+          id: "home",
+          tools: [{ name: "set_light", parameters: { type: "object", properties: { device_id: { type: "string", enum: ["lamp"] } } } }],
+        },
+        {
+          id: "garden",
+          tools: [{ name: "set_pump", parameters: { type: "object", properties: { device_id: { type: "string", enum: ["fountain"] } } } }],
+        },
+      ],
+    });
+    render(<NluCatalogEditor draft={{ aliases: "", actions: "", hidden_sources: ["garden"] }} onChange={vi.fn()} />);
+    await screen.findByText("lamp");
+    // garden is hidden, so its enum value does not render; home's value still does.
+    expect(screen.queryByText("fountain")).toBeNull();
+    expect(screen.getByText("lamp")).toBeInTheDocument();
+  });
+
   it("shows an offline card with Retry when getTools fails, then refetches", async () => {
     api.getTools.mockRejectedValueOnce(new Error("boom"));
     render(<NluCatalogEditor draft={draft} onChange={vi.fn()} />);

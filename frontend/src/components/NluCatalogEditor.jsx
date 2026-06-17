@@ -11,7 +11,9 @@
 // is DERIVED from those two fields each render, and every edit re-serializes the
 // whole field through onChange — so this editor and the SchemaForm textareas stay
 // in sync. Only transient view state (slot-type overrides, per-group collapse,
-// search, active-source set, filter) lives in local React state.
+// search, filter) lives in local React state. The active-source set is likewise
+// DERIVED from a persisted field (`draft.hidden_sources`), exactly like
+// aliases/actions, so the operator's source selection survives a reload.
 //
 // Ported from the standalone designer mockup (entities.jsx). Product adaptations:
 // the demo state switch and the "new device" badge / "New" filter were dropped
@@ -404,12 +406,11 @@ export default function NluCatalogEditor({ draft, onChange }) {
   const [nonce, setNonce] = useState(0);
 
   // Transient view state (never persisted): slot-type overrides keyed by GROUP key,
-  // per-group collapse (group key → bool, true = collapsed), search, active source
-  // set, and the All/Empty filter.
+  // per-group collapse (group key → bool, true = collapsed), search, and the
+  // All/Empty filter.
   const [overrides, setOverrides] = useState({});
   const [collapsed, setCollapsed] = useState({});
   const [query, setQuery] = useState("");
-  const [active, setActive] = useState(null); // Set of active source ids, or null = "all online-with-slots"
   const [filter, setFilter] = useState("all"); // "all" | "empty"
 
   useEffect(() => {
@@ -455,19 +456,22 @@ export default function NluCatalogEditor({ draft, onChange }) {
     return out;
   }, [allEnumSlots]);
 
-  // Default active set: every online source that owns slots. `active === null`
-  // means "use the default" so a fresh catalog auto-selects without an effect.
-  const effectiveActive = useMemo(() => {
-    if (active) return active;
-    return new Set(slotServers.filter((id) => onlineIds.has(id)));
-  }, [active, slotServers, onlineIds]);
+  // Persisted UI state: the ids of sources the operator HID in the Sources bar live
+  // in `draft.hidden_sources` (saved with the rest of the form via "Save changes").
+  // The active set is DERIVED — every online slot-owning source MINUS the hidden
+  // ones — so a newly advertised source is visible by default and only explicit
+  // opt-outs persist across reloads.
+  const hiddenSet = useMemo(() => new Set(draft.hidden_sources || []), [draft.hidden_sources]);
+  const effectiveActive = useMemo(
+    () => new Set(slotServers.filter((id) => onlineIds.has(id) && !hiddenSet.has(id))),
+    [slotServers, onlineIds, hiddenSet]
+  );
   const toggleSource = (id) => {
-    setActive((prev) => {
-      const base = prev || new Set(slotServers.filter((s) => onlineIds.has(s)));
-      const next = new Set(base);
-      next.has(id) ? next.delete(id) : next.add(id);
-      return next;
-    });
+    // Flip membership in the HIDDEN set and persist via onChange: an active source
+    // becomes hidden, a hidden one becomes active again.
+    const next = new Set(hiddenSet);
+    next.has(id) ? next.delete(id) : next.add(id);
+    onChange("hidden_sources", [...next]);
   };
   const srvOn = (server) => effectiveActive.has(server);
 

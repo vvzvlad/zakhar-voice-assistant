@@ -115,6 +115,12 @@ def test_action_for_llm_reply_error_is_live():
     assert action_for("llm.instances.openrouter.reply_error") == "live"
 
 
+def test_action_for_llm_hidden_sources_is_live():
+    # hidden_sources is panel-only UI state (simple-nlu catalog editor's Sources bar)
+    # that no backend reads, so toggling it must apply live — never rebuild the NLU.
+    assert action_for("llm.instances.simple-nlu.hidden_sources") == "live"
+
+
 def test_action_for_audio_stream_tts_is_live():
     # stream_tts (the streaming-TTS kill-switch) is read live per run via the
     # Runtime read-through, so flipping it must NOT re-bind the audio server.
