@@ -5,7 +5,7 @@
   "stt": {"selected": "groq", "instances": {"groq": {"api_key": "", "model": "whisper-large-v3-turbo", "language": "ru", "temperature": 0.0, "timeout": 60}}},
   "llm": {"selected": "openrouter", "instances": {"openrouter": {"api_key": "", "model": "anthropic/claude-haiku-4.5", "timeout": 300, "reply_rate_limit": "Лимит запросов исчерпан. Попробуй ещё раз чуть позже.", "reply_empty_after_tools": "Готово.", "reply_empty": "Я тебя не расслышал, повтори."}}},
   "stress": {"selected": "ruaccent", "instances": {"ruaccent": {"enabled": true, "model_size": "turbo3.1", "stress_format": "plus", "use_dictionary": true, "tiny_mode": false, "device": "CPU"}}},
-  "tts": {"selected": "piper", "instances": {"piper": {"voice_path": "models/ru_RU-ruslan-medium.onnx", "sentence_silence": 0.4}}},
+  "tts": {"selected": "piper", "instances": {"piper": {"voice_path": "models/ru_RU-ruslan-medium.onnx", "sentence_silence": 0.4}, "silero": {"model_path": "models/silero_tts_v4_ru.pt", "speaker": "xenia", "sample_rate": 48000, "put_accent": true, "put_yo": true, "sentence_silence": 0.4}}},
   "core": {
     "context": {"max_turns": 5, "ttl_seconds": 300},
     "audio": {"host": "0.0.0.0", "port": 8200, "ttl": 300, "public_base_url": "", "stream_tts": true},

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Download the in-process STT/TTS/VAD models (Vosk RU small + Piper RU ruslan +
-# Silero VAD onnx) into ./models. Models are large binaries and are NOT committed
-# (see .gitignore).
+# Silero TTS RU v4 + Silero VAD onnx) into ./models. Models are large binaries and
+# are NOT committed (see .gitignore).
 # Existing files are kept (skip-if-present), so re-running is cheap and idempotent.
 set -euo pipefail
 
@@ -59,6 +59,19 @@ if [ -f "$SILERO_ONNX" ]; then
 else
     echo "Downloading Silero VAD model..."
     curl -fsSL "$SILERO_URL" -o "$SILERO_ONNX"
+fi
+
+# --- Silero TTS: Russian v4 multi-speaker model (.pt, torch.package) ----------
+# ~60-100 MB. Needs PyTorch at RUNTIME — torch is an OPTIONAL dependency (NOT in
+# requirements.txt / the Docker image); install it separately to use this voice.
+SILERO_TTS_URL="https://models.silero.ai/models/tts/ru/v4_ru.pt"
+SILERO_TTS_PT="$MODELS_DIR/silero_tts_v4_ru.pt"
+
+if [ -f "$SILERO_TTS_PT" ]; then
+    echo "Silero TTS model already present: $SILERO_TTS_PT (skip)"
+else
+    echo "Downloading Silero TTS model..."
+    curl -fsSL "$SILERO_TTS_URL" -o "$SILERO_TTS_PT"
 fi
 
 echo "Models ready in $MODELS_DIR/"

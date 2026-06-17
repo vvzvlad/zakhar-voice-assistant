@@ -2,6 +2,7 @@ import io
 import wave
 
 import httpx
+import numpy as np
 import pytest
 import respx
 
@@ -14,6 +15,13 @@ from src.plugins.tts.piper import (
     PiperProvider,
     PiperTtsBackend,
     _list_piper_voices,
+)
+from src.plugins.tts.silero import (
+    V4_RU_SPEAKERS,
+    SileroTtsBackend,
+    SileroTtsConfig,
+    SileroTtsProvider,
+    _list_silero_models,
 )
 from src.plugins.tts.yandex import (
     YANDEX_V3_URL,
@@ -1089,3 +1097,168 @@ def test_piper_provider_options_voice_path_scans_configured_dir(tmp_path):
 def test_piper_provider_options_other_field_returns_none(tmp_path):
     onnx = _make_piper_voice(tmp_path, "a")
     assert PiperProvider().options("sentence_silence", PiperConfig(voice_path=str(onnx)), None) is None
+
+
+# --- Silero _synth tests (inject a stub model; no torch / real model load) ----
+
+
+class _FakeTensor:
+    """Stands in for the torch tensor apply_tts returns: exposes .numpy()."""
+    def __init__(self, arr):
+        self._arr = arr
+
+    def numpy(self):
+        return self._arr
+
+
+class _StubSileroModel:
+    """Stub Silero model. apply_tts records its kwargs and returns a _FakeTensor
+    of `samples_for[text]` (default `default_samples`) constant samples; texts in
+    `raises` raise ValueError to drive the except/continue path."""
+    def __init__(self, samples_for=None, raises=(), default_samples=10):
+        self.samples_for = samples_for or {}
+        self.raises = set(raises)
+        self.default_samples = default_samples
+        self.calls = []
+
+    def apply_tts(self, text, speaker, sample_rate, put_accent=True, put_yo=True):
+        self.calls.append({"text": text, "speaker": speaker, "sample_rate": sample_rate,
+                           "put_accent": put_accent, "put_yo": put_yo})
+        if text in self.raises:
+            raise ValueError("unsupported symbols")
+        n = self.samples_for.get(text, self.default_samples)
+        return _FakeTensor(np.full(n, 0.5, dtype=np.float32))
+
+
+def test_silero_synth_silence_padding_is_whole_frames_and_off_by_value():
+    # Two short sentences; compare 0.4s vs 0.0s sentence_silence. The only
+    # difference must be exactly one inter-sentence silence gap of
+    # int(sample_rate*0.4) whole frames (mono 16-bit -> 2 bytes/frame).
+    text = "Раз. Два."
+    rate = 24000
+    model0 = _StubSileroModel(default_samples=5)
+    model4 = _StubSileroModel(default_samples=5)
+    b0 = SileroTtsBackend.from_model(model0, sample_rate=rate, sentence_silence=0.0)
+    b4 = SileroTtsBackend.from_model(model4, sample_rate=rate, sentence_silence=0.4)
+
+    wav0 = b0._synth(text)
+    wav4 = b4._synth(text)
+
+    with wave.open(io.BytesIO(wav0), "rb") as r0:
+        assert r0.getframerate() == rate
+        width, ch = r0.getsampwidth(), r0.getnchannels()
+        data0 = r0.readframes(r0.getnframes())
+    with wave.open(io.BytesIO(wav4), "rb") as r4:
+        data4 = r4.readframes(r4.getnframes())
+
+    frame = width * ch  # mono 16-bit -> 2 bytes
+    expected_silence_bytes = int(rate * 0.4) * frame
+    assert len(data4) - len(data0) == expected_silence_bytes
+    # The extra bytes are a whole number of frames (no misalignment).
+    assert (len(data4) - len(data0)) % frame == 0
+    # The extra bytes are actual silence (all zero), inserted between sentences.
+    first_sentence_bytes = 5 * 2  # 5 samples * 2 bytes
+    silence = data4[first_sentence_bytes: first_sentence_bytes + expected_silence_bytes]
+    assert silence == b"\x00" * expected_silence_bytes
+
+
+def test_silero_synth_all_unpronounceable_returns_valid_silent_clip():
+    # Every fragment raises -> except/continue for all -> pcm stays empty. Must
+    # yield a parseable empty-but-valid WAV at the configured sample rate.
+    text = "Раз. Два."
+    rate = 24000
+    model = _StubSileroModel(raises={"Раз.", "Два."})
+    backend = SileroTtsBackend.from_model(model, sample_rate=rate, sentence_silence=0.4)
+
+    wav = backend._synth(text)
+    with wave.open(io.BytesIO(wav), "rb") as r:
+        assert r.getframerate() == rate
+        assert r.getnchannels() == 1
+        assert r.getsampwidth() == 2
+        assert r.getnframes() == 0  # nothing pronounceable -> silent (empty) clip
+
+
+async def test_silero_synthesize_returns_native_wav():
+    # R8 contract: the backend returns its engine's NATIVE format (audio/wav) at
+    # the configured sample rate, NOT a device-ready MP3.
+    rate = 24000
+    model = _StubSileroModel(default_samples=5)
+    backend = SileroTtsBackend.from_model(model, sample_rate=rate, sentence_silence=0.0)
+
+    mime, audio = await backend.synthesize("Раз.", "ru")
+
+    assert mime == "audio/wav"
+    with wave.open(io.BytesIO(audio), "rb") as r:  # parseable, real WAV bytes
+        assert r.getframerate() == rate
+        assert r.getnchannels() == 1
+        assert r.getsampwidth() == 2
+
+
+def test_silero_synth_keeps_stress_expands_units_no_phonetic_mangling():
+    # _synth runs sanitize_plus_stress(expand_units(...)): the native "+vowel"
+    # stress survives, units expand, and NO espeak phonetic rewrite happens
+    # (Silero pronounces "что" correctly).
+    model = _StubSileroModel(default_samples=5)
+    backend = SileroTtsBackend.from_model(model, sample_rate=24000, sentence_silence=0.0)
+
+    backend._synth("Что там, прив+ет, 5%.")
+
+    sent = model.calls[0]["text"]
+    assert "прив+ет" in sent          # "+vowel" markup kept (Silero-native)
+    assert "процентов" in sent        # "%" expanded
+    assert "%" not in sent
+    assert "Что" in sent              # no phonetic mangling for Silero
+    assert "Што" not in sent
+
+
+def test_silero_synth_propagates_speaker_rate_accent_yo():
+    # The configured speaker / sample_rate / put_accent / put_yo must reach apply_tts.
+    model = _StubSileroModel(default_samples=5)
+    backend = SileroTtsBackend.from_model(
+        model, speaker="baya", sample_rate=8000, put_accent=False, put_yo=False
+    )
+
+    backend._synth("Привет.")
+
+    call = model.calls[0]
+    assert call["speaker"] == "baya"
+    assert call["sample_rate"] == 8000
+    assert call["put_accent"] is False
+    assert call["put_yo"] is False
+
+
+def test_silero_provider_options(tmp_path):
+    deps = None  # options() for these fields ignores deps (no network)
+    # speaker -> the static v4_ru roster includes "xenia".
+    speakers = SileroTtsProvider().options("speaker", SileroTtsConfig(), deps)
+    assert "xenia" in speakers
+    # sample_rate -> a list of {"value", "label"} whose values include 48000.
+    rates = SileroTtsProvider().options("sample_rate", SileroTtsConfig(), deps)
+    assert 48000 in [o["value"] for o in rates]
+    # model_path -> local-disk scan keeps only .pt files.
+    (tmp_path / "voice.pt").write_bytes(b"pt")
+    (tmp_path / "notes.txt").write_text("not a model")
+    out = _list_silero_models(str(tmp_path))
+    assert out == [{"value": str(tmp_path / "voice.pt"), "label": "voice"}]
+    # And the provider routes model_path through that scan.
+    cfg = SileroTtsConfig(model_path=str(tmp_path / "x.pt"))
+    via_provider = SileroTtsProvider().options("model_path", cfg, deps)
+    assert via_provider == [{"value": str(tmp_path / "voice.pt"), "label": "voice"}]
+
+
+def test_silero_provider_describe_includes_speaker():
+    assert SileroTtsProvider().describe(SileroTtsConfig()) == "silero/silero_tts_v4_ru.pt/xenia"
+
+
+def test_silero_config_defaults():
+    cfg = SileroTtsConfig()
+    assert cfg.speaker == "xenia"
+    assert cfg.sample_rate == 48000
+    assert cfg.put_accent is True
+    assert cfg.put_yo is True
+    assert cfg.sentence_silence == 0.4
+    assert cfg.model_path == "models/silero_tts_v4_ru.pt"
+
+
+def test_silero_v4_ru_speakers_roster():
+    assert V4_RU_SPEAKERS == ["aidar", "baya", "eugene", "kseniya", "xenia", "random"]
