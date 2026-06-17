@@ -34,31 +34,39 @@ function Gantt({ r }) {
   const present = GSTAGES.filter((g) => r.t[g.k] > 0);
   const tot = present.reduce((a, g) => a + r.t[g.k], 0) || 1;
   const maxK = present.reduce((m, g) => (r.t[g.k] > r.t[m.k] ? g : m), present[0] || { k: "vad" });
-  // Early-filler marker: the announcement spoken mid-run (not a pipeline stage).
-  // fillerMarkerPct returns its x-position on the same 0..100% axis the stage
-  // bars use, or null when no filler fired.
+  // Early-filler marker: the announcement spoken mid-run. fillerMarkerPct gives
+  // its x-position on the same 0..100% axis the stage bars use (null when no
+  // filler fired). The tick is drawn inside the track of the stage it falls in
+  // (in practice LLM, since the filler is the LLM's early reply) instead of on a
+  // row of its own.
   const fpct = fillerMarkerPct(r);
+  let fillerHost = null;
+  if (fpct != null) {
+    let acc = 0;
+    for (let i = 0; i < present.length; i++) {
+      const w = r.t[present[i].k] / tot * 100;
+      if (fpct >= acc && fpct < acc + w) { fillerHost = i; break; }
+      acc += w;
+    }
+    // fpct clamped to the right edge (=== 100) or past the last segment: attach to
+    // the last present stage so the tick always renders.
+    if (fillerHost == null && present.length) fillerHost = present.length - 1;
+  }
   let off = 0;
   return <div className="z-gantt">
-    {present.map((g) => {
+    {present.map((g, i) => {
       const w = r.t[g.k] / tot * 100; const left = off; off += w;
       const bott = g.k === maxK.k;
       return <div className="z-grow" key={g.k}>
         <div className="lbl"><s style={{ background: SC[g.k] }} />{g.label}{bott && <span style={{ fontSize: 9.5, fontWeight: 700, color: "var(--warn)", fontFamily: "var(--mono)" }}>◆ max</span>}</div>
-        <div className="z-gtrack"><div className="z-gseg" style={{ left: left + "%", width: w + "%", background: SC[g.k] }} /></div>
+        <div className="z-gtrack">
+          <div className="z-gseg" style={{ left: left + "%", width: w + "%", background: SC[g.k] }} />
+          {i === fillerHost && <div className="z-wffiller" style={{ left: fpct + "%", background: FILLER_COLOR }}
+            title={`🗣 «${r.filler_text}» — early reply at ${fmtSec(r.t_filler)}`} />}
+        </div>
         <div className="ms">{r.t[g.k]}<span style={{ color: "var(--mut2)", fontWeight: 400 }}> ms</span></div>
       </div>;
     })}
-    {/* Filler event row: a marker on the shared time axis so the amber tick lines
-        up under the stage during which the filler was spoken. */}
-    {fpct != null && <div className="z-grow">
-      <div className="lbl"><s style={{ background: FILLER_COLOR }} />Filler</div>
-      <div className="z-gtrack">
-        <div className="z-wffiller" style={{ left: fpct + "%", background: FILLER_COLOR }}
-          title={`🗣 «${r.filler_text}» — early reply at ${fmtSec(r.t_filler)}`} />
-      </div>
-      <div className="ms" style={{ color: FILLER_COLOR }}>{fmtSec(r.t_filler)}</div>
-    </div>}
     {r.error && <div className="z-grow">
       <div className="lbl"><s style={{ background: "#dc2626" }} />{r.error.stage}</div>
       <div className="z-gtrack"><div className="z-gseg" style={{ left: off + "%", width: (100 - off) + "%", background: "repeating-linear-gradient(45deg,#dc2626,#dc2626 4px,#fecaca 4px,#fecaca 8px)" }} /></div>
