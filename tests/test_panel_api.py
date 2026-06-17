@@ -20,6 +20,7 @@ from aiohttp.test_utils import TestClient, TestServer
 from src.config_service import ConfigService
 from src.panel_api import PanelServer
 from src.plugins.base import Deps
+from src.plugins.tts.fishaudio import FISH_TTS_URL
 from src.prompt_store import PromptStore
 from src.run_events import RunEventsHub
 from src.runs_store import RunsStore
@@ -294,10 +295,10 @@ async def test_options_unknown_plugin_returns_404(tmp_path):
 
 @respx.mock
 async def test_tts_test_synthesizes_with_draft_settings(tmp_path):
-    # The endpoint builds an AD-HOC teratts backend from the request's settings
+    # The endpoint builds an AD-HOC fishaudio backend from the request's settings
     # (NOT the stored config, which selects yandex) and streams back the upstream
     # audio bytes in the provider's native format.
-    route = respx.get(url__regex=r"http://tts\.test/synthesize/.*").mock(
+    route = respx.post(FISH_TTS_URL).mock(
         return_value=httpx.Response(
             200, content=b"MP3-BYTES", headers={"Content-Type": "audio/mpeg"}
         )
@@ -305,8 +306,8 @@ async def test_tts_test_synthesizes_with_draft_settings(tmp_path):
     client, svc = await _client(tmp_path)
     try:
         resp = await client.post("/api/tts/test", json={
-            "provider": "teratts",
-            "settings": {"base_url": "http://tts.test"},
+            "provider": "fishaudio",
+            "settings": {"api_key": "k"},
             "text": "Привет, проверка голоса",
         })
         assert resp.status == 200
@@ -315,7 +316,7 @@ async def test_tts_test_synthesizes_with_draft_settings(tmp_path):
         assert route.call_count == 1
         # The stored config was never touched by the ad-hoc build.
         assert svc.document()["tts"]["selected"] == "yandex"
-        assert "teratts" not in svc.document()["tts"]["instances"]
+        assert "fishaudio" not in svc.document()["tts"]["instances"]
     finally:
         await client.close()
 
@@ -337,7 +338,7 @@ async def test_tts_test_empty_text_returns_422(tmp_path):
     try:
         for bad in ("", "   "):
             resp = await client.post("/api/tts/test", json={
-                "provider": "teratts", "settings": {"base_url": "http://x"}, "text": bad,
+                "provider": "fishaudio", "settings": {"api_key": "k"}, "text": bad,
             })
             assert resp.status == 422
             assert "error" in await resp.json()
@@ -349,7 +350,7 @@ async def test_tts_test_too_long_text_returns_422(tmp_path):
     client, _svc_ = await _client(tmp_path)
     try:
         resp = await client.post("/api/tts/test", json={
-            "provider": "teratts", "settings": {"base_url": "http://x"}, "text": "а" * 501,
+            "provider": "fishaudio", "settings": {"api_key": "k"}, "text": "а" * 501,
         })
         assert resp.status == 422
         assert (await resp.json())["error"] == "text too long (max 500 chars)"
@@ -373,14 +374,12 @@ async def test_tts_test_invalid_settings_returns_422(tmp_path):
 
 @respx.mock
 async def test_tts_test_upstream_failure_returns_502(tmp_path):
-    respx.get(url__regex=r"http://tts\.test/synthesize/.*").mock(
-        return_value=httpx.Response(500, text="boom")
-    )
+    respx.post(FISH_TTS_URL).mock(return_value=httpx.Response(500, text="boom"))
     client, _svc_ = await _client(tmp_path)
     try:
         resp = await client.post("/api/tts/test", json={
-            "provider": "teratts",
-            "settings": {"base_url": "http://tts.test"},
+            "provider": "fishaudio",
+            "settings": {"api_key": "k"},
             "text": "проверка",
         })
         assert resp.status == 502
@@ -423,7 +422,7 @@ async def test_tts_test_piper_missing_voice_path_returns_422(tmp_path):
 async def test_tts_test_text_at_500_char_cap_returns_200(tmp_path):
     # Boundary: the 500-char cap is inclusive and measured AFTER strip, so both
     # exactly-500 text and 500 significant chars padded with whitespace pass.
-    respx.get(url__regex=r"http://tts\.test/synthesize/.*").mock(
+    respx.post(FISH_TTS_URL).mock(
         return_value=httpx.Response(
             200, content=b"MP3-BYTES", headers={"Content-Type": "audio/mpeg"}
         )
@@ -432,8 +431,8 @@ async def test_tts_test_text_at_500_char_cap_returns_200(tmp_path):
     try:
         for text in ("а" * 500, "  \n" + "а" * 500 + "  \t"):
             resp = await client.post("/api/tts/test", json={
-                "provider": "teratts",
-                "settings": {"base_url": "http://tts.test"},
+                "provider": "fishaudio",
+                "settings": {"api_key": "k"},
                 "text": text,
             })
             assert resp.status == 200

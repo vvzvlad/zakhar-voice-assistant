@@ -26,8 +26,8 @@ def test_parse_multi_field():
 
 
 def test_parse_provider_only():
-    out = parse_voice_marker("<<<<<VOICE provider=teratts>>>>>")
-    assert out == {"provider": "teratts", "fields": {}}
+    out = parse_voice_marker("<<<<<VOICE provider=piper>>>>>")
+    assert out == {"provider": "piper", "fields": {}}
 
 
 def test_parse_missing_provider_returns_none():
@@ -116,8 +116,8 @@ def test_build_patch_drops_secret_fields_even_if_allowed():
 
 
 def test_build_patch_provider_only():
-    patch = build_voice_patch("teratts", {}, {"voice", "speed"})
-    assert patch == {"tts": {"selected": "teratts", "instances": {"teratts": {}}}}
+    patch = build_voice_patch("piper", {}, {"voice", "speed"})
+    assert patch == {"tts": {"selected": "piper", "instances": {"piper": {}}}}
 
 
 def test_build_patch_empty_provider_returns_none():

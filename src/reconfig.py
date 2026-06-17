@@ -366,7 +366,7 @@ class Reconfigurator:
         Rebuilt stages are the UNION of (a) the cloud stages whose selected provider reports
         uses_http_cloud — these MUST rebuild because their create() binds to deps.http_cloud,
         which just changed — and (b) the stages named by `paths` (incl. OFFLINE backends like
-        vosk STT / piper or teratts TTS), so a coalesced patch touching both core.network.*
+        vosk STT / piper TTS), so a coalesced patch touching both core.network.*
         and a selected offline backend does not silently drop that backend's change. The
         OpenWeatherMap tool source also captures http_cloud, so tools are always rebuilt.
         Proxy changes are rare; an in-flight request on the old client may fail when it is

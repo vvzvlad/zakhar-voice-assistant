@@ -49,7 +49,7 @@ function makeCatalog() {
     providers: [{ id: pid, label: pid, schema, values: { base_url: "http://initial" } }],
   });
   return {
-    categories: [cat("stt", "groq"), cat("llm", "openrouter"), cat("tts", "teratts")],
+    categories: [cat("stt", "groq"), cat("llm", "openrouter"), cat("tts", "piper")],
     core: { schema: {}, values: {} },
   };
 }
@@ -155,7 +155,7 @@ describe("voice test action", () => {
 
     await waitFor(() => expect(api.streamTtsVoice).toHaveBeenCalledTimes(1));
     const [provider, draft, text, signal] = api.streamTtsVoice.mock.calls[0];
-    expect(provider).toBe("teratts");
+    expect(provider).toBe("piper");
     expect(draft).toEqual({ base_url: "http://unsaved-draft" });
     expect(text).toBe(DEFAULT_PHRASE);
     expect(signal).toBeInstanceOf(AbortSignal);

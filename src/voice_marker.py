@@ -54,7 +54,7 @@ def build_voice_patch(provider, fields, allowed_fields):
     reaches the config). Hidden `*_label` display-companion fields are dropped too:
     they are UI metadata (the chosen voice/model's human name), not voice identity,
     and are never applied from a marker. Provider-only (no safe fields) is valid,
-    e.g. teratts. Returns {"tts": {"selected": provider, "instances":
+    e.g. piper. Returns {"tts": {"selected": provider, "instances":
     {provider: {...}}}} or None when provider is empty."""
     if not provider:
         return None

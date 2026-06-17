@@ -131,8 +131,8 @@ class StreamFeed:
 class AudioServer:
     """One shared HTTP server for all speakers with an in-memory TTL cache.
 
-    Speakers fetch generated audio from /tts/<id>.<ext> (.mp3 for both TeraTTS and
-    Piper). Each entry stores its own content type. Byte-cache entries expire after
+    Speakers fetch generated audio from /tts/<id>.<ext>; the extension/content-type
+    depends on the TTS backend. Each entry stores its own content type. Byte-cache entries expire after
     `ttl` seconds (measured on the monotonic event-loop clock) and are pruned on
     put/put_stream. Streaming entries (`put_stream`) are served as chunked
     responses that follow the producer's StreamFeed; on close the complete clip

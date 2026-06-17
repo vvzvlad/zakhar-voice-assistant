@@ -56,13 +56,13 @@ def test_create_adhoc_builds_backend_from_overrides(tmp_path):
     # panel's unsaved draft) for ANY plugin — not just the selected one — without
     # touching the stored document.
     svc = _service(tmp_path)
-    backend = svc.create_adhoc("tts", "teratts", {"base_url": "http://x"})
-    assert backend.__class__.__name__ == "TeraTtsHttpBackend"
-    assert backend.base_url == "http://x"
-    # The stored doc is untouched: selection unchanged, no teratts instance created.
+    backend = svc.create_adhoc("tts", "fishaudio", {"api_key": "k"})
+    assert backend.__class__.__name__ == "FishAudioTtsBackend"
+    assert backend.api_key == "k"
+    # The stored doc is untouched: selection unchanged, no fishaudio instance created.
     doc = svc.document()
     assert doc["tts"]["selected"] == "yandex"
-    assert "teratts" not in doc["tts"]["instances"]
+    assert "fishaudio" not in doc["tts"]["instances"]
 
 
 def test_create_adhoc_invalid_settings_raise_validation_error(tmp_path):
@@ -278,6 +278,43 @@ def test_apply_deep_merge_preserves_untouched_siblings(tmp_path):
     assert saved["tts"]["instances"]["yandex"]["voice"] == "zahar"
     assert saved["stt"]["instances"]["groq"]["api_key"] == "gsk-secret"
     assert saved["core"]["openweathermap"]["city"] == "Москва"
+
+
+def test_command_vocabulary_empty_for_cloud_llm(tmp_path):
+    # The default config selects a cloud LLM (openrouter), which offers no closed
+    # vocabulary -> command_vocabulary() is [] (a free-form LLM imposes no grammar).
+    svc = _service(tmp_path)
+    assert svc.command_vocabulary() == []
+
+
+def test_command_vocabulary_uses_simple_nlu_words_when_selected(tmp_path):
+    # With simple-nlu selected, command_vocabulary() returns its alias/verb/number
+    # words (the provider-agnostic vocabulary() hook), provider-agnostically.
+    from src.plugins.llm.simple_nlu import nlu_vocabulary
+
+    doc = _doc()
+    aliases = "свет в зале, люстра = bright_room_light"
+    actions = "on = включи\noff = выключи"
+    doc["llm"] = {
+        "selected": "simple-nlu",
+        "instances": {"simple-nlu": {"aliases": aliases, "actions": actions}},
+    }
+    svc = ConfigService(doc, _deps(), path=str(tmp_path / "config.json"))
+
+    vocab = svc.command_vocabulary()
+    assert vocab == nlu_vocabulary(aliases, actions)
+    # Non-empty and contains the spoken phrase/verb words.
+    assert "свет" in vocab and "включи" in vocab
+
+
+def test_base_provider_vocabulary_returns_empty(tmp_path):
+    # The base hook (used by every cloud LLM provider) returns [] — the contract
+    # that keeps command_vocabulary() provider-agnostic.
+    from src.plugins.base import get_provider
+
+    svc = _service(tmp_path)
+    prov = get_provider("llm", "openrouter")
+    assert prov.vocabulary(svc.get("llm")) == []
 
 
 def test_provider_returns_selected_provider_object(tmp_path):

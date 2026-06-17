@@ -4,7 +4,7 @@ Client-side voice assistant for a "HA Voice PE" ESP32 speaker. It connects to th
 speaker over the ESPHome Native API (as the client), then runs the pipeline:
 STT (cloud Whisper, default Groq) → LLM (default Claude Haiku 4.5 via OpenRouter) →
 smart-home tools via an external MCP server → RuAccent (Russian stress placement) →
-TTS (local TeraTTS HTTP service), and serves the resulting audio back to N speakers.
+TTS (offline Piper / cloud Yandex SpeechKit / Fish Audio), and serves the resulting audio back to N speakers.
 It replaces Home Assistant in this loop. Smart-home control is an MCP integration:
 the app is an MCP client (running an agentic tool-calling loop) that connects to an
 external smart-home MCP server hosted in Node-RED (node-red-contrib-mcp-server)

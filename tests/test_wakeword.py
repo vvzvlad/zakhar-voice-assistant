@@ -319,7 +319,7 @@ def _doc():
         "version": 1,
         "stt": {"selected": "groq", "instances": {"groq": {"api_key": "gsk-secret"}}},
         "llm": {"selected": "openrouter", "instances": {"openrouter": {"api_key": "k", "model": "m"}}},
-        "tts": {"selected": "teratts", "instances": {"teratts": {"base_url": ""}}},
+        "tts": {"selected": "piper", "instances": {"piper": {}}},
         "core": {},
     }
 

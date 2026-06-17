@@ -11,7 +11,7 @@ from src.plugins.tts._ru_text import (
 
 
 def _piper_chain(text: str) -> str:
-    """The exact adaptation chain Piper/TeraTTS backends apply."""
+    """The exact adaptation chain the Piper backend applies."""
     return phonetic_ru(expand_units(stress_to_acute(text)))
 
 

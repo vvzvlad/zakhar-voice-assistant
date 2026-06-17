@@ -15,8 +15,8 @@ describe("parseVoiceMarker", () => {
   });
 
   it("parses a provider-only marker", () => {
-    expect(parseVoiceMarker("<<<<<VOICE provider=teratts>>>>>"))
-      .toEqual({ provider: "teratts", fields: {} });
+    expect(parseVoiceMarker("<<<<<VOICE provider=piper>>>>>"))
+      .toEqual({ provider: "piper", fields: {} });
   });
 
   it("returns null when the provider is missing", () => {
@@ -45,7 +45,7 @@ describe("voiceLabel", () => {
     expect(voiceLabel({ provider: "yandex", fields: { voice: "zahar" } })).toBe("yandex/zahar");
     expect(voiceLabel({ provider: "fishaudio", fields: { model: "s2-pro", reference_id: "3b5c9f" } }))
       .toBe("fishaudio/s2-pro/3b5c9f");
-    expect(voiceLabel({ provider: "teratts", fields: {} })).toBe("teratts");
+    expect(voiceLabel({ provider: "piper", fields: {} })).toBe("piper");
   });
 
   it("returns an empty string for null", () => {
@@ -88,8 +88,8 @@ describe("buildVoiceMarker", () => {
   });
 
   it("yields a provider-only marker when nothing emittable remains", () => {
-    expect(buildVoiceMarker("teratts", { base_url: "" }))
-      .toBe("<<<<<VOICE provider=teratts>>>>>");
+    expect(buildVoiceMarker("piper", { base_url: "" }))
+      .toBe("<<<<<VOICE provider=piper>>>>>");
   });
 
   it("returns an empty string for an empty provider", () => {

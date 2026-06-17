@@ -16,7 +16,7 @@ export function parseVoiceMarker(text) {
   const provider = fields.provider; delete fields.provider;
   return provider ? { provider, fields } : null;
 }
-// Short human label, e.g. "yandex/zahar" or "fishaudio/s2-pro/3b5c9f" or "teratts".
+// Short human label, e.g. "yandex/zahar" or "fishaudio/s2-pro/3b5c9f" or "piper".
 export function voiceLabel(parsed) {
   if (!parsed) return "";
   const vals = Object.values(parsed.fields);
@@ -32,7 +32,7 @@ export const SECRET_FIELDS = new Set(["api_key", "token", "password"]);
 // excluded; empty/nullish values are skipped; values containing whitespace or a
 // ">" are skipped because the space-separated single-line format (closed by
 // ">>>>>") cannot round-trip them. Provider-only (no emittable fields) yields
-// the bare form "<<<<<VOICE provider=teratts>>>>>".
+// the bare form "<<<<<VOICE provider=piper>>>>>".
 export function buildVoiceMarker(provider, settings = {}) {
   if (!provider) return "";
   const parts = [`provider=${provider}`];

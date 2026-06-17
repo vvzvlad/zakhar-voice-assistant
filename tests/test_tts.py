@@ -15,7 +15,6 @@ from src.plugins.tts.piper import (
     PiperTtsBackend,
     _list_piper_voices,
 )
-from src.plugins.tts.teratts import TeraTtsHttpBackend
 from src.plugins.tts.yandex import (
     YANDEX_V3_URL,
     YandexTtsBackend,
@@ -407,41 +406,6 @@ async def test_yandex_synthesize_surfaces_error_body():
     assert "400" in str(exc.value)
 
 
-@respx.mock
-async def test_teratts_synthesize_builds_url_and_returns_audio():
-    audio = b"\xff\xf3mp3-bytes"
-    # The text is URL-encoded into the path (quote(text, safe="")).
-    route = respx.get("http://tera.local/synthesize/%D0%BF%D1%80%D0%B8%D0%B2%D0%B5%D1%82").mock(
-        return_value=httpx.Response(200, content=audio, headers={"Content-Type": "audio/mpeg"}))
-    async with httpx.AsyncClient() as client:
-        backend = TeraTtsHttpBackend("http://tera.local/", client, timeout=10)
-        mime, data = await backend.synthesize("привет", "ru")
-    assert route.called
-    assert mime == "audio/mpeg"
-    assert data == audio
-
-
-@respx.mock
-async def test_teratts_synthesize_defaults_mime_when_header_absent():
-    # No Content-Type header -> falls back to audio/mpeg.
-    route = respx.get("http://tera.local/synthesize/hi").mock(
-        return_value=httpx.Response(200, content=b"x"))
-    async with httpx.AsyncClient() as client:
-        backend = TeraTtsHttpBackend("http://tera.local", client, timeout=10)
-        mime, _ = await backend.synthesize("hi", "ru")
-    assert route.called
-    assert mime == "audio/mpeg"
-
-
-@respx.mock
-async def test_teratts_synthesize_raises_on_non_2xx():
-    respx.get("http://tera.local/synthesize/hi").mock(return_value=httpx.Response(503))
-    async with httpx.AsyncClient() as client:
-        backend = TeraTtsHttpBackend("http://tera.local", client, timeout=10)
-        with pytest.raises(httpx.HTTPStatusError):
-            await backend.synthesize("hi", "ru")
-
-
 # --- Piper _synth tests (inject a stub voice; no real model load) -----------
 
 _STUB_RATE = 22050
@@ -591,30 +555,6 @@ def test_piper_synth_applies_adaptation_chain_in_order():
 
 
 @respx.mock
-async def test_teratts_synthesize_applies_adaptation_chain():
-    from urllib.parse import unquote
-
-    # TeraTTS gets the same Piper-style adaptation; the adapted text is
-    # URL-encoded into the path, so match the route with a wildcard path.
-    route = respx.get(url__regex=r"http://tera\.local/synthesize/.+").mock(
-        return_value=httpx.Response(200, content=b"\xff\xf3mp3",
-                                    headers={"Content-Type": "audio/mpeg"}))
-    async with httpx.AsyncClient() as client:
-        backend = TeraTtsHttpBackend("http://tera.local", client, timeout=10)
-        mime, _ = await backend.synthesize("чт+о, 50%?", "ru")
-
-    assert route.called
-    assert mime == "audio/mpeg"
-    raw_url = str(route.calls.last.request.url)
-    decoded = unquote(raw_url)
-    assert "што́" in decoded      # stress applied before phonetic_ru
-    assert "процентов" in decoded      # "%" expanded
-    assert "+" not in decoded          # no "+" leaks into the request text
-    # The combining acute (U+0301) must travel percent-encoded, never raw.
-    assert "́" not in raw_url
-
-
-@respx.mock
 async def test_yandex_synthesize_adapts_text_keeps_native_stress():
     import json
 
@@ -647,26 +587,6 @@ def test_piper_applies_russian_adaptation_chain():
     _synth_wav(backend, "чт+о 50%")
 
     assert voice.sentences == ["што́ 50процентов"]
-
-
-@respx.mock
-async def test_teratts_applies_russian_adaptation_chain():
-    from urllib.parse import quote
-
-    # Exact-URL proof that TeraTTS runs the Piper-style chain: the GET path must
-    # contain the URL-encoded adapted text. Encoded via quote(safe="") exactly
-    # like the backend, so the expectation tracks the encoding, not hardcoded
-    # percent-escapes (note the combining acute U+0301 after "о").
-    route = respx.get(url__regex=r"http://tera\.local/synthesize/.+").mock(
-        return_value=httpx.Response(200, content=b"\xff\xf3mp3",
-                                    headers={"Content-Type": "audio/mpeg"}))
-    async with httpx.AsyncClient() as client:
-        backend = TeraTtsHttpBackend("http://tera.local", client, timeout=10)
-        await backend.synthesize("чт+о 50%", "ru")
-
-    assert route.called
-    expected = quote("што́ 50процентов", safe="")
-    assert expected in str(route.calls.last.request.url)
 
 
 @respx.mock
@@ -906,32 +826,6 @@ async def test_fishaudio_synthesize_stream_unvoiceable_empty_stream_no_request()
         got = [c async for c in chunks]
     assert (mime, got) == ("audio/mpeg", [])
     assert not route.called
-
-
-@respx.mock
-async def test_teratts_synthesize_stream_streams_bytes_and_mime_from_header():
-    # Same URL-encoded GET as the buffered path; the mime comes from the
-    # response Content-Type header and the body is streamed chunk by chunk.
-    route = respx.get(
-        "http://tera.local/synthesize/%D0%BF%D1%80%D0%B8%D0%B2%D0%B5%D1%82"
-    ).mock(return_value=httpx.Response(200, content=_astream(b"\xff\xf3aa", b"bb"),
-                                       headers={"Content-Type": "audio/wav"}))
-    async with httpx.AsyncClient() as client:
-        backend = TeraTtsHttpBackend("http://tera.local/", client, timeout=10)
-        mime, chunks = await backend.synthesize_stream("привет", "ru")
-        got = [c async for c in chunks]
-    assert route.called
-    assert mime == "audio/wav"
-    assert got == [b"\xff\xf3aa", b"bb"]
-
-
-@respx.mock
-async def test_teratts_synthesize_stream_raises_before_iteration_on_non_2xx():
-    respx.get("http://tera.local/synthesize/hi").mock(return_value=httpx.Response(503))
-    async with httpx.AsyncClient() as client:
-        backend = TeraTtsHttpBackend("http://tera.local", client, timeout=10)
-        with pytest.raises(httpx.HTTPStatusError):
-            await backend.synthesize_stream("hi", "ru")
 
 
 @respx.mock

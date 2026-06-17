@@ -19,7 +19,6 @@ from src.plugins.stt.vosk import VoskSttConfig
 from src.plugins.tts import fishaudio as fishaudio_mod
 from src.plugins.tts.fishaudio import FISH_MODELS_URL, FishAudioTtsConfig
 from src.plugins.tts.piper import PiperConfig
-from src.plugins.tts.teratts import TeraTtsConfig
 from src.plugins.tts.yandex import YandexTtsConfig
 
 
@@ -34,7 +33,6 @@ def _deps():
 # --- ConfigModel defaults / validation ---------------------------------------
 
 def test_config_models_build_with_defaults():
-    assert TeraTtsConfig().base_url == ""
     assert PiperConfig().sentence_silence == 0.4
     assert YandexTtsConfig().voice == "zahar"
     assert GroqSttConfig().model == "whisper-large-v3-turbo"
