@@ -259,6 +259,9 @@ class ToolHub:
                     {
                         "name": t["function"]["name"],
                         "description": t["function"].get("description", ""),
+                        # Full JSON-schema parameters so the panel can read enum
+                        # slot values (additive, backward-compatible).
+                        "parameters": t["function"].get("parameters", {}),
                     }
                     for t in raw
                 ],

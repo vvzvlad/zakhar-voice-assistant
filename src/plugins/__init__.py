@@ -9,5 +9,5 @@ from src.plugins.vad import silero, ten, webrtc  # noqa: F401
 from src.plugins.wakeword import vosk as wakeword_vosk  # noqa: F401
 from src.plugins.tts import teratts, piper, yandex, fishaudio  # noqa: F401
 from src.plugins.stt import groq as stt_groq, openrouter as stt_openrouter, vosk, yandex as stt_yandex  # noqa: F401
-from src.plugins.llm import openrouter, groq as llm_groq  # noqa: F401
+from src.plugins.llm import openrouter, groq as llm_groq, simple_nlu  # noqa: F401
 from src.plugins.stress import ruaccent as ruaccent_provider  # noqa: F401

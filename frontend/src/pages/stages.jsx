@@ -3,9 +3,10 @@ import { Selector, PageHeader, FormSaveBar } from "../components/primitives.jsx"
 import SchemaForm from "../components/SchemaForm.jsx";
 import { useAppData } from "../appData.jsx";
 import { useStageForm, errorLines } from "../useStageForm.js";
-import { getOptions, getChimes, playChime, streamTtsVoice } from "../api.js";
+import { getOptions, getChimes, playChime, streamTtsVoice, getTools } from "../api.js";
 import { playAudioResponse } from "../streamAudio.js";
 import { buildVoiceMarker } from "../voiceMarker.js";
+import { parseActionNames, entitySlotsFromTools, parseAliasText, serializeAliasText } from "../nluAliases.js";
 
 function Card({ title, sub, children, foot }) {
   return <div className="z-card">
@@ -224,6 +225,100 @@ function VoiceMarkerCard({ provider, settings }) {
   </Card>;
 }
 
+// Inline alias editor for the offline-NLU (simple-nlu) provider. Instead of
+// hand-editing the raw `aliases` textarea, it discovers the smart-home entities
+// live from the MCP tool catalog (enum slots) and offers one input per entity in
+// which the operator types Russian synonyms. The source of truth stays
+// `draft.aliases`: every keystroke re-serializes the whole field via
+// serializeAliasText, so this editor and the SchemaForm textarea stay in sync.
+// `actions` is read (not written) to know which enum slots are verb-driven.
+export function NluAliasEditor({ draft, onChange }) {
+  const [sources, setSources] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null); // soft hint, never thrown
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const data = await getTools();
+        if (alive) setSources((data && data.sources) || []);
+      } catch (e) {
+        if (alive) setError(e.message || "Не удалось загрузить инструменты");
+      } finally {
+        if (alive) setLoading(false);
+      }
+    })();
+    return () => { alive = false; };
+  }, []);
+
+  // Derive everything from props each render — no duplicate local copy of the
+  // alias text, so the textarea in SchemaForm remains the single source of truth.
+  const actionNames = parseActionNames(draft.actions || "");
+  const entities = entitySlotsFromTools(sources, actionNames);
+  const { map, extraLines } = parseAliasText(draft.aliases || "");
+
+  // Apply a single entity's edit: rebuild the whole aliases field from the live
+  // map + this value's new phrases, preserving the extra/advanced lines.
+  const setPhrases = (value, phrases) => {
+    const next = { ...map, [value]: phrases };
+    onChange("aliases", serializeAliasText(entities, next, extraLines));
+  };
+
+  // One row per unique enum VALUE; group rows under their owning tool header.
+  const rows = [];
+  let lastTool = null;
+  const seen = new Set();
+  for (const entity of entities) {
+    if (entity.tool !== lastTool) {
+      rows.push(
+        <div key={`h-${entity.tool}`} className="z-fh" style={{ marginTop: rows.length ? 12 : 0, fontWeight: 600 }}>
+          {entity.tool}
+        </div>
+      );
+      lastTool = entity.tool;
+    }
+    for (const value of entity.values) {
+      if (seen.has(value)) continue; // one input per unique value
+      seen.add(value);
+      rows.push(
+        <div key={value} style={{ display: "grid", gridTemplateColumns: "minmax(140px, 0.5fr) 1fr", gap: 12, alignItems: "center" }}>
+          <span className="z-fh" style={{ marginTop: 0 }}>
+            <span style={{ opacity: 0.7 }}>{entity.slot} · </span>
+            <code>{value}</code>
+          </span>
+          <div className="z-inp">
+            <input
+              value={map[value] || ""}
+              placeholder="русские названия через запятую"
+              onChange={(e) => setPhrases(value, e.target.value)}
+            />
+          </div>
+        </div>
+      );
+    }
+  }
+
+  return <Card title="Сущности умного дома (из MCP)" sub="введите русские названия — алиасы соберутся автоматически">
+    <div className="z-f">
+      {loading ? (
+        <div className="z-fh" style={{ marginTop: 0 }}>Загрузка…</div>
+      ) : error ? (
+        <div className="z-fh" style={{ marginTop: 0, color: "#b91c1c" }}>{error}</div>
+      ) : entities.length === 0 ? (
+        <div className="z-fh" style={{ marginTop: 0 }}>
+          Инструменты из MCP не обнаружены — проверь, что сервер умного дома доступен и включён.
+        </div>
+      ) : (
+        rows
+      )}
+      <div className="z-fh" style={{ marginTop: 12, opacity: 0.8 }}>
+        Числовые слоты (яркость, температура) задаются числом в самой команде — алиасы для них не нужны.
+      </div>
+    </div>
+  </Card>;
+}
+
 // ── Generic provider stage (STT / LLM / TTS) ──────────────────────────────
 function ProviderStage({ cat, title, crumb, desc }) {
   const { catalog, patch, system } = useAppData();
@@ -272,6 +367,8 @@ function ProviderStage({ cat, title, crumb, desc }) {
             so every DynamicSelect refetches for the newly selected provider. */}
         <SchemaForm key={selected} schema={prov.schema} values={draft} onChange={onChange} optionsFor={optionsFor} />
       </Card>
+      {/* Offline-NLU only: per-entity alias inputs sourced live from the MCP catalog. */}
+      {cat === "llm" && selected === "simple-nlu" && <NluAliasEditor draft={draft} onChange={onChange} />}
       {/* TTS only: test the CURRENT (unsaved) draft settings with an in-browser playback. */}
       {cat === "tts" && <VoiceTestCard provider={selected} settings={draft} />}
       {/* TTS only: ready-to-copy prompt marker built from the same live draft. */}

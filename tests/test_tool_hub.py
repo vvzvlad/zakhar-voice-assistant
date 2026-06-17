@@ -246,6 +246,58 @@ async def test_describe_returns_one_entry_per_source():
     assert home_entry["tools"][0]["description"] == "desc set_light"
 
 
+async def test_describe_advertises_tool_parameters():
+    # describe() carries each tool's full JSON-schema `parameters` so the panel can
+    # read enum slot values (e.g. to render the offline-NLU alias editor).
+    class EnumSource(FakeSource):
+        def raw_tools(self):
+            return [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "set_light",
+                        "description": "turn a light on/off",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "device_id": {
+                                    "type": "string",
+                                    "enum": ["bright_room_light", "night_light"],
+                                },
+                                "state": {"type": "string", "enum": ["on", "off"]},
+                            },
+                        },
+                    },
+                }
+            ]
+
+    hub = ToolHub([EnumSource("home", ["set_light"])])
+    await hub.start()
+
+    described = hub.describe()
+    tool = described[0]["tools"][0]
+    # The parameters dict is passed through verbatim, including properties + enum.
+    assert tool["parameters"]["properties"]["device_id"]["enum"] == [
+        "bright_room_light",
+        "night_light",
+    ]
+    assert tool["parameters"]["properties"]["state"]["enum"] == ["on", "off"]
+
+
+async def test_describe_tool_parameters_default_empty_when_absent():
+    # A tool whose function dict omits "parameters" still exposes the key as {} so
+    # the panel never has to guard for its absence.
+    class NoParamsSource(FakeSource):
+        def raw_tools(self):
+            return [{"type": "function", "function": {"name": "ping"}}]
+
+    hub = ToolHub([NoParamsSource("home", ["ping"])])
+    await hub.start()
+
+    tool = hub.describe()[0]["tools"][0]
+    assert tool["parameters"] == {}
+
+
 async def test_describe_online_reflects_having_tools():
     # A source advertising zero tools (e.g. a configured-but-unreachable MCP)
     # reports online=False; one with tools reports online=True.
