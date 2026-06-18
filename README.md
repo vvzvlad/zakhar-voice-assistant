@@ -69,6 +69,61 @@ a container runs only the cloud providers out of the box. To use the offline
 backends in Docker, provide a populated `models/` directory (e.g. run `make models`
 on the host and mount it into the container).
 
+## Deployment
+
+Production runs the **prebuilt image** from
+`ghcr.io/vvzvlad/zakhar-voice-assistant` — never build on the box. CI builds and
+pushes the image on every green push to `main`; `docker-compose.yml` in the repo
+root is the ready-to-use deploy template (pull, don't build).
+
+1. Copy `docker-compose.yml` to the host — it is the only file you need (the image
+   carries the code; no checkout required on prod).
+2. Pull and start:
+
+   ```bash
+   docker compose pull        # fetch the prebuilt ghcr.io image
+   docker compose up -d       # start in the background
+   ```
+
+   The first boot seeds `data/config.json` from `templates/default_config.json`
+   into the named volume.
+3. Open the admin panel at `http://<host>:8201` and set providers, API keys and
+   devices (or edit `data/config.json` directly inside the volume). All JSON
+   settings apply live — no restart needed. See [Configuration](#configuration).
+
+**Ports** (published straight to the LAN, no reverse proxy):
+
+- `8201` — admin panel UI + API, and the agent MCP endpoint at `/mcp` (matches
+  `PANEL_PORT`).
+- `8200` — audio server, so the speaker can fetch the generated audio; **must
+  match `core.audio.port`** in `data/config.json` (default 8200).
+
+**State** — all mutable state (config, per-device context, `prompts.db`) lives in
+the `zakhar-voice-assistant` named volume mounted at `/app/data`, so it survives
+restarts and image updates.
+
+**Environment** — only `TZ` (container timezone) and the panel bind
+`PANEL_HOST` / `PANEL_PORT` (defaults `0.0.0.0` / `8201`) are env-tunable;
+everything else is in `data/config.json`.
+
+**Image tags** — `:latest` (head of `main`) and `:<git-sha>` (pin an exact build;
+swap the tag in `docker-compose.yml` to roll back).
+
+**Updates** — the compose file carries the
+`com.centurylinklabs.watchtower.enable=true` label, so a running
+[Watchtower](https://containrrr.dev/watchtower/) auto-pulls new `latest` images.
+Without Watchtower, update manually:
+
+```bash
+docker compose pull && docker compose up -d
+```
+
+A built-in healthcheck probes `http://127.0.0.1:8200/health` every 30 min.
+
+> Offline STT/TTS models are **not** in the image — out of the box a container runs
+> only the cloud providers. To use the offline backends, mount a populated
+> `models/` directory (see [Quick start](#quick-start)).
+
 ## Configuration
 
 All config lives in a single JSON file, `data/config.json` (created on first run
