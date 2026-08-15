@@ -70,14 +70,15 @@ models directory would not change that by one line — the file would still not 
 
 The check is split rather than weakened, and neither half is allowed to be vacuous:
 
-  * check (e1), container `-bareboot`: the image's own command, NO volumes, NO config — production's
-    genuine first boot. It proves what is really provable in that state: the startup marker is
-    logged, the template copy fires, data/config.json really lands on disk (fetched back out with
-    `docker cp` and parsed), and no traceback appears where one would mean a NEW failure. Its last
-    verdict is the one that keeps this honest: the boot must end EITHER alive AND SERVING (a future
-    in which the TTS load became lazy) OR in exactly the missing-model failure above. Any OTHER way
-    of dying — a missing wheel, a broken libc++ layer, an import error — is a FAIL. That is the
-    difference between "we know why it stops here" and "it stops here, we stopped looking".
+  * check (e1), container `-bareboot`: the image's own command, NO volumes, NO config, and an EMPTY
+    NETWORK NAMESPACE (`--network none`) — production's genuine first boot, minus any way out of the
+    runner. It proves what is really provable in that state: the startup marker is logged, the
+    template copy fires, data/config.json really lands on disk (fetched back out with `docker cp`
+    and parsed), and no traceback appears where one would mean a NEW failure. Its last verdict is
+    the one that keeps this honest: the boot must end EITHER alive AND SERVING (a future in which
+    the TTS load became lazy) OR in exactly the missing-model failure above. Any OTHER way of dying
+    — a missing wheel, a broken libc++ layer, an import error — is a FAIL. That is the difference
+    between "we know why it stops here" and "it stops here, we stopped looking".
 
     BOTH halves of that verdict are decided on a POSITIVE observation, because "the container did
     not die" and "the eager load is gone" are different claims and only the second one is worth
@@ -88,6 +89,18 @@ The check is split rather than weakened, and neither half is allowed to be vacuo
     whole log: the moment the known failure is merely LOGGED rather than fatal — one try/except
     around `svc.create("tts")` away — a whole-log search would let it mask every later death, and a
     process that exited 0 with that traceback behind it did not stop for the reason it looks like.
+    A log with NO traceback in it at all is its own failure rather than a wider window: it is what a
+    tidy `logger.error(...)` plus a non-zero exit looks like, both expected fragments are somewhere
+    in such a log, and searching all of it for them would put the masking straight back.
+
+    The two questions are NOT independent, and getting that wrong is how this check acquired a false
+    RED. A boot dying slower than the exit budget cannot answer /health either — the audio server
+    starts after the load that is killing it — so the ordinary expected stop lands in the survivor
+    branch whenever the runner is loaded enough, and one failed probe there says nothing about which
+    of the two it is. So the probe failing is not a verdict: the state and the log are re-read
+    afterwards (the probe spends real seconds, and the container may well have died inside them) and
+    a container that has since stopped is judged as a stop. "Deadlocked, retrying, or waiting on a
+    network timeout" is only ever said about a container still running on that second look.
 
   * check (e2), container `-serve`: the same image, still NO volumes, still the image's own CMD,
     but with data/config.json injected before start (`docker create` -> `docker cp` -> `docker
@@ -122,19 +135,35 @@ Every check is written against a way this image has a realistic chance of shippi
       snapshot the boot wait returned — carries no traceback and shows the stress stage really came
       up disabled. Outer half.
 
-Nothing here holds a credential, and nothing it starts reaches a service outside the runner. Both
-halves of that are properties of the injected config rather than hopes about it. The one key this
-gate invents is a fake TTS api_key, needed only because the cloud provider's constructor refuses an
-empty one; no request is ever made with it. And the stress stage is turned off in the same place,
-because the template enables RuAccent and src/app.py asks for it in the background as soon as the
-panel is up (`reconf.request_initial_load({"stress", "wakeword"})`) — which downloads ~360 MB of
-turbo3.1 from HuggingFace into a container this gate deletes seconds later. Nothing goes red when
-it does: src/reconfig.py catches a failed load per category. That is exactly why it has to be
-turned off here rather than relied upon to fail, and why (g) reads the receipt for it out of the
+Nothing here holds a credential, and nothing it starts reaches a service outside the runner. Neither
+half is a hope, and neither rests on the containers failing early enough not to try — but the two
+containers that run the real command earn the second half in DIFFERENT ways, and the difference is
+worth stating because one of them used to be the crash doing the work.
+
+The SERVING container earns it by its injected config, which is a document this gate wrote. The one
+key this gate invents is a fake TTS api_key, needed only because the cloud provider's constructor
+refuses an empty one; no request is ever made with it. And the stress stage is turned off in the
+same place, because the template enables RuAccent and src/app.py asks for it in the background as
+soon as the panel is up (`reconf.request_initial_load({"stress", "wakeword"})`) — which downloads
+~360 MB of turbo3.1 from HuggingFace into a container this gate deletes seconds later. Nothing goes
+red when it does: src/reconfig.py catches a failed load per category. That is exactly why it has to
+be turned off here rather than relied upon to fail, and why (g) reads the receipt for it out of the
 log: the switch is written against a field of a pydantic model that ignores unknown keys, so a
 renamed field or a new stress provider would turn it into a silent no-op that nothing else here
-could see. A gate that needed a real key, or a round trip to a third party, could not run on a
-pull request at all.
+could see.
+
+The BARE container has no injected config — that is the point of (e1), so there is nothing there to
+constrain it, and its template selects RuAccent exactly as production's does. It earns the second
+half by running with `--network none` instead. Without that the invariant would hold only because
+the eager Piper load kills the process before `request_initial_load` is ever reached: a property of
+the CRASH, not of the container — and the survivor branch (e1) is written to ACCEPT is precisely the
+world in which that crash is gone, the boot reaches the panel, and the gate spends its run pulling
+turbo3.1 while its own docstring says it reaches nothing. An empty namespace makes the claim true in
+both worlds. Nothing in this check needs a network: `logs`, `inspect`, `cp` and `exec` all talk to
+the daemon, and `lo` still exists in there, which is all the /health probe uses.
+
+A gate that needed a real key, or a round trip to a third party, could not run on a pull request at
+all.
 
 Two properties matter and are easy to lose, so they are stated where they can be checked:
 
@@ -348,15 +377,21 @@ HTTP_PROBE_ROW_PREFIX = "[in-container] "
 #   + 30 (rm bareboot)  + 60 (run -d)   + 90 (marker poll: 60 budget + one 30 s logs)
 #                       + 60 (exit poll: 30 budget + one 30 s inspect)
 #                       + 30 (re-read the log once it is final)
-#                       + 30 (docker cp the config out)
-#                       + 30 (docker exec: the health probe, only reached by a survivor) = 330
+#                       + 30 (docker exec: the health probe, only reached by a survivor)
+#                       + 30 (re-inspect after that probe fails: judge_bare_outcome)
+#                       + 30 (re-read the log when that inspect says it has since stopped)
+#                       + 30 (docker cp the config out)                                = 390
 #   + 30 (rm serve)     + 60 (create)   + 30 (cp the config in) + 60 (start)         = 180
 #   + 90 (marker poll on the serving container: 60 budget + one 30 s logs)           =  90
 #   + 180 (docker exec: the http probe)                                              = 180
 #   + 30 (inspect the serving container)
 #   + 45 (settled-log poll: 15 budget + one 30 s logs)                               =  75
 #   + 120 (the `finally`: 4 x 30)                                                    = 120
-#   = 1305 s, 21 minutes 45 s. Both workflows allow 23.
+#   = 1365 s, 22 minutes 45 s. Both workflows allow 24.
+# The last two lines of the bare-boot block are the price of not calling an ordinary slow death a
+# deadlock: when the health probe says no, judge_bare_outcome re-reads the state and, if the
+# container has stopped since, its log. Both are only ever reached on the survivor path, and only
+# after the probe has already failed there.
 # A marker poll is bounded at BOOT_BUDGET in WALL CLOCK plus, in the worst case, one `docker logs`
 # that started just before the deadline — hence 60 + 30 rather than 60. The bare container's exit
 # poll is bounded the same way against BAREBOOT_EXIT_BUDGET and one `docker inspect`, and the
@@ -401,16 +436,31 @@ BOOT_PAUSE = 0.5
 # are not all the same thing: the survivor this check hopes for, a boot deadlocked in a backend
 # constructor, one spinning on a retry, and one simply dying slower than 30 s all look identical
 # from out here. So reaching the deadline is NOT the verdict — it only decides which question gets
-# asked next. What separates them is the health probe below: a container that came up answers
-# /health, and the other three do not. That is why 30 s being a heuristic costs nothing: an image
-# that needed 31 s to import onnxruntime lands in the survivor branch and is then asked a question
-# it can answer, instead of being waved through on "not dead yet".
+# asked next. What separates the FIRST of those from the rest is the health probe below: a container
+# that came up answers /health, and the other three do not.
+#
+# What the probe does NOT separate is the last two, and that is the honest reading of this number. A
+# boot dying slower than 30 s cannot answer /health either — src/app.py starts the audio server only
+# after the very load that is killing it — so it lands in the survivor branch and fails the probe in
+# exactly the way a deadlock does. 30 s is therefore not a free heuristic: it is the line past which
+# a NORMAL, expected death has to be re-identified rather than diagnosed on the strength of one
+# failed probe. judge_bare_outcome() is where that happens — when the probe says no it re-reads the
+# container's state and log before writing a verdict, because the probe itself spends real seconds
+# (BAREBOOT_HEALTH_BUDGET, plus the exec around it) and a boot that was still importing onnxruntime
+# at this deadline has usually reached its terminal state by the end of them. "Deadlocked, retrying,
+# or waiting on a network timeout" is then kept for a container that is STILL running on that second
+# look, which is the only container it describes.
 BAREBOOT_EXIT_BUDGET = 30
 # The bare survivor's own budget for /health, inside the probe. Deliberately short: it starts only
 # after the container has been alive for BAREBOOT_EXIT_BUDGET past its startup line, by which point
 # an application that came up has been listening for tens of seconds. Long enough to absorb a slow
 # `docker exec` and a loaded runner, short enough that a hung container is reported as hung rather
 # than waited on.
+#
+# DECLARED TWICE, exactly like the probe markers above, and for the same reason: the probe's text
+# carries this number again as its own `BUDGET`, because interpolating it in would mean `.format()`
+# over a body full of braces. This name is what the comments here reason about; that one is what
+# runs. If you move one, move the other.
 BAREBOOT_HEALTH_BUDGET = 15
 
 # How long the SERVING container's log is polled for the stress stage's receipt before the last
@@ -1138,6 +1188,10 @@ PROBE_MARKER = "zakhar bareboot health ok"
 
 # The port docker-compose.yml's healthcheck probes, reached on the container's own loopback.
 URL = "http://127.0.0.1:8200/health"
+# The outer half's BAREBOOT_HEALTH_BUDGET, written out again for the same reason PROBE_MARKER is:
+# this text is handed to another interpreter and cannot import from the file it lives in. The outer
+# half's timeout arithmetic is written against that name and this loop is bounded by this number, so
+# if you move one, move the other.
 BUDGET = 15
 PAUSE = 0.5
 ATTEMPT_TIMEOUT = 5
@@ -1152,7 +1206,11 @@ def main():
                 status, body = response.status, response.read().decode("utf-8", "replace")
             break
         except urllib.error.HTTPError as error:
-            # An HTTP answer, just not the one wanted: something IS serving, so stop asking.
+            # An HTTP answer, just not the one wanted. Something IS listening and speaking HTTP, so
+            # retrying is pointless — but it is not a pass either: the verdict below still requires
+            # 200 and a body of "ok", and /health has exactly one handler, so anything else means
+            # the thing answering on this port is not the audio server this check is about. Breaking
+            # here is what turns that into a reported status instead of a spent budget.
             status, body = error.code, ""
             break
         except Exception as error:
@@ -1528,6 +1586,154 @@ def bareboot_serves(name):
     return status == 0 and BAREBOOT_HEALTH_MARKER in output, output
 
 
+def bareboot_stop_reason(state, logs):
+    """Why a STOPPED bare container's stop is NOT the one known stop. Returns (reason, exit_code).
+
+    `reason` is None exactly when the stop is the expected one; `exit_code` is returned either way
+    because the accepting row names it.
+
+    Three independent things have to hold, and the message says which of them did not.
+
+    There has to BE a traceback. That is checked first and reported on its own rather than folded
+    into the fragment search below, because without it there is no last traceback to search and
+    `rsplit` would hand back the WHOLE log — which is precisely the substring-over-everything test
+    this function exists to not be. A boot that ends in a tidy `logger.error(...)` plus a non-zero
+    SystemExit carries both expected fragments somewhere in its log and no traceback at all; letting
+    that through would restore the masking with an extra step.
+
+    The fragments have to be in the LAST traceback rather than anywhere in the log, which is the
+    whole difference between "this is why it stopped" and "this appears somewhere above the reason
+    it stopped". The day `svc.create("tts")` is wrapped in a try/except that logs — which is how
+    this failure stops being fatal — the known FileNotFoundError stays in the log for good, and a
+    whole-log search would let it mask EVERY later death: a missing wheel, a broken libc++ layer, an
+    import error, all reported as "stopped on the missing Piper voice, as expected".
+
+    And the exit code has to be non-zero. A process killed by an uncaught exception exits non-zero;
+    an exit of 0 with that traceback behind it means something caught it and returned, so whatever
+    ended this container, it was not the exception in the log.
+    """
+    # `Running ExitCode`, e.g. "false 1". Read as a fixed PAIR rather than as "the last field",
+    # because a state this gate cannot parse must not become an empty string that quietly satisfies
+    # every `!= "0"` test below — that is a check whose stated purpose is to not be vacuous failing
+    # open on the one input nobody looked at. An unparsed state is reported as itself.
+    fields = state.split()
+    exit_code = fields[1] if len(fields) == 2 else ""
+
+    if TRACEBACK_MARKER not in logs:
+        return ("docker reports `Running ExitCode` = {!r} and its log carries NO traceback at all, "
+                "so the known Piper stop cannot be what ended it: that stop is an UNCAUGHT "
+                "FileNotFoundError, and CPython prints a traceback for those. Something else ended "
+                "this boot — a caught error re-reported as a log line and a bare SystemExit, a "
+                "signal, an exec that never got that far — and the expected fragments appearing "
+                "somewhere in the log would say nothing about which. Full logs:\n{}".format(
+                    state, excerpt(logs))), exit_code
+
+    last_traceback = logs.rsplit(TRACEBACK_MARKER, 1)[-1]
+    missing = [f for f in BAREBOOT_EXPECTED_FRAGMENTS if f not in last_traceback]
+    if missing:
+        mismatch = ("its LAST traceback does not carry {} (the whole log may well mention them "
+                    "higher up; what ends the process is what counts)".format(
+                        " and ".join(repr(f) for f in missing)))
+    elif exit_code == "":
+        mismatch = ("its last traceback IS the known one, but `docker inspect` did not answer with "
+                    "the two fields this gate reads an exit code out of, so whether that exception "
+                    "actually ended the process is unknown — and unknown is not a pass")
+    elif exit_code == "0":
+        mismatch = ("its last traceback IS the known one but the container exited 0, so something "
+                    "caught that exception and returned — this stop is not the one the traceback "
+                    "looks like")
+    else:
+        return None, exit_code
+
+    return ("docker reports `Running ExitCode` = {!r} and {}. This image is KNOWN to stop here on "
+            "the eager Piper voice load and nothing else; anything else means something new is "
+            "broken and is being hidden behind an expected failure. Last traceback:\n{}\n"
+            "Full logs:\n{}".format(
+                state, mismatch, excerpt(last_traceback), excerpt(logs))), exit_code
+
+
+def judge_bare_outcome(name, outcome_target, state, state_output, still_running, logs):
+    """(e1)'s last verdict: the boot either came up and SERVES, or stopped in the ONE known place.
+
+    Returns (row, still_running, logs) rather than just a row, because ASKING the question can
+    change the answer to "how did this boot end", and every other row in check_bare_boot has to be
+    written about the boot as it finally ended rather than as it looked at the exit budget.
+
+    Three states, and the middle one is the one that used to be got wrong:
+
+    * Stopped already: judged by bareboot_stop_reason() on the settled log.
+    * Alive and answering /health: the future this check hopes for — the eager Piper load became
+      lazy — and the only evidence for it that is not "it did not die". Accepted so that fixing the
+      app does not redden the gate.
+    * Alive and NOT answering: this is where a slow, ordinary death and a real deadlock arrive
+      together, and one failed probe does not tell them apart. A container still inside
+      `svc.create("tts")` at the exit budget CANNOT answer — src/app.py starts the audio server
+      afterwards — so the expected stop reaches this branch whenever the runner is loaded enough to
+      push the onnxruntime import past BAREBOOT_EXIT_BUDGET. Reporting "deadlocked, retrying, or
+      waiting on a network timeout" there is a false RED with a diagnosis that sends its reader
+      looking for a deadlock that was never there. And the container may well have died DURING the
+      probe: bareboot_serves() spends up to BAREBOOT_HEALTH_TIMEOUT, so `still_running` is by then
+      a claim about the past. So the state and the log are re-read, and a container that has since
+      stopped is judged as a stop like any other.
+    """
+    if state is None:
+        return (outcome_target, "docker inspect failed: {}".format(excerpt(state_output))), \
+            False, logs
+
+    if not still_running:
+        reason, exit_code = bareboot_stop_reason(state, logs)
+        if reason is None:
+            return ("{} (stopped on the missing Piper voice, exit {}, as expected)".format(
+                outcome_target, exit_code), None), False, logs
+        return (outcome_target, reason), False, logs
+
+    serving, probe_output = bareboot_serves(name)
+    if serving:
+        return ("{} (alive {} s after its startup line AND answering /health: the eager model load "
+                "is gone)".format(outcome_target, BAREBOOT_EXIT_BUDGET), None), True, logs
+
+    # The probe said no, which is the answer both remaining cases give. Re-read what the container
+    # IS now, then re-read its log if it has stopped — the traceback that decides the verdict is
+    # written in the last moments before the exit, so the log taken at the budget predates it.
+    state, state_output = container_state(name)
+    if state is not None and not state.startswith("true"):
+        log_status, settled_logs = docker(["logs", name], LOGS_TIMEOUT)
+        if log_status != 0:
+            return (outcome_target, (
+                "it had already stopped by the time /health was asked — it was still running at "
+                "the {} s exit budget and reached its terminal state ({!r}) while the probe ran — "
+                "but its log could not be re-read to see WHY: {}. The log taken at the budget is "
+                "older than the exit, so it cannot answer that question either. Probe "
+                "output:\n{}".format(BAREBOOT_EXIT_BUDGET, state, excerpt(settled_logs),
+                                     excerpt(probe_output)))), False, logs
+        logs = settled_logs
+        reason, exit_code = bareboot_stop_reason(state, logs)
+        if reason is None:
+            # The ordinary slow death: too slow for the exit budget, dead before the probe gave up.
+            # An expected stop, and it says so — no deadlock is claimed, because none was observed.
+            return ("{} (stopped on the missing Piper voice, exit {}, as expected — it was still "
+                    "inside that load at the {} s exit budget and reached the stop while /health "
+                    "was being asked)".format(outcome_target, exit_code, BAREBOOT_EXIT_BUDGET),
+                    None), False, logs
+        return (outcome_target, reason), False, logs
+
+    # Still up on the second look (or unreadable on it), and not serving. NOW the diagnosis below
+    # is earned: the known stop kills the process, and this process is still there.
+    second_look = ("it is still running on a second `docker inspect`, taken after the probe gave up"
+                   if state is not None else
+                   "a second `docker inspect` could not be read at all ({}), so this verdict rests "
+                   "on the state at the exit budget".format(excerpt(state_output)))
+    return (outcome_target, (
+        "the container is still up {} s after its startup line, but its audio server never "
+        "answered /health from inside it. Alive is not the same as up: src/app.py builds every "
+        "eager backend BEFORE it starts that server, so a container that is running and not serving "
+        "is one still inside that construction. It is not the known Piper stop running late either "
+        "— {} — so what is left is a construction that is deadlocked, retrying, or waiting on a "
+        "network timeout, and it is neither of the two endings this branch exists to accept. Probe "
+        "output:\n{}\nLogs:\n{}".format(
+            BAREBOOT_EXIT_BUDGET, second_look, excerpt(probe_output), excerpt(logs)))), True, logs
+
+
 def check_bare_boot(image, name):
     """(e1) The image's own command, no volumes, no config: production's genuine first boot.
 
@@ -1540,14 +1746,22 @@ def check_bare_boot(image, name):
     which is what makes the config-on-disk row possible at all.
 
     ORDER MATTERS HERE: wait for the startup line, then wait for the container to reach a TERMINAL
-    state, then re-read the log, and only then judge. Every verdict below is about a boot that is
-    over; see the long comment at the settle step for what taking them at the marker instead would
-    accept and what it would falsely reject.
+    state, then re-read the log, then decide the OUTCOME, and only then write the rows. Every
+    verdict below is about a boot that is over; see the long comment at the settle step for what
+    taking them at the marker instead would accept and what it would falsely reject. The outcome is
+    decided before the rows are written rather than last, because deciding it can change what this
+    boot turned out to be — judge_bare_outcome() spends seconds inside the container and re-reads
+    its state and log — and a report whose earlier rows were scoped to a boot that had not ended yet
+    contradicts its own last line.
 
     A boot that is over in the other direction — still alive at the deadline — is not judged on that
     fact either. "Alive" is where the survivor this check hopes for, a deadlocked constructor, an
     endless retry and a slow death all look the same, so the outcome row asks the container whether
-    it is SERVING instead of reading "not dead" as "came up". See bareboot_serves().
+    it is SERVING instead of reading "not dead" as "came up". See bareboot_serves(), and
+    judge_bare_outcome() for what happens when the answer is no.
+
+    `--network none` is what makes this container's "reaches nothing outside the runner" a property
+    of the container rather than of the way it happens to fail; see the comment at the run below.
     """
     rows = []
     start_target = "`docker run -d` starts {} with the image's own command and no volumes".format(
@@ -1563,8 +1777,24 @@ def check_bare_boot(image, name):
     every_target = (marker_target, created_target, config_target, trace_target, outcome_target)
 
     remove_container(name)
+    # `--network none`, and it is the only container here that gets it. This one boots on the
+    # IMAGE'S OWN template — there is no injected config to constrain it, that being the whole point
+    # of (e1) — and that template selects RuAccent with `enabled: true`, which src/app.py asks for
+    # in the background as soon as the panel is up and which downloads ~360 MB of turbo3.1 from
+    # HuggingFace. Today it never gets that far, because the eager Piper load kills it first; but
+    # "the download does not happen" would then be a property of the CRASH, and the survivor branch
+    # this check exists to accept is exactly the world where the boot gets past that crash and does
+    # reach `request_initial_load`. There the health probe would answer, the row would go green, and
+    # the gate would have spent the run pulling a third of a gigabyte off HuggingFace while claiming
+    # in its own docstring that it reaches nothing outside the runner. An empty network namespace
+    # makes that impossible in both worlds instead of true in one of them.
+    # Nothing this check does needs the network: the boot path to `svc.create("tts")` opens no
+    # socket (webrtc VAD and the groq STT client both only construct), and `docker logs`, `inspect`,
+    # `cp` and `exec` all talk to the daemon, not to the container. `lo` still exists inside an
+    # empty namespace, so the /health probe on 127.0.0.1 is unaffected.
     status, output = docker(
-        ["run", "-d", "--name", name] + environment_flags(CONTAINER_ENV) + [image], START_TIMEOUT)
+        ["run", "-d", "--name", name, "--network", "none"]
+        + environment_flags(CONTAINER_ENV) + [image], START_TIMEOUT)
     if status is None:
         rows.append((start_target, output))
         for target in every_target:
@@ -1624,6 +1854,17 @@ def check_bare_boot(image, name):
             rows.append((target, settled_note.format(
                 "`docker logs` exited {}: {}".format(log_status, excerpt(logs)))))
         return rows, logs
+
+    # The LAST verdict is decided FIRST, and the rows are written afterwards in report order. Not a
+    # rearrangement for its own sake: judge_bare_outcome() may spend the health probe's whole budget
+    # inside the container and then re-read its state and log, and a boot that was still importing
+    # onnxruntime at the exit budget is usually over by the time it returns. Every row below is
+    # therefore written against what this boot FINALLY was — `still_running` and `logs` as they are
+    # after that question was asked — instead of against the snapshot at the deadline, which is how
+    # a report ends up calling a container "still running, so nothing in its log is supposed to have
+    # died" one row above reporting the exit that killed it.
+    outcome_row, still_running, logs = judge_bare_outcome(
+        name, outcome_target, state, state_output, still_running, logs)
 
     reached = STARTUP_MARKER in logs
     rows.append((marker_target, None if reached else (
@@ -1705,72 +1946,7 @@ def check_bare_boot(image, name):
                 "the image failing before the application begins.",
                 excerpt(window)))))
 
-    if state is None:
-        rows.append((outcome_target, "docker inspect failed: {}".format(excerpt(state_output))))
-    elif still_running:
-        # It outlived the budget. That is NOT the verdict — it is the question. "Alive" is equally
-        # true of the future this row hopes for (the eager Piper load became lazy) and of a boot
-        # deadlocked in a backend constructor, spinning on a retry, or blocked on a network timeout
-        # inside svc.create(). Reporting "the eager model load appears to be gone" on the strength
-        # of not having died is the gate claiming something it did not observe.
-        # So the container is ASKED. src/app.py starts the audio server only after every eager
-        # backend has been built, so /health answering is direct evidence that the construction this
-        # whole check is about got past; nothing else this gate can reach distinguishes the four
-        # cases above. An answer is an improvement and is accepted so that fixing the app does not
-        # redden the gate — and when it starts happening the TTS switch in check (e2) can be dropped
-        # (the stress switch cannot; see build_serving_config).
-        serving, probe_output = bareboot_serves(name)
-        if serving:
-            rows.append(("{} (alive {} s after its startup line AND answering /health: the eager "
-                         "model load is gone)".format(outcome_target, BAREBOOT_EXIT_BUDGET), None))
-        else:
-            rows.append((outcome_target, (
-                "the container is still up {} s after its startup line, but its audio server never "
-                "answered /health from inside it. Alive is not the same as up: src/app.py builds "
-                "every eager backend BEFORE it starts that server, so a container that is running "
-                "and not serving is one still inside that construction — deadlocked, retrying, or "
-                "waiting on a network timeout — and it is neither the known Piper stop nor the lazy "
-                "load this branch exists to accept. Probe output:\n{}\nLogs:\n{}".format(
-                    BAREBOOT_EXIT_BUDGET, excerpt(probe_output), excerpt(logs)))))
-    else:
-        # It stopped. Two independent things have to hold before that stop is the KNOWN one, and
-        # the message says which of them did not.
-        #
-        # The fragments are looked for in the LAST traceback rather than anywhere in the log, and
-        # that is the whole difference between "this is why it stopped" and "this appears somewhere
-        # above the reason it stopped". The day `svc.create("tts")` is wrapped in a try/except that
-        # logs — which is how this failure stops being fatal — the known FileNotFoundError stays in
-        # the log for good, and a whole-log search would let it mask EVERY later death: a missing
-        # wheel, a broken libc++ layer, an import error, all reported as "stopped on the missing
-        # Piper voice, as expected".
-        #
-        # The exit code is the second half. A process killed by an uncaught exception exits
-        # non-zero; an exit of 0 with that traceback behind it means something caught it and
-        # returned, so whatever ended this container, it was not the exception in the log.
-        last_traceback = logs.rsplit(TRACEBACK_MARKER, 1)[-1]
-        missing = [f for f in BAREBOOT_EXPECTED_FRAGMENTS if f not in last_traceback]
-        # `Running ExitCode`, e.g. "false 1" — the code is the second field.
-        fields = state.split()
-        exit_code = fields[-1] if len(fields) > 1 else ""
-        if not missing and exit_code != "0":
-            rows.append((
-                "{} (stopped on the missing Piper voice, exit {}, as expected)".format(
-                    outcome_target, exit_code), None))
-        else:
-            if missing:
-                mismatch = ("its LAST traceback does not carry {} (the whole log may well mention "
-                            "them higher up; what ends the process is what counts)".format(
-                                " and ".join(repr(f) for f in missing)))
-            else:
-                mismatch = ("its last traceback IS the known one but the container exited 0, so "
-                            "something caught that exception and returned — this stop is not the "
-                            "one the traceback looks like")
-            rows.append((outcome_target, (
-                "docker reports `Running ExitCode` = {!r} and {}. This image is KNOWN to stop here "
-                "on the eager Piper voice load and nothing else; anything else means something new "
-                "is broken and is being hidden behind an expected failure. Last traceback:\n{}\n"
-                "Full logs:\n{}".format(
-                    state, mismatch, excerpt(last_traceback), excerpt(logs)))))
+    rows.append(outcome_row)
     return rows, logs
 
 

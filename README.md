@@ -132,7 +132,15 @@ Where nothing polls the registry, update manually:
 docker compose pull && docker compose up -d
 ```
 
-A built-in healthcheck probes `http://127.0.0.1:8200/health` every 30 min.
+A built-in healthcheck probes `http://127.0.0.1:8200/health` every 30 s (`timeout:
+5s`, `retries: 3`, `start_period: 40s`). The interval has to stay well under the
+updater's `RollbackTimeout` (120 s on this fleet), because the updater judges the new
+container by its health: a container whose first probe has not run yet is still
+`starting` when that gate is decided, so the update gets rolled back on a service
+that is perfectly fine. On Docker ≥ 25 the `start_period` also enables
+`start_interval` (5 s by default), so the first probe lands seconds after start
+rather than a whole interval later — in production the container reports healthy
+about 6 s in.
 
 > Offline STT/TTS models are **not** in the image; they live on the
 > `zakhar-voice-assistant-models` volume mounted at `/app/models`. That volume must

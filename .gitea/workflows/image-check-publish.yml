@@ -314,24 +314,29 @@ jobs:
       # python3. Inside the container it is the other way round — the image's own interpreter is
       # `python` — and ci/smoke.py invokes it accordingly.
       #
-      # The gate holds no credential, and the container it boots reaches nothing outside this
-      # runner. Both are properties of the config ci/smoke.py injects rather than hopes about it.
-      # The one key it invents is a fake TTS api_key, needed only because the cloud provider's
-      # constructor refuses an empty one; nothing ever makes a request with it. And the same
-      # injected config turns the stress stage OFF, because the image's template enables RuAccent
-      # and src/app.py asks for it in the background once the panel is up — which would pull ~360 MB
-      # from HuggingFace into a container the gate deletes seconds later, with nothing going red
-      # (src/reconfig.py catches a failed per-category load). Together those two are what let this
-      # gate run on a pull request at all. All four containers it starts carry $SMOKE_NAME, so this
-      # run and a concurrent PR check cannot collide, and anything left behind is removable by name.
+      # The gate holds no credential, and the containers it boots reach nothing outside this runner.
+      # For the SERVING container both are properties of the config ci/smoke.py injects rather than
+      # hopes about it. The one key it invents is a fake TTS api_key, needed only because the cloud
+      # provider's constructor refuses an empty one; nothing ever makes a request with it. And the
+      # same injected config turns the stress stage OFF, because the image's template enables
+      # RuAccent and src/app.py asks for it in the background once the panel is up — which would
+      # pull ~360 MB from HuggingFace into a container the gate deletes seconds later, with nothing
+      # going red (src/reconfig.py catches a failed per-category load). The BARE container has no
+      # injected config — that is the point of it — so it runs with `--network none`: without that,
+      # "it downloads nothing" would hold only because the missing model kills it first, which is a
+      # property of the crash and not of the container, and the lazy-load future that check is
+      # written to ACCEPT is exactly the one where the crash is gone. Together those are what let
+      # this gate run on a pull request at all. All four containers it starts carry $SMOKE_NAME, so
+      # this run and a concurrent PR check cannot collide, and anything left behind is removable by
+      # name.
       #
-      # Step-level `timeout-minutes`, the one act_runner is known to enforce. 23 minutes is set
+      # Step-level `timeout-minutes`, the one act_runner is known to enforce. 24 minutes is set
       # against ci/smoke.py's OWN worst case, which the script documents and sums from its
-      # individual bounds: 1305 s — 21 minutes 45 s — if every docker call it makes runs out its
+      # individual bounds: 1365 s — 22 minutes 45 s — if every docker call it makes runs out its
       # budget, all three probes and the four-container `finally` included. In practice the whole
       # gate is well under two minutes. Being killed BY this timeout is what the margin is for: the
       # script's own container cleanup would not run, and the `if: always()` step below catches that.
-      timeout-minutes: 23
+      timeout-minutes: 24
       env:
         # SMOKE_NAME is not here: it is set once at job level, so this step and the cleanup step
         # below are guaranteed to be talking about the same containers.

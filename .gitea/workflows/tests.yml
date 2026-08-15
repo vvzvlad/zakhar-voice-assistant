@@ -242,15 +242,17 @@ jobs:
       # known place and nowhere else) and one given a model-free config (which proves /health, the
       # panel and the version the panel reports).
       #
-      # The gate holds no credential, and the container it boots reaches nothing outside this
-      # runner — the config ci/smoke.py injects invents a fake TTS key and switches the stress stage
-      # off, the latter because the image's template would otherwise pull a RuAccent model from
-      # HuggingFace in the background. That is what lets it run here at all: a pull request has no
-      # access to the deployment's keys, and should not.
+      # The gate holds no credential, and the containers it boots reach nothing outside this runner.
+      # The SERVING one is held to that by the config ci/smoke.py injects, which invents a fake TTS
+      # key and switches the stress stage off — the image's template would otherwise pull a RuAccent
+      # model from HuggingFace in the background. The BARE one has no injected config by design, so
+      # it is started with `--network none` instead, which is what makes that true of it whether or
+      # not it still dies on the missing model first. Together they are what lets this run here at
+      # all: a pull request has no access to the deployment's keys, and should not.
       #
-      # 23 minutes, against ci/smoke.py's own documented worst case of 1305 s. Same number as the
+      # 24 minutes, against ci/smoke.py's own documented worst case of 1365 s. Same number as the
       # publishing workflow, for the same reason.
-      timeout-minutes: 23
+      timeout-minutes: 24
       env:
         # SMOKE_NAME is not here: it is set once at job level, so this step and the cleanup step
         # below are guaranteed to be talking about the same containers.
