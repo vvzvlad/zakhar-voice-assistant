@@ -67,7 +67,20 @@ services:
       com.centurylinklabs.watchtower.enable: "true"
     healthcheck:
       # python:3.11-slim ships no curl, so probe /health with the stdlib instead.
+      #
+      # These timings are NOT cosmetic, and the obvious "cheap" choice silently breaks
+      # updates. Portainer's native updater recreates the container and then waits
+      # RollbackTimeout (120 s on this fleet) for it to report healthy; if it has not by
+      # then, the update is reverted and the image enters a cooldown that stops further
+      # attempts, so it does not recover on its own. Docker schedules the FIRST probe one
+      # `interval` after start — so a long interval leaves the container still `starting`
+      # when that gate is judged, and every update gets rolled back while the service
+      # itself is perfectly fine. That is exactly what happened on 2026-08-15 with
+      # `interval: 30m`: State.Health had an EMPTY probe log (never ran), not a failing
+      # one. The app answers /health ~1.5 s after start, so 30 s clears the gate with
+      # room to spare.
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8200/health', timeout=4).status==200 else 1)"]
-      interval: 30m
+      interval: 30s
       timeout: 5s
-      retries: 2
+      retries: 3
+      start_period: 40s
