@@ -125,9 +125,13 @@ request'ах идут те же тесты, та же сборка и тот ж�
 сборку; поменяйте тег в `docker-compose.yml`, чтобы откатиться).
 
 **Обновления** — в compose-файле есть метка
-`com.centurylinklabs.watchtower.enable=true`, поэтому запущенный
-[Watchtower](https://containrrr.dev/watchtower/) сам подтягивает новые образы
-`latest`. Без Watchtower обновляйте вручную:
+`com.centurylinklabs.watchtower.enable=true`: она включает контейнер в
+автоматический передеплой, когда сдвигается `:latest`. Ключ остался
+watchtower-овским по историческим причинам — метку читает собственный
+image-updater Portainer (scope по меткам, опрос раз в 5 минут, с очисткой и
+откатом при неудаче), который понимает её наравне со своей
+`io.portainer.update.enable`; самого Watchtower в схеме нет. Там, где реестр никто
+не опрашивает, обновляйте вручную:
 
 ```bash
 docker compose pull && docker compose up -d
@@ -215,7 +219,7 @@ API-ключи — это обычные строковые поля в JSON (с
 | `models/` | Файлы офлайн-моделей (Vosk / Piper / Silero), скачиваются `make models`. В gitignore; не вшиты в Docker-образ. |
 | `templates/` | Закоммиченные эталонные ассеты (`default_prompt.md`, `default_config.json`), засеваются в `data/` при первом запуске. |
 | `Dockerfile` | Двухстадийная сборка: node-стадия собирает панель, python-стадия несёт только её `dist`; зависимости кешируются до кода; без `EXPOSE`. |
-| `docker-compose.yml` | Шаблон деплоя — образ из реестра Gitea, тома `data` + `models`, аудиопорт публикуется в LAN, метка watchtower. |
+| `docker-compose.yml` | Шаблон деплоя — образ из реестра Gitea, тома `data` + `models`, аудиопорт публикуется в LAN, метка автообновления. |
 | `.gitea/workflows/` | CI: тесты → сборка → смоук-гейт → пуш в `gitea.vvzvlad.xyz` (`<sha>`, затем `latest`). На pull request'ах те же проверки, но без публикации. |
 | `ci/smoke.py` | Гейт между сборкой и пушем: контракт образа, штамп версии, нативные библиотеки VAD, бандл фронтенда, старт и `/health`. |
 | `AGENTS.md` | Конвенции / онбординг для агентов. |

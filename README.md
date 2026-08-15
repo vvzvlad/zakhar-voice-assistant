@@ -121,9 +121,12 @@ everything else is in `data/config.json`.
 swap the tag in `docker-compose.yml` to roll back).
 
 **Updates** — the compose file carries the
-`com.centurylinklabs.watchtower.enable=true` label, so a running
-[Watchtower](https://containrrr.dev/watchtower/) auto-pulls new `latest` images.
-Without Watchtower, update manually:
+`com.centurylinklabs.watchtower.enable=true` label, which opts this container in to
+automatic redeployment when `:latest` moves. The key is Watchtower's for historical
+reasons only: the label is read by Portainer's own native image updater (labelled
+scope, five-minute poll, cleanup and rollback-on-failure), which understands it
+alongside its own `io.portainer.update.enable` — so no Watchtower is involved.
+Where nothing polls the registry, update manually:
 
 ```bash
 docker compose pull && docker compose up -d
@@ -206,7 +209,7 @@ like the admin panel). Tools:
 | `models/` | Offline model files (Vosk / Piper / Silero), fetched by `make models`. Gitignored; not bundled in the Docker image. |
 | `templates/` | Committed reference assets (`default_prompt.md`, `default_config.json`) seeded into `data/` on first boot. |
 | `Dockerfile` | Two-stage build: a node stage builds the panel, the python stage carries only its `dist`; deps cached before code; no `EXPOSE`. |
-| `docker-compose.yml` | Deploy template — image from the Gitea registry, `data` + `models` volumes, audio port published to LAN, watchtower label. |
+| `docker-compose.yml` | Deploy template — image from the Gitea registry, `data` + `models` volumes, audio port published to LAN, auto-update label. |
 | `.gitea/workflows/` | CI: tests → build → smoke gate → push to `gitea.vvzvlad.xyz` (`<sha>` then `latest`). Pull requests run the same checks without publishing. |
 | `ci/smoke.py` | The gate between build and push: image contract, version stamp, native VAD libs, frontend bundle, boot and `/health`. |
 | `AGENTS.md` | Conventions / onboarding for agents. |

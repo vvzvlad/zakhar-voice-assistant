@@ -39,8 +39,8 @@ jobs:
     # advertises it and serves every repository on the instance. Writing the runner's own name here
     # would leave the job queued forever, because no runner offers a label by that name.
     runs-on: ubuntu-latest
-    # The three step-level timeouts below come to 77 minutes (30 tests + 25 build + 22 smoke); 90
-    # leaves 13 on top for checkout, the tag computation and the two cleanup steps. The outer bound
+    # The three step-level timeouts below come to 78 minutes (30 tests + 25 build + 23 smoke); 90
+    # leaves 12 on top for checkout, the tag computation and the two cleanup steps. The outer bound
     # has to EXCEED the sum, not equal it: act_runner kills the whole job when this fires, and a
     # step marked `if: always()` is not guaranteed to run afterwards — so a job that dies mid-smoke
     # leaves containers and a few hundred MB of image sitting on the daemon the entire fleet shares.
@@ -248,9 +248,9 @@ jobs:
       # HuggingFace in the background. That is what lets it run here at all: a pull request has no
       # access to the deployment's keys, and should not.
       #
-      # 22 minutes, against ci/smoke.py's own documented worst case of 1260 s. Same number as the
+      # 23 minutes, against ci/smoke.py's own documented worst case of 1305 s. Same number as the
       # publishing workflow, for the same reason.
-      timeout-minutes: 22
+      timeout-minutes: 23
       env:
         # SMOKE_NAME is not here: it is set once at job level, so this step and the cleanup step
         # below are guaranteed to be talking about the same containers.

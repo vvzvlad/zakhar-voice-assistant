@@ -59,7 +59,7 @@ permissions:
 # ALL OF THAT REQUIRES GITEA >= 1.24, which is where Gitea Actions learned `concurrency`. An older
 # instance does not reject this block, it IGNORES it: the runs stop being serialised, the ordering
 # argued for above simply is not there any more, and nothing in the run list says so — the failure
-# surfaces as production occasionally running the previous commit. This instance is 1.26.4.
+# surfaces as production occasionally running the previous commit.
 concurrency:
   group: image-${{ github.ref }}
   cancel-in-progress: false
@@ -70,8 +70,8 @@ jobs:
     # advertises it and serves every repository on the instance. Writing the runner's own name here
     # would leave the job queued forever, because no runner offers a label by that name.
     runs-on: ubuntu-latest
-    # The four step-level timeouts below come to 92 minutes (30 tests + 25 build + 22 smoke + 15
-    # push); 105 leaves 13 on top for checkout, the tag computation, the registry login, the two
+    # The four step-level timeouts below come to 93 minutes (30 tests + 25 build + 23 smoke + 15
+    # push); 105 leaves 12 on top for checkout, the tag computation, the registry login, the two
     # cleanup steps and the logout. The outer bound has to EXCEED the sum, not equal it: act_runner
     # kills the whole job when this fires, and a step marked `if: always()` is not guaranteed to run
     # afterwards — so a job that dies mid-push leaves the smoke containers and a few hundred MB of
@@ -325,13 +325,13 @@ jobs:
       # gate run on a pull request at all. All four containers it starts carry $SMOKE_NAME, so this
       # run and a concurrent PR check cannot collide, and anything left behind is removable by name.
       #
-      # Step-level `timeout-minutes`, the one act_runner is known to enforce. 22 minutes is set
+      # Step-level `timeout-minutes`, the one act_runner is known to enforce. 23 minutes is set
       # against ci/smoke.py's OWN worst case, which the script documents and sums from its
-      # individual bounds: 1260 s — 21 minutes — if every docker call it makes runs out its
-      # budget, both probes and the four-container `finally` included. In practice the whole gate is
-      # well under two minutes. Being killed BY this timeout is what the margin is for: the script's
-      # own container cleanup would not run, and the `if: always()` step below is what catches that.
-      timeout-minutes: 22
+      # individual bounds: 1305 s — 21 minutes 45 s — if every docker call it makes runs out its
+      # budget, all three probes and the four-container `finally` included. In practice the whole
+      # gate is well under two minutes. Being killed BY this timeout is what the margin is for: the
+      # script's own container cleanup would not run, and the `if: always()` step below catches that.
+      timeout-minutes: 23
       env:
         # SMOKE_NAME is not here: it is set once at job level, so this step and the cleanup step
         # below are guaranteed to be talking about the same containers.
