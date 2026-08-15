@@ -82,14 +82,17 @@ The check is split rather than weakened, and neither half is allowed to be vacuo
   * check (e2), container `-serve`: the same image, still NO volumes, still the image's own CMD,
     but with data/config.json injected before start (`docker create` -> `docker cp` -> `docker
     start`). The injected document is the IMAGE'S OWN TEMPLATE, read back out of the image, with
-    one field changed: the TTS provider is switched to a cloud one that needs no local model file.
-    That is the single thing production supplies via a volume and an image can never contain. With
-    it the whole application really comes up — audio server, panel, MCP endpoint — and /health and
-    the panel are then checked from inside, for real.
+    two fields changed. The TTS provider is switched to a cloud one that needs no local model file:
+    that is the single thing production supplies via a volume and an image can never contain. The
+    stress stage is switched off: the template enables RuAccent, which downloads its model from
+    HuggingFace, and that is the one thing in this configuration that would reach outside the
+    runner. With those two the whole application really comes up — audio server, panel, MCP
+    endpoint — and /health and the panel are then checked from inside, for real.
 
 If the eager Piper load is ever made lazy, (e1) will report the container still running and (e2)'s
-config injection becomes removable. Until then this is the shape of the truth, and it is stated in
-both directions so that neither half can quietly become a formality.
+TTS switch becomes removable. The stress switch does not: it is about the network, not about
+models. Until then this is the shape of the truth, and it is stated in both directions so that
+neither half can quietly become a formality.
 
 Every check is written against a way this image has a realistic chance of shipping broken:
 
@@ -105,9 +108,16 @@ Every check is written against a way this image has a realistic chance of shippi
 * (g) the serving container is still alive at the end and its boot log carries no traceback.
       Outer half.
 
-Nothing here holds a credential or reaches an external service. The one key it invents is a fake
-TTS api_key, needed only because the cloud provider's constructor refuses an empty one; no request
-is ever made with it. A gate that needed a real key could not run on a pull request at all.
+Nothing here holds a credential, and nothing it starts reaches a service outside the runner. Both
+halves of that are properties of the injected config rather than hopes about it. The one key this
+gate invents is a fake TTS api_key, needed only because the cloud provider's constructor refuses an
+empty one; no request is ever made with it. And the stress stage is turned off in the same place,
+because the template enables RuAccent and src/app.py asks for it in the background as soon as the
+panel is up (`reconf.request_initial_load({"stress", "wakeword"})`) — which downloads ~360 MB of
+turbo3.1 from HuggingFace into a container this gate deletes seconds later. Nothing goes red when
+it does: src/reconfig.py catches a failed load per category. That is exactly why it has to be
+turned off here rather than relied upon to fail. A gate that needed a real key, or a round trip to
+a third party, could not run on a pull request at all.
 
 Two properties matter and are easy to lose, so they are stated where they can be checked:
 
@@ -208,6 +218,18 @@ BAREBOOT_EXPECTED_FRAGMENTS = ("FileNotFoundError", "models/ru_RU-ruslan-medium.
 SMOKE_TTS_PROVIDER = "yandex"
 SMOKE_TTS_KEY = "smoke-not-a-real-key"
 
+# The stress provider the serving container's config turns OFF, and it is the one thing in this
+# file that is about the network rather than about the image. The template selects `ruaccent` with
+# `enabled: true`; src/app.py defers that load and asks for it (with wakeword) right after the panel
+# starts, and RuAccentProvider.create then pulls the turbo3.1 model — some 360 MB — from HuggingFace
+# into a container that is removed a few seconds later. Setting `enabled: false` on the selected
+# stress instance is what stops it: RuAccentProvider.create returns a PassthroughAccentizer without
+# touching the model at all (src/plugins/stress/ruaccent.py). Nothing here would go RED without
+# this — src/reconfig.py logs a failed per-category load and carries on — which is precisely why it
+# has to be switched off rather than left to fail: an unattended download is how a gate that
+# advertises "reaches no external service" quietly stops being one.
+SMOKE_STRESS_PROVIDER = "ruaccent"
+
 # The command the image-probe container runs INSTEAD of the image's own. The image's own command
 # cannot survive without models (see the module docstring), so a probe container started with it
 # would be racing a process on its way out. A sleeping container is a stable place to `docker exec`
@@ -244,6 +266,25 @@ HTTP_PROBE_MARKER = "zakhar http probe ok"
 EXPECTED_IMAGE_PROBE_TARGETS = 23
 EXPECTED_HTTP_PROBE_TARGETS = 5
 
+# The same argument, applied to the OUTER half — and it applies just as literally. A `check_*` in
+# this file that stopped emitting rows (an early `return rows` added to a branch, a loop over a list
+# that became empty) takes its own verdicts out of the report without taking anything red with them:
+# every row that WAS printed still says ok, the exit status is still 0, and the last line still
+# reads `smoke ok: N/N` — with a smaller N that nobody reads as a number. So the count is pinned
+# here too and checked in main() before the summary is printed.
+#
+# The full run: 3 rows from the image contract, 1 for the template read, 1 for the probe
+# container's start, 23 + 2 from the image probe (its own verdicts plus the two consistency rows
+# run_probe adds), 6 from the bare boot, 3 + 3 from the serving container's start and boot, 5 + 2
+# from the http probe, and 1 for the serving container still being alive.
+EXPECTED_TOTAL_TARGETS = 50
+# The one legitimate path with a different count: the image's config template could not be read, so
+# there is no document to inject and the whole serving block (3 + 3 + 5 + 2 + 1 = 14 rows) is
+# replaced by the two "not attempted" rows main() reports in its place. That path is red by
+# construction — the template row above it already failed — but the count still has to be right, or
+# this check would bury the real failure under a bogus one about its own arithmetic.
+EXPECTED_TEMPLATELESS_TARGETS = EXPECTED_TOTAL_TARGETS - 14 + 2
+
 # The prefix put in front of every row a probe reported, so the merged report says where each
 # verdict was decided. Without it a reader of thirty result lines cannot tell which of them were
 # taken from inside a container and which from the runner.
@@ -262,15 +303,18 @@ HTTP_PROBE_ROW_PREFIX = "[in-container] "
 #   + 30 (rm probe)     + 60 (run -d: the idle container)                            =  90
 #   + 120 (docker exec: the image probe)                                             = 120
 #   + 30 (rm bareboot)  + 60 (run -d)   + 90 (marker poll: 60 budget + one 30 s logs)
-#                       + 30 (docker cp the config out) + 30 (inspect its state)     = 240
+#                       + 60 (exit poll: 30 budget + one 30 s inspect)
+#                       + 30 (re-read the log once it is final)
+#                       + 30 (docker cp the config out)                              = 300
 #   + 30 (rm serve)     + 60 (create)   + 30 (cp the config in) + 60 (start)         = 180
 #   + 90 (marker poll on the serving container: 60 budget + one 30 s logs)           =  90
 #   + 180 (docker exec: the http probe)                                              = 180
 #   + 30 (inspect the serving container) + 30 (one last `docker logs` for the log)   =  60
 #   + 120 (the `finally`: 4 x 30)                                                    = 120
-#   = 1200 s, exactly 20 minutes. Both workflows allow 22.
+#   = 1260 s, 21 minutes. Both workflows allow 22.
 # A marker poll is bounded at BOOT_BUDGET in WALL CLOCK plus, in the worst case, one `docker logs`
-# that started just before the deadline — hence 60 + 30 rather than 60.
+# that started just before the deadline — hence 60 + 30 rather than 60. The bare container's exit
+# poll is bounded the same way against BAREBOOT_EXIT_BUDGET and one `docker inspect`.
 # Four of these `rm`s are pre-run cleanups: every container this gate starts is removed by name
 # before it is started, so a re-run from the UI — which keeps the same run id, hence the same
 # $SMOKE_NAME — cannot die on "name already in use".
@@ -294,6 +338,17 @@ LOGS_TIMEOUT = 30
 # shared runner right after a build needs.
 BOOT_BUDGET = 60
 BOOT_PAUSE = 0.5
+
+# How long the BARE container is given to reach a terminal state after it has logged its startup
+# line, before this gate concludes it is going to keep running. It exists because the marker is
+# main.py's FIRST line and the failure this check is about happens a second or two LATER: `from
+# piper import PiperVoice` drags in onnxruntime, and only then does PiperVoice.load open the .json
+# that is not there. A verdict taken at the marker would accept any container that had merely not
+# died YET as "the eager load is gone" — the one thing check (e1) promises it can tell apart.
+# Spent only when the container really does survive, i.e. only on the day that promise comes true;
+# a container that dies polls out in a second or two. 30 s is roughly fifteen times the observed
+# gap, which is the margin a shared runner right after a build needs.
+BAREBOOT_EXIT_BUDGET = 30
 
 # How much of an unexpected output reaches the log. Container logs can run to thousands of lines
 # when something loops, and an unbounded dump would bury the verdict.
@@ -939,8 +994,8 @@ def main():
     else:
         reason = (
             "it answered {!r} (last error: {}). /api/system is registered unconditionally in "
-            "PanelServer.start(), so it is the one panel route that cannot be absent — a failure "
-            "here means the panel is not serving at all".format(
+            "PanelServer.build_app(), so it is the one panel route that cannot be absent — a "
+            "failure here means the panel is not serving at all".format(
                 status, describe(error) if error is not None else "none"))
         rows.append((system_target, reason))
         rows.append((version_target, "not attempted: " + reason))
@@ -1071,6 +1126,30 @@ def container_state(name):
     return output.strip(), output
 
 
+def wait_for_exit(name, budget):
+    """Poll container_state() until the container is no longer running, or the budget runs out.
+
+    Returns (state, output, still_running). `still_running` is True ONLY when the container was
+    still up at the deadline, i.e. when it survived the whole budget — which is a different
+    statement from "it had not died yet when we happened to look", and that difference is the entire
+    reason this exists rather than a single inspect at the startup marker.
+
+    Bounded in WALL CLOCK for the same reason wait_for_marker is: each attempt shells out with its
+    own 30 s bound, and an attempt-counted loop would multiply into minutes on a slow daemon.
+    """
+    deadline = time.monotonic() + budget
+    while True:
+        state, output = container_state(name)
+        if state is None:
+            # Could not be read at all; the caller reports that rather than guessing an outcome.
+            return None, output, False
+        if not state.startswith("true"):
+            return state, output, False
+        if time.monotonic() >= deadline:
+            return state, output, True
+        time.sleep(BOOT_PAUSE)
+
+
 def check_image_contract(image):
     """(a) What the image DECLARES: its command, where it runs, and that nothing wraps them."""
     rows = []
@@ -1147,23 +1226,39 @@ def read_template(image, name):
 
 
 def build_serving_config(template):
-    """The template with its TTS provider switched to one that needs no model file.
+    """The template with its TTS provider switched to one that needs no model file, and its stress
+    stage switched off.
 
-    THIS IS THE ONE PLACE THIS GATE DEVIATES FROM PRODUCTION'S CONFIGURATION, and the module
-    docstring explains why at length: the image contains no models by design, the template selects
-    Piper, and Piper loads its voice file eagerly during boot — before the audio server is started.
-    Production supplies that file on the /app/models volume; a gate cannot.
+    THIS IS THE ONLY PLACE THIS GATE DEVIATES FROM PRODUCTION'S CONFIGURATION, and it deviates in
+    exactly two fields, for two different reasons.
 
-    Exactly one key is changed, and the rest of the document is production's own template, so
-    everything else about this boot — the audio server, the panel, the MCP endpoint, the prompt
-    store, the reminders scheduler, the device manager — is configured the way a real first boot
-    configures it. The api_key is required only because the cloud provider's constructor refuses an
-    empty one; no request is ever made with it.
+    TTS, because the module docstring's long version applies: the image contains no models by
+    design, the template selects Piper, and Piper loads its voice file eagerly during boot — before
+    the audio server is started. Production supplies that file on the /app/models volume; a gate
+    cannot. The api_key is required only because the cloud provider's constructor refuses an empty
+    one; no request is ever made with it.
+
+    STRESS, because the template enables RuAccent and src/app.py asks for it in the background the
+    moment the panel is up, which downloads ~360 MB from HuggingFace into a container that is
+    removed seconds later. That is a slow, unattended reach outside the runner in a gate whose whole
+    claim is that it makes none — and it is invisible in the report either way, because
+    src/reconfig.py catches a failed per-category load. `enabled: false` on the SELECTED stress
+    instance is what actually prevents the load: RuAccentProvider.create returns a
+    PassthroughAccentizer before touching the model. Written against `selected` rather than against
+    the constant alone so that a template which switches stress providers is still turned off; the
+    constant is what says which provider this was written for.
+
+    Everything else is production's own template, so the rest of this boot — the audio server, the
+    panel, the MCP endpoint, the prompt store, the reminders scheduler, the device manager — is
+    configured the way a real first boot configures it.
     """
     document = json.loads(json.dumps(template))  # deep copy: the caller keeps the pristine template
     tts = document.setdefault("tts", {})
     tts["selected"] = SMOKE_TTS_PROVIDER
     tts.setdefault("instances", {})[SMOKE_TTS_PROVIDER] = {"api_key": SMOKE_TTS_KEY}
+    stress = document.setdefault("stress", {})
+    selected_stress = stress.get("selected") or SMOKE_STRESS_PROVIDER
+    stress.setdefault("instances", {}).setdefault(selected_stress, {})["enabled"] = False
     return document
 
 
@@ -1264,6 +1359,11 @@ def check_bare_boot(image, name):
     The container is started detached and WITHOUT `--rm`, so its filesystem and its state can still
     be read after it has exited — `docker cp` and `docker inspect` both work on a stopped container,
     which is what makes the config-on-disk row possible at all.
+
+    ORDER MATTERS HERE: wait for the startup line, then wait for the container to reach a TERMINAL
+    state, then re-read the log, and only then judge. Every verdict below is about a boot that is
+    over; see the long comment at the settle step for what taking them at the marker instead would
+    accept and what it would falsely reject.
     """
     rows = []
     start_target = "`docker run -d` starts {} with the image's own command and no volumes".format(
@@ -1298,6 +1398,34 @@ def check_bare_boot(image, name):
             rows.append((target, "`docker logs` exited {}: {}".format(log_status, excerpt(logs))))
         return rows, logs
 
+    # NOTHING below is decided on the log wait_for_marker just returned, and that is the point of
+    # this block. The marker is main.py's FIRST line; the interesting half of this boot happens
+    # AFTER it, a second or two later — `from piper import PiperVoice` pulls in onnxruntime, and
+    # only then does PiperVoice.load open the .json that is not there. A snapshot taken the instant
+    # the marker appeared is therefore a log that is still being written, and judging it costs both
+    # kinds of wrong answer at once: the outcome row's "still running" branch would accept any
+    # container that had not died YET (the branch that is supposed to mean "the eager load became
+    # lazy" would mean "we looked too early"), while a container that died a moment later — with its
+    # traceback not yet in the snapshot — would be reported as a NEW, unknown failure. The
+    # template-copy row has the same problem in miniature: it is printed milliseconds after the
+    # marker, so the snapshot can miss a line whose file the `docker cp` below then fetches
+    # successfully, and the report contradicts itself two rows apart.
+    # So: wait for a terminal state with an explicit budget, re-read the log, and decide everything
+    # from THAT. The budget is only ever spent by a container that really did survive.
+    state, state_output, still_running = wait_for_exit(name, BAREBOOT_EXIT_BUDGET)
+    log_status, logs = docker(["logs", name], LOGS_TIMEOUT)
+    if log_status != 0:
+        # The daemon answered `docker logs` for this container moments ago, so this is an anomaly
+        # rather than a slow start. Reported instead of quietly falling back to the stale snapshot:
+        # a verdict taken from that snapshot is the exact thing this block exists to stop.
+        for target in every_target:
+            rows.append((target, (
+                "the container reached its startup line, but re-reading its log once it had settled "
+                "failed: `docker logs` exited {}: {}. Every verdict below is about the FINAL log, "
+                "so none of them can be decided from the partial one taken at the marker".format(
+                    log_status, excerpt(logs)))))
+        return rows, logs
+
     reached = STARTUP_MARKER in logs
     rows.append((marker_target, None if reached else (
         "it never appeared in {} s. That line is printed by main.py before asyncio.run(), so its "
@@ -1317,7 +1445,11 @@ def check_bare_boot(image, name):
     os.close(handle)
     copy_status, copy_output = docker(["cp", "{}:{}".format(name, CONFIG_PATH), local_path],
                                       COPY_TIMEOUT)
-    if copy_status != 0:
+    if copy_status is None:
+        # No exit code at all: timed out, or docker is gone. docker()'s own message says which, and
+        # neither is "the file is not there" — which is what the branch below would claim.
+        rows.append((config_target, copy_output))
+    elif copy_status != 0:
         rows.append((config_target, (
             "`docker cp` exited {}: {}. On a fresh container this file is the ONLY thing the first "
             "boot is supposed to produce, so its absence means the deployment's very first start "
@@ -1359,15 +1491,15 @@ def check_bare_boot(image, name):
             "there is the image failing before the application begins. "
             "Before the marker:\n{}".format(excerpt(before)))))
 
-    state, state_output = container_state(name)
     if state is None:
         rows.append((outcome_target, "docker inspect failed: {}".format(excerpt(state_output))))
-    elif state.startswith("true"):
-        # A future in which the eager Piper load became lazy. Not a failure — an improvement — and
-        # this row deliberately accepts it so that fixing the app does not redden the gate. When
-        # this starts happening, the config injection in check (e2) can be dropped.
-        rows.append(("{} (still running: the eager model load appears to be gone)".format(
-            outcome_target), None))
+    elif still_running:
+        # SURVIVED THE WHOLE BUDGET, not merely "was up when we looked": a future in which the eager
+        # Piper load became lazy. Not a failure — an improvement — and this row deliberately accepts
+        # it so that fixing the app does not redden the gate. When this starts happening, the TTS
+        # switch in check (e2) can be dropped (the stress switch cannot; see build_serving_config).
+        rows.append(("{} (still running {} s after its startup line: the eager model load appears "
+                     "to be gone)".format(outcome_target, BAREBOOT_EXIT_BUDGET), None))
     elif all(fragment in logs for fragment in BAREBOOT_EXPECTED_FRAGMENTS):
         rows.append(("{} (stopped on the missing Piper voice, as expected)".format(outcome_target),
                      None))
@@ -1408,6 +1540,15 @@ def start_serving_container(image, name, version, config):
         + environment_flags(CONTAINER_ENV + ["{}={}".format(PROBE_VERSION_ENV, version)])
         + [image],
         CREATE_TIMEOUT)
+    # `status is None` means there was no exit code at all — the call timed out or docker is
+    # missing — and docker()'s message already says which. Kept apart from a non-zero exit the way
+    # read_template() and check_bare_boot() keep them apart: folded together, the report reads
+    # "`docker create` exited None", which describes nothing that happened.
+    if status is None:
+        rows.append((create_target, output))
+        for target in every_target:
+            rows.append((target, "not attempted: the container could not be created"))
+        return rows, False
     if status != 0:
         rows.append((create_target, "`docker create` exited {}:\n{}".format(
             status, excerpt(output))))
@@ -1424,6 +1565,10 @@ def start_serving_container(image, name, version, config):
         os.unlink(local_path)
     except OSError:
         pass
+    if status is None:
+        rows.append((copy_target, output))
+        rows.append((start_target, "not attempted: the config was not copied in"))
+        return rows, False
     if status != 0:
         rows.append((copy_target, "`docker cp` exited {}:\n{}".format(status, excerpt(output))))
         rows.append((start_target, "not attempted: the config was not copied in"))
@@ -1431,6 +1576,9 @@ def start_serving_container(image, name, version, config):
     rows.append((copy_target, None))
 
     status, output = docker(["start", name], START_TIMEOUT)
+    if status is None:
+        rows.append((start_target, output))
+        return rows, False
     if status != 0:
         rows.append((start_target, "`docker start` exited {}:\n{}".format(
             status, excerpt(output))))
@@ -1444,6 +1592,16 @@ def check_serving_boot(name, started):
 
     Returns (rows, logs). The HTTP probe runs after this and does the actual serving checks; this
     establishes that there is something to probe and that it is the program we think it is.
+
+    It waits for the TTS BACKEND line rather than for the startup line, and that is not a cosmetic
+    choice of marker. The startup line is main.py's first, printed before asyncio.run(); everything
+    the two rows below are about happens after it — src/app.py builds the ConfigDoc, opens two
+    httpx clients and calls svc.create() four times before it logs which TTS backend it got. A wait
+    that returned on the startup line would leave both verdicts to be taken from a one-line log:
+    the config row would report "the injected config was not read" on a container that was still
+    reading it, and the traceback row would be looking at a log with nothing in it yet. Waiting for
+    the later marker costs nothing on a healthy boot (it arrives a moment after the first line) and
+    bounds the sick one at the same BOOT_BUDGET, with a log that by then holds the failure.
     """
     marker_target = "the serving container logs {!r} (bounded at {} s)".format(
         STARTUP_MARKER, BOOT_BUDGET)
@@ -1457,7 +1615,7 @@ def check_serving_boot(name, started):
         return [(target, "not attempted: the container never started") for target in every_target], \
             ""
 
-    log_status, logs = wait_for_marker(name, STARTUP_MARKER, BOOT_BUDGET)
+    log_status, logs = wait_for_marker(name, tts_marker, BOOT_BUDGET)
     if log_status != 0:
         return [(target, "`docker logs` exited {}: {}".format(log_status, excerpt(logs)))
                 for target in every_target], logs
@@ -1474,12 +1632,16 @@ def check_serving_boot(name, started):
         "absence means the injected data/config.json was not read: either the copy landed "
         "somewhere else or something rewrote it. Logs:\n{}".format(excerpt(logs)))))
 
-    # The whole log this time, not only the part before the marker. In THIS container the marker is
-    # still main.py's first line, but everything that follows — building the backends, starting the
-    # audio server, starting the panel — is a boot that is supposed to succeed, so a traceback
-    # anywhere in it is a finding. The deferred stress/wakeword loads that run after the panel is up
-    # report their failures with logger.error and no traceback (src/reconfig.py catches them
-    # per-category), which is what keeps this row from flapping on a runner with no model files.
+    # The whole log this time, not only the part before the startup line: unlike the bare container,
+    # this one is given everything it needs, so every stage of its boot is supposed to succeed and a
+    # traceback anywhere is a finding. Thanks to the wait above that log now covers the boot through
+    # backend construction rather than one line. What comes AFTER the TTS line — the panel, the MCP
+    # endpoint, the audio server — is not left unchecked either, it is simply checked by better
+    # instruments than a log grep: the HTTP probe asks those servers directly and
+    # check_container_alive establishes the process outlived all of it. The deferred stress/wakeword
+    # loads that run after the panel is up report their failures with logger.error and no traceback
+    # (src/reconfig.py catches them per-category), which is what keeps this row from flapping on a
+    # runner with no model files.
     rows.append((trace_target, None if "Traceback (most recent call last)" not in logs else (
         "there is one. This container is given everything it needs to come up, so a traceback in "
         "its boot log is the image failing at something that has nothing to do with the missing "
@@ -1547,6 +1709,10 @@ def main():
 
     rows = []
     transcripts = []
+    # How many verdicts this run is supposed to end with; checked against the real count below. The
+    # only legitimate reason for it to change is the template-less branch, which says so where it
+    # takes it.
+    expected_targets = EXPECTED_TOTAL_TARGETS
 
     rows.extend(check_image_contract(image))
 
@@ -1576,6 +1742,8 @@ def main():
             reason = "not attempted: the image's config template could not be read"
             for target in ("the serving container", "the http probe"):
                 rows.append((target, reason))
+            # Two rows where the serving block's fourteen would have been.
+            expected_targets = EXPECTED_TEMPLATELESS_TARGETS
         else:
             serve_rows, serve_started = start_serving_container(
                 image, name + SERVE_SUFFIX, version, build_serving_config(template))
@@ -1615,6 +1783,21 @@ def main():
         print(excerpt(text).rstrip() or "(no output)")
     print("")
     print("--- results ---")
+
+    # Before a single verdict is printed: the NUMBER of verdicts is itself one. The two probes are
+    # already held to an exact count (see EXPECTED_IMAGE_PROBE_TARGETS) for a reason that applies
+    # word for word out here — a check_* that stopped emitting rows takes its own verdicts out of
+    # the report and takes nothing red with them, so the run ends `smoke ok: 48/48` and exits 0 with
+    # every printed row saying ok and two claims silently no longer made. Appended as an ordinary
+    # failure row so the printing and the summary below need to know nothing about it; on a correct
+    # run the count matches and no row is added at all.
+    if len(rows) != expected_targets:
+        rows.append((
+            "this gate produced all {} of the verdicts it is supposed to".format(expected_targets),
+            "it produced {}. Either a check stopped emitting rows — in which case this gate is now "
+            "proving less than it says it does and nothing else here would have noticed — or one "
+            "was added or removed and EXPECTED_TOTAL_TARGETS (or, on the template-less path, "
+            "EXPECTED_TEMPLATELESS_TARGETS) needs updating".format(len(rows))))
 
     failures = []
     for target, reason in rows:

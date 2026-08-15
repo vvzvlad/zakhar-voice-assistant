@@ -23,8 +23,8 @@ volumes:
   # is started. Without this mount the container writes its first-boot config and
   # then dies with FileNotFoundError on that path, so /health never answers and the
   # healthcheck below never passes.
-  # This volume exists on the deployment and was missing from this file; the two
-  # are now in step. Populate it by copying the model files in (see README).
+  # Nothing fills this volume automatically: populate it by copying the model files
+  # in by hand (see README).
   zakhar-voice-assistant-models:
 
 services:
@@ -58,7 +58,13 @@ services:
         max-file: 5
         max-size: 10m
     labels:
-      com.centurylinklabs.watchtower.enable: "true"   # auto-update the image
+      # Opts this container in to automatic redeployment when `:latest` moves. The key is
+      # watchtower's for historical reasons — watchtower itself is long gone from this fleet —
+      # and the label is now read by Portainer's own native image updater, which understands it
+      # alongside its own `io.portainer.update.enable`, so the fleet never had to be relabelled.
+      # Keep it in step with the tag on the `image:` line above: an updater pointed at a tag CI
+      # never moves is an updater that silently does nothing.
+      com.centurylinklabs.watchtower.enable: "true"
     healthcheck:
       # python:3.11-slim ships no curl, so probe /health with the stdlib instead.
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8200/health', timeout=4).status==200 else 1)"]

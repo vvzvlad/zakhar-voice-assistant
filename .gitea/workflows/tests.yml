@@ -94,9 +94,22 @@ jobs:
         docker rm -f "$SMOKE_NAME-tests" || true
         # --exclude paths that are large, useless in the container, or actively harmful: .git is the
         # full history this job deliberately fetched, .venv and node_modules are host-built trees
-        # that would shadow the ones pip/npm produce, models/ holds hundreds of megabytes of voices
-        # no test reads.
-        tar --exclude=./.git --exclude=./.venv --exclude=./frontend/node_modules --exclude=./models -cf - . | docker run --rm -i --name "$SMOKE_NAME-tests" -w /w python:3.11-slim bash -c '
+        # that would shadow the ones pip/npm produce, and data/ is runtime state that does not exist
+        # on the runner but does on a workstation — where this same command, run by hand to
+        # reproduce a CI failure, would otherwise ship the developer's data/config.json and every
+        # real API key in it into the container.
+        # models/ is hundreds of megabytes of voices, and excluding it is NOT free the way the other
+        # four are: the TEN and Silero VAD integration tests are skipif-gated on those files being
+        # present (tests/test_vad_ten.py, tests/test_vad_silero.py), so the exclusion decides
+        # whether they run. On a CI checkout the directory does not exist and nothing changes; run
+        # by hand on a populated workstation this quietly turns the very tests libc++1 is installed
+        # for into skips. Drop the exclusion to get them, and pay the upload.
+        # --pull always on the container for the same reason `docker build --pull` carries it below:
+        # this runner is self-hosted with a persistent daemon, so a once-pulled python:3.11-slim
+        # would serve every run for months. Here that image is both the interpreter the whole suite
+        # runs on and the apt sources libc++1/libc++abi1 are fetched from, which makes it an
+        # explicit, versioned input rather than whatever happens to be in the cache.
+        tar --exclude=./.git --exclude=./.venv --exclude=./frontend/node_modules --exclude=./models --exclude=./data -cf - . | docker run --rm -i --pull always --name "$SMOKE_NAME-tests" -w /w python:3.11-slim bash -c '
           set -e
           tar -xf -
           for i in 1 2 3; do apt-get update && break; sleep 5; done
@@ -229,10 +242,13 @@ jobs:
       # known place and nowhere else) and one given a model-free config (which proves /health, the
       # panel and the version the panel reports).
       #
-      # The gate holds no credential and reaches no external service, which is what lets it run here
-      # at all: a pull request has no access to the deployment's keys, and should not.
+      # The gate holds no credential, and the container it boots reaches nothing outside this
+      # runner — the config ci/smoke.py injects invents a fake TTS key and switches the stress stage
+      # off, the latter because the image's template would otherwise pull a RuAccent model from
+      # HuggingFace in the background. That is what lets it run here at all: a pull request has no
+      # access to the deployment's keys, and should not.
       #
-      # 22 minutes, against ci/smoke.py's own documented worst case of 1200 s. Same number as the
+      # 22 minutes, against ci/smoke.py's own documented worst case of 1260 s. Same number as the
       # publishing workflow, for the same reason.
       timeout-minutes: 22
       env:
