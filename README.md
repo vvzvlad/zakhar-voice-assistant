@@ -64,24 +64,33 @@ deliberately NOT in `requirements.txt` or the Docker image — so install it
 yourself (e.g. `pip install torch`) to use that provider.
 
 Docker note: the published image ships WITHOUT model files (the Dockerfile neither
-downloads nor bundles `models/`) and the compose volume mounts only `/app/data`, so
-a container runs only the cloud providers out of the box. To use the offline
-backends in Docker, provide a populated `models/` directory (e.g. run `make models`
-on the host and mount it into the container).
+downloads nor bundles `models/`), so `docker-compose.yml` mounts a second named
+volume, `zakhar-voice-assistant-models`, at `/app/models` — and it has to be
+populated. This is not optional the way "offline backends are optional" suggests:
+`templates/default_config.json` selects the **Piper** TTS voice at
+`models/ru_RU-ruslan-medium.onnx`, and `src/plugins/tts/piper.py` loads it EAGERLY
+while `src/app.py` is still building backends — before the audio server starts. A
+container with an empty models volume therefore writes its first-boot config and
+then exits with `FileNotFoundError`; it does not fall back to cloud-only. Run
+`make models` on the host and copy the result into the volume, or switch
+`tts.selected` to a cloud provider in `data/config.json` before the first boot.
 
 ## Deployment
 
 Production runs the **prebuilt image** from
-`ghcr.io/vvzvlad/zakhar-voice-assistant` — never build on the box. CI builds and
-pushes the image on every green push to `main`; `docker-compose.yml` in the repo
-root is the ready-to-use deploy template (pull, don't build).
+`gitea.vvzvlad.xyz/projects/zakhar-voice-assistant` — never build on the box. CI
+builds the image on every push to `main`, smoke-tests it, and pushes it only if the
+gate passes (`.gitea/workflows/image-check-publish.yml`); pull requests run the
+identical tests, build and gate but never publish (`.gitea/workflows/tests.yml`).
+`docker-compose.yml` in the repo root is the ready-to-use deploy template (pull,
+don't build).
 
 1. Copy `docker-compose.yml` to the host — it is the only file you need (the image
    carries the code; no checkout required on prod).
 2. Pull and start:
 
    ```bash
-   docker compose pull        # fetch the prebuilt ghcr.io image
+   docker compose pull        # fetch the prebuilt image from the Gitea registry
    docker compose up -d       # start in the background
    ```
 
@@ -100,7 +109,9 @@ root is the ready-to-use deploy template (pull, don't build).
 
 **State** — all mutable state (config, per-device context, `prompts.db`) lives in
 the `zakhar-voice-assistant` named volume mounted at `/app/data`, so it survives
-restarts and image updates.
+restarts and image updates. A second volume, `zakhar-voice-assistant-models`, is
+mounted at `/app/models` and holds the offline model files, which are not in the
+image (see the Docker note under [Quick start](#quick-start)).
 
 **Environment** — only `TZ` (container timezone) and the panel bind
 `PANEL_HOST` / `PANEL_PORT` (defaults `0.0.0.0` / `8201`) are env-tunable;
@@ -120,9 +131,10 @@ docker compose pull && docker compose up -d
 
 A built-in healthcheck probes `http://127.0.0.1:8200/health` every 30 min.
 
-> Offline STT/TTS models are **not** in the image — out of the box a container runs
-> only the cloud providers. To use the offline backends, mount a populated
-> `models/` directory (see [Quick start](#quick-start)).
+> Offline STT/TTS models are **not** in the image; they live on the
+> `zakhar-voice-assistant-models` volume mounted at `/app/models`. That volume must
+> be populated — with the stock config the container does not boot without it (see
+> the Docker note under [Quick start](#quick-start)).
 
 ## Configuration
 
@@ -193,15 +205,17 @@ like the admin panel). Tools:
 | `data/` | Runtime state: `config.json`, per-device context, `prompts.db` (named system-prompt profiles). Gitignored, mounted as a volume. |
 | `models/` | Offline model files (Vosk / Piper / Silero), fetched by `make models`. Gitignored; not bundled in the Docker image. |
 | `templates/` | Committed reference assets (`default_prompt.md`, `default_config.json`) seeded into `data/` on first boot. |
-| `Dockerfile` | Slim single-stage build; deps cached before code; no `EXPOSE`. |
-| `docker-compose.yml` | Deploy template — image from `ghcr.io`, volume, audio port published to LAN, watchtower label. |
-| `.github/workflows/` | CI: `test` → `build` → push to `ghcr.io` (`latest` + sha). |
+| `Dockerfile` | Two-stage build: a node stage builds the panel, the python stage carries only its `dist`; deps cached before code; no `EXPOSE`. |
+| `docker-compose.yml` | Deploy template — image from the Gitea registry, `data` + `models` volumes, audio port published to LAN, watchtower label. |
+| `.gitea/workflows/` | CI: tests → build → smoke gate → push to `gitea.vvzvlad.xyz` (`<sha>` then `latest`). Pull requests run the same checks without publishing. |
+| `ci/smoke.py` | The gate between build and push: image contract, version stamp, native VAD libs, frontend bundle, boot and `/health`. |
 | `AGENTS.md` | Conventions / onboarding for agents. |
 
 ## Rules in one breath
 
 All mutable state in `data/`; all config in `data/config.json` (providers self-describe
 their settings; the config core never hardcodes provider fields); tests are mandatory and
-gate the Docker build; deploy a prebuilt `ghcr.io` image via docker-compose. Unlike a public
+gate the Docker build, and a smoke gate stands between the build and the registry; deploy a
+prebuilt image from the Gitea registry via docker-compose. Unlike a public
 web service, the audio port is published straight to the LAN (no Traefik) so speakers can
 fetch audio.

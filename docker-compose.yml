@@ -1,4 +1,4 @@
-# Deploy template. Pull the prebuilt image from ghcr.io — do NOT build on prod.
+# Deploy template. Pull the prebuilt image from the Gitea registry — do NOT build on prod.
 # Values below are PLACEHOLDERS (XXX / your_..._here), not real secrets.
 #
 # Deviation from the canonical web template: this is a LAN device<->server service,
@@ -14,14 +14,32 @@
 
 volumes:
   zakhar-voice-assistant:
+  # Offline model files (Piper/Silero voices, the Vosk STT+wakeword model, the
+  # Silero VAD onnx). They are hundreds of megabytes and are deliberately NOT in
+  # the image — the Dockerfile copies only src/, templates/, main.py and the built
+  # frontend — so this volume is what makes the image runnable at all: the config
+  # template selects the Piper TTS voice at models/ru_RU-ruslan-medium.onnx and
+  # src/plugins/tts/piper.py loads it EAGERLY during boot, before the audio server
+  # is started. Without this mount the container writes its first-boot config and
+  # then dies with FileNotFoundError on that path, so /health never answers and the
+  # healthcheck below never passes.
+  # This volume exists on the deployment and was missing from this file; the two
+  # are now in step. Populate it by copying the model files in (see README).
+  zakhar-voice-assistant-models:
 
 services:
   zakhar-voice-assistant:
-    image: ghcr.io/vvzvlad/zakhar-voice-assistant:latest
+    # Built and published by .gitea/workflows/image-check-publish.yml, which derives
+    # this path from the repository it runs in. This line is hand-written, so it is
+    # the one place that has to be changed by hand if the registry or the repo moves.
+    image: gitea.vvzvlad.xyz/projects/zakhar-voice-assistant:latest
     container_name: zakhar-voice-assistant
     restart: always
     volumes:
       - zakhar-voice-assistant:/app/data   # all mutable state survives restart/update
+      # Model files, read-only to the app in practice but mounted rw so they can be
+      # updated in place. Required for boot — see the note on the volume above.
+      - zakhar-voice-assistant-models:/app/models
     ports:
       # Must match core.audio.port in data/config.json (default 8200).
       - "8200:8200"                          # publish the audio server to the LAN
