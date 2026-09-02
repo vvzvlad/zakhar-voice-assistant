@@ -264,7 +264,7 @@ async def test_ensure_tools_stays_empty_when_reload_still_fails(monkeypatch):
 # (tests/fixtures/mcp_smarthome_wire.json) through the project's REAL code path:
 #   McpToolHub.start()/call()  ->  real streamablehttp_client  ->  real
 #   mcp.ClientSession / mcp.types decoder, with only the HTTP transport mocked
-#   by respx (fully offline; no socket to 10.31.41.62 is ever opened).
+#   by respx (fully offline; no socket to 192.0.2.20 is ever opened).
 #
 # Approach used: respx transport mock (the IMPLEMENTATION PLAN's preferred path).
 # It works because the recorded server is STATELESS (session_id_present == false):

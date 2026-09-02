@@ -1,5 +1,5 @@
 {
-  "url": "http://10.31.41.62:8001/mcp",
+  "url": "http://192.0.2.20:8001/mcp",
   "protocol_requested": "2025-03-26",
   "session_id_present": false,
   "protocol_negotiated": "2025-03-26",

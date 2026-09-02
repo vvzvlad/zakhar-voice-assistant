@@ -18,6 +18,13 @@ models/
 # Claude Code git worktrees — must never be committed
 .claude/worktrees/
 
+# Claude Code session transcripts dumped at the repo root by the CLI. Hundreds of
+# megabytes of raw conversation, including real internal hostnames and addresses —
+# a single `git add -A` would publish all of it. The trailing `*` also catches the
+# longer names a worktree session dumps under (…-assistant-.claude-worktrees-<name>);
+# the leading `/` keeps the rule anchored to the repo root.
+/-Users-vvzvlad-Data-Projects-zakhar-voice-assistant*/
+
 # Generated at Docker build time by the version-stamp step
 src/_version.txt
 Pipfile.lock
