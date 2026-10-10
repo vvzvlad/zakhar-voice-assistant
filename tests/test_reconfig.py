@@ -469,14 +469,18 @@ async def test_reloading_reports_category_in_flight_then_clears():
 
 # --- run_loop (queue drain task) ---------------------------------------------
 
-async def _wait_for(predicate, *, max_iters=50):
-    """Yield to the loop (bounded) until predicate() is truthy; return whether it became
-    true. Deterministic and bounded -- no unbounded waits."""
-    for _ in range(max_iters):
-        if predicate():
-            return True
-        await asyncio.sleep(0)
-    return predicate()
+async def _wait_for(predicate, *, timeout=5.0, interval=0.005):
+    """Poll predicate() every `interval` seconds until it is truthy; return whether it
+    became true. Bounded by `timeout` seconds of wall-clock time, not by scheduler turns:
+    the awaited state is often reached in a to_thread() worker, which a loaded machine
+    can delay well past any fixed number of event-loop yields."""
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while not predicate():
+        if loop.time() >= deadline:
+            return False
+        await asyncio.sleep(interval)
+    return True
 
 
 @pytest.mark.asyncio
