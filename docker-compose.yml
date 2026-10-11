@@ -58,27 +58,17 @@ services:
         max-file: 5
         max-size: 10m
     labels:
-      # Opts this container in to automatic redeployment when `:latest` moves. The key is
-      # watchtower's for historical reasons — watchtower itself is long gone from this fleet —
-      # and the label is now read by Portainer's own native image updater, which understands it
-      # alongside its own `io.portainer.update.enable`, so the fleet never had to be relabelled.
-      # Keep it in step with the tag on the `image:` line above: an updater pointed at a tag CI
-      # never moves is an updater that silently does nothing.
+      # Opts in to automatic redeployment when `:latest` moves. Portainer's native image updater
+      # reads this watchtower-named label alongside `io.portainer.update.enable`. Keep it in step
+      # with the tag on the `image:` line above.
       com.centurylinklabs.watchtower.enable: "true"
     healthcheck:
       # python:3.11-slim ships no curl, so probe /health with the stdlib instead.
       #
-      # These timings are NOT cosmetic, and the obvious "cheap" choice silently breaks
-      # updates. Portainer's native updater recreates the container and then waits
-      # RollbackTimeout (120 s on this fleet) for it to report healthy; if it has not by
-      # then, the update is reverted and the image enters a cooldown that stops further
-      # attempts, so it does not recover on its own. Docker schedules the FIRST probe one
-      # `interval` after start — so a long interval leaves the container still `starting`
-      # when that gate is judged, and every update gets rolled back while the service
-      # itself is perfectly fine. That is exactly what happened on 2026-08-15 with
-      # `interval: 30m`: State.Health had an EMPTY probe log (never ran), not a failing
-      # one. The app answers /health ~1.5 s after start, so 30 s clears the gate with
-      # room to spare.
+      # Keep `interval` short: Portainer's updater waits RollbackTimeout (120 s on this fleet) for
+      # the recreated container to turn healthy, otherwise it reverts the update and stops retrying.
+      # Docker runs the first probe one `interval` after start, so a long interval leaves the
+      # container `starting` and every update is rolled back. /health answers ~1.5 s after start.
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8200/health', timeout=4).status==200 else 1)"]
       interval: 30s
       timeout: 5s

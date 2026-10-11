@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
-// Integration test (jsdom) for the offline-NLU catalog editor (ported from the
-// designer mockup). Drives the REAL component against a mocked getTools() catalog
-// and asserts on the chip-input DOM + the persistence calls it makes via onChange.
+// Integration test (jsdom) for the offline-NLU catalog editor. Drives the REAL
+// component against a mocked getTools() catalog and asserts on the chip-input DOM +
+// the persistence calls it makes via onChange.
 //
 // Catalog under test:
 //   set_light  : device_id {bright_room_light, table_light}, state {on, off}

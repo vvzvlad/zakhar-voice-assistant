@@ -1,26 +1,13 @@
 """Background capture jobs: decouple device recording from the browser request.
 
-The admin panel's "Capture sample" used to be a single long-lived POST that held
-the HTTP connection open for the WHOLE recording (up to CAPTURE_MAX_SECONDS) and
-returned the WAV in the response body. That coupling was the root cause of two
-field bugs:
+The recording runs as a server-side background asyncio task. The browser only starts it (202),
+polls its status (for the live countdown) and downloads the result, so closing the browser
+cannot cancel it. Cancelling DeviceClient.capture() mid-stream breaks the device's
+voice_assistant run and makes the speaker reboot.
 
-  * Closing the browser mid-recording aborted the request -> aiohttp cancelled the
-    handler -> CancelledError tore through DeviceClient.capture() and left the
-    device's voice_assistant run broken mid-stream -> the speaker emergency-rebooted.
-  * After accidentally closing the modal there was no way to release a device that
-    was still "busy" with an in-flight capture.
-
-This module runs the recording as a SERVER-SIDE background asyncio task. The
-browser only starts it (202), polls its status (for the live countdown), and
-downloads the result. None of those calls is tied to the recording's lifetime,
-so closing the browser no longer cancels the recording -> no device reboot.
-
-IMPORTANT firmware fact: the device self-times the recording entirely in firmware
-(button press -> stop wake word -> voice_assistant.start -> delay(seconds) ->
-voice_assistant.stop -> start wake word). The server CANNOT interrupt the device
-mid-recording. The device finishes its physical recording on its own in the
-background; the pipeline drains and emits RUN_END cleanly (no reboot).
+The device self-times the recording in firmware (button press -> stop wake word ->
+voice_assistant.start -> delay(seconds) -> voice_assistant.stop -> start wake word); the server
+cannot interrupt it. The pipeline drains and emits RUN_END when the device finishes.
 """
 
 import asyncio

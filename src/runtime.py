@@ -3,7 +3,7 @@
 The live source of truth at runtime: pipelines read config and backends THROUGH
 this holder on every request, so a reconfiguration takes effect by either
 mutating ConfigService's document (live fields, surfaced via the properties
-below) or by swapping a backend/subsystem reference here (later tiers) — without
+below) or by swapping a backend/subsystem reference here — without
 rebuilding the pipelines.
 """
 

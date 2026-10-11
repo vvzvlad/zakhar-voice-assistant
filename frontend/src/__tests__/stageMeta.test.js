@@ -1,5 +1,4 @@
-// Unit tests for the static stage metadata (src/stageMeta.js). Guards the R2
-// regression where vad became a catalog category: every stage must map to a
+// Unit tests for the static stage metadata (src/stageMeta.js): every stage must map to a
 // catalog category id so provider cards/labels resolve from /api/catalog.
 import { describe, it, expect } from "vitest";
 import { STAGES, STAGE_ORDER, STAGE_COLOR } from "../stageMeta.js";

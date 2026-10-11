@@ -374,8 +374,7 @@ class CalendarClient:
         A bare `date` start (no time component) produces an all-day event
         (DTSTART;VALUE=DATE / DTEND;VALUE=DATE); a `datetime` start produces a timed
         event. Optional fields (description, location, priority, reminders, recurrence)
-        are added only when provided, so existing callers that pass just
-        summary/start/end keep working unchanged.
+        are added only when provided.
         """
         # Default start when omitted: next full hour (a timed event).
         if start is None:

@@ -157,12 +157,12 @@ async def test_verify_grammar_recognizer_gets_words_and_waveform():
 
 
 async def test_per_call_decode_does_not_redirect_fd2(tmp_path):
-    # Lock-in: the per-call recognizer path must NOT redirect process-global fd 2.
+    # The per-call recognizer path must NOT redirect process-global fd 2.
     # We point fd 2 at a temp file ourselves around the decode and have the stub
     # recognizer write a native-style WARNING straight to fd 2. If the decode path
-    # captured fd 2 (the old, regression-prone behaviour), it would dup2 fd 2 to its
-    # own pipe and the marker would land in loguru instead of our file. With the
-    # capture gone, the marker must land in OUR file and NOT be routed to loguru.
+    # captured fd 2 it would dup2 fd 2 to its own pipe and the marker would land in
+    # loguru instead of our file. The marker must land in OUR file and NOT be routed
+    # to loguru.
     marker = b"WARNING (VoskAPI) per-call marker\n"
 
     class _WritingRecognizer(_FakeRecognizer):

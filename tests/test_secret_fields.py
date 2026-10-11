@@ -2,14 +2,10 @@
 `secret` so the admin panel masks it.
 
 Masking in the panel is driven ONLY by the explicit `json_schema_extra={"secret":
-True}` flag (frontend reads `node.secret === true`); the old name-heuristic that
-guessed "this looks like a key" was removed because it both leaked (an untagged
-credential would render as plaintext) and over-masked (any name containing "key",
-e.g. the wakeword `keywords` field). This test is that runtime heuristic's
-replacement: it walks every registered provider ConfigModel and every CoreConfig
-sub-section and asserts that any field whose NAME is a known credential carries
-the flag — so a future untagged credential fails CI instead of silently rendering
-as plaintext.
+True}` flag (frontend reads `node.secret === true`), never by the field name. This
+test walks every registered provider ConfigModel and every CoreConfig sub-section
+and asserts that any field whose NAME is a known credential carries the flag, so an
+untagged credential fails CI instead of rendering as plaintext.
 
 It is a PRECISE-name guard: it keys off an exact-match SENSITIVE set, so it never
 flags non-secret fields like `keywords` / `model_path` / `host`.

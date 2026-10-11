@@ -62,8 +62,8 @@ async def _client(tmp_path, **kw):
 
 
 def _prompt_store(tmp_path, text="seed prompt"):
-    """A PromptStore on tmp_path seeded from a legacy file holding `text`, so the
-    'default' profile's text matches what _svc's config used to point at."""
+    """A PromptStore on tmp_path seeded from a prompt file holding `text`, so the
+    'default' profile's text matches _svc's config."""
     seed = tmp_path / "system_prompt.md"
     seed.write_text(text, encoding="utf-8")
     return PromptStore(str(tmp_path / "prompts.db"), seed_path=str(seed))
@@ -1770,9 +1770,8 @@ async def test_runs_stream_handshake_disconnect_is_quiet(tmp_path, monkeypatch):
     assert hub.count() == 0        # the socket was never registered
     assert ws._eof_sent is True    # response marked finalized
 
-    # The crux of the regression: aiohttp's real write_eof() must now be a clean
-    # no-op. Without the fix (ws._eof_sent left False) this call raises
-    # RuntimeError("Call .prepare() first").
+    # aiohttp's real write_eof() must be a clean no-op; with ws._eof_sent left
+    # False it raises RuntimeError("Call .prepare() first").
     await ws.write_eof()
 
 

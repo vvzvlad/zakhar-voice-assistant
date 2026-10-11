@@ -104,9 +104,9 @@ export const setWakeProbabilityStream = (device, enabled) =>
   request("/api/device/wake-probability", { method: "POST", body: { device, enabled } });
 
 // Background capture: the recording runs as a server-side task decoupled from the
-// browser request, so closing the browser no longer cancels it (which used to
-// reboot the device). start kicks it off (202 -> initial status), getCaptureStatus
-// polls for the live countdown, and downloadCaptureResult fetches the finished WAV.
+// browser request, so closing the browser does not cancel it. start kicks it off
+// (202 -> initial status), getCaptureStatus polls for the live countdown, and
+// downloadCaptureResult fetches the finished WAV.
 export const startCapture = (device, seconds) =>
   request("/api/capture", { method: "POST", body: { device, seconds } });
 export const getCaptureStatus = (device) =>

@@ -42,9 +42,8 @@ describe("SchemaField widget selection", () => {
   });
 
   it("does NOT mask a 'key'-ish field name without the secret flag (e.g. keywords)", () => {
-    // Regression guard for the dropped name heuristic: the old KEYISH regex masked
-    // any name containing "key", wrongly hiding the wakeword `keywords` field. With
-    // explicit masking, a field that lacks secret:true is a plain text input.
+    // Only `secret: true` masks a field: a name containing "key" (the wakeword `keywords`
+    // field) is a plain text input.
     const c = renderField("keywords", { type: "string" }, "computer, alexa");
     const input = c.querySelector("input");
     expect(input.getAttribute("type")).not.toBe("password");
@@ -153,7 +152,7 @@ describe("SchemaField widget selection", () => {
   });
 
   it("a FREEFORM dynamic field keeps the search input even for a short list", async () => {
-    // Regression: a freeform model field whose provider returns a short/empty
+    // A freeform model field whose provider returns a short/empty
     // list (e.g. missing api_key) must still allow typing an arbitrary id.
     const onChange = vi.fn();
     const schema = { properties: { model: { type: "string", options: "dynamic", freeform: true } } };
@@ -266,13 +265,11 @@ describe("SchemaField widget selection", () => {
   });
 
   it("re-syncs displayed text on a BIDIRECTIONAL external value reset (multi-word phrase vs split entries)", () => {
-    // Regression for the space-join comparison bug: keyword entries may contain a SPACE
-    // (a multi-word wake phrase, e.g. "окей захар" — a documented feature). The re-sync
-    // effect must compare STRUCTURALLY, because join(" ") makes ["окей захар"] (one phrase)
-    // and ["окей","захар"] (two entries) look EQUAL — so a genuine external value reset
-    // (e.g. after save/reload re-seeds the form via useStageForm WITHOUT a remount) would
-    // be wrongly skipped and the input keeps showing stale text. We drive the external
-    // value via `rerender` (NOT a fresh render) so the StringListInput is NOT remounted.
+    // Keyword entries may contain a space (a multi-word wake phrase, e.g. "окей захар"). The
+    // re-sync effect must compare structurally: join(" ") makes ["окей захар"] and
+    // ["окей","захар"] look equal, so an external value reset (save/reload re-seeding the form
+    // via useStageForm without a remount) would be skipped. `rerender` keeps the StringListInput
+    // mounted.
     const schema = { properties: { keywords: { type: "array", items: { type: "string" } } } };
     const onChange = vi.fn();
     const { container, rerender } = render(

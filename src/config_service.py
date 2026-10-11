@@ -6,8 +6,7 @@ never about any concrete provider field. Stage providers come from the REGISTRY;
 sections come from CoreConfig. Both expose themselves to the UI as JSON Schema.
 
 Store path injection: the constructor takes an optional `path` (defaults to
-config_store.DEFAULT_PATH). apply() persists there. This is cleaner than monkeypatching
-the module global and lets tests point at a tmp file.
+config_store.DEFAULT_PATH); apply() persists there, and tests point it at a tmp file.
 """
 
 import copy

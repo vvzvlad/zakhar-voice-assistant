@@ -225,7 +225,7 @@ class PanelServer:
         self.device_wake_prob_get = device_wake_prob_get
         self.device_wake_prob_set = device_wake_prob_set
         # Background capture jobs: the recording runs as a server-side task so a
-        # browser disconnect no longer cancels it (which used to reboot the device).
+        # browser disconnect cannot cancel it (and reboot the device).
         self._capture_jobs = CaptureJobManager(device_capture) if device_capture is not None else None
         self.static_dir = static_dir
         self.runs_store = runs_store
@@ -740,8 +740,8 @@ class PanelServer:
 
         Body: {"device": "<name>", "seconds": <int 1..300>}. The device records that
         many seconds of mic audio (no STT/LLM/TTS). The recording runs as a
-        SERVER-SIDE background task and is NOT tied to this HTTP request: closing the
-        browser no longer cancels it (which used to reboot the device). The browser
+        SERVER-SIDE background task and is NOT tied to this HTTP request, so closing
+        the browser does not cancel it (cancelling reboots the device). The browser
         then polls GET /api/capture for the live countdown and downloads the result
         via GET /api/capture/result.
 
@@ -751,7 +751,7 @@ class PanelServer:
           - 409 a capture is already in progress on that device (CaptureBusyError)
           - 503 capture not wired (no DeviceManager)
         Capture failures (offline device, unknown device, empty recording, timeout)
-        no longer fail this request — they surface on the status endpoint as state
+        do not fail this request — they surface on the status endpoint as state
         "error" with the message.
         """
         if self._capture_jobs is None:

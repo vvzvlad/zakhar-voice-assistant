@@ -1,11 +1,11 @@
 """WebRTC VAD provider: the speech/no-speech classifier behind the vad stage.
 
-Owns everything WebRTC-specific that used to live inline in the pipeline: the
-640-byte framing, the webrtcvad.Vad object and the per-utterance speech/silence
-counters. The generic end-pointing thresholds stay in core.vad and arrive per
-run as an EndpointPolicy. The decision-only makeup gain for the quiet
-less-processed mic channel is the PIPELINE's concern now (core.vad.mic_auto_gain,
-applied before any VAD backend sees the chunk), not this plugin's.
+Owns everything WebRTC-specific: the 640-byte framing and the webrtcvad.Vad object;
+the speech/silence counters live in the shared EndpointTracker. The generic
+end-pointing thresholds stay in core.vad and arrive per run as an EndpointPolicy.
+The decision-only makeup gain for the quiet less-processed mic channel is the
+pipeline's concern (core.vad.mic_auto_gain, applied before any VAD backend sees
+the chunk), not this plugin's.
 """
 
 import webrtcvad
@@ -39,14 +39,13 @@ class WebRtcVadSession(VadSession):
     def feed(self, chunk: bytes) -> str | None:
         # Consume whole 640-byte frames only; keep the remainder for the next chunk.
         # Each frame drives the shared tracker; the LAST frame's verdict is the
-        # chunk's verdict — identical to the original decide-after-the-whole-chunk
-        # logic, because update() evaluates the decision on the same counters the
-        # old end-of-chunk check read (so a mid-chunk near-endpoint that speech
-        # later in the chunk cancels still keeps the session listening). Known
-        # boundary: a chunk that completes no frame returns None without
-        # re-checking thresholds — equivalent for any positive policy values
-        # (the panel enforces positive ms thresholds), since frame-less chunks
-        # leave the counters untouched.
+        # chunk's verdict — identical to deciding after the whole chunk, because
+        # update() evaluates the decision on the same counters an end-of-chunk check
+        # would read (so a mid-chunk near-endpoint that speech later in the chunk
+        # cancels still keeps the session listening). Known boundary: a chunk that
+        # completes no frame returns None without re-checking thresholds — equivalent
+        # for any positive policy values (the panel enforces positive ms thresholds),
+        # since frame-less chunks leave the counters untouched.
         reason = None
         self._rem.extend(chunk)
         while len(self._rem) >= FRAME_BYTES:

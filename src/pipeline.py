@@ -266,7 +266,7 @@ class Pipeline:
         resolves with the WAV bytes in _finish_capture, or fails with an exception
         if the armed run aborts / expires without producing audio.
         """
-        # Busy-guard (FIX A): refuse a second concurrent capture on the same
+        # Busy-guard: refuse a second concurrent capture on the same
         # pipeline. If a previous capture Future is still pending (armed and waiting,
         # or a capture run is in flight), the device is already recording for another
         # caller — racing a new arm here would overwrite that Future and leave the
@@ -320,7 +320,7 @@ class Pipeline:
         capture was already streaming (_capture_run), a later _finish_capture finds
         the Future already done/None and is a safe no-op — no double-set.
 
-        Because arm_capture's busy-guard (FIX A) refuses a second concurrent capture,
+        Because arm_capture's busy-guard refuses a second concurrent capture,
         there is only ever one armed Future per pipeline at a time, so this can only
         ever fail the Future the matching capture() created — never a different
         request's Future.
@@ -374,10 +374,10 @@ class Pipeline:
         # (armed == False) is completely unaffected.
         #
         # Two guards before consuming the flag:
-        #  - Expiry (FIX 2): if the arm-arrival deadline has passed, the button press
+        #  - Expiry: if the arm-arrival deadline has passed, the button press
         #    was likely lost / the device never started. Clear the stale flag and run
         #    this as a NORMAL run, so a later genuine wake word isn't silently captured.
-        #  - Wake-word discrimination (FIX 3): a manual start from the button carries
+        #  - Wake-word discrimination: a manual start from the button carries
         #    NO wake_word_phrase, whereas a real wake-word run has a non-empty phrase.
         #    Only consume the flag for a phraseless (manual) start; if a phrased run
         #    arrives while armed, leave the flag set so the genuine manual start still

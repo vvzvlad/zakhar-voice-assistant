@@ -1,5 +1,5 @@
-// Client-side mirror of the backend /api/runs filters, extracted from
-// pages/log.jsx (R-FE-1, behaviour-preserving) so it can be unit-tested.
+// Client-side mirror of the backend /api/runs filters, kept separate from
+// pages/log.jsx so it can be unit-tested.
 // Used to decide whether a live-pushed run matches the current UI filters.
 // device: exact; result: all|errors|ok; search: case-insensitive substring
 // over recognized/response text.

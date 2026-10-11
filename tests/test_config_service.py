@@ -259,7 +259,7 @@ def test_on_change_does_not_fire_on_failed_apply(tmp_path):
 
 
 def test_apply_deep_merge_preserves_untouched_siblings(tmp_path):
-    # Data-loss regression guard: a partial patch touching ONE nested leaf must not
+    # A partial patch touching ONE nested leaf must not
     # wipe sibling leaves in other categories or core. Assert both the in-memory state
     # and the persisted file keep the untouched values verbatim.
     path = str(tmp_path / "config.json")

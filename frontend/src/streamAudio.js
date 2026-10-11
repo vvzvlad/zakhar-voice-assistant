@@ -5,8 +5,7 @@
 //     the response body is piped chunk-by-chunk into a SourceBuffer, so audio
 //     begins before synthesis finishes.
 //   - BLOB FALLBACK otherwise (piper's audio/wav, or a browser without a usable
-//     MediaSource): the whole body is buffered into a Blob and played at once —
-//     this reproduces the pre-streaming behaviour.
+//     MediaSource): the whole body is buffered into a Blob and played at once.
 //
 // Framework-agnostic (no React): returns a controller `{ stop }`. Exactly ONE
 // terminal callback (onEnded or onError) fires per playback, and stop() suppresses

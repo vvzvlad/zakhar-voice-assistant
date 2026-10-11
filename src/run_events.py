@@ -12,7 +12,7 @@ class RunEventsHub:
 
     Created once in the app composition root and shared by the pipeline (producer,
     via broadcast()) and the panel API (consumers register/unregister their sockets).
-    Two producers now broadcast (pipeline runs + the panel system heartbeat), so the
+    Two producers broadcast (pipeline runs + the panel system heartbeat), so the
     per-client send loop is serialized by an asyncio.Lock to keep their sends from
     interleaving on one socket. A send failure drops that client; it never propagates
     to the caller.
