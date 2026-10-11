@@ -4,8 +4,8 @@ machine in src/vad.py.
 These drive update() directly with synthetic speech/non-speech windows: every
 VAD session (WebRTC 20 ms, Silero 32 ms, TEN 16 ms) shares this exact decision
 logic, so the tracker is tested on its own, independent of any audio engine.
-The WebRTC session tests in tests/test_vad_webrtc.py remain the parity oracle
-for the moved logic.
+The WebRTC session tests in tests/test_vad_webrtc.py check the same decisions
+through a real session.
 """
 
 from src.vad import EndpointPolicy, EndpointTracker

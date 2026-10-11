@@ -253,32 +253,24 @@ async def test_ensure_tools_stays_empty_when_reload_still_fails(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# R-MCP-1: wire-format contract test.
+# Wire-format contract test.
 #
 # The StubSession tests above never exercise the real mcp.ClientSession decoder
-# nor any JSON-RPC/SSE framing: they hand the hub a fake session whose return
-# values are already Python objects. They therefore CANNOT catch SDK-decoder
-# drift or a server-side wire-format change (e.g. `content[].text` renamed to
-# `content[].value`, or `inputSchema` renamed). This test pins the real Node-RED
-# smart-home MCP wire format by replaying a REAL recorded server exchange
-# (tests/fixtures/mcp_smarthome_wire.json) through the project's REAL code path:
+# nor any JSON-RPC/SSE framing, so they cannot catch SDK-decoder drift or a
+# server-side wire-format change. This test replays a recorded Node-RED smart-home
+# MCP exchange (tests/fixtures/mcp_smarthome_wire.json) through the real code path:
 #   McpToolHub.start()/call()  ->  real streamablehttp_client  ->  real
 #   mcp.ClientSession / mcp.types decoder, with only the HTTP transport mocked
 #   by respx (fully offline; no socket to 192.0.2.20 is ever opened).
 #
-# Approach used: respx transport mock (the IMPLEMENTATION PLAN's preferred path).
-# It works because the recorded server is STATELESS (session_id_present == false):
-# the SDK never gets an Mcp-Session-Id, so handle_get_stream() returns immediately
-# (no server->client GET SSE channel to satisfy) and terminate_session() is a
-# no-op (no DELETE). Only the POST request/response pairs need to be served.
+# The recorded server is stateless (session_id_present == false): the SDK never
+# gets an Mcp-Session-Id, so handle_get_stream() returns immediately and
+# terminate_session() is a no-op. Only the POST request/response pairs are served.
 #
-# One SDK quirk handled: mcp.ClientSession assigns its OWN monotonic JSON-RPC
-# request ids starting at 0 and correlates responses by id. The recorded payloads
-# carry the original ids (1, 2, 3). If we replayed them verbatim, ClientSession
-# would never match the response to its pending request and initialize() would
-# hang forever. So the handler rewrites ONLY the JSON-RPC envelope `id` to echo
-# the incoming request's id. The load-bearing wire payload (result.tools[],
-# inputSchema, content[].text, ...) is preserved exactly as recorded.
+# mcp.ClientSession assigns its own JSON-RPC request ids starting at 0 and
+# correlates responses by id, while the recording carries ids 1, 2, 3, so the
+# handler rewrites only the envelope `id` to echo the request's id. The wire
+# payload (result.tools[], inputSchema, content[].text, ...) is kept as recorded.
 
 WIRE_FIXTURE = Path(__file__).parent / "fixtures" / "mcp_smarthome_wire.json"
 

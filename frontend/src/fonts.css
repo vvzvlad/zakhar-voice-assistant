@@ -1,7 +1,6 @@
 /* Self-hosted IBM Plex fonts.
-   Bundled by Vite into dist/assets and served same-origin, replacing the former
-   Google Fonts CDN <link> in index.html. This eliminates the cross-origin
-   round-trip that caused the post-load font swap (FOUT). Only the latin and
+   Bundled by Vite into dist/assets and served same-origin, so there is no
+   cross-origin round-trip and no post-load font swap (FOUT). Only the latin and
    cyrillic subsets are shipped (the UI is English + Russian); each @font-face
    is gated by unicode-range so the browser downloads only what a page needs.
 

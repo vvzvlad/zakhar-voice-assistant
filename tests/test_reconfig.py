@@ -613,8 +613,8 @@ class _FakeRunsStore:
 
 
 def _runs_runtime(*, enabled, retention_days=7, runs_store=None, panel=None):
-    # The runs.db path now derives from the hardcoded config_store.DATA_DIR (not from
-    # core.context.dir), so the runtime stub no longer needs a context dir.
+    # The runs.db path derives from config_store.DATA_DIR, so the runtime stub needs
+    # no context dir.
     return types.SimpleNamespace(
         core=types.SimpleNamespace(
             runs=types.SimpleNamespace(enabled=enabled, retention_days=retention_days),

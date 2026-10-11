@@ -24,9 +24,9 @@ const GSTAGES = [
   { k: "stress", label: "Accents" }, { k: "tts", label: "TTS synth" },
 ];
 
-// matchesFilters lives in ../runsFilters.js (extracted for unit tests); it is the
-// client-side mirror of the backend /api/runs filters used to decide whether a
-// live-pushed run matches the current UI filters.
+// matchesFilters lives in ../runsFilters.js; it is the client-side mirror of the
+// backend /api/runs filters used to decide whether a live-pushed run matches the
+// current UI filters.
 
 // Per-stage horizontal Gantt with a "◆ max" marker on the slowest stage and a
 // hatched fail segment for error runs.

@@ -15,10 +15,7 @@
 // DERIVED from a persisted field (`draft.hidden_sources`), exactly like
 // aliases/actions, so the operator's source selection survives a reload.
 //
-// Ported from the standalone designer mockup (entities.jsx). Product adaptations:
-// the demo state switch and the "new device" badge / "New" filter were dropped
-// (no backend signal for them); the page chrome (PageHeader / Save bar) is gone
-// because this renders as a section inside the LLM stage page.
+// Renders as a section inside the LLM stage page (no page chrome of its own).
 import React, { useState, useRef, useEffect, useMemo } from "react";
 import { Ic } from "./icons.jsx";
 import { getTools } from "../api.js";

@@ -619,7 +619,7 @@ def _announce_client(name="dev", *, online=True):
 
 
 async def test_announce_delegates_to_pipeline_speak():
-    # The device layer no longer touches pipeline internals (tts_backend /
+    # The device layer does not touch pipeline internals (tts_backend /
     # audio_server): announce is online-check + pipeline.speak(text).
     c = _announce_client()
     await c.announce("привет")

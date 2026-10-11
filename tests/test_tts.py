@@ -69,8 +69,8 @@ def test_wav_to_mp3_mono_8khz_16bit():
 
 
 def test_wav_to_mp3_rejects_24bit_wav():
-    # R-3: lameenc assumes 16-bit PCM; a 24-bit WAV used to be silently
-    # mis-encoded into distorted audio. It must now raise loudly.
+    # lameenc assumes 16-bit PCM, so a 24-bit WAV would be mis-encoded into
+    # distorted audio. It must raise instead.
     frames = 100
     buf = io.BytesIO()
     with wave.open(buf, "wb") as wf:

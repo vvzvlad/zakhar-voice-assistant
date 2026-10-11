@@ -22,7 +22,7 @@ def test_build_system_prompt_replaces_marker_and_includes_body(tmp_path):
     out = build_system_prompt(core, store)
 
     # The <<<<<TDW>>>>> marker is replaced in-place with the time/date prefix; the
-    # active profile's body is included. Weather is no longer injected (it is a tool now).
+    # active profile's body is included. Weather is not injected (it is a tool).
     assert "<<<<<TDW>>>>>" not in out
     assert out.startswith("BODY ")
     assert "Сейчас (дата и время):" in out

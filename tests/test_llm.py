@@ -353,7 +353,7 @@ async def test_history_is_included():
     await _respond(backend, hub, "новый вопрос", history=history)
 
     # System prompt (verbatim from the request) + history + the new user turn,
-    # in order. The stage no longer assembles the prompt itself.
+    # in order. The stage does not assemble the prompt itself.
     messages = backend.seen[0][0]
     assert messages[0] == {"role": "system", "content": SYSTEM_PROMPT}
     assert messages[1:] == [

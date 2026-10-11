@@ -2,9 +2,8 @@
 # AND the PRE-ROLL voice_assistant fork — say «Захар <команда>» in ONE continuous
 # breath, no waiting for the confirmation beep.
 #
-# This is now the SINGLE canonical device config (the plain zakhar-voice.yaml was
-# removed): a pre-roll fork of the stock HA Voice PE firmware, carrying everything in
-# one place. On top of the stock firmware it adds:
+# The single device config: a pre-roll fork of the stock HA Voice PE firmware. On top of the
+# stock firmware it adds:
 #   1) external_components: swap in the patched `voice_assistant` (zakhar-preroll/).
 #   2) voice_assistant: preroll_duration — how much audio BEFORE wake detection to
 #      prepend to the stream, so the server receives «Захар …» + the command as one
@@ -15,16 +14,15 @@
 #
 # The stock firmware (mic, LED ring, buttons, media player, timers, OTA, improv,
 # etc.) is still pulled UNCHANGED from the official Nabu Casa package; we only
-# override the device name, Wi-Fi/API creds, the micro_wake_word model, and now the
+# override the device name, Wi-Fi/API creds, the micro_wake_word model, and the
 # voice_assistant component + preroll.
 #
 # First flash MUST be over USB-C (factory OTA creds unknown); then OTA works.
 #   esphome run zakhar-voice-preroll.yaml     # pick the USB serial port when asked
 #
-# AFTER FLASHING: the STT transcript now starts with «захар …» (the wake word is in
-# the streamed audio). The voice-assistant server must STRIP the leading wake phrase
-# before processing the command. Tune `preroll_duration` (1200–2000 ms) on hardware
-# to match v8's detection latency. See zakhar-preroll/README.md.
+# The STT transcript starts with «захар …» (the wake word is in the streamed audio); the
+# server strips the leading wake phrase. Tune `preroll_duration` (1200–2000 ms) on hardware
+# to match the model's detection latency. See zakhar-preroll/README.md.
 #
 # NOTE: the fork is pinned to ESPHome 2026.5.x (same as home-assistant-voice@26.5.0).
 # When you bump ESPHome past 2026.5.x, the fork must be rebased (see its README).
@@ -66,21 +64,11 @@ packages:
         # (A remote github:// / raw URL fails here: ESPHome can't resolve the
         # relative .tflite inside a manifest fetched that way.)
         #
-        # v28 = angmax: MAX-RECALL model, DEPLOYED 2026-06-17. A SERVER-side gate-wakeword verifies
-        # «захар» downstream, so on-device FALSE accepts are cheap (≈ a server call) and FAPH is no
-        # longer the on-device constraint. The on-device job is to MISS as little «захар» as possible —
-        # short OR drawn, any voice/condition (short/drawn distinction DROPPED, short «захар» is now a
-        # POSITIVE). Recipe: angular (AM-Softmax s=10 m=0.20, annealed) + ALL diverse positives (fish
-        # device-tract drawn ~5700 voices + fish short + section real-device + v8). INT8 streaming,
-        # 77728 B, deployable full-INT8 (op-set == v27, NO DEQUANTIZE — loads fine).
-        # Recall vs the previous prod v27 (0.67): on-channel (this recapture tract) 0.991,
-        # off-channel ~0.846 — beats v27 on EVERY channel. Red-teamed: fires on 99.3% of «захар»
-        # but 6.6% of generic speech (AUC 0.995) — a real discriminator, not saturation; leakage-free.
-        # Server-call-rate post-VAD ~8.7/h worst-case (continuous TV/radio); real homes far less.
-        # NB: the FIRST export crashed the device (boot-loop on a DEQUANTIZE the resolver lacks);
-        # re-exported full-INT8. Cost: per-sample L2-norm (RSQRT, not in resolver) dropped, so
-        # off-channel recall 0.93->0.846 (on-channel ~unchanged). Full 0.93 off-channel would need
-        # Dequantize/RSQRT in the fork resolver (a firmware change, skipped). v19 = robust fallback.
+        # v28 = angmax, a max-recall model: a server-side gate-wakeword verifies «захар»
+        # downstream, so on-device false accepts are cheap and the on-device job is to miss as
+        # few «захар» as possible (short or drawn). INT8 streaming, 77728 B, full-INT8 with the
+        # same op set as v27: the fork's op resolver has no DEQUANTIZE or RSQRT, so a model that
+        # needs them boot-loops the device. v19 is the robust fallback.
         # See ../microWakeWord/v28/{TRAINING_REPORT_v28,DEPLOY_v28}.md.
         - model: ../microWakeWord/v28/model/zakhar.json
           id: zakhar
@@ -104,16 +92,11 @@ esphome:
 # Set 0ms to disable.
 voice_assistant:
   preroll_duration: 2000ms
-  # The "thinking" LED indicator is now driven EXPLICITLY by the server via the
-  # "Thinking Indicator" template switch below (object_id thinking_indicator), NOT by
-  # the voice_assistant on_* triggers. Rationale: the server plays the ack ("блям") and
-  # the slow-tool filler via the ANNOUNCEMENT API, whose firmware handler fires
-  # on_tts_start/on_tts_end/on_end and drives voice_assistant_phase to replying/idle
-  # MID-THINKING — corrupting any phase- or VA-event-based indicator (this is why the
-  # old on_stt_*/on_intent_* bracketing died after ~1 blink). The server knows the exact
-  # thinking window (STT_VAD_END -> TTS_START) and flips the switch, so the indicator is
-  # immune to the announce-driven phase churn. on_error clears the flag as a safety net
-  # in case a run aborts between the server's ON and OFF.
+  # The "thinking" LED indicator is driven by the server via the "Thinking Indicator" switch
+  # below, not by voice_assistant on_* triggers: the server plays the ack and the slow-tool filler
+  # through the announcement API, whose handler fires on_tts_start/on_tts_end/on_end and moves
+  # voice_assistant_phase to replying/idle mid-thinking. The server knows the thinking window
+  # (STT_VAD_END -> TTS_START). on_error clears the flag in case a run aborts between ON and OFF.
   on_error:
     - globals.set:
         id: thinking_active

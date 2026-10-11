@@ -609,7 +609,7 @@ def test_create_event_all_day_reminder_full_day_before():
 
 
 def test_create_event_timed_reminder_unchanged():
-    # Regression: timed events keep "N minutes before start" semantics.
+    # Timed events keep "N minutes before start" semantics.
     ical, _ = _saved_ical(
         {
             "summary": "Standup",
@@ -1121,7 +1121,7 @@ async def test_get_events_tool_bad_dates():
 
 
 async def test_get_events_tool_same_day_range_covers_whole_day():
-    # Regression: a single-day query (start == end, date-only) must search the
+    # A single-day query (start == end, date-only) must search the
     # whole day, not a zero-width [start, end) window that finds nothing.
     client = _fake_client()
     source = BuiltinMcpSource("calendar", build_calendar_server(client))

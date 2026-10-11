@@ -271,7 +271,7 @@ export function parseAliasText(aliasesText) {
 // is a real catalog value that currently belongs to an ACTION slot (so its verbs
 // live in `actions`, not here) — re-emitting it would duplicate it into `aliases`.
 // Only genuinely out-of-catalog manual aliases are preserved. Omitting the arg (or
-// passing an empty set) keeps the original behavior — nothing is suppressed.
+// passing an empty set) suppresses nothing.
 export function serializeAliasText(entities, valueToPhrases, extraLines, knownCatalogValues) {
   const known = knownCatalogValues || new Set();
   const lines = [];

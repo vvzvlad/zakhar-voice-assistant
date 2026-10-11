@@ -694,9 +694,8 @@ async def test_no_speech_run_is_recorded_as_empty(tmp_path, monkeypatch):
 
 
 async def test_run_broadcast_on_no_speech(tmp_path, monkeypatch):
-    # Regression guard: a no_speech finalization returns early INSIDE the lock, but
-    # the run must still be pushed to live admin-panel WS subscribers (it used to be
-    # recorded yet never broadcast, so the live log only caught up on a manual reload).
+    # A no_speech finalization returns early INSIDE the lock, but the run must still be
+    # pushed to live admin-panel WS subscribers, not only recorded.
     patch_llm(monkeypatch)
     store = FakeRunsStore()
     hub = FakeRunEvents()
@@ -1217,9 +1216,8 @@ async def test_run_recorded_on_empty_stt(tmp_path, monkeypatch):
 
 
 async def test_run_broadcast_on_empty_stt(tmp_path, monkeypatch):
-    # Regression guard: an empty transcription returns early INSIDE the lock, but the
-    # run must still be pushed to live admin-panel WS subscribers (it used to be
-    # recorded yet never broadcast, so the live log only caught up on a manual reload).
+    # An empty transcription returns early INSIDE the lock, but the run must still be
+    # pushed to live admin-panel WS subscribers, not only recorded.
     patch_llm(monkeypatch)
     store = FakeRunsStore()
     hub = FakeRunEvents()
@@ -1584,8 +1582,8 @@ async def test_capture_longer_than_60s_is_not_truncated_at_hard_cap(tmp_path, mo
 
 
 async def test_normal_run_hard_cap_truncates_at_60s(tmp_path, monkeypatch):
-    # Regression guard: a NORMAL (non-capture) run is still truncated at the 60 s
-    # HARD_CAP_BYTES — the duration-based capture cap must NOT leak into normal runs.
+    # A NORMAL (non-capture) run is still truncated at the 60 s HARD_CAP_BYTES — the
+    # duration-based capture cap must NOT leak into normal runs.
     # Feed > 60 s of PCM in one chunk; the run finalizes ("maxlen") with the buffer
     # capped at exactly HARD_CAP_BYTES.
     from src.pipeline import HARD_CAP_BYTES, SAMPLE_RATE
@@ -1594,7 +1592,7 @@ async def test_normal_run_hard_cap_truncates_at_60s(tmp_path, monkeypatch):
     patch_llm(monkeypatch, reply="ок")
     pipeline, events = make_pipeline(tmp_path, monkeypatch, stt_text="команда")
     # This test asserts the HARD_CAP length reaches STT; disable the lead-in trim so
-    # it stays a pure cap regression guard and is not coupled to trim_start_ms.
+    # it is not coupled to trim_start_ms.
     pipeline.rt.core.vad.trim_start_ms = 0
     install_fake_vad(pipeline, [True])  # always speech: only the cap can finalize
 
@@ -1618,7 +1616,7 @@ async def test_normal_run_hard_cap_truncates_at_60s(tmp_path, monkeypatch):
 
 async def test_capture_arming_does_not_affect_normal_run(tmp_path, monkeypatch):
     # A normal wake-word run on a pipeline that was NEVER armed runs the full
-    # STT->LLM->TTS path unchanged (regression guard for the capture branch).
+    # STT->LLM->TTS path unchanged.
     patch_llm(monkeypatch, reply="готово")
     cap_dir = tmp_path / "captures"
     pipeline, events = make_pipeline(tmp_path, monkeypatch, stt_text="включи свет")
@@ -1667,7 +1665,7 @@ async def test_capture_run_after_normal_run_is_isolated(tmp_path, monkeypatch):
 
 
 async def test_expired_arm_does_not_capture_later_run(tmp_path, monkeypatch):
-    # FIX 2: if the button press is lost / the device never starts, the armed flag
+    # If the button press is lost / the device never starts, the armed flag
     # must expire instead of silently turning a later real wake-word run into a
     # capture-only run. Arm, blow past the arm-arrival deadline, then start a normal
     # run: it must run the full STT->LLM->TTS path, not capture.
@@ -1697,7 +1695,7 @@ async def test_expired_arm_does_not_capture_later_run(tmp_path, monkeypatch):
 
 
 async def test_wake_word_run_while_armed_keeps_flag_for_manual_start(tmp_path, monkeypatch):
-    # FIX 3: between arm_capture() and the button-initiated start, a real wake word
+    # Between arm_capture() and the button-initiated start, a real wake word
     # could fire. Its on_start carries a wake_word_phrase, so it must NOT consume the
     # armed flag: it runs as a normal assistant run, and the flag survives so the
     # later phraseless manual start still gets captured.
@@ -1741,7 +1739,7 @@ async def test_wake_word_run_while_armed_keeps_flag_for_manual_start(tmp_path, m
 async def test_second_concurrent_capture_is_rejected_first_still_completes(
     tmp_path, monkeypatch
 ):
-    # FIX A: while one capture is armed/in-flight, a second arm_capture on the SAME
+    # While one capture is armed/in-flight, a second arm_capture on the SAME
     # pipeline must be refused with CaptureBusyError (no future overwrite, no cross-
     # request cancellation) — and the FIRST capture must still complete normally.
     cap_dir = tmp_path / "captures"
@@ -1782,7 +1780,7 @@ async def test_second_concurrent_capture_is_rejected_first_still_completes(
 async def test_capture_empty_audio_fails_future_with_capture_empty_error(
     tmp_path, monkeypatch
 ):
-    # FIX B: a capture run that produces NO audio fails the future with the distinct
+    # A capture run that produces NO audio fails the future with the distinct
     # CaptureEmptyError (mapped to HTTP 500 server-side), not a generic RuntimeError.
     cap_dir = tmp_path / "captures"
     pipeline, events = make_pipeline(tmp_path, monkeypatch, name="dev")
@@ -2190,8 +2188,8 @@ async def test_filler_fires_when_any_tool_in_round_is_slow(tmp_path, monkeypatch
 
 
 async def test_final_reply_waits_for_filler_playback(tmp_path, monkeypatch):
-    # Regression: the early filler and the final reply both play through the device's
-    # single media-player announcement slot, so the run must not emit the final TTS_END
+    # The early filler and the final reply both play through the device's single
+    # media-player announcement slot, so the run must not emit the final TTS_END
     # while the filler announce is still playing. Here a gated announcer blocks; the run
     # must park before TTS_END until it is released.
     import asyncio

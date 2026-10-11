@@ -241,7 +241,7 @@ async def test_groq_backend_missing_or_blank_text_returns_empty(payload):
 
 @respx.mock
 async def test_groq_backend_malformed_200_body_raises_stage_error():
-    # Д1 regression: a 200 whose body is not JSON makes resp.json() raise
+    # A 200 whose body is not JSON makes resp.json() raise
     # json.JSONDecodeError (a ValueError, NOT an httpx.HTTPError). It must
     # surface as StageError("stt", ...) per the SttBackend contract, not leak raw.
     respx.post(GROQ_STT_URL).mock(

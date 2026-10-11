@@ -146,7 +146,7 @@ describe("Select allowCustom", () => {
   });
 
   it("allowCustom ALONE (no searchable) renders the input even for a short list", () => {
-    // Regression: with a short/empty fetched list (e.g. provider with no api_key)
+    // With a short/empty fetched list (e.g. provider with no api_key)
     // the custom value must still be typeable — the input cannot depend on
     // `searchable` alone.
     const onChange = vi.fn();

@@ -8,8 +8,7 @@ and in-process built-in MCP servers (BuiltinMcpSource, e.g. OpenWeatherMap).
 The hub is also the single place that publishes the ambient device to in-process
 tools: `call(..., device=...)` sets the current_device ContextVar around the source
 call (and resets it after), so a tool like set_reminder can target the originating
-speaker without it being an LLM-visible argument. Sources' `call` signatures are
-unchanged.
+speaker without it being an LLM-visible argument.
 
 Tool names are advertised RAW (unchanged from each source), so the system prompt and
 the external MCP server keep working with their existing names. The hub routes by raw

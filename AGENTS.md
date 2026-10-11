@@ -22,8 +22,13 @@ configured under `core.mcp_servers` in `data/config.json`.
   served by the admin panel at `/mcp` on the panel port): external agents read the
   run log, view/patch the config, speak text and send full text requests through
   the pipeline.
+- `frontend/` — Vite/React admin panel (vitest tests in `frontend/src/__tests__/`).
 - `tests/` — pytest
-- `data/` — runtime state: `config.json`, per-device context files, `prompts.db` (SQLite store of named system-prompt profiles; seeded once from the legacy `system_prompt.md`) (gitignored, docker volume)
+- `ci/smoke.py` — smoke gate run by CI against the built image; read its module docstring
+  before changing it.
+- `esphome/` — speaker firmware config and the forked ESPHome components (pinned to 2026.5.x).
+- `microWakeWord/` — wake-word model training research and the deployed models.
+- `data/` — runtime state: `config.json`, per-device context files, `prompts.db` (SQLite store of named system-prompt profiles) (gitignored, docker volume)
 - `templates/` — committed reference assets seeded into `data/` on first boot (`default_prompt.md`, `default_config.json`)
 - `main.py` — thin entry point over `src/`
 
@@ -43,6 +48,14 @@ make test              # runs .venv/bin/pytest
 ```bash
 make run               # runs .venv/bin/python main.py
 ```
+
+## CI and deploy
+- `.gitea/workflows/tests.yml` (pull requests): pytest in `python:3.11-slim`, image build,
+  `ci/smoke.py`; never pushes.
+- `.gitea/workflows/image-check-publish.yml` (push to `main`): the same steps, then pushes
+  `:<sha>` and `:latest` to `gitea.vvzvlad.xyz`. Production follows `:latest` via Portainer's
+  image updater (`docker-compose.yml`).
+- The image carries no models; production mounts them on the `/app/models` volume.
 
 ## Configuration
 
@@ -77,3 +90,12 @@ only setting is `core.agent_mcp.enabled`, panel-editable and read live per reque
   first use (`make test` / `make run` bootstrap it) — never the system Python.
 - Tests are required for new code; in CI `build` depends on `test`.
 - No `EXPOSE` in the Dockerfile — the audio port is published to the LAN via compose `ports`.
+
+## Limits for agents
+- Tests: at most three times the code (`wc -l` of `tests/` against the code). Over the limit,
+  still write the test you need, and in the same change go through the old tests: drop or merge
+  duplicates and tests of implementation rather than behaviour.
+- Comments explain the code as it is and why it is built this way. History ("used to", "after
+  the review", "since the incident") goes into the commit message.
+- This file stays under ~150 lines: only what an agent would get wrong without it. No decision
+  history, incident logs or retelling of the code.
