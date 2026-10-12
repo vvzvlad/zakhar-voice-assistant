@@ -21,8 +21,8 @@
 #   esphome run zakhar-voice-preroll.yaml     # pick the USB serial port when asked
 #
 # The STT transcript starts with «захар …» (the wake word is in the streamed audio); the
-# server strips the leading wake phrase. Tune `preroll_duration` (1200–2000 ms) on hardware
-# to match the model's detection latency. See zakhar-preroll/README.md.
+# server must strip or ignore the leading wake phrase. Tune `preroll_duration` (1200–2000 ms)
+# on hardware to match the model's detection latency. See zakhar-preroll/README.md.
 #
 # NOTE: the fork is pinned to ESPHome 2026.5.x (same as home-assistant-voice@26.5.0).
 # When you bump ESPHome past 2026.5.x, the fork must be rebased (see its README).
