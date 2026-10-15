@@ -10,6 +10,8 @@ The owner's words:
 - «ок, берем вебсокет, приступай» — the transport is WebSocket.
 - «переводим панель конечно тоже, выкидываем весь еспхоум» — the panel moves to this protocol
   too; ESPHome leaves the server, the speaker and the panel.
+- «по воздуху конечно» — the speaker gets the new firmware over the air, the first time through
+  the OTA of its current ESPHome firmware, not over USB.
 
 ## Transport
 
