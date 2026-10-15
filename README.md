@@ -2,12 +2,14 @@
 
 *Also available in [Russian](README.ru.md).*
 
-Client-side voice assistant for a "HA Voice PE" ESP32 speaker that replaces Home
-Assistant in the voice loop. The server connects to the speaker over the ESPHome
-Native API (as the client) and runs the pipeline: STT (cloud Whisper, default
-Groq) → LLM (default Claude Haiku 4.5 via OpenRouter) → smart-home tools via an
-external MCP server → RuAccent (Russian stress placement) → TTS (offline Piper /
-offline Silero / cloud Yandex SpeechKit / Fish Audio), returning the generated audio to N speakers.
+Voice assistant server for ESP32 voice devices — the "HA Voice PE" speaker and the
+espanel wall panel — that replaces Home Assistant in the voice loop. The devices
+connect to the server over its own WebSocket protocol
+([docs/device-protocol.md](docs/device-protocol.md)) and the server runs the
+pipeline: STT (cloud Whisper, default Groq) → LLM (default Claude Haiku 4.5 via
+OpenRouter) → smart-home tools via an external MCP server → RuAccent (Russian
+stress placement) → TTS (offline Piper / offline Silero / cloud Yandex SpeechKit /
+Fish Audio), playing the reply back on the devices.
 
 Smart-home control is an MCP integration: the app is an MCP client that connects
 to an external smart-home MCP server (hosted in Node-RED via
@@ -69,7 +71,7 @@ volume, `zakhar-voice-assistant-models`, at `/app/models` — and it has to be
 populated. This is not optional the way "offline backends are optional" suggests:
 `templates/default_config.json` selects the **Piper** TTS voice at
 `models/ru_RU-ruslan-medium.onnx`, and `src/plugins/tts/piper.py` loads it EAGERLY
-while `src/app.py` is still building backends — before the audio server starts. A
+while `src/app.py` is still building backends — before the device server starts. A
 container with an empty models volume therefore writes its first-boot config and
 then exits with `FileNotFoundError`; it does not fall back to cloud-only. Run
 `make models` on the host and copy the result into the volume, or switch
@@ -104,8 +106,9 @@ don't build).
 
 - `8201` — admin panel UI + API, and the agent MCP endpoint at `/mcp` (matches
   `PANEL_PORT`).
-- `8200` — audio server, so the speaker can fetch the generated audio; **must
-  match `core.audio.port`** in `data/config.json` (default 8200).
+- `8200` — device server: the devices connect to `ws://<host>:8200/device`;
+  `/health` is on the same port. **Must match `core.audio.port`** in
+  `data/config.json` (default 8200).
 
 **State** — all mutable state (config, per-device context, `prompts.db`) lives in
 the `zakhar-voice-assistant` named volume mounted at `/app/data`, so it survives
@@ -153,7 +156,7 @@ All config lives in a single JSON file, `data/config.json` (created on first run
 from `templates/default_config.json`; `make config` seeds it explicitly). The only
 env-configurable values are `PANEL_HOST` / `PANEL_PORT` (see below); everything else
 is in the JSON. ALL JSON settings apply LIVE (hot) the moment they are saved via the
-panel/API: backends, tool sources, the audio server, devices and reminders are
+panel/API: backends, tool sources, the device server, devices and reminders are
 reconfigured in place — there is no restart concept in the panel. The one thing NOT
 in the JSON config is the admin panel's own bind host/port: those come from the
 `PANEL_HOST` / `PANEL_PORT` environment variables (defaults `0.0.0.0` / `8201`) and
@@ -173,16 +176,19 @@ Shape (see `templates/default_config.json` for the full default):
   - `tts`: `piper` (offline) | `silero` (offline, needs PyTorch) | `yandex` (SpeechKit) | `fishaudio` (cloud) — voice/key/etc. per provider.
   Each provider declares its own settings schema (`src/plugins/<stage>/<id>.py`); adding a
   provider is one file, no changes to the config core.
-- **`core`** — non-provider settings: `context` (max_turns / ttl_seconds / dir), `audio`
-  (host / port / ttl / public_base_url), `vad` thresholds, `network.external_proxy`,
+- **`core`** — non-provider settings: `context` (max_turns / ttl_seconds), `audio`
+  (host / port of the device server), `vad` thresholds, `network.external_proxy`,
   `openweathermap` (api_key / city), `mcp_servers` (list of
   `{name, url, token, transport, prompt, slow}` — marking a server `slow` makes the
   assistant speak a short filler line before calling its tools),
-  `calendar` (url / username / password / calendar), `esphome.port`, `prompt.system_prompt_path`
+  `calendar` (url / username / password / calendar), `prompt.system_prompt_path`
   (legacy seed only — prompts now live as named profiles in `data/prompts.db`),
   `agent_mcp` (enabled — the agent-facing MCP endpoint served by the panel at `/mcp`),
   `runs` (enabled / retention_days),
-  `reminders` (enabled), `devices` (list of `{name, host, psk}`), `tts_timeout`, `log_level`.
+  `reminders` (enabled), `capture` (enabled / dir — save every utterance as WAV),
+  `ack` (enabled / sound_path — the end-of-phrase chime), `devices` (list of
+  `{name, enabled, wake_cutoff, vad_cutoff}`, see [Devices](#devices-and-firmware)),
+  `tts_timeout`, `log_level`.
 
 API keys are plain string fields in the JSON (this is a trusted-LAN service); `data/` is
 gitignored, so `config.json` and its keys never get committed.
@@ -202,22 +208,63 @@ like the admin panel). Tools:
 - `get_config()` — the full live config document.
 - `update_config(patch)` — deep-merge a config patch; changes apply live (hot-reload).
 - `list_devices()` — configured speakers with live status.
-- `say(text, device?)` — speak arbitrary text on a speaker (TTS + announce).
+- `say(text, device?)` — speak arbitrary text on a speaker (TTS, played as an announcement).
 - `ask(text, device?, speak?)` — full assistant turn (LLM + smart-home tools +
   conversation context) as if the user spoke it; the reply is optionally spoken.
+
+## Devices and firmware
+
+The devices are the WebSocket clients: each one connects to
+`ws://<server>:8200/device` (the port is `core.audio.port`) and keeps the connection
+up, reconnecting on its own. The contract is
+[docs/device-protocol.md](docs/device-protocol.md). A device whose id is not in
+`core.devices` yet is added there on its first connection; `enabled: false` refuses
+it, and `wake_cutoff` / `vad_cutoff` (percent) are sent to it as its wake-word and
+VAD thresholds.
+
+Debug and dataset calls of the panel API (`http://<host>:8201`), meant for an agent with curl:
+
+- `POST /api/device/detect` `{"device": "<name>", "enabled": false}` — turn the device's
+  wake-word detection off (`true`: on). The model keeps running, so the wake probability
+  still streams; detection is back on at the device's next connection.
+- `POST /api/datasets/<set>` `{"device": "<name>", "takes": 200, "seconds": 3}` — record a
+  wake-word dataset: for each take the speaker beeps, then records `seconds` (1–10, default
+  3) into `data/datasets/<set>/NNNN.wav`; a new session on the same set continues the
+  numbering. `GET /api/datasets` lists the sets with their clip counts and the session
+  state, `POST /api/datasets/<set>/stop` stops after the current take,
+  `GET /api/datasets/<set>.zip` downloads the set. Detection stays on between takes, so a
+  word said after a take's window starts a voice session and ends the recording as busy —
+  turn detection off for the session.
+
+The Voice PE speaker firmware lives in `firmware/` — plain ESP-IDF C. Its
+`components/zakhar_link` is the device side of the protocol and is shared with the
+espanel wall panel. Wi-Fi credentials, the device id and the server URL of one
+speaker go into `firmware/sdkconfig.secrets` (gitignored, `CONFIG_ZAKHAR_*` lines
+over `firmware/sdkconfig.defaults`).
+
+```bash
+make fw-build                       # build on the cirunner docker host into firmware/build/
+make fw-ota HOST=<address>          # send it over Wi-Fi to a speaker running this firmware
+make fw-flash PORT=/dev/cu.usbmodem…  # or over USB
+make fw-logs HOST=<address>         # the speaker's live log over Wi-Fi
+make fw-host-test fw-voicepe-host-test  # host tests of the pure C cores
+```
 
 ## What's here
 
 | Path | Purpose |
 |------|---------|
-| `Makefile` | Single entry point for repeated actions: `install`, `config`, `models`, `test`, `run`. Run `make help`. |
+| `Makefile` | Single entry point for repeated actions: `install`, `config`, `models`, `test`, `run`, `fw-*`. Run `make help`. |
 | `src/` | Application code. Config core: `config_store.py` + `config_service.py`; providers under `src/plugins/`. |
 | `tests/` | pytest suite (runs in CI before the image is built). |
+| `docs/device-protocol.md` | The WebSocket protocol between the server and the devices. |
+| `firmware/` | Voice PE speaker firmware (ESP-IDF C) and the shared `zakhar_link` component. |
+| `microWakeWord/` | Wake-word model training and the deployed models. |
 | `data/` | Runtime state: `config.json`, per-device context, `prompts.db` (named system-prompt profiles). Gitignored, mounted as a volume. |
 | `models/` | Offline model files (Vosk / Piper / Silero), fetched by `make models`. Gitignored; not bundled in the Docker image. |
 | `templates/` | Committed reference assets (`default_prompt.md`, `default_config.json`) seeded into `data/` on first boot. |
 | `Dockerfile` | Two-stage build: a node stage builds the panel, the python stage carries only its `dist`; deps cached before code; no `EXPOSE`. |
-| `docker-compose.yml` | Deploy template — image from the Gitea registry, `data` + `models` volumes, audio port published to LAN, auto-update label. |
+| `docker-compose.yml` | Deploy template — image from the Gitea registry, `data` + `models` volumes, device port published to LAN, auto-update label. |
 | `.gitea/workflows/` | CI: tests → build → smoke gate → push to `gitea.vvzvlad.xyz` (`<sha>` then `latest`). Pull requests run the same checks without publishing. |
 | `ci/smoke.py` | The gate between build and push: image contract, version stamp, native VAD libs, frontend bundle, boot and `/health`. |
 | `AGENTS.md` | Conventions / onboarding for agents. |
@@ -228,5 +275,5 @@ All mutable state in `data/`; all config in `data/config.json` (providers self-d
 their settings; the config core never hardcodes provider fields); tests are mandatory and
 gate the Docker build, and a smoke gate stands between the build and the registry; deploy a
 prebuilt image from the Gitea registry via docker-compose. Unlike a public
-web service, the audio port is published straight to the LAN (no Traefik) so speakers can
-fetch audio.
+web service, the device port is published straight to the LAN (no Traefik) so the devices
+can connect.

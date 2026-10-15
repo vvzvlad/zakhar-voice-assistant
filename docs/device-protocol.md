@@ -12,6 +12,15 @@ The owner's words:
   too; ESPHome leaves the server, the speaker and the panel.
 - «по воздуху конечно» — the speaker gets the new firmware over the air, the first time through
   the OTA of its current ESPHome firmware, not over USB.
+- «сделай там логи по сети тока, как у еспхоума» — the speaker streams its log over Wi-Fi to
+  whoever connects to it (TCP port 23, `make fw-logs HOST=<address>`), outside this protocol.
+- «еще какой-то удобный интерфейс нужен для записи аудио, например если я хочу записать датасет
+  захаров», option chosen: «По сигналу колонки» — a dataset take is a beep on the speaker, then a
+  short `capture`; the clips go into a named set on the server and download as one archive.
+  «фронт можно вокруг этого не дописывать, просто дать апи, один фиг я агента прошу всегда» —
+  only the panel HTTP API (`/api/datasets`), no panel UI.
+- «сделай команду отключения и включения, для дебага нужна» — `detect {on}` turns the device's
+  wake-word detection off and on; panel API `POST /api/device/detect`.
 
 ## Transport
 
@@ -114,9 +123,10 @@ device                                   server
 | `volume {value}` | device → server | the volume changed on the device (the dial) or after `set_volume` |
 | `wake_peak_stream {on}` | server → device | start or stop the wake probability stream |
 | `wake_peak {value}` | device → server | once a second while the stream is on: the highest wake-word probability of that second, percent |
+| `detect {on}` | server → device | wake-word detection on or off; off: the models keep running (`wake_peak` too) but a detection starts no session. Every new connection starts with detection on |
 | `capture {seconds}` | server → device | record a sample, see below |
 | `audio_end {reason}` | device → server | the device stopped a stream on its own: `capture` (the sample is complete) or `busy` (refused, a session is running) |
 
 `capture`: the device pauses wake-word detection, streams the microphone for `seconds` from the
 moment of the command (no pre-roll) as `0x01` frames, then sends `audio_end {reason: "capture"}`
-and resumes detection. It shows its own recording indication meanwhile.
+and detection returns to what `detect` set. It shows its own recording indication meanwhile.

@@ -27,7 +27,11 @@ configured under `core.mcp_servers` in `data/config.json`.
 - `tests/` — pytest
 - `ci/smoke.py` — smoke gate run by CI against the built image; read its module docstring
   before changing it.
-- `esphome/` — speaker firmware config and the forked ESPHome components (pinned to 2026.5.x).
+- `docs/device-protocol.md` — the normative server↔device contract; a change to the protocol
+  changes this file, `src/device_server.py` and `firmware/components/zakhar_link` together.
+- `firmware/` — Voice PE speaker firmware, plain ESP-IDF C. `components/zakhar_link` is the
+  device side of the protocol and is vendored into the espanel repo (esp-svgpanel); this copy
+  is the source of truth.
 - `microWakeWord/` — wake-word model training research and the deployed models.
 - `data/` — runtime state: `config.json`, per-device context files, `prompts.db` (SQLite store of named system-prompt profiles) (gitignored, docker volume)
 - `templates/` — committed reference assets seeded into `data/` on first boot (`default_prompt.md`, `default_config.json`)
@@ -48,6 +52,13 @@ make test              # runs .venv/bin/pytest
 ## Running the app
 ```bash
 make run               # runs .venv/bin/python main.py
+```
+
+## Firmware
+```bash
+make fw-build                          # idf.py in docker on cirunner, never on the laptop
+make fw-host-test fw-voicepe-host-test # host tests of the pure C cores
+make fw-ota HOST=<address>             # fw-flash PORT=… over USB, fw-logs HOST=… for the log
 ```
 
 ## CI and deploy
@@ -73,7 +84,7 @@ only setting is `core.agent_mcp.enabled`, panel-editable and read live per reque
   provider's fields. Adding a provider = one new plugin file; zero changes to the core.
 - `core.*` holds non-provider settings (context, audio, vad — end-pointing thresholds +
   mic conditioning, network, openweathermap, mcp_servers,
-  calendar, agent_mcp, prompt, panel, runs, reminders, devices, tts_timeout,
+  calendar, agent_mcp, prompt, runs, reminders, capture, ack, devices, tts_timeout,
   log_level) as plain `CoreConfig` pydantic sections.
 - API keys are plain string fields in the JSON (trusted-LAN service, no masking). `data/`
   is gitignored so `config.json` never gets committed.
@@ -90,7 +101,7 @@ only setting is `core.agent_mcp.enabled`, panel-editable and read live per reque
 - Python always runs inside a local `.venv`, created automatically by `make` on
   first use (`make test` / `make run` bootstrap it) — never the system Python.
 - Tests are required for new code; in CI `build` depends on `test`.
-- No `EXPOSE` in the Dockerfile — the audio port is published to the LAN via compose `ports`.
+- No `EXPOSE` in the Dockerfile — the device port is published to the LAN via compose `ports`.
 
 ## Limits for agents
 - Tests: at most three times the code (`wc -l` of `tests/` against the code). Over the limit,

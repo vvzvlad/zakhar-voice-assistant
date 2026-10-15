@@ -1,8 +1,8 @@
 # microWakeWord «захааар» — индекс и текущее состояние
 
 On-device wake word для протяжного **«захааар»** (рус.; короткий «захар» НЕ цель) на
-microWakeWord (INT8 streaming TFLite, ESP32-S3 / Home Assistant Voice PE, ESPHome
-`micro_wake_word`). Каталог способов и вердиктов — [v10/HYPOTHESIS_REGISTRY.md](v10/HYPOTHESIS_REGISTRY.md).
+microWakeWord (INT8 streaming TFLite, ESP32-S3 / Home Assistant Voice PE, движок
+[../firmware/components/wake_word/](../firmware/components/wake_word/)). Каталог способов и вердиктов — [v10/HYPOTHESIS_REGISTRY.md](v10/HYPOTHESIS_REGISTRY.md).
 
 > ⚠️ **ЧЕСТНЫЙ РЕ-БЕЙЗЛАЙН 2026-06-15** (полный разбор — [HONEST_EVAL_2026-06-15.md](HONEST_EVAL_2026-06-15.md);
 > аудит-предшественник [v27/AUDIT_2026-06-14.md](v27/AUDIT_2026-06-14.md)). Пересобрали leakage-safe eval →
@@ -17,9 +17,9 @@ microWakeWord (INT8 streaming TFLite, ESP32-S3 / Home Assistant Voice PE, ESPHom
 > пайплайн [fish_audio/](fish_audio/README.md)). v27 остаётся прод, в репо моделей ничего не залито.
 
 ## Деплой: v28 (angmax, MAX-RECALL)
-- В проде/[../esphome/zakhar-voice-preroll.yaml](../esphome/zakhar-voice-preroll.yaml) стоит
-  **[v28/model/](v28/model/)**, **`probability_cutoff 0.90`**, окно 5, VAD on (config_version `v21_preroll`,
-  model_version `zakhar_v28`).
+- В проде стоит **[v28/model/](v28/model/)** — прошивка
+  [../firmware/](../firmware/) вшивает `v28/model/zakhar.tflite` при сборке; порог — `wake_cutoff`
+  устройства в конфиге сервера (по умолчанию 80 %), окно 5, VAD on.
 - **СМЕНА ЦЕЛИ:** на СЕРВЕРЕ сделан gate-wakeword (2-я ступень верификации «захар») → on-device ложные
   дёшевы (≈ вызов сервера) → **FAPH больше НЕ ограничение**; цель on-device = **максимум RECALL** в любых
   условиях. Различение короткий/протяжный НЕ нужно, короткий «захар» теперь **ПОЗИТИВ**.
