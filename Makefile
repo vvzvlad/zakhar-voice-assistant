@@ -135,6 +135,69 @@ test: install ## Run the test suite (auto-creates .venv if missing)
 run: install frontend ## Run the app (auto-creates .venv, builds the frontend)
 	$(PY) main.py
 
+# --- Firmware ----------------------------------------------------------------
+# Host test of the zakhar_link component's pure core (no ESP-IDF). The core uses IDF's json
+# component; here cJSON is fetched at the version ESP-IDF 5.5.4 ships and compiled next to it.
+FW_LINK := firmware/components/zakhar_link
+FW_HOST := firmware/build-host
+CJSON_V := 1.7.19
+CJSON   := https://raw.githubusercontent.com/DaveGamble/cJSON/v$(CJSON_V)
+CJSON_D := $(FW_HOST)/cJSON-$(CJSON_V)
+
+$(CJSON_D)/cJSON.c $(CJSON_D)/cJSON.h:
+	@mkdir -p $(CJSON_D)
+	curl -fsSL "$(CJSON)/$(notdir $@)" -o "$@"
+
+.PHONY: fw-host-test
+fw-host-test: $(CJSON_D)/cJSON.c $(CJSON_D)/cJSON.h ## Host-test the firmware zakhar_link core
+	cc -std=gnu17 -Wall -Wextra -Werror -I $(FW_LINK)/include -I $(FW_LINK) -I $(CJSON_D) \
+		$(FW_LINK)/host_test/test_zl_core.c $(FW_LINK)/zl_core.c $(CJSON_D)/cJSON.c \
+		-lm -o $(FW_HOST)/test_zl_core
+	$(FW_HOST)/test_zl_core
+
+# The Voice PE firmware (firmware/, plain ESP-IDF). idf.py runs in espressif/idf:v5.5.4, the IDF
+# ESPHome built the speaker's bootloader with, on the cirunner docker host, which cannot see this
+# laptop's paths: the sources (and the v28 wake-word model) go in as a tar on stdin, the flashable
+# artefacts come back as a tar on stdout into firmware/build/, the build log goes to stderr.
+# firmware/sdkconfig.secrets (gitignored: Wi-Fi, device id, server URL) rides along when present.
+FW_DOCKER := docker -c cirunner
+FW_IDF    := espressif/idf:v5.5.4
+FW_OUT    := build/voicepe.bin build/bootloader/bootloader.bin build/partition_table/partition-table.bin \
+             build/ota_data_initial.bin build/flash_args dependencies.lock
+
+.PHONY: fw-build fw-flash fw-ota fw-logs fw-voicepe-host-test
+fw-build: ## Build the Voice PE firmware on cirunner into firmware/build/
+	set -o pipefail; COPYFILE_DISABLE=1 tar -cf - --exclude firmware/build --exclude firmware/build-host \
+		--exclude firmware/managed_components --exclude firmware/sdkconfig --exclude firmware/sdkconfig.old \
+		firmware microWakeWord/v28/model/zakhar.tflite \
+	| $(FW_DOCKER) run --rm -i --entrypoint bash $(FW_IDF) -c 'set -e; mkdir /w; cd /w; tar -xf -; \
+		cd firmware; . $$IDF_PATH/export.sh >&2; \
+		idf.py -DZAKHAR_GIT_VERSION=$(shell git describe --always --dirty) build size >&2; tar -cf - $(FW_OUT)' \
+	| tar -C firmware -xf -
+
+fw-flash: ## Flash firmware/build/ over USB: make fw-flash PORT=/dev/cu.usbmodem...
+	@test -n "$(PORT)" || { echo "PORT=<serial port> is required" >&2; exit 1; }
+	cd firmware/build && esptool.py --chip esp32s3 -p $(PORT) -b 460800 --before default_reset \
+		--after hard_reset write_flash @flash_args
+
+fw-ota: ## Send firmware/build/voicepe.bin to a running speaker: make fw-ota HOST=<address>
+	@test -n "$(HOST)" || { echo "HOST=<device address> is required" >&2; exit 1; }
+	curl -fsS --data-binary @firmware/build/voicepe.bin -H 'Content-Type: application/octet-stream' \
+		http://$(HOST)/ota
+
+fw-logs: ## Stream a running speaker's log over Wi-Fi: make fw-logs HOST=<address>
+	@test -n "$(HOST)" || { echo "HOST=<device address> is required" >&2; exit 1; }
+	nc $(HOST) 23
+
+fw-voicepe-host-test: ## Host-test the Voice PE firmware's pure cores (audio, indication, dial)
+	@mkdir -p $(FW_HOST)
+	cc -std=gnu17 -Wall -Wextra -Werror -I firmware/main firmware/main/host_test/test_audio_core.c \
+		firmware/main/audio_core.c -o $(FW_HOST)/test_audio_core
+	cc -std=gnu17 -Wall -Wextra -Werror -I firmware/main firmware/main/host_test/test_ui_core.c \
+		firmware/main/ui_core.c -o $(FW_HOST)/test_ui_core
+	$(FW_HOST)/test_audio_core
+	$(FW_HOST)/test_ui_core
+
 # --- Housekeeping ------------------------------------------------------------
 .PHONY: clean
 clean: ## Remove the venv and Python caches

@@ -1,0 +1,32 @@
+CONFIG_IDF_TARGET="esp32s3"
+
+# ESP32-S3R8 with a 16 MB quad flash; the ESPHome partition layout (partitions.csv).
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+# A new image is kept once it has run a minute with an IP or taken an upload; one that crashes
+# first, or gets no IP in 120 s and restarts, boots the previous image again (app_main.c).
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+
+# 8 MB octal PSRAM in the package: the microphone tap, the playback buffer, the model arenas.
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_SPEED_80M=y
+
+# The stock firmware runs micro_wake_word at the highest clock (ESPHome's default for the S3).
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+
+# The stock caches and the stock pair that copies code and read-only data into PSRAM at boot
+# (home-assistant-voice.yaml: "considerably speeds up mWW"); code then also runs while the flash
+# is being written.
+CONFIG_ESP32S3_DATA_CACHE_64KB=y
+CONFIG_ESP32S3_DATA_CACHE_LINE_64B=y
+CONFIG_ESP32S3_INSTRUCTION_CACHE_32KB=y
+CONFIG_SPIRAM_FETCH_INSTRUCTIONS=y
+CONFIG_SPIRAM_RODATA=y
+
+# 1 ms ticks: the LED effects keep the stock millisecond timings.
+CONFIG_FREERTOS_HZ=1000
+
+# As the stock firmware: the I2S interrupts keep running while the flash is written (NVS, OTA).
+CONFIG_I2S_ISR_IRAM_SAFE=y
