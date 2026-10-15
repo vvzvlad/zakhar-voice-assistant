@@ -20,9 +20,11 @@ The owner's words:
 - Binary frames carry audio. The first byte is the kind, the rest is the payload:
   - `0x01` — microphone audio, device → server;
   - `0x02` — playback audio, server → device.
-- All audio is signed 16-bit little-endian PCM. No codec on either side.
-- Liveness: the server sends a WebSocket ping every 10 s; a side that hears nothing for 30 s drops
-  the connection. The device reconnects with a backoff of 1, 2, 4 … 30 s.
+- All audio is signed 16-bit little-endian PCM. No codec on either side. The microphone runs at
+  16 kHz.
+- Liveness: the server sends a WebSocket ping every 10 s and drops the connection when the pong
+  does not come within 5 s; the device drops it when it has heard nothing for 30 s. The device
+  reconnects with a backoff of 1, 2, 4 … 30 s.
 - No encryption, no authentication: the devices live on a trusted LAN.
 
 ## Connection
@@ -80,7 +82,9 @@ device                                   server
   screen. `reply` without `session` is an announcement (a reminder, an agent's `speak`).
 - Every server message of a session carries its `session`; the device drops messages whose
   `session` is not its current one. A new `wake` replaces the current session on both sides: the
-  device flushes its playback, the server cancels the older run.
+  device flushes its playback, the server cancels the older run and, before anything else of the
+  new session, sends `play_stop` — a stream the server started before it saw the `wake` is
+  dropped on the device too.
 - A device without a speaker (`caps.speaker: false`) never gets playback: the server skips TTS for
   it and sends the text only.
 
@@ -91,7 +95,10 @@ device                                   server
 - The device plays streams back to back in arrival order (the end-of-phrase chime, a filler, the
   answer) and sends `played {id}` when the last sample of a stream is out.
 - `play_stop` flushes everything queued and playing; the device answers `played {id, "dropped":
-  true}` for each stream it dropped. A new `wake` flushes the same way.
+  true}` for each stream it dropped. A new `wake` flushes the same way. `0x02` frames and
+  `play_end` of a dropped stream that are still on the way are discarded.
+- The server stops waiting for `played` of a stream after its duration plus `buffer_ms` plus 5 s
+  and treats it as dropped.
 - Pacing: the server keeps at most `buffer_ms − 500` ms of audio ahead of the device's playback,
   estimating that playback runs at real time from the first frame it sends. The device buffer
   holds `buffer_ms`.
