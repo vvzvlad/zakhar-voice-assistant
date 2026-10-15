@@ -99,3 +99,9 @@ only setting is `core.agent_mcp.enabled`, panel-editable and read live per reque
   the review", "since the incident") goes into the commit message.
 - This file stays under ~150 lines: only what an agent would get wrong without it. No decision
   history, incident logs or retelling of the code.
+
+## FPF
+
+Read a pattern through the `fpf` MCP (`read_pattern <ID>`) before applying it.
+
+- Changing the system-prompt profile, the LLM, an STT/TTS/VAD provider, an MCP server's tools or `max_tool_rounds` — SYSE.46 "Test an Agent and Its Support in Representative Work": replay real requests from the run log (the agent MCP serves them with rounds and stage timings), include ones that must end in a refusal or a clarifying question, and compare the tool calls and their effects, not only the spoken reply.
