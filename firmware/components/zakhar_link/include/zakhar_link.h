@@ -61,7 +61,8 @@ typedef struct {
     // A `capture` starts (true) or ends (false): show a recording indication; wake words are
     // ignored meanwhile.
     void (*on_capture)(bool active);
-    // Asked on every wake word; false ignores it.
+    // Asked on a wake word that would start a session (online, detection on, no capture); false
+    // ignores it.
     bool (*can_start)(void);
 } zl_callbacks_t;
 

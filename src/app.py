@@ -203,6 +203,7 @@ async def main() -> None:
             device_controls_set=manager.set_device_control,
             device_wake_prob_get=manager.wake_prob,
             device_wake_prob_set=manager.set_wake_prob_stream,
+            device_detect_set=manager.set_detect,
             static_dir=static_dir if os.path.isdir(static_dir) else None,
             runs_store=runs_store,
             tool_sources=hub.describe,

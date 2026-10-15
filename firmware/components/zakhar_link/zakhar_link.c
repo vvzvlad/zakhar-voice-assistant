@@ -161,6 +161,9 @@ static void on_text(esp_websocket_client_handle_t ws, const char *json, size_t l
         case ZL_MSG_CAPTURE:
             s_capture_ms = m.capture_ms;
             break;
+        case ZL_MSG_DETECT:
+            zl_sess_detect(&s_sess, m.on);
+            break;
         default:
             break;
         }
@@ -202,6 +205,9 @@ static void on_text(esp_websocket_client_handle_t ws, const char *json, size_t l
         break;
     case ZL_MSG_CAPTURE:
         notify(EV_CAPTURE);
+        break;
+    case ZL_MSG_DETECT:
+        ESP_LOGI(TAG, "wake word detection %s", m.on ? "on" : "off");
         break;
     default:
         break;
@@ -334,14 +340,25 @@ static bool link_connect(void)
     return true;
 }
 
+static void wake_refused(zl_wake_t why)
+{
+    ESP_LOGI(TAG, "wake word ignored: %s", why == ZL_WAKE_DETECT_OFF ? "detection is off" : "a capture is running");
+}
+
 static void wake(void)
 {
     const char *word = atomic_load(&s_wake_word);
     lock();
     const bool online = s_online;
+    const zl_wake_t would = zl_sess_wake_check(&s_sess);
     unlock();
     if (!online) {
         ESP_LOGI(TAG, "wake word ignored: no server");
+        return;
+    }
+    // Refused before the start gate is asked, so can_start sees only wakes that start a session.
+    if (would != ZL_WAKE_START) {
+        wake_refused(would);
         return;
     }
     if (s_cb.can_start != NULL && !s_cb.can_start()) {
@@ -354,15 +371,15 @@ static void wake(void)
     uint32_t dropped[ZL_PLAYQ_STREAMS];
     size_t ndropped = 0;
     lock();
-    const bool started = zl_sess_wake(&s_sess);
+    const zl_wake_t w = zl_sess_wake(&s_sess);
     const uint32_t session = s_sess.session;
-    if (started) {
+    if (w == ZL_WAKE_START) {
         s_mic_pos = pos - (pos < preroll ? pos : preroll);
         ndropped = zl_playq_flush(&s_playq, dropped);
     }
     unlock();
-    if (!started) {
-        ESP_LOGI(TAG, "wake word ignored: a capture is running");
+    if (w != ZL_WAKE_START) {  // a `detect` off came in while can_start was asked
+        wake_refused(w);
         return;
     }
     ESP_LOGI(TAG, "wake word \"%s\": session %u", word, (unsigned)session);

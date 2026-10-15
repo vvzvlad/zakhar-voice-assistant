@@ -186,6 +186,7 @@ class PanelServer:
                  device_status=None, device_capture=None, device_play=None,
                  device_controls_get=None, device_controls_set=None,
                  device_wake_prob_get=None, device_wake_prob_set=None,
+                 device_detect_set=None,
                  static_dir=None, runs_store=None, tool_sources=None,
                  run_events=None, prompt_store=None, agent_mcp=None,
                  heartbeat_interval: float = 1.0, reload_status=None):
@@ -233,6 +234,11 @@ class PanelServer:
         #   /api/device/wake-probability endpoints return 503.
         self.device_wake_prob_get = device_wake_prob_get
         self.device_wake_prob_set = device_wake_prob_set
+        # device_detect_set: optional SYNC callable (device_name, enabled: bool) -> dict that
+        #   turns the device's wake-word detection off/on for debugging and returns
+        #   {device, detect} (DeviceManager.set_detect). None -> POST /api/device/detect
+        #   returns 503.
+        self.device_detect_set = device_detect_set
         # Background capture jobs: the recording runs as a server-side task so a
         # browser disconnect cannot cancel it.
         self._capture_jobs = CaptureJobManager(device_capture) if device_capture is not None else None
@@ -758,6 +764,31 @@ class PanelServer:
         except RuntimeError as e:  # offline
             return web.json_response({"error": str(e)}, status=409)
 
+    async def _post_detect(self, request: web.Request) -> web.Response:
+        """Debug switch: turn a device's wake-word detection off/on. Body: {device, enabled(bool)}.
+
+        Returns {device, detect}. The server keeps no state: the device turns detection back
+        on at every new connection. Status codes: 200 ok, 400 bad input, 404 unknown device,
+        409 offline, 503 not wired."""
+        if self.device_detect_set is None:
+            return web.json_response({"error": "detect switch not available"}, status=503)
+        body = await _read_json(request)
+        if not isinstance(body, dict):
+            return web.json_response({"error": "body must be a JSON object"}, status=400)
+        device = body.get("device")
+        if not isinstance(device, str) or not device:
+            return web.json_response({"error": 'field "device" (string) is required'}, status=400)
+        enabled = body.get("enabled")
+        # Strict bool: reject ints/strings/None (avoid an ambiguous truthiness toggle).
+        if not isinstance(enabled, bool):
+            return web.json_response({"error": 'field "enabled" (bool) is required'}, status=400)
+        try:
+            return web.json_response(self.device_detect_set(device, enabled))
+        except LookupError as e:
+            return web.json_response({"error": str(e)}, status=404)
+        except RuntimeError as e:  # offline
+            return web.json_response({"error": str(e)}, status=409)
+
     async def _post_capture(self, request: web.Request) -> web.Response:
         """Start a background capture of a manual sample on a speaker (non-blocking).
 
@@ -874,7 +905,10 @@ class PanelServer:
           - 503 dataset recording not wired (no DeviceManager)
         A failing take (offline or unknown device, empty recording, timeout) does not fail
         this request: it ends the session as state "error" with the message, and the clips
-        already written stay. There are no retries.
+        already written stay. There are no retries. Wake-word detection stays on between
+        takes, so a word said after the take's window can start a voice session and the
+        next take then fails as busy; POST /api/device/detect {"enabled": false} before the
+        session (and true after) keeps that from happening.
         """
         name = request.match_info["name"]
         refusal = self._dataset_refusal(name)
@@ -1216,6 +1250,7 @@ class PanelServer:
             web.post("/api/device/controls", self._post_device_controls),
             web.get("/api/device/wake-probability", self._get_wake_probability),
             web.post("/api/device/wake-probability", self._post_wake_probability),
+            web.post("/api/device/detect", self._post_detect),
             web.post("/api/capture", self._post_capture),
             web.get("/api/capture", self._get_capture_status),
             web.get("/api/capture/result", self._get_capture_result),

@@ -27,6 +27,7 @@ typedef enum {
     ZL_MSG_SET_VOLUME,
     ZL_MSG_WAKE_PEAK_STREAM,
     ZL_MSG_CAPTURE,
+    ZL_MSG_DETECT,
 } zl_msg_type_t;
 
 typedef struct {
@@ -38,7 +39,7 @@ typedef struct {
     uint32_t id;          // PLAY_START, PLAY_END
     uint8_t wake, vad;    // CONFIG, as uint8 cutoffs
     int value;            // SET_VOLUME, percent
-    bool on;              // WAKE_PEAK_STREAM
+    bool on;              // WAKE_PEAK_STREAM, DETECT
     uint32_t capture_ms;  // CAPTURE
     void *json;           // the parsed object that `text` points into
 } zl_msg_t;
@@ -73,11 +74,25 @@ typedef struct {
     bool open;         // from the wake to its idle or error
     bool mic;          // the session's audio streams: from the wake to its first state other than listening
     bool capture;      // a capture streams
+    bool detect_off;   // a `detect` turned wake words off; zero, so on, with every connection
 } zl_sess_t;
 
-// A wake word: false while a capture runs; otherwise the next session starts (new number, open,
-// the mic on) and replaces the current one.
-bool zl_sess_wake(zl_sess_t *s);
+// What a wake word does: starts a session, or is refused and why.
+typedef enum {
+    ZL_WAKE_START,
+    ZL_WAKE_DETECT_OFF,  // a `detect` turned detection off
+    ZL_WAKE_CAPTURE,     // a capture runs
+} zl_wake_t;
+
+// What a wake word would do now; changes nothing.
+zl_wake_t zl_sess_wake_check(const zl_sess_t *s);
+
+// A wake word: refused while detection is off or a capture runs (as zl_sess_wake_check says);
+// otherwise the next session starts (new number, open, the mic on) and replaces the current one.
+zl_wake_t zl_sess_wake(zl_sess_t *s);
+
+// A `detect`: wake words start sessions (true) or are refused (false). A capture does not care.
+void zl_sess_detect(zl_sess_t *s, bool on);
 
 // The session filter: a message without `session` passes, one with it only for the current one.
 bool zl_sess_accepts(const zl_sess_t *s, const zl_msg_t *m);
@@ -88,7 +103,8 @@ void zl_sess_state(zl_sess_t *s, zl_state_t state);
 // A `capture`: false (busy) while a session is open; otherwise the capture starts.
 bool zl_sess_capture(zl_sess_t *s);
 
-// The connection is gone: everything stops. Reports whether a session was open and a capture ran.
+// The connection is gone: everything stops, and detection is on again for the next connection.
+// Reports whether a session was open and a capture ran.
 void zl_sess_lost(zl_sess_t *s, bool *was_open, bool *was_capture);
 
 // ---------------------------------------------------------------- the playback queue

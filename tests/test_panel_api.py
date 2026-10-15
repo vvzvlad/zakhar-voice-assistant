@@ -1258,6 +1258,26 @@ async def test_post_wake_probability_offline_returns_409(tmp_path):
         await client.close()
 
 
+async def test_post_detect_switches_and_rejects_non_bool(tmp_path):
+    calls = []
+
+    def setit(device, enabled):
+        calls.append((device, enabled))
+        return {"device": device, "detect": enabled}
+
+    client, _svc_ = await _client(tmp_path, device_detect_set=setit)
+    try:
+        resp = await client.post("/api/device/detect", json={"device": "hall", "enabled": False})
+        assert resp.status == 200
+        assert await resp.json() == {"device": "hall", "detect": False}
+        for enabled in (0, "false", None):
+            resp = await client.post("/api/device/detect", json={"device": "hall", "enabled": enabled})
+            assert resp.status == 400, enabled
+        assert calls == [("hall", False)]
+    finally:
+        await client.close()
+
+
 async def test_get_tools(tmp_path):
     # tool_sources is a zero-arg callable returning ToolHub.describe() output.
     sources = [{

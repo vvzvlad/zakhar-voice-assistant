@@ -588,6 +588,16 @@ class DeviceManager:
             conn.wake_peak = None
         return {"device": device_name, "online": True, "available": True, "value": conn.wake_peak}
 
+    def set_detect(self, device_name: str, enabled: bool) -> dict:
+        """Debug switch for the device's wake-word detection. Not tracked here: the device
+        turns detection back on at every new connection."""
+        conn = self._find(device_name).conn
+        if conn is None:
+            raise RuntimeError(f"{device_name} is offline")
+        conn.send({"type": "detect", "on": bool(enabled)})
+        logger.info(f"{device_name}: wake-word detection {'on' if enabled else 'off'}")
+        return {"device": device_name, "detect": bool(enabled)}
+
     def wake_prob(self, device_name: str) -> dict:
         target = self._find(device_name)
         conn = target.conn

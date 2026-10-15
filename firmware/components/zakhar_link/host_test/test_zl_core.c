@@ -1,6 +1,6 @@
 // Host test of the zakhar_link pure core (zl_core.c) against docs/device-protocol.md: message
 // decode and encode, the cutoff and peak numbers, the backoff, the session filter and the playback
-// queue. `make fw-host-test` builds it with cJSON at the version ESP-IDF 5.4 ships.
+// queue. `make fw-host-test` builds it with cJSON at the version ESP-IDF 5.5.4 ships.
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
@@ -63,6 +63,11 @@ static void test_decode(void)
     zl_msg_free(&m);
     assert(decode("{\"type\": \"wake_peak_stream\", \"on\": true}", &m) && m.on);
     zl_msg_free(&m);
+    assert(decode("{\"type\": \"detect\", \"on\": false}", &m) && m.type == ZL_MSG_DETECT && !m.on);
+    zl_msg_free(&m);
+    assert(decode("{\"type\": \"detect\", \"on\": true}", &m) && m.type == ZL_MSG_DETECT && m.on);
+    zl_msg_free(&m);
+    assert(!decode("{\"type\": \"detect\", \"on\": 1}", &m));
     assert(decode("{\"type\": \"capture\", \"seconds\": 5}", &m) && m.capture_ms == 5000);
     zl_msg_free(&m);
     assert(!decode("{\"type\": \"capture\", \"seconds\": 0}", &m));
@@ -116,7 +121,7 @@ static zl_msg_t msg_of(const char *json)
 static void test_session(void)
 {
     zl_sess_t s = {0};
-    assert(zl_sess_wake(&s) && s.session == 1 && s.open && s.mic);
+    assert(zl_sess_wake(&s) == ZL_WAKE_START && s.session == 1 && s.open && s.mic);
     zl_msg_t cur = msg_of("{\"type\": \"state\", \"session\": 1, \"value\": \"listening\"}");
     zl_msg_t old = msg_of("{\"type\": \"state\", \"session\": 0, \"value\": \"idle\"}");
     zl_msg_t any = msg_of("{\"type\": \"reply\", \"text\": \"a\"}");
@@ -128,19 +133,33 @@ static void test_session(void)
     zl_sess_state(&s, ZL_STATE_TRANSCRIBING);
     assert(!s.mic && s.open);
 
-    assert(zl_sess_wake(&s) && s.session == 2 && s.mic);  // a new wake replaces the session
+    assert(zl_sess_wake(&s) == ZL_WAKE_START && s.session == 2 && s.mic);  // a new wake replaces the session
     assert(!zl_sess_accepts(&s, &cur));
     zl_sess_state(&s, ZL_STATE_IDLE);
     assert(!s.mic && !s.open);
 
     assert(zl_sess_capture(&s) && s.capture);
-    assert(!zl_sess_wake(&s) && s.session == 2);  // wake words ignored during a capture
+    assert(zl_sess_wake_check(&s) == ZL_WAKE_CAPTURE);
+    assert(zl_sess_wake(&s) == ZL_WAKE_CAPTURE && s.session == 2);  // wake words ignored during a capture
     bool open, capture;
     zl_sess_lost(&s, &open, &capture);
     assert(!open && capture && !s.capture);
-    assert(zl_sess_wake(&s));
+    assert(zl_sess_wake(&s) == ZL_WAKE_START);
     zl_sess_lost(&s, &open, &capture);
     assert(open && !capture && !s.open && !s.mic);
+
+    // Detection off: wake words are refused and say why, a capture still starts; a lost
+    // connection turns detection on again.
+    const uint32_t before = s.session;
+    zl_sess_detect(&s, false);
+    assert(zl_sess_wake_check(&s) == ZL_WAKE_DETECT_OFF);
+    assert(zl_sess_wake(&s) == ZL_WAKE_DETECT_OFF && s.session == before && !s.open && !s.mic);
+    assert(zl_sess_capture(&s) && s.capture);
+    zl_sess_lost(&s, &open, &capture);
+    assert(zl_sess_wake(&s) == ZL_WAKE_START && s.session == before + 1);
+    zl_sess_detect(&s, false);
+    zl_sess_detect(&s, true);
+    assert(zl_sess_wake_check(&s) == ZL_WAKE_START);
 
     zl_msg_free(&cur);
     zl_msg_free(&old);

@@ -104,6 +104,13 @@ static bool decode_fields(const cJSON *o, const char *type, zl_msg_t *m)
         m->on = cJSON_IsTrue(v);
         return true;
     }
+    if (strcmp(type, "detect") == 0) {
+        m->type = ZL_MSG_DETECT;
+        const cJSON *v = field(o, "on");
+        if (!cJSON_IsBool(v)) return false;
+        m->on = cJSON_IsTrue(v);
+        return true;
+    }
     if (strcmp(type, "capture") == 0) {
         m->type = ZL_MSG_CAPTURE;
         const cJSON *v = field(o, "seconds");
@@ -247,13 +254,26 @@ uint32_t zl_backoff_next(uint32_t s)
 
 // ---------------------------------------------------------------- the voice session
 
-bool zl_sess_wake(zl_sess_t *s)
+zl_wake_t zl_sess_wake_check(const zl_sess_t *s)
 {
-    if (s->capture) return false;
+    if (s->detect_off) return ZL_WAKE_DETECT_OFF;
+    if (s->capture) return ZL_WAKE_CAPTURE;
+    return ZL_WAKE_START;
+}
+
+zl_wake_t zl_sess_wake(zl_sess_t *s)
+{
+    const zl_wake_t w = zl_sess_wake_check(s);
+    if (w != ZL_WAKE_START) return w;
     s->session++;
     s->open = true;
     s->mic = true;
-    return true;
+    return ZL_WAKE_START;
+}
+
+void zl_sess_detect(zl_sess_t *s, bool on)
+{
+    s->detect_off = !on;
 }
 
 bool zl_sess_accepts(const zl_sess_t *s, const zl_msg_t *m)
@@ -281,6 +301,7 @@ void zl_sess_lost(zl_sess_t *s, bool *was_open, bool *was_capture)
     s->open = false;
     s->mic = false;
     s->capture = false;
+    s->detect_off = false;
 }
 
 // ---------------------------------------------------------------- the playback queue

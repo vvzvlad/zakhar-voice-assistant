@@ -444,6 +444,17 @@ async def test_controls(srv):
     await until(lambda: srv.manager.wake_prob("kitchen")["value"] == 42)
 
 
+async def test_set_detect_sends_switch_and_refuses_offline(srv):
+    with pytest.raises(RuntimeError, match="offline"):
+        srv.manager.set_detect("kitchen", False)
+    dev = await srv.connect()
+    await dev.recv()  # config
+    assert srv.manager.set_detect("kitchen", False) == {"device": "kitchen", "detect": False}
+    assert await dev.recv() == {"type": "detect", "on": False}
+    srv.manager.set_detect("kitchen", True)
+    assert await dev.recv() == {"type": "detect", "on": True}
+
+
 async def test_unknown_disabled_and_replaced_ids(srv):
     # An unknown id is added to the config as an enabled device.
     hall = await srv.connect("hall")
