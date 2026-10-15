@@ -47,7 +47,7 @@ describe("Dashboard service map", () => {
     useAppData.mockReturnValue({ catalog: catalogWithVad(), config });
     const { container } = await renderDashboard();
     const provs = [...container.querySelectorAll(".z-svc .prov")];
-    expect(provs).toHaveLength(6); // vad, wakeword, stt, llm, stress, tts
+    expect(provs).toHaveLength(5); // vad, wakeword, chains, stress, tts
     expect(provs[0].textContent).toBe("WebRTC VAD");
   });
 
@@ -56,8 +56,45 @@ describe("Dashboard service map", () => {
     const { container } = await renderDashboard();
     expect(screen.getByText("Pipeline overview")).toBeInTheDocument();
     const provs = [...container.querySelectorAll(".z-svc .prov")];
-    expect(provs).toHaveLength(6);
+    expect(provs).toHaveLength(5);
     expect(provs[0].textContent).toBe("—");
+  });
+
+  it("shows one Chains row per enabled chain with its share of served requests and average time", async () => {
+    getMetrics.mockResolvedValueOnce({
+      per_stage_avg_ms: {},
+      per_chain: { fast: { served: 3, avg_ms: 400 }, smart: { served: 1, avg_ms: 9000 } },
+    });
+    const chains = [
+      { name: "fast", enabled: true, stt: "vosk", handler: "simple-nlu" },
+      { name: "off", enabled: false, stt: "groq", handler: "openrouter" },
+      { name: "smart", enabled: true, stt: "groq", handler: "openrouter" },
+    ];
+    useAppData.mockReturnValue({ catalog: catalogWithVad(), config: { core: { ...config.core, chains } } });
+    await renderDashboard();
+    const rows = screen.getAllByTestId("chain-row").map((r) => r.textContent);
+    expect(rows).toEqual(["vosk → simple-nlu75%0.40s", "groq → openrouter25%9.00s"]);
+    expect(screen.getByText("2 enabled")).toBeInTheDocument();
+  });
+
+  it("shows the TTS node's first enabled variant and the number of fallbacks", async () => {
+    const tts = {
+      id: "tts",
+      variants: [
+        { provider: "fish", enabled: false },
+        { provider: "yandex", enabled: true },
+        { provider: "piper", enabled: true },
+      ],
+      providers: [
+        { id: "yandex", label: "Yandex", values: { voice: "alena" } },
+        { id: "piper", label: "Piper", values: {} },
+      ],
+    };
+    useAppData.mockReturnValue({ catalog: { categories: [...catalogWithVad().categories, tts] }, config });
+    const { container } = await renderDashboard();
+    const node = [...container.querySelectorAll(".z-svc")].pop();
+    expect(node.querySelector(".prov").textContent).toBe("yandex");
+    expect(node.querySelector(".mdl").textContent).toBe("voice · alena · +1 fallback");
   });
 
   it("surfaces rejected_24h as its own KPI tile", async () => {

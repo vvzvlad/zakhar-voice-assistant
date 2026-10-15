@@ -611,7 +611,8 @@ class PanelServer:
         except ValueError:
             return {"voice_error": f"unknown TTS provider {parsed['provider']!r}"}
         allowed = set(prov.ConfigModel.model_fields)
-        patch = build_voice_patch(parsed["provider"], parsed["fields"], allowed)
+        variants = self.svc.document()["tts"]["variants"]
+        patch = build_voice_patch(parsed["provider"], parsed["fields"], allowed, variants)
         try:
             self.svc.apply(patch)
         except (ValidationError, ValueError) as e:
@@ -834,6 +835,7 @@ class PanelServer:
         device = request.query.get("device") or None
         result = request.query.get("result") or None
         search = request.query.get("search") or None
+        chain = request.query.get("chain") or None
         try:
             limit = int(request.query.get("limit", 100))
         except (TypeError, ValueError):
@@ -850,10 +852,11 @@ class PanelServer:
         # write lock, so gathering them would only contend on that lock.
         runs = await asyncio.to_thread(
             self.runs_store.list,
-            device=device, result=result, search=search, limit=limit, offset=offset,
+            device=device, result=result, search=search, chain=chain,
+            limit=limit, offset=offset,
         )
         total = await asyncio.to_thread(
-            self.runs_store.count, device=device, result=result, search=search,
+            self.runs_store.count, device=device, result=result, search=search, chain=chain,
         )
         return web.json_response({"runs": runs, "total": total})
 
@@ -968,6 +971,7 @@ class PanelServer:
                 "error_rate": 0.0,
                 "rejected_24h": 0,
                 "per_stage_avg_ms": {"vad": None, "wakeword": None, "stt": None, "llm": None, "stress": None, "tts": None},
+                "per_chain": {},
             })
         metrics = await asyncio.to_thread(self.runs_store.metrics, now=time.time())
         return web.json_response(metrics)

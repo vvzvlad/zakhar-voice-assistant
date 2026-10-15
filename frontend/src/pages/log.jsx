@@ -79,6 +79,44 @@ function Gantt({ r }) {
   </div>;
 }
 
+// Attempt outcome -> pill tone: an answer or spoken audio is good, a failure is
+// bad, a decline / empty text / cancellation is an expected hand-off (muted).
+const ATTEMPT_TONE = {
+  answered: "good", spoke: "good",
+  stt_error: "bad", handler_error: "bad", error: "bad",
+};
+
+// The run's chain and TTS attempts in the order they ran. A chain attempt is
+// {kind:"chain", chain, stt, handler, text, outcome, error, t_stt, t_handler};
+// a TTS attempt is {kind:"tts", provider, outcome, error, t} (times in ms).
+function Attempts({ attempts }) {
+  return <div className="z-card"><div style={{ padding: "4px 17px" }}>
+    {attempts.map((a, i) => {
+      const tts = a.kind === "tts";
+      return <div className="z-f" key={i} data-testid="attempt">
+        <div className="z-fl">
+          <span style={{ display: "flex", alignItems: "baseline", gap: 8, minWidth: 0 }}>
+            <span className="mono" style={{ color: "var(--mut2)", fontSize: 11 }}>{i + 1}</span>
+            {tts
+              ? <b>TTS · <span className="mono">{a.provider}</span></b>
+              : <b>{a.chain} · <span className="mono" style={{ fontWeight: 500 }}>{a.stt ? `${a.stt} → ${a.handler}` : a.handler}</span></b>}
+          </span>
+          <span style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <span className="mono" style={{ fontSize: 11, color: "var(--mut)" }}>
+              {tts ? fmtSec(a.t)
+                : a.stt ? `STT ${fmtSec(a.t_stt)} · handler ${fmtSec(a.t_handler)}`
+                : `handler ${fmtSec(a.t_handler)}`}
+            </span>
+            <span className={"z-pill " + (ATTEMPT_TONE[a.outcome] || "muted")}>{a.outcome}</span>
+          </span>
+        </div>
+        {!tts && a.text && <div style={{ fontSize: 13, color: "var(--ink)" }}>{a.text}</div>}
+        {a.error && <div className="z-fh" style={{ marginTop: 0, color: "#b91c1c" }}>{a.error}</div>}
+      </div>;
+    })}
+  </div></div>;
+}
+
 // A click-to-expand row: renders only `summary` until toggled open, so heavy
 // blocks (full system prompt, a tool's JSON schema) stay collapsed by default.
 function Collapsible({ summary, children }) {
@@ -150,6 +188,11 @@ function Drawer({ r, loading, error, onClose }) {
             <div className="z-f"><div className="z-fl"><b style={{ color: "var(--mut)", fontWeight: 600, fontSize: 11, textTransform: "uppercase", letterSpacing: ".04em" }}>Response (LLM)</b></div>
               <div style={{ fontSize: 14, color: r.llm ? "var(--ink)" : "var(--mut2)", fontStyle: r.llm ? "normal" : "italic" }}>{r.llm || "— no response produced —"}</div></div>
           </div></div>
+
+          {r.attempts && r.attempts.length > 0 && <>
+            <div className="z-sl">Attempts<div className="ln" /></div>
+            <Attempts attempts={r.attempts} />
+          </>}
 
           {r.has_audio ? <>
             <div className="z-sl">Utterance audio</div>
@@ -241,6 +284,7 @@ function Drawer({ r, loading, error, onClose }) {
           <div className="z-sl">Metadata</div>
           <div className="z-card"><div style={{ padding: "6px 17px" }}>
             <KV k="Device" v={r.device || "—"} />
+            <KV k="Chain" v={r.chain || "—"} />
             <KV k="End reason" v={r.reason || "—"} />
             <KV k="Model" v={r.model || "—"} />
             <KV k="Total tokens" v={r.tokens || "—"} />
@@ -261,6 +305,7 @@ function Log() {
   const [result, setResult] = useState("all");       // all → errors → ok → rejected
   const [search, setSearch] = useState("");
   const [device, setDevice] = useState("");
+  const [chain, setChain] = useState("");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
   const [total, setTotal] = useState(0);              // total matching rows across all pages
@@ -286,6 +331,7 @@ function Log() {
     if (result !== "all") params.result = result;
     if (search.trim()) params.search = search.trim();
     if (device.trim()) params.device = device.trim();
+    if (chain.trim()) params.chain = chain.trim();
     getRuns(params)
       .then((data) => {
         if (gen !== genRef.current) return;            // a newer load superseded this one
@@ -293,14 +339,14 @@ function Log() {
       })
       .catch((e) => { if (gen === genRef.current) setError(e); })
       .finally(() => { if (gen === genRef.current) setLoading(false); }); // a newer load owns the spinner otherwise
-  }, [result, search, device, page, pageSize]);
+  }, [result, search, device, chain, page, pageSize]);
 
   useEffect(() => { load(); }, [load]);
 
   // Keep the latest filter values in a ref so the single live subscription below
   // always matches against current filters without re-subscribing per keystroke.
-  const filtersRef = useRef({ result, search, device });
-  useEffect(() => { filtersRef.current = { result, search, device }; }, [result, search, device]);
+  const filtersRef = useRef({ result, search, device, chain });
+  useEffect(() => { filtersRef.current = { result, search, device, chain }; }, [result, search, device, chain]);
   // Mirror page/pageSize so the single live subscription can read them without
   // resubscribing (same pattern as filtersRef).
   const pageRef = useRef(page);
@@ -365,6 +411,10 @@ function Log() {
           <input placeholder="Device…" value={device}
             onChange={(e) => { setDevice(e.target.value); setPage(1); }} />
         </div>
+        <div className="z-search" style={{ maxWidth: 180 }}>
+          <input placeholder="Chain…" value={chain}
+            onChange={(e) => { setChain(e.target.value); setPage(1); }} />
+        </div>
         <div className="z-fchip" onClick={() => { setResult(result === "all" ? "errors" : result === "errors" ? "ok" : result === "ok" ? "rejected" : "all"); setPage(1); }}>Result · <b>{result}</b> ▾</div>
         <span style={{ flex: 1 }} />
         <span style={{ fontSize: 11, color: "var(--mut2)", fontFamily: "var(--mono)" }}>{total} runs</span>
@@ -376,13 +426,14 @@ function Log() {
             : <>
               <div className="z-tblwrap">
                 <table className="z-tbl">
-                  <thead><tr><th>Time</th><th>Device</th><th>Recognized</th><th>Response</th><th style={{ textAlign: "right" }}>Tok</th><th>Stage waterfall</th><th style={{ textAlign: "right" }}>Σ</th><th>Status</th></tr></thead>
+                  <thead><tr><th>Time</th><th>Device</th><th>Chain</th><th>Recognized</th><th>Response</th><th style={{ textAlign: "right" }}>Tok</th><th>Stage waterfall</th><th style={{ textAlign: "right" }}>Σ</th><th>Status</th></tr></thead>
                   <tbody>
                     {runs.map((r) => {
                       const m = statusMeta(r);
                       return <tr key={r.key} className={openId === r.id ? "sel" : ""} onClick={() => { if (r.id != null) openRow(r.id); }}>
                         <td className="tm">{r.time}</td>
                         <td style={{ fontWeight: 600 }}>{r.device}</td>
+                        <td className="mono" data-testid="run-chain" style={{ fontSize: 11.5, color: r.chain ? "var(--ink2)" : "var(--mut2)" }}>{r.chain || "—"}</td>
                         <td><div className={"z-tx" + (r.stt ? "" : " mut")}>{r.stt || (r.live ? "…" : "(silence)")}</div></td>
                         <td><div className={"z-tx" + (r.llm ? "" : " mut")}>{r.llm || (r.live ? "…" : "—")}</div></td>
                         <td className="num">{r.tokens || "—"}</td>

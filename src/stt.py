@@ -103,6 +103,10 @@ class SttBackend(ABC):
     or no speech was recognized. Raises StageError("stt", ...) on failure.
     """
 
+    # True when transcribe() and open_stream() accept a `vocabulary` keyword (a
+    # closed word list to restrict recognition to); only then is it passed.
+    supports_vocabulary = False
+
     @abstractmethod
     async def transcribe(self, pcm: bytes) -> str:
         ...

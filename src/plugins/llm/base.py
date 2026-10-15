@@ -16,9 +16,11 @@ from src.plugins.base import LABEL_FIELD_EXTRA, MODEL_FIELD_EXTRA, SECRET_FIELD_
 
 class LlmBackend(ABC):
     @abstractmethod
-    async def complete(self, messages: list, tools: list | None) -> dict:
+    async def complete(self, messages: list, tools: list | None, *, has_next: bool = False) -> dict:
         """One chat-completions round-trip. Returns the raw provider JSON
-        (with 'choices'/'usage'/'model'). Raises httpx.HTTPStatusError on non-2xx."""
+        (with 'choices'/'usage'/'model'). Raises httpx.HTTPStatusError on non-2xx.
+        `has_next` is True when a later recognition chain would take an utterance
+        this handler declines (by raising stage_errors.Declined)."""
 
 
 class LlmConfig(BaseModel):
@@ -44,3 +46,6 @@ class LlmConfig(BaseModel):
     # Spoken when the LLM stage fails for any reason other than a rate limit; the
     # raw error text goes to the run log, never to the user.
     reply_error: str = "Что-то сломалось, попробуй ещё раз попозже."
+    # Spoken when the LLM stage fails AFTER a tool already ran: the action happened,
+    # so no later chain retries it and the user hears that only the answer is missing.
+    reply_error_after_tools: str = "Сделал, но ответить не смог."

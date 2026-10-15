@@ -4,7 +4,6 @@ import asyncio
 import contextlib
 import json
 import os
-from collections.abc import Callable
 
 from loguru import logger
 from pydantic import BaseModel, Field
@@ -13,11 +12,6 @@ from src.logging_setup import capture_native_stderr
 from src.plugins.base import LOCAL_MODEL_FIELD_EXTRA, Deps, Provider, register
 from src.stage_errors import StageError
 from src.stt import SttBackend, StreamingSttSession, StreamingTranscript
-
-
-def _strip_unk(text: str) -> str:
-    """Drop the Vosk out-of-grammar "[unk]" sentinel tokens so they never reach NLU."""
-    return " ".join(t for t in text.split() if t != "[unk]")
 
 
 class VoskStreamSession(StreamingSttSession):
@@ -68,10 +62,10 @@ class VoskStreamSession(StreamingSttSession):
                     break  # finish()/aclose() sentinel
                 is_final, text = await asyncio.to_thread(self._decode_chunk, chunk)
                 if is_final:
-                    self._accumulator.add_final(self._final_index, _strip_unk(text))
+                    self._accumulator.add_final(self._final_index, text)
                     self._final_index += 1
                 else:
-                    self._accumulator.add_partial(_strip_unk(text))
+                    self._accumulator.add_partial(text)
         except Exception as e:  # noqa: BLE001 - surfaced via self._error in finish()
             self._error = e
         finally:
@@ -96,7 +90,7 @@ class VoskStreamSession(StreamingSttSession):
             if self._error is not None:
                 raise StageError("stt", f"Vosk STT decode failed: {self._error}")
             # Flush the trailing segment (drive task has ended -> recognizer is free).
-            final = _strip_unk(await asyncio.to_thread(self._final_text))
+            final = await asyncio.to_thread(self._final_text)
             self._accumulator.add_final(self._final_index, final)
             return self._accumulator.result()
         finally:
@@ -123,12 +117,14 @@ class VoskSttBackend(SttBackend):
     per call (the model is thread-safe for spawning recognizers). Decoding is
     blocking C code, so it runs in a worker thread.
 
-    Optionally grammar-restricted: when a live command-vocabulary accessor is
-    supplied, each per-call recognizer is constrained to that closed vocabulary —
-    read fresh per decode so NLU/LLM-selection changes take effect with no rebuild.
+    Optionally grammar-restricted: a `vocabulary` passed per call constrains that
+    call's recognizer to the closed word list (the recognition chain passes its
+    handler's vocabulary when the chain narrows).
     """
 
-    def __init__(self, model_path: str, *, model=None, vocabulary: "Callable[[], list[str]] | None" = None):
+    supports_vocabulary = True
+
+    def __init__(self, model_path: str, *, model=None):
         # The model is injectable for testing. When None (production path), it is
         # loaded lazily so the heavy dependency/model are only required when the
         # Vosk backend is actually selected at runtime (never in tests/CI).
@@ -141,64 +137,49 @@ class VoskSttBackend(SttBackend):
             with capture_native_stderr("vosk-stt"):
                 model = Model(model_path)  # fail fast if the dir is missing
         self._model = model
-        # Live closed-vocabulary accessor (or None). Read per decode, never cached.
-        self._vocabulary = vocabulary
 
-    def _current_vocab(self) -> list[str]:
-        """Read the live closed command vocabulary (or [] if none / on any error).
-        Called per decode so NLU edits and LLM-provider switches take effect with no
-        backend rebuild. A vocabulary error must never break STT — fall back to full
-        vocabulary."""
-        if self._vocabulary is None:
-            return []
-        try:
-            return list(self._vocabulary() or [])
-        except Exception as e:
-            logger.warning(f"Vosk STT vocabulary read failed; using full vocabulary: {e}")
-            return []
+    def _make_recognizer(self, vocabulary: list[str] | None):
+        """Build a KaldiRecognizer for the shared model. With a vocabulary, constrain
+        the recognizer to that grammar (words plus the Vosk "[unk]" sentinel) —
+        closed-vocabulary decode, much faster/more accurate for the fixed command
+        set; otherwise a plain full-vocab recognizer. Overridable in tests.
 
-    def _make_recognizer(self):
-        """Build a KaldiRecognizer for the shared model. When a live command
-        vocabulary is present, constrain the recognizer to that grammar (words plus
-        the Vosk "[unk]" sentinel) — closed-vocabulary decode, much faster/more
-        accurate for the fixed command set; otherwise a plain full-vocab recognizer.
-        Overridable in tests."""
+        A word outside the grammar decodes as "[unk]", which stays in the
+        transcript: the handler then sees that something it does not know was
+        said."""
         from vosk import KaldiRecognizer
 
         # NO fd-2 capture here: this runs per transcribe in a worker thread, and
         # redirecting process-global fd 2 around every decode would swallow loguru
         # lines emitted by other threads. The model load in __init__ is the rare
         # window that's wrapped instead.
-        words = self._current_vocab()
-        if words:
-            grammar = json.dumps(list(words) + ["[unk]"], ensure_ascii=False)
+        if vocabulary:
+            grammar = json.dumps(list(vocabulary) + ["[unk]"], ensure_ascii=False)
             return KaldiRecognizer(self._model, 16000, grammar)
         return KaldiRecognizer(self._model, 16000)
 
-    def _decode(self, pcm: bytes) -> str:
-        rec = self._make_recognizer()
+    def _decode(self, pcm: bytes, vocabulary: list[str] | None) -> str:
+        rec = self._make_recognizer(vocabulary)
         rec.SetWords(False)
         rec.AcceptWaveform(pcm)
-        text = json.loads(rec.FinalResult()).get("text", "").strip()
-        # Drop the Vosk out-of-grammar sentinel so "[unk]" never reaches the NLU.
-        return _strip_unk(text)
+        return json.loads(rec.FinalResult()).get("text", "").strip()
 
-    def open_stream(self):
-        """Open a live streaming session: build a fresh recognizer (reads the live
-        command vocabulary once, like the batch path) and hand it to the session.
+    def open_stream(self, *, vocabulary: list[str] | None = None):
+        """Open a live streaming session: build a fresh recognizer (restricted to
+        `vocabulary` when given, like the batch path) and hand it to the session.
         Returning a session routes the pipeline through feed()/finish() instead of
         batch transcribe(). A build failure propagates to the pipeline, which logs
         and falls back to batch."""
-        rec = self._make_recognizer()
+        rec = self._make_recognizer(vocabulary)
         rec.SetWords(False)
         return VoskStreamSession(rec)
 
-    async def transcribe(self, pcm: bytes) -> str:
+    async def transcribe(self, pcm: bytes, *, vocabulary: list[str] | None = None) -> str:
         if not pcm:
             return ""
         # Speaker PCM is already 16 kHz mono 16-bit — no resampling needed.
         try:
-            return await asyncio.to_thread(self._decode, pcm)
+            return await asyncio.to_thread(self._decode, pcm, vocabulary)
         except StageError:
             raise
         except Exception as e:
@@ -211,15 +192,6 @@ class VoskSttBackend(SttBackend):
 
 class VoskSttConfig(BaseModel):
     model_path: str = Field("models/vosk-model-small-ru-0.22", json_schema_extra=LOCAL_MODEL_FIELD_EXTRA)
-    restrict_to_nlu: bool = Field(
-        True,
-        title="Restrict to Simple NLU vocabulary",
-        description="When the active intent engine is Simple NLU, constrain Vosk "
-        "recognition to its command vocabulary (alias phrases + action verbs + number "
-        "words) via a Vosk grammar — big accuracy/speed win for the fixed command set. "
-        "Automatically has NO effect when a free-form LLM is selected (the full model "
-        "vocabulary is used then).",
-    )
 
 
 def _list_vosk_models(base_dir: str) -> list[dict]:
@@ -252,10 +224,10 @@ class VoskSttProvider(Provider):
     id = "vosk"
     label = "Vosk (offline)"
     ConfigModel = VoskSttConfig
+    supports_vocabulary = VoskSttBackend.supports_vocabulary
 
     def create(self, cfg: VoskSttConfig, deps: Deps):
-        vocab = deps.command_vocabulary if cfg.restrict_to_nlu else None
-        return VoskSttBackend(cfg.model_path, vocabulary=vocab)
+        return VoskSttBackend(cfg.model_path)
 
     def options(self, field: str, cfg: VoskSttConfig, deps: Deps, query: str = ""):
         # Local-disk scan of installed Vosk models next to the configured path

@@ -99,29 +99,50 @@ def test_strip_handles_none_and_empty():
 
 # --- build_voice_patch ---------------------------------------------------------
 
+PIPER_ONLY = [{"provider": "piper", "enabled": True}]
+
+
 def test_build_patch_drops_unknown_fields():
     patch = build_voice_patch(
-        "piper", {"voice_path": "x.onnx", "bogus": "1"}, {"voice_path", "sentence_silence"}
+        "piper", {"voice_path": "x.onnx", "bogus": "1"}, {"voice_path", "sentence_silence"},
+        PIPER_ONLY,
     )
-    assert patch == {"tts": {"selected": "piper", "instances": {"piper": {"voice_path": "x.onnx"}}}}
+    assert patch == {"tts": {"variants": PIPER_ONLY,
+                             "instances": {"piper": {"voice_path": "x.onnx"}}}}
 
 
 def test_build_patch_drops_secret_fields_even_if_allowed():
     # api_key is in SECRET_FIELDS, so it is dropped despite being an allowed field.
     assert "api_key" in SECRET_FIELDS
     patch = build_voice_patch(
-        "yandex", {"voice": "zahar", "api_key": "leaked"}, {"voice", "api_key"}
+        "yandex", {"voice": "zahar", "api_key": "leaked"}, {"voice", "api_key"}, []
     )
-    assert patch == {"tts": {"selected": "yandex", "instances": {"yandex": {"voice": "zahar"}}}}
+    assert patch["tts"]["instances"] == {"yandex": {"voice": "zahar"}}
 
 
 def test_build_patch_provider_only():
-    patch = build_voice_patch("piper", {}, {"voice", "speed"})
-    assert patch == {"tts": {"selected": "piper", "instances": {"piper": {}}}}
+    patch = build_voice_patch("piper", {}, {"voice", "speed"}, PIPER_ONLY)
+    assert patch == {"tts": {"variants": PIPER_ONLY, "instances": {"piper": {}}}}
 
 
 def test_build_patch_empty_provider_returns_none():
-    assert build_voice_patch("", {"voice": "zahar"}, {"voice"}) is None
+    assert build_voice_patch("", {"voice": "zahar"}, {"voice"}, PIPER_ONLY) is None
+
+
+def test_build_patch_puts_the_marker_provider_first():
+    # The marker's provider leads the variant list, enabled; the others keep their
+    # order and enabled state, and a provider already listed is moved, not duplicated.
+    current = [{"provider": "piper", "enabled": True},
+               {"provider": "silero", "enabled": False},
+               {"provider": "yandex", "enabled": False}]
+    patch = build_voice_patch("yandex", {}, set(), current)
+    assert patch["tts"]["variants"] == [{"provider": "yandex", "enabled": True},
+                                        {"provider": "piper", "enabled": True},
+                                        {"provider": "silero", "enabled": False}]
+    # A provider not listed yet is added in front of the existing ones.
+    patch = build_voice_patch("fishaudio", {}, set(), current)
+    assert [v["provider"] for v in patch["tts"]["variants"]] == [
+        "fishaudio", "piper", "silero", "yandex"]
 
 
 def test_build_patch_drops_label_companion_fields():
@@ -131,7 +152,6 @@ def test_build_patch_drops_label_companion_fields():
         "fishaudio",
         {"reference_id": "abc", "reference_id_label": "Nice Voice"},
         allowed_fields={"reference_id", "reference_id_label"},
+        variants=[],
     )
-    assert patch == {
-        "tts": {"selected": "fishaudio", "instances": {"fishaudio": {"reference_id": "abc"}}}
-    }
+    assert patch["tts"]["instances"] == {"fishaudio": {"reference_id": "abc"}}

@@ -31,12 +31,15 @@ from pydantic import BaseModel, Field
 
 from src.plugins.base import Deps, Provider, register
 from src.plugins.llm.base import LlmBackend
+from src.stage_errors import Declined
 
 # Default verbs are real (not commented) so the provider works out of the box.
 _DEFAULT_ACTIONS = (
     "on = включи, включай, зажги, зажги свет, вруби, врубай, запусти\n"
     "off = выключи, выключай, погаси, выруби, отключи, останови"
 )
+
+_DEFAULT_FILLER_WORDS = "захар, пожалуйста, ну, а, давай, ка, мне"
 
 # A self-documenting, all-commented example so the aliases field matches nothing
 # until the operator configures it for their actual entity/scene ids.
@@ -73,6 +76,16 @@ class SimpleNluConfig(BaseModel):
             "enum value of a tool's state-like param, it fills that slot."
         ),
         json_schema_extra={"widget": "textarea"},
+    )
+    filler_words: str = Field(
+        _DEFAULT_FILLER_WORDS,
+        title="Filler words (strict mode)",
+        description=(
+            "Comma-separated words an utterance may carry besides the command. Used "
+            "only in strict mode, when a later recognition chain takes what this one "
+            "declines: a command runs only if every word is an action verb, a word of "
+            "the matched alias phrase, a number that set a value, or one of these."
+        ),
     )
     min_confidence: float = Field(
         0.5,
@@ -122,6 +135,7 @@ class SimpleNluConfig(BaseModel):
     reply_empty_after_tools: str = "Готово."
     reply_rate_limit: str = "Лимит запросов исчерпан. Попробуй ещё раз чуть позже."
     reply_error: str = "Что-то сломалось, попробуй ещё раз попозже."
+    reply_error_after_tools: str = "Сделал, но ответить не смог."
 
     # --- Panel UI state (no runtime effect): ids of MCP sources the operator hid in
     # the NLU catalog editor's Sources bar. Persisted so the selection survives a
@@ -216,13 +230,15 @@ _RU_TENS = {
 }
 
 
-def nlu_vocabulary(aliases_text: str, actions_text: str) -> list[str]:
+def nlu_vocabulary(
+    aliases_text: str, actions_text: str, filler_text: str = _DEFAULT_FILLER_WORDS
+) -> list[str]:
     """Collect the distinct spoken Russian words the NLU can match, for use as a
     Vosk closed-vocabulary grammar. Union of: every word in every alias phrase,
-    every action-verb word, and the Russian number words 0..100. Phrases are
-    split into individual word tokens (so the decoder can recognise any sequence
-    of them); tokens are lowercased. Returns a sorted, de-duplicated list. The
-    caller appends the Vosk "[unk]" sentinel."""
+    every action-verb word, every filler word, and the Russian number words
+    0..100. Phrases are split into individual word tokens (so the decoder can
+    recognise any sequence of them); tokens are lowercased. Returns a sorted,
+    de-duplicated list. The caller appends the Vosk "[unk]" sentinel."""
     words: set[str] = set()
     for entry in parse_aliases(aliases_text):
         for phrase in entry["phrases"]:
@@ -230,6 +246,9 @@ def nlu_vocabulary(aliases_text: str, actions_text: str) -> list[str]:
     for verbs in parse_actions(actions_text).values():
         for verb in verbs:
             words.update(re.findall(r"[a-zа-яё0-9]+", verb.lower()))
+    # Filler words are in the grammar so a narrowed decoder can emit them instead of
+    # "[unk]", which strict mode treats as an unexplained word.
+    words.update(re.findall(r"[a-zа-яё0-9]+", (filler_text or "").lower()))
     words.update(_RU_UNITS.keys())
     words.update(_RU_TENS.keys())
     words.discard("")
@@ -266,6 +285,11 @@ def extract_number(text: str) -> int | None:
     return None
 
 
+def _is_number_token(token: str) -> bool:
+    """A digit run or a Russian number word 0..100 (one normalized token)."""
+    return token.isdigit() or token in _RU_UNITS or token in _RU_TENS
+
+
 # --------------------------------------------------------------------------- #
 # Backend.
 # --------------------------------------------------------------------------- #
@@ -294,6 +318,7 @@ class SimpleNluBackend(LlmBackend):
         *,
         aliases_text: str,
         actions_text: str,
+        filler_text: str,
         min_confidence: float,
         fuzzy_threshold: int,
         level_on: int,
@@ -305,6 +330,8 @@ class SimpleNluBackend(LlmBackend):
     ):
         self._aliases = parse_aliases(aliases_text)
         self._actions = parse_actions(actions_text)
+        # Filler words as exact normalized word forms (strict mode only).
+        self._fillers = frozenset(self._normalize(filler_text))
         self._min_confidence = min_confidence
         self._fuzzy_threshold = fuzzy_threshold
         self._level_on = level_on
@@ -322,7 +349,7 @@ class SimpleNluBackend(LlmBackend):
 
     # --- public contract -------------------------------------------------- #
 
-    async def complete(self, messages: list, tools: list | None) -> dict:
+    async def complete(self, messages: list, tools: list | None, *, has_next: bool = False) -> dict:
         fingerprint = self._fingerprint_tools(tools or [])
         # Rebuild the model only when the tool catalog changed. Training is
         # blocking (pymorphy3 + sklearn fit) so it runs in a worker thread.
@@ -337,9 +364,11 @@ class SimpleNluBackend(LlmBackend):
             content = self._round2_reply(messages)
             return self._envelope(content, None, "none")
 
-        # ROUND 1: classify the user utterance into a tool call (or no-match).
+        # ROUND 1: classify the user utterance into a tool call (or no-match). With a
+        # later chain behind this one, detection is strict and a no-match declines,
+        # so that chain re-recognizes the audio and answers instead.
         user_text = self._last_user_text(messages)
-        intent = self._detect(user_text, model)
+        intent = self._detect(user_text, model, strict=has_next)
         if intent["is_command"] and intent["tool"]:
             tool_calls = [{
                 "id": "call_0",
@@ -352,6 +381,8 @@ class SimpleNluBackend(LlmBackend):
             }]
             # Empty content: avoid double-speak (the on_filler path would speak it).
             return self._envelope("", tool_calls, intent["name"])
+        if has_next:
+            raise Declined(self._reply_unmatched)
         return self._envelope(self._reply_unmatched, None, "none")
 
     def _envelope(self, content: str, tool_calls, intent_name: str) -> dict:
@@ -544,13 +575,19 @@ class SimpleNluBackend(LlmBackend):
                 "phrase_lemmas": [pl for pl in phrase_lemmas if pl],
             })
 
-        # 3) Action verb lemma -> action name (for state-slot filling).
+        # 3) Action verb lemma -> action name (for state-slot filling), and the same
+        # by exact word form for strict mode, where a lemma would equate «закрыл»
+        # with «закрой».
         action_verb_lemmas: dict[frozenset, str] = {}
+        action_verb_tokens: dict[frozenset, str] = {}
         for action, verbs in self._actions.items():
             for verb in verbs:
                 lemset = frozenset(self._lemmas(verb, lemmatizer))
                 if lemset:
                     action_verb_lemmas[lemset] = action
+                tokset = frozenset(self._normalize(verb))
+                if tokset:
+                    action_verb_tokens[tokset] = action
 
         # 4) Per-tool applicable verbs (those whose action is in the tool's state
         # enum; if a tool has no state slot, ALL verbs are bare triggers).
@@ -623,9 +660,9 @@ class SimpleNluBackend(LlmBackend):
             "lemmatizer": lemmatizer,
             "tools_index": tools_index,
             "aliases_resolved": aliases_resolved,
-            "per_tool_verbs": per_tool_verbs,
             "per_tool_alias_phrases": per_tool_alias_phrases,
             "action_verb_lemmas": action_verb_lemmas,
+            "action_verb_tokens": action_verb_tokens,
             "classifier": classifier,
         }
 
@@ -647,16 +684,35 @@ class SimpleNluBackend(LlmBackend):
 
     # --- detection ------------------------------------------------------- #
 
-    def _detect(self, user_text: str, model: dict | None) -> dict:
-        """Classify `user_text` into {is_command, tool, args, name}."""
+    def _detect(self, user_text: str, model: dict | None, *, strict: bool = False) -> dict:
+        """Classify `user_text` into {is_command, tool, args, name}.
+
+        `strict` runs only the deterministic path (no fuzzy phrase match, no
+        classifier), matches action verbs by exact word form instead of by lemma,
+        and keeps a command only when every word of the utterance is explained
+        (see _unexplained)."""
         no_match = {"is_command": False, "tool": None, "args": {}, "name": "none"}
         if not model or not user_text:
             return no_match
         lemmatizer = model["lemmatizer"]
         tools_index = model["tools_index"]
+        user_tokens = self._normalize(user_text)
         user_lemmas = self._lemmas(user_text, lemmatizer)
         user_lemma_set = set(user_lemmas)
         user_lemma_str = " ".join(user_lemmas)
+        fuzzy_threshold = 0 if strict else self._fuzzy_threshold
+        # (verb key, action) of every action verb present in the utterance.
+        if strict:
+            user_token_set = set(user_tokens)
+            present_verbs = [
+                (tokset, action) for tokset, action in model["action_verb_tokens"].items()
+                if tokset <= user_token_set
+            ]
+        else:
+            present_verbs = [
+                (lemset, action) for lemset, action in model["action_verb_lemmas"].items()
+                if lemset <= user_lemma_set
+            ]
 
         # 1) DETERMINISTIC: a tool whose alias phrase is fully present (subset or
         # fuzzy) and (if it has a state slot) an applicable verb is present. Prefer
@@ -665,20 +721,22 @@ class SimpleNluBackend(LlmBackend):
         best_len = -1
         for tname, tinfo in tools_index.items():
             phrase_sets = model["per_tool_alias_phrases"].get(tname, [])
-            verbs = model["per_tool_verbs"].get(tname, [])
-            has_verb = any(v <= user_lemma_set for v in verbs) if verbs else False
             matched_phrase_len = -1
             for pl in phrase_sets:
                 if pl <= user_lemma_set:
                     matched_phrase_len = max(matched_phrase_len, len(pl))
-                elif self._fuzzy_threshold and self._fuzzy_ratio(
+                elif fuzzy_threshold and self._fuzzy_ratio(
                     " ".join(sorted(pl)), user_lemma_str
-                ) >= self._fuzzy_threshold:
+                ) >= fuzzy_threshold:
                     matched_phrase_len = max(matched_phrase_len, len(pl))
             if matched_phrase_len < 0:
                 continue
-            # If the tool has a state slot, require an applicable verb.
-            if tinfo["state_slot"] is not None and not has_verb:
+            # If the tool has a state slot, require a present verb whose action is
+            # one of that slot's values.
+            state_slot = tinfo["state_slot"]
+            if state_slot is not None and not any(
+                action in tinfo["slots"][state_slot]["enum"] for _, action in present_verbs
+            ):
                 continue
             if matched_phrase_len > best_len:
                 best_len = matched_phrase_len
@@ -687,8 +745,8 @@ class SimpleNluBackend(LlmBackend):
         chosen = best_tool
         from_classifier = False
 
-        # 2) CLASSIFIER fallback.
-        if chosen is None and model.get("classifier") is not None:
+        # 2) CLASSIFIER fallback (never in strict mode).
+        if chosen is None and not strict and model.get("classifier") is not None:
             try:
                 clf = model["classifier"]
                 proba = clf.predict_proba([user_lemma_str])[0]
@@ -708,8 +766,9 @@ class SimpleNluBackend(LlmBackend):
         # the classifier path is evidence-free, so we DON'T auto-fill and we require
         # below that the predicted tool's enum slots were actually grounded in text.
         tinfo = tools_index[chosen]
-        args = self._fill_slots(
-            chosen, user_text, user_lemma_set, model, auto_fill_singletons=not from_classifier
+        args, evidence = self._fill_slots(
+            chosen, user_text, user_lemma_set, model, present_verbs, fuzzy_threshold,
+            auto_fill_singletons=not from_classifier,
         )
         # Classifier guard: a predicted tool with enum slots must have at least one
         # filled from the utterance, else it is an unsupported guess -> no command.
@@ -719,7 +778,24 @@ class SimpleNluBackend(LlmBackend):
         # Required-slot validation is the main false-positive guard.
         if not tinfo["required"] <= set(args.keys()):
             return no_match
+        if strict and self._unexplained(user_tokens, user_lemmas, evidence):
+            return no_match
         return {"is_command": True, "tool": chosen, "args": args, "name": chosen}
+
+    def _unexplained(self, tokens: list[str], lemmas: list[str], evidence: dict) -> list[str]:
+        """The words of the utterance nothing in the command accounts for. A word is
+        explained when it is a word of an action verb that filled a slot, its lemma
+        is in the alias phrase that filled a slot, it is a number and a number
+        filled a slot, or it is a filler word. `tokens` and `lemmas` are parallel."""
+        verb_tokens = set().union(*evidence["verbs"])
+        phrase_lemmas = set().union(*evidence["phrases"])
+        return [
+            tok for tok, lem in zip(tokens, lemmas)
+            if tok not in verb_tokens
+            and lem not in phrase_lemmas
+            and not (evidence["number"] and _is_number_token(tok))
+            and tok not in self._fillers
+        ]
 
     def _fill_slots(
         self,
@@ -727,46 +803,55 @@ class SimpleNluBackend(LlmBackend):
         user_text: str,
         user_lemma_set: set,
         model: dict,
+        present_verbs: list[tuple[frozenset, str]],
+        fuzzy_threshold: int,
         *,
         auto_fill_singletons: bool = True,
-    ) -> dict:
+    ) -> tuple[dict, dict]:
+        """Fill the chosen tool's args from the utterance. `present_verbs` are the
+        (verb key, action) pairs found in it. Returns (args, evidence): evidence
+        holds the keys of the verbs that filled a slot ('verbs'), the lemma sets of
+        the alias phrases that filled a slot ('phrases'), and whether a number
+        filled a slot ('number')."""
         tinfo = model["tools_index"][tool]
         args: dict = {}
+        evidence: dict = {"verbs": [], "phrases": [], "number": False}
 
         # The action names present in the utterance (action name == enum value by
         # convention; "on"/"off" below mirror that same convention deliberately).
-        present_actions = {
-            action for lemset, action in model["action_verb_lemmas"].items()
-            if lemset <= user_lemma_set
-        }
+        present_actions = {action for _, action in present_verbs}
 
         # State slot <- the action name of a verb present in the utterance.
         state_slot = tinfo["state_slot"]
         if state_slot is not None:
             enum = tinfo["slots"][state_slot]["enum"] or []
-            for lemset, action in model["action_verb_lemmas"].items():
-                if lemset <= user_lemma_set and action in enum:
+            for verb, action in present_verbs:
+                if action in enum:
                     args[state_slot] = action
+                    evidence["verbs"].append(verb)
                     break
 
         # Enum slots <- value of the best-matching alias phrase for that slot.
         for slot in tinfo["enum_slots"]:
             best_value = None
+            best_phrase = None
             best_len = -1
             for entry in model["aliases_resolved"]:
                 if entry["tool"] != tool or entry["slot"] != slot:
                     continue
                 for pl in entry["phrase_lemmas"]:
                     matched = pl <= user_lemma_set
-                    if not matched and self._fuzzy_threshold:
+                    if not matched and fuzzy_threshold:
                         matched = self._fuzzy_ratio(
                             " ".join(sorted(pl)), " ".join(sorted(user_lemma_set))
-                        ) >= self._fuzzy_threshold
+                        ) >= fuzzy_threshold
                     if matched and len(pl) > best_len:
                         best_len = len(pl)
                         best_value = entry["value"]
+                        best_phrase = pl
             if best_value is not None:
                 args[slot] = best_value
+                evidence["phrases"].append(best_phrase)
 
         # Level slot <- an explicit number, else an on/off verb maps to a level.
         # Done BEFORE number_slots so the level slot wins (the loop below skips
@@ -778,10 +863,13 @@ class SimpleNluBackend(LlmBackend):
             num = extract_number(user_text)
             if num is not None:
                 args[level_slot] = num if level_type == "number" else str(num)
+                evidence["number"] = True
             elif "off" in present_actions:
                 args[level_slot] = 0 if level_type == "number" else self._off_token
+                evidence["verbs"].append(next(v for v, a in present_verbs if a == "off"))
             elif "on" in present_actions and level_type == "number":
                 args[level_slot] = self._level_on
+                evidence["verbs"].append(next(v for v, a in present_verbs if a == "on"))
             # string level slot + on-verb + no number -> leave UNFILLED, so the
             # required-slot validation correctly no-matches it.
 
@@ -792,6 +880,7 @@ class SimpleNluBackend(LlmBackend):
             num = extract_number(user_text)
             if num is not None:
                 args[slot] = num
+                evidence["number"] = True
 
         # Required single-value enum slots left unfilled <- their only value. Only on
         # the deterministic path (a real match already proved intent); skipped on the
@@ -804,7 +893,7 @@ class SimpleNluBackend(LlmBackend):
                 if enum and len(enum) == 1:
                     args[slot] = enum[0]
 
-        return args
+        return args, evidence
 
 
 @register
@@ -819,6 +908,7 @@ class SimpleNluProvider(Provider):
         return SimpleNluBackend(
             aliases_text=cfg.aliases,
             actions_text=cfg.actions,
+            filler_text=cfg.filler_words,
             min_confidence=cfg.min_confidence,
             fuzzy_threshold=cfg.fuzzy_threshold,
             level_on=cfg.level_on,
@@ -833,4 +923,4 @@ class SimpleNluProvider(Provider):
 
     def vocabulary(self, cfg: SimpleNluConfig) -> list[str]:
         # The closed command vocabulary an offline STT can restrict its grammar to.
-        return nlu_vocabulary(cfg.aliases, cfg.actions)
+        return nlu_vocabulary(cfg.aliases, cfg.actions, cfg.filler_words)

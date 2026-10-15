@@ -8,11 +8,15 @@ import types
 
 import pytest
 
+import src.plugins  # noqa: F401  register providers (the http rebuild reads their cloud flag)
+from src.core_config import ChainConfig
 from src.reconfig import (
     Reconfigurator,
     action_for,
     backend_categories,
     changed_paths,
+    pool_instances,
+    reconciled_pools,
 )
 
 
@@ -94,6 +98,7 @@ def test_action_for_representative_paths():
         "core.devices": "rebuild_devices",
         "core.devices.0.host": "rebuild_devices",
         "core.esphome.port": "rebuild_devices",
+        "core.chains": "rebuild_backends",
         "llm.instances.openrouter.temperature": "rebuild_backends",
         "llm.instances.openrouter.reply_empty": "live",
         "llm.instances.openrouter.max_tool_rounds": "live",
@@ -113,6 +118,7 @@ def test_action_for_llm_reply_error_is_live():
     # reply_error is one of the live LLM provider leaves (read per request, not baked
     # into the backend), so changing it must NOT trigger a backend rebuild.
     assert action_for("llm.instances.openrouter.reply_error") == "live"
+    assert action_for("llm.instances.simple-nlu.reply_error_after_tools") == "live"
 
 
 def test_action_for_llm_hidden_sources_is_live():
@@ -140,13 +146,30 @@ def test_action_for_label_companion_fields_are_live():
 # --- backend_categories ------------------------------------------------------
 
 def test_backend_categories_maps_each_stage_path():
-    assert backend_categories({"tts.instances.yandex.voice"}) == {"tts"}
-    assert backend_categories({"llm.selected"}) == {"llm"}
-    assert backend_categories({"core.tts_timeout"}) == {"tts"}
     assert backend_categories({"vad.instances.webrtc.aggressiveness"}) == {"vad"}
-    assert backend_categories(
-        {"stt.instances.groq.api_key", "tts.selected"}
-    ) == {"stt", "tts"}
+    # stt/llm (per-chain) and tts (per-variant) are pools, not single-backend stages.
+    assert backend_categories({
+        "stt.instances.groq.api_key", "tts.instances.yandex.voice", "tts.variants",
+        "core.tts_timeout", "core.chains",
+    }) == set()
+
+
+def test_pool_instances_names_each_rebuilt_provider():
+    assert pool_instances({
+        "stt.instances.groq.api_key",
+        "llm.instances.simple-nlu.aliases",
+        "llm.instances.openrouter.reply_error",   # live leaf: no rebuild
+        "core.chains",
+        "tts.instances.yandex.voice",
+        "tts.instances.fishaudio.reference_id_label",   # live leaf: no rebuild
+        "tts.variants",
+    }) == {("stt", "groq"), ("llm", "simple-nlu"), ("tts", "yandex")}
+
+
+def test_reconciled_pools_follow_chains_and_variants():
+    assert reconciled_pools({"core.chains"}) == {"stt", "llm"}
+    assert reconciled_pools({"tts.variants"}) == {"tts"}
+    assert reconciled_pools({"tts.instances.yandex.voice", "core.tts_timeout"}) == set()
 
 
 def test_backend_categories_ignores_non_rebuild_paths():
@@ -279,52 +302,72 @@ def test_reconfigurator_log_level_reinits_logging(monkeypatch):
 # --- apply_job (async backend rebuild) ---------------------------------------
 
 class _StubSvc:
-    """create(cat) returns a sentinel encoding the category AND the tts_timeout it saw.
+    """create(cat) / create_instance(cat, id) return a sentinel encoding what was built
+    AND the tts_timeout it saw.
 
     Reading `deps.tts_timeout` here lets tests assert the push-before-create ordering:
     the rebuilt backend records exactly the timeout the worker observed at create time.
     The stub shares the SAME `deps` object the Reconfigurator holds (set via attach).
-    Also tracks per-category call counts to assert coalescing (rebuild once per burst).
+    Also tracks per-category (single-backend stages) and per-(category, id) (chain
+    pools) call counts to assert coalescing (rebuild once per burst).
 
     provider(cat) returns an object whose uses_http_cloud bool mirrors the selected
-    provider's flag. By default every category is cloud (uses_http_cloud True); pass
-    `cloud_cats` to mark only a subset cloud (the rest report offline -> not rebuilt
-    on a proxy change). This drives _rebuild_http's proxied-only category selection.
+    provider's flag for the single-backend stages; `cloud_cats` marks which of them are
+    cloud. The STT/handler/TTS pools read the real registry flag (groq/openrouter/yandex
+    cloud, vosk/simple-nlu/piper offline). `variants` is the enabled TTS variant list.
     """
 
-    def __init__(self, fail_on=None, cloud_cats=("stt", "llm", "tts")):
-        self._fail_on = fail_on   # category whose create() should raise
+    def __init__(self, fail_on=None, cloud_cats=(), variants=("yandex",)):
+        self._fail_on = fail_on   # category, or (category, id), whose create should raise
         self.deps = None          # set by attach() to the Reconfigurator's deps bag
-        self.calls = {}           # per-category create() call count
-        self._cloud_cats = set(cloud_cats)   # categories whose provider is cloud
+        self.calls = {}           # create() call count per category / (category, id)
+        self._cloud_cats = set(cloud_cats)   # single-backend stages whose provider is cloud
+        self.variants = list(variants)
 
     def attach(self, deps):
         """Point the stub at the same deps object the Reconfigurator mutates."""
         self.deps = deps
         return self
 
+    def _timeout(self):
+        return self.deps.tts_timeout if self.deps is not None else None
+
     def create(self, cat):
         self.calls[cat] = self.calls.get(cat, 0) + 1
         if cat == self._fail_on:
             raise RuntimeError(f"boom:{cat}")
-        timeout = self.deps.tts_timeout if self.deps is not None else None
-        return ("backend", cat, timeout)
+        return ("backend", cat, self._timeout())
+
+    def create_instance(self, cat, pid):
+        self.calls[(cat, pid)] = self.calls.get((cat, pid), 0) + 1
+        if (cat, pid) == self._fail_on:
+            raise RuntimeError(f"boom:{cat}/{pid}")
+        return ("backend", cat, pid, self._timeout())
 
     def provider(self, cat):
         """Selected-provider stub exposing only uses_http_cloud (what _rebuild_http reads)."""
         return types.SimpleNamespace(uses_http_cloud=cat in self._cloud_cats)
 
+    def tts_variants(self):
+        return list(self.variants)
 
-def _job_runtime(svc, *, tts_timeout=99):
-    """Runtime stub for apply_job: holds the four stage backends, the svc and a core
-    whose tts_timeout the TTS rebuild copies into deps."""
+
+def _chain(name="main", stt="groq", handler="openrouter", **kw):
+    return ChainConfig(name=name, stt=stt, handler=handler, **kw)
+
+
+def _job_runtime(svc, *, tts_timeout=99, chains=None):
+    """Runtime stub for apply_job: holds the single-stage backends, the chain pools
+    (one chain groq -> openrouter by default), the TTS variant pool (yandex), the svc
+    and a core whose tts_timeout the TTS rebuild copies into deps."""
+    chains = chains if chains is not None else [_chain()]
     return types.SimpleNamespace(
         svc=svc,
-        core=types.SimpleNamespace(tts_timeout=tts_timeout),
+        core=types.SimpleNamespace(tts_timeout=tts_timeout, chains=chains),
         vad_backend="old-vad",
-        stt_backend="old-stt",
-        llm_backend="old-llm",
-        tts_backend="old-tts",
+        stt_backends={"groq": "old-stt"},
+        llm_backends={"openrouter": "old-llm"},
+        tts_backends={"yandex": "old-tts"},
     )
 
 
@@ -343,9 +386,9 @@ async def test_apply_job_rebuilds_only_tts_and_pushes_timeout():
     # proves the push happened BEFORE create (push-before-create ordering).
     reconf, rt, deps = _make_job_reconf(_StubSvc(), tts_timeout=99, deps_timeout=30)
     await reconf.apply_job({"tts.instances.yandex.voice"})
-    assert rt.tts_backend == ("backend", "tts", 99)   # create saw the pushed timeout
-    assert rt.stt_backend == "old-stt"     # untouched
-    assert rt.llm_backend == "old-llm"     # untouched
+    assert rt.tts_backends == {"yandex": ("backend", "tts", "yandex", 99)}   # saw the pushed timeout
+    assert rt.stt_backends == {"groq": "old-stt"}     # untouched
+    assert rt.llm_backends == {"openrouter": "old-llm"}   # untouched
     assert deps.tts_timeout == 99          # pushed from core.tts_timeout before rebuild
 
 
@@ -355,20 +398,85 @@ async def test_apply_job_rebuilds_only_vad():
     reconf, rt, deps = _make_job_reconf(_StubSvc(), deps_timeout=30)
     await reconf.apply_job({"vad.instances.webrtc.aggressiveness"})
     assert rt.vad_backend == ("backend", "vad", 30)   # swapped to the new sentinel
-    assert rt.stt_backend == "old-stt"     # untouched
-    assert rt.llm_backend == "old-llm"     # untouched
-    assert rt.tts_backend == "old-tts"     # untouched
+    assert rt.stt_backends == {"groq": "old-stt"}     # untouched
+    assert rt.llm_backends == {"openrouter": "old-llm"}   # untouched
+    assert rt.tts_backends == {"yandex": "old-tts"}     # untouched
     assert deps.tts_timeout == 30          # no tts rebuild -> timeout not touched
 
 
 @pytest.mark.asyncio
 async def test_apply_job_rebuilds_only_stt():
     reconf, rt, deps = _make_job_reconf(_StubSvc(), deps_timeout=30)
-    await reconf.apply_job({"stt.selected"})
-    assert rt.stt_backend == ("backend", "stt", 30)
-    assert rt.llm_backend == "old-llm"     # untouched
-    assert rt.tts_backend == "old-tts"     # untouched
+    await reconf.apply_job({"stt.instances.groq.api_key"})
+    assert rt.stt_backends == {"groq": ("backend", "stt", "groq", 30)}
+    assert rt.llm_backends == {"openrouter": "old-llm"}   # untouched
+    assert rt.tts_backends == {"yandex": "old-tts"}     # untouched
     assert deps.tts_timeout == 30          # no tts rebuild -> timeout not touched
+
+
+@pytest.mark.asyncio
+async def test_apply_job_skips_instance_no_enabled_chain_uses():
+    # An instance whose own settings changed is rebuilt only when an enabled chain
+    # references it: vosk is configured but unused, and a disabled chain does not count.
+    svc = _StubSvc()
+    reconf, rt, _deps = _make_job_reconf(svc)
+    rt.core.chains.append(_chain(name="off", stt="vosk", enabled=False))
+    await reconf.apply_job({"stt.instances.vosk.model_path"})
+    assert svc.calls == {}
+    assert rt.stt_backends == {"groq": "old-stt"}
+
+
+@pytest.mark.asyncio
+async def test_apply_job_chains_change_builds_new_and_drops_unreferenced():
+    # core.chains now uses vosk -> simple-nlu first and still groq, but no longer
+    # openrouter: the new instances are built, the unreferenced one is dropped, and
+    # the instance still in use is NOT rebuilt (its settings did not change).
+    svc = _StubSvc()
+    reconf, rt, _deps = _make_job_reconf(svc, deps_timeout=30)
+    rt.core.chains = [
+        _chain(name="nlu", stt="vosk", handler="simple-nlu"),
+        _chain(name="cloud", stt="groq", handler="simple-nlu"),
+    ]
+    await reconf.apply_job({"core.chains"})
+    assert rt.stt_backends == {"groq": "old-stt", "vosk": ("backend", "stt", "vosk", 30)}
+    assert rt.llm_backends == {"simple-nlu": ("backend", "llm", "simple-nlu", 30)}
+    assert svc.calls == {("stt", "vosk"): 1, ("llm", "simple-nlu"): 1}
+
+
+@pytest.mark.asyncio
+async def test_apply_job_variants_change_builds_new_and_drops_unused():
+    # tts.variants now enables piper and no longer yandex, while fishaudio stays
+    # listed but disabled: piper is built (timeout pushed first), yandex dropped,
+    # nothing else built.
+    svc = _StubSvc(variants=("piper",))
+    reconf, rt, deps = _make_job_reconf(svc, tts_timeout=99, deps_timeout=30)
+    await reconf.apply_job({"tts.variants"})
+    assert rt.tts_backends == {"piper": ("backend", "tts", "piper", 99)}
+    assert svc.calls == {("tts", "piper"): 1}
+    assert deps.tts_timeout == 99
+
+
+@pytest.mark.asyncio
+async def test_apply_job_variant_instances_rebuild_only_enabled_variants():
+    # An instance whose settings changed is rebuilt only while it is an enabled
+    # variant; a variant still enabled whose settings did not change is not rebuilt.
+    svc = _StubSvc(variants=("yandex", "piper"))
+    reconf, rt, _deps = _make_job_reconf(svc)
+    rt.tts_backends["piper"] = "old-piper"
+    await reconf.apply_job({"tts.instances.fishaudio.speed", "tts.instances.piper.voice_path"})
+    assert svc.calls == {("tts", "piper"): 1}
+    assert rt.tts_backends == {"yandex": "old-tts", "piper": ("backend", "tts", "piper", 99)}
+
+
+@pytest.mark.asyncio
+async def test_apply_job_tts_timeout_rebuilds_every_enabled_variant():
+    svc = _StubSvc(variants=("yandex", "piper"))
+    reconf, rt, _deps = _make_job_reconf(svc, tts_timeout=77, deps_timeout=30)
+    rt.tts_backends["piper"] = "old-piper"
+    await reconf.apply_job({"core.tts_timeout"})
+    assert rt.tts_backends == {"yandex": ("backend", "tts", "yandex", 77),
+                               "piper": ("backend", "tts", "piper", 77)}
+    assert rt.stt_backends == {"groq": "old-stt"}
 
 
 @pytest.mark.asyncio
@@ -377,26 +485,27 @@ async def test_apply_job_rebuilds_multiple_categories():
     # The tts push runs once, up front, so any create() in this job (incl. stt) sees
     # the already-updated deps.tts_timeout (99).
     reconf, rt, _deps = _make_job_reconf(_StubSvc(), tts_timeout=99, deps_timeout=30)
-    await reconf.apply_job({"stt.selected", "tts.selected"})
-    assert rt.stt_backend == ("backend", "stt", 99)   # swapped to the new sentinel
-    assert rt.tts_backend == ("backend", "tts", 99)   # tts rebuilt with pushed timeout
-    assert rt.llm_backend == "old-llm"     # untouched
+    await reconf.apply_job({"stt.instances.groq.api_key", "tts.instances.yandex.voice"})
+    assert rt.stt_backends == {"groq": ("backend", "stt", "groq", 99)}   # new sentinel
+    assert rt.tts_backends == {"yandex": ("backend", "tts", "yandex", 99)}   # pushed timeout
+    assert rt.llm_backends == {"openrouter": "old-llm"}   # untouched
 
 
 @pytest.mark.asyncio
 async def test_apply_job_failed_create_keeps_old_backend():
-    reconf, rt, _deps = _make_job_reconf(_StubSvc(fail_on="llm"))
-    await reconf.apply_job({"llm.selected"})
-    assert rt.llm_backend == "old-llm"     # rebuild failed -> old backend kept
+    reconf, rt, _deps = _make_job_reconf(_StubSvc(fail_on=("llm", "openrouter")))
+    await reconf.apply_job({"llm.instances.openrouter.model"})
+    assert rt.llm_backends == {"openrouter": "old-llm"}   # rebuild failed -> old kept
 
 
 @pytest.mark.asyncio
 async def test_apply_job_partial_failure_rebuilds_what_it_can():
     # One category fails, the other succeeds in the same job: apply-what-you-can.
-    reconf, rt, _deps = _make_job_reconf(_StubSvc(fail_on="llm"), deps_timeout=30)
-    await reconf.apply_job({"stt.selected", "llm.selected"})
-    assert rt.stt_backend == ("backend", "stt", 30)   # rebuilt despite the sibling failure
-    assert rt.llm_backend == "old-llm"     # failed -> old backend kept
+    reconf, rt, _deps = _make_job_reconf(
+        _StubSvc(fail_on=("llm", "openrouter")), deps_timeout=30)
+    await reconf.apply_job({"stt.instances.groq.api_key", "llm.instances.openrouter.model"})
+    assert rt.stt_backends == {"groq": ("backend", "stt", "groq", 30)}   # rebuilt anyway
+    assert rt.llm_backends == {"openrouter": "old-llm"}   # failed -> old backend kept
 
 
 @pytest.mark.asyncio
@@ -410,7 +519,7 @@ async def test_request_initial_load_rebuilds_stress_when_drained():
     job = reconf.queue.get_nowait()
     await reconf.apply_job(job)
     assert rt.stress_backend == ("backend", "stress", 30)   # swapped in via the warm-up
-    assert rt.stt_backend == "old-stt"                       # other stages untouched
+    assert rt.stt_backends == {"groq": "old-stt"}            # other stages untouched
 
 
 # --- reloading() (in-flight model-load status for the panel) ------------------
@@ -422,19 +531,22 @@ def test_reloading_empty_on_fresh_reconfigurator():
 
 
 class _BlockingSvc:
-    """create(cat) blocks (in its worker thread) until a threading.Event is set, so a
-    test can observe the in-flight reloading() state. Mirrors _StubSvc's create return
-    shape (a sentinel tuple) but gates the call on the release event."""
+    """create_instance(cat, id) blocks (in its worker thread) until a threading.Event is
+    set, so a test can observe the in-flight reloading() state. Mirrors _StubSvc's
+    return shape (a sentinel tuple) but gates the call on the release event."""
 
     def __init__(self, release: threading.Event):
         self._release = release
-        self.entered = threading.Event()   # set the instant create() begins blocking
+        self.entered = threading.Event()   # set the instant create begins blocking
 
-    def create(self, cat):
+    def create_instance(self, cat, pid):
         self.entered.set()
         # Block in the worker thread (to_thread) until the test releases us.
         self._release.wait(timeout=5)
-        return ("backend", cat, None)
+        return ("backend", cat, pid, None)
+
+    def tts_variants(self):
+        return ["yandex"]
 
 
 @pytest.mark.asyncio
@@ -446,7 +558,7 @@ async def test_reloading_reports_category_in_flight_then_clears():
     rt = _job_runtime(svc)
     reconf = Reconfigurator(rt, types.SimpleNamespace(tts_timeout=30), asyncio.Queue())
 
-    task = asyncio.create_task(reconf.apply_job({"stt.selected"}))
+    task = asyncio.create_task(reconf.apply_job({"stt.instances.groq.api_key"}))
     try:
         # Wait until create() is actually executing in its worker thread. _reloading.add()
         # happens-before the to_thread() that starts create(), so once `entered` is set the
@@ -454,7 +566,7 @@ async def test_reloading_reports_category_in_flight_then_clears():
         # (no race with the worker thread that the reverse order would have).
         assert await _wait_for(lambda: svc.entered.is_set())
         assert reconf.reloading() == ["stt"]   # category marked while create() blocks
-        assert rt.stt_backend == "old-stt"     # not swapped yet (create still running)
+        assert rt.stt_backends == {"groq": "old-stt"}   # not swapped yet (still creating)
         release.set()                       # let create() finish
         await asyncio.wait_for(task, timeout=5)
     finally:
@@ -464,7 +576,7 @@ async def test_reloading_reports_category_in_flight_then_clears():
             with contextlib.suppress(asyncio.CancelledError):
                 await task
     assert reconf.reloading() == []                 # cleared after the rebuild
-    assert rt.stt_backend == ("backend", "stt", None)  # backend swapped in
+    assert rt.stt_backends == {"groq": ("backend", "stt", "groq", None)}   # swapped in
 
 
 # --- run_loop (queue drain task) ---------------------------------------------
@@ -488,9 +600,9 @@ async def test_run_loop_applies_a_job():
     reconf, rt, _deps = _make_job_reconf(_StubSvc(), tts_timeout=99, deps_timeout=30)
     task = asyncio.create_task(reconf.run_loop())
     try:
-        reconf.queue.put_nowait({"tts.selected"})
-        assert await _wait_for(lambda: rt.tts_backend != "old-tts")
-        assert rt.tts_backend == ("backend", "tts", 99)
+        reconf.queue.put_nowait({"tts.instances.yandex.voice"})
+        assert await _wait_for(lambda: rt.tts_backends["yandex"] != "old-tts")
+        assert rt.tts_backends["yandex"] == ("backend", "tts", "yandex", 99)
     finally:
         task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
@@ -513,13 +625,13 @@ async def test_run_loop_survives_apply_job_exception(monkeypatch):
     monkeypatch.setattr(reconf, "apply_job", flaky_apply)
     task = asyncio.create_task(reconf.run_loop())
     try:
-        reconf.queue.put_nowait({"stt.selected"})        # makes apply_job raise once
+        reconf.queue.put_nowait({"stt.instances.groq.api_key"})   # makes apply_job raise once
         # Wait until the first (failing) job was consumed, so the good job is a SEPARATE
         # apply call (not coalesced into the failing one).
         assert await _wait_for(lambda: not state["first"])
-        reconf.queue.put_nowait({"tts.selected"})        # good job processed afterwards
-        assert await _wait_for(lambda: rt.tts_backend != "old-tts")
-        assert rt.tts_backend == ("backend", "tts", 99)
+        reconf.queue.put_nowait({"tts.instances.yandex.voice"})   # good job processed afterwards
+        assert await _wait_for(lambda: rt.tts_backends["yandex"] != "old-tts")
+        assert rt.tts_backends["yandex"] == ("backend", "tts", "yandex", 99)
     finally:
         task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
@@ -532,17 +644,17 @@ async def test_run_loop_coalesces_bursted_jobs():
     # stage rebuilds at most once (assert per-category create() call counts).
     svc = _StubSvc()
     reconf, rt, _deps = _make_job_reconf(svc, tts_timeout=99, deps_timeout=30)
-    reconf.queue.put_nowait({"stt.selected"})
-    reconf.queue.put_nowait({"tts.selected"})
+    reconf.queue.put_nowait({"stt.instances.groq.api_key"})
+    reconf.queue.put_nowait({"tts.instances.yandex.voice"})
     task = asyncio.create_task(reconf.run_loop())
     try:
         assert await _wait_for(
-            lambda: rt.stt_backend != "old-stt" and rt.tts_backend != "old-tts"
+            lambda: rt.stt_backends["groq"] != "old-stt" and rt.tts_backends["yandex"] != "old-tts"
         )
-        assert rt.stt_backend == ("backend", "stt", 99)   # tts push ran first this job
-        assert rt.tts_backend == ("backend", "tts", 99)
-        assert svc.calls.get("stt") == 1   # coalesced -> rebuilt once
-        assert svc.calls.get("tts") == 1
+        assert rt.stt_backends["groq"] == ("backend", "stt", "groq", 99)   # tts push first
+        assert rt.tts_backends["yandex"] == ("backend", "tts", "yandex", 99)
+        assert svc.calls.get(("stt", "groq")) == 1   # coalesced -> rebuilt once
+        assert svc.calls.get(("tts", "yandex")) == 1
     finally:
         task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
@@ -767,9 +879,12 @@ class _FakeHttpClient:
         self.closed = True
 
 
-def _http_runtime(svc, hub, *, external_proxy=""):
+def _http_runtime(svc, hub, *, external_proxy="", chains=None):
     """Runtime stub for the http rebuild: holds svc (for backend cats), the hub (for the
-    tools rebuild), a scheduler and a core exposing tts_timeout + network.external_proxy."""
+    tools rebuild), a scheduler, the chain pools, the TTS variant pool (svc.variants)
+    and a core exposing tts_timeout, network.external_proxy and the chains
+    (groq -> openrouter, both cloud, by default)."""
+    chains = chains if chains is not None else [_chain()]
     return types.SimpleNamespace(
         svc=svc,
         hub=hub,
@@ -777,11 +892,12 @@ def _http_runtime(svc, hub, *, external_proxy=""):
         core=types.SimpleNamespace(
             tts_timeout=42,
             network=types.SimpleNamespace(external_proxy=external_proxy),
+            chains=chains,
         ),
         vad_backend="old-vad",
-        stt_backend="old-stt",
-        llm_backend="old-llm",
-        tts_backend="old-tts",
+        stt_backends={c.stt: "old-stt" for c in chains},
+        llm_backends={c.handler: "old-llm" for c in chains},
+        tts_backends={pid: "old-tts" for pid in svc.variants},
     )
 
 
@@ -808,8 +924,8 @@ async def test_apply_job_rebuild_http_swaps_client_rebuilds_deps_and_closes_old(
     assert deps.http_cloud is new_client
     assert old_client.closed is True
     # All three cloud backends rebuilt off the new client (each exactly once).
-    assert svc.calls == {"stt": 1, "llm": 1, "tts": 1}
-    assert rt.stt_backend == ("backend", "stt", 42)   # tts_timeout pushed before create
+    assert svc.calls == {("stt", "groq"): 1, ("llm", "openrouter"): 1, ("tts", "yandex"): 1}
+    assert rt.stt_backends["groq"] == ("backend", "stt", "groq", 42)   # timeout pushed first
     # Tool sources rebuilt against the new client.
     assert hub.set_calls == [["new-src"]]
 
@@ -857,11 +973,11 @@ async def test_apply_job_http_covers_tools_and_backends_exactly_once(monkeypatch
 
     # external_proxy -> rebuild_http; stt.* -> rebuild_backends; mcp_servers -> rebuild_tools.
     await reconf.apply_job(
-        {"core.network.external_proxy", "stt.selected", "core.mcp_servers"}
+        {"core.network.external_proxy", "stt.instances.groq.model", "core.mcp_servers"}
     )
 
     # Backends rebuilt once each (NOT twice), tools swapped once.
-    assert svc.calls == {"stt": 1, "llm": 1, "tts": 1}
+    assert svc.calls == {("stt", "groq"): 1, ("llm", "openrouter"): 1, ("tts", "yandex"): 1}
     assert hub.set_calls == [["new-src"]]
     assert deps.http_cloud is new_client
     assert old_client.closed is True
@@ -869,16 +985,16 @@ async def test_apply_job_http_covers_tools_and_backends_exactly_once(monkeypatch
 
 @pytest.mark.asyncio
 async def test_apply_job_rebuild_http_skips_offline_stt(monkeypatch):
-    # Selected STT provider is OFFLINE (uses_http_cloud False) while llm/tts are cloud:
-    # a proxy change must rebuild ONLY {"llm","tts"} (NOT stt -> no model reload), rebuild
-    # tools, swap the client and close the old one.
+    # The chain's STT provider is OFFLINE (vosk, uses_http_cloud False) while its
+    # handler and tts are cloud: a proxy change must rebuild ONLY the handler and tts
+    # (NOT stt -> no model reload), rebuild tools, swap the client and close the old one.
     monkeypatch.setattr("src.reconfig.build_sources", lambda c, h, s: ["new-src"])
     new_client = _FakeHttpClient("new")
     monkeypatch.setattr("src.reconfig.httpx.AsyncClient", lambda **kw: new_client)
     old_client = _FakeHttpClient("old")
-    svc = _StubSvc(cloud_cats=("llm", "tts"))   # stt offline
+    svc = _StubSvc()   # tts variant yandex: cloud
     hub = _FakeHub()
-    rt = _http_runtime(svc, hub)
+    rt = _http_runtime(svc, hub, chains=[_chain(stt="vosk")])
     deps = types.SimpleNamespace(http_cloud=old_client, tts_timeout=30)
     svc.attach(deps)
     reconf = Reconfigurator(rt, deps, asyncio.Queue())
@@ -886,10 +1002,11 @@ async def test_apply_job_rebuild_http_skips_offline_stt(monkeypatch):
     await reconf.apply_job({"core.network.external_proxy"})
 
     # Only the cloud stages rebuilt; the offline stt backend is left untouched.
-    assert svc.calls == {"llm": 1, "tts": 1}
-    assert rt.stt_backend == "old-stt"     # offline -> no reload
-    assert rt.llm_backend == ("backend", "llm", 42)
-    assert rt.tts_backend == ("backend", "tts", 42)   # tts_timeout pushed before create
+    assert svc.calls == {("llm", "openrouter"): 1, ("tts", "yandex"): 1}
+    assert rt.stt_backends == {"vosk": "old-stt"}     # offline -> no reload
+    assert rt.llm_backends == {"openrouter": ("backend", "llm", "openrouter", 42)}
+    # tts_timeout pushed before create
+    assert rt.tts_backends == {"yandex": ("backend", "tts", "yandex", 42)}
     assert hub.set_calls == [["new-src"]]              # tools still rebuilt
     assert deps.http_cloud is new_client
     assert old_client.closed is True
@@ -897,8 +1014,8 @@ async def test_apply_job_rebuild_http_skips_offline_stt(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_apply_job_rebuild_http_also_rebuilds_offline_backend_changed_in_job(monkeypatch):
-    # Coalesced job touching BOTH core.network.* (rebuild_http) AND a SELECTED OFFLINE
-    # backend's own field (stt is offline here, llm/tts cloud). The http rebuild must
+    # Coalesced job touching BOTH core.network.* (rebuild_http) AND an OFFLINE chain
+    # backend's own field (stt is vosk here, llm/tts cloud). The http rebuild must
     # rebuild the UNION of the cloud stages (client changed) AND the offline stt (its
     # config changed) — so the offline change is NOT silently dropped — rebuild tools,
     # swap the client, and close the old one (nothing lost).
@@ -906,22 +1023,22 @@ async def test_apply_job_rebuild_http_also_rebuilds_offline_backend_changed_in_j
     new_client = _FakeHttpClient("new")
     monkeypatch.setattr("src.reconfig.httpx.AsyncClient", lambda **kw: new_client)
     old_client = _FakeHttpClient("old")
-    svc = _StubSvc(cloud_cats=("llm", "tts"))   # stt offline, llm/tts cloud
+    svc = _StubSvc()   # tts variant yandex: cloud
     hub = _FakeHub()
-    rt = _http_runtime(svc, hub)
+    rt = _http_runtime(svc, hub, chains=[_chain(stt="vosk")])
     deps = types.SimpleNamespace(http_cloud=old_client, tts_timeout=30)
     svc.attach(deps)
     reconf = Reconfigurator(rt, deps, asyncio.Queue())
 
     await reconf.apply_job(
-        {"core.network.external_proxy", "stt.instances.vosk.model"}
+        {"core.network.external_proxy", "stt.instances.vosk.model_path"}
     )
 
     # stt (offline, config changed) rebuilt despite NOT being cloud, plus the cloud stages.
-    assert svc.calls == {"stt": 1, "llm": 1, "tts": 1}
-    assert rt.stt_backend == ("backend", "stt", 42)   # offline stt change applied (not dropped)
-    assert rt.llm_backend == ("backend", "llm", 42)
-    assert rt.tts_backend == ("backend", "tts", 42)
+    assert svc.calls == {("stt", "vosk"): 1, ("llm", "openrouter"): 1, ("tts", "yandex"): 1}
+    assert rt.stt_backends == {"vosk": ("backend", "stt", "vosk", 42)}   # applied, not dropped
+    assert rt.llm_backends == {"openrouter": ("backend", "llm", "openrouter", 42)}
+    assert rt.tts_backends == {"yandex": ("backend", "tts", "yandex", 42)}
     assert hub.set_calls == [["new-src"]]              # tools rebuilt
     assert deps.http_cloud is new_client               # client swapped
     assert old_client.closed is True                   # old client closed
@@ -930,15 +1047,15 @@ async def test_apply_job_rebuild_http_also_rebuilds_offline_backend_changed_in_j
 @pytest.mark.asyncio
 async def test_apply_job_rebuild_http_also_rebuilds_vad_changed_in_job(monkeypatch):
     # Coalesced job touching BOTH core.network.* (rebuild_http) AND a vad instance
-    # field. vad is OFFLINE (default _StubSvc cloud_cats has no vad), so it enters the
+    # field. vad is OFFLINE (default _StubSvc cloud_cats is empty), so it enters the
     # http rebuild only through the backend_categories(paths) half of the union — and
     # must be rebuilt EXACTLY once (not dropped, not doubled), alongside the cloud
-    # stages, with tools rebuilt and the client swapped/closed as usual.
+    # backends, with tools rebuilt and the client swapped/closed as usual.
     monkeypatch.setattr("src.reconfig.build_sources", lambda c, h, s: ["new-src"])
     new_client = _FakeHttpClient("new")
     monkeypatch.setattr("src.reconfig.httpx.AsyncClient", lambda **kw: new_client)
     old_client = _FakeHttpClient("old")
-    svc = _StubSvc()   # default cloud_cats: stt/llm/tts cloud, vad offline
+    svc = _StubSvc()   # vad offline; the chain's groq/openrouter and tts yandex are cloud
     hub = _FakeHub()
     rt = _http_runtime(svc, hub)
     deps = types.SimpleNamespace(http_cloud=old_client, tts_timeout=30)
@@ -949,12 +1066,14 @@ async def test_apply_job_rebuild_http_also_rebuilds_vad_changed_in_job(monkeypat
         {"core.network.external_proxy", "vad.instances.webrtc.aggressiveness"}
     )
 
-    # vad rebuilt exactly once via the union, plus each cloud stage exactly once.
-    assert svc.calls == {"vad": 1, "stt": 1, "llm": 1, "tts": 1}
-    assert rt.vad_backend == ("backend", "vad", 42)    # vad change applied (not dropped)
-    assert rt.stt_backend == ("backend", "stt", 42)
-    assert rt.llm_backend == ("backend", "llm", 42)
-    assert rt.tts_backend == ("backend", "tts", 42)
+    # vad rebuilt exactly once via the union, plus each cloud backend exactly once.
+    assert svc.calls == {"vad": 1, ("stt", "groq"): 1, ("llm", "openrouter"): 1,
+                         ("tts", "yandex"): 1}
+    # vad change applied (not dropped); built before the pool's TTS timeout push.
+    assert rt.vad_backend == ("backend", "vad", 30)
+    assert rt.stt_backends == {"groq": ("backend", "stt", "groq", 42)}
+    assert rt.llm_backends == {"openrouter": ("backend", "llm", "openrouter", 42)}
+    assert rt.tts_backends == {"yandex": ("backend", "tts", "yandex", 42)}
     assert hub.set_calls == [["new-src"]]              # tools rebuilt
     assert deps.http_cloud is new_client               # client swapped
     assert old_client.closed is True                   # old client closed
@@ -962,16 +1081,16 @@ async def test_apply_job_rebuild_http_also_rebuilds_vad_changed_in_job(monkeypat
 
 @pytest.mark.asyncio
 async def test_apply_job_rebuild_http_offline_only_reloads_no_model(monkeypatch):
-    # ALL selected providers are offline (uses_http_cloud False): a proxy change rebuilds
+    # ALL providers in use are offline (uses_http_cloud False): a proxy change rebuilds
     # NO backends (no svc.create calls -> no model reload), but tools are still rebuilt and
     # the client is still swapped + the old one closed.
     monkeypatch.setattr("src.reconfig.build_sources", lambda c, h, s: ["new-src"])
     new_client = _FakeHttpClient("new")
     monkeypatch.setattr("src.reconfig.httpx.AsyncClient", lambda **kw: new_client)
     old_client = _FakeHttpClient("old")
-    svc = _StubSvc(cloud_cats=())   # every stage offline
+    svc = _StubSvc(variants=("piper",))   # every stage offline
     hub = _FakeHub()
-    rt = _http_runtime(svc, hub)
+    rt = _http_runtime(svc, hub, chains=[_chain(stt="vosk", handler="simple-nlu")])
     deps = types.SimpleNamespace(http_cloud=old_client, tts_timeout=30)
     svc.attach(deps)
     reconf = Reconfigurator(rt, deps, asyncio.Queue())
@@ -980,10 +1099,10 @@ async def test_apply_job_rebuild_http_offline_only_reloads_no_model(monkeypatch)
 
     # No model reload at all: not a single create() call across the stages.
     assert svc.calls == {}
-    assert rt.stt_backend == "old-stt"
-    assert rt.llm_backend == "old-llm"
-    assert rt.tts_backend == "old-tts"
-    assert deps.tts_timeout == 30          # tts not in cats -> timeout push skipped
+    assert rt.stt_backends == {"vosk": "old-stt"}
+    assert rt.llm_backends == {"simple-nlu": "old-llm"}
+    assert rt.tts_backends == {"piper": "old-tts"}
+    assert deps.tts_timeout == 30          # no tts rebuild -> timeout push skipped
     assert hub.set_calls == [["new-src"]]  # tools still rebuilt (OpenWeatherMap uses http_cloud)
     assert deps.http_cloud is new_client   # client still swapped
     assert old_client.closed is True       # old client still closed

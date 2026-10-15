@@ -1,10 +1,10 @@
 // Adapts backend run rows (snake_case, epoch ts, flat timings) into the UI shape
 // the Log/Dashboard components expect, plus the presentation consts they read.
 //
-// Backend row (list)  : { id, ts, device, result, reason, stt_text, llm_text,
+// Backend row (list)  : { id, ts, device, chain, result, reason, stt_text, llm_text,
 //                         tokens, t_vad, t_wakeword, t_stt, t_llm, t_stress, t_tts,
 //                         t_total, wakeword_score }
-// Backend row (detail): the above PLUS model, rounds[], audio_*, error_*.
+// Backend row (detail): the above PLUS model, rounds[], attempts[], audio_*, error_*.
 
 import { total } from "./components/primitives.jsx";
 

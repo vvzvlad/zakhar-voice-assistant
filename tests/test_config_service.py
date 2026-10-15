@@ -20,16 +20,16 @@ def _deps():
 def _doc():
     return {
         "version": 1,
-        "stt": {"selected": "groq", "instances": {"groq": {"api_key": "gsk-secret"}}},
-        "llm": {
-            "selected": "openrouter",
-            "instances": {"openrouter": {"api_key": "sk-or-secret", "model": "m1"}},
-        },
+        "stt": {"instances": {"groq": {"api_key": "gsk-secret"}}},
+        "llm": {"instances": {"openrouter": {"api_key": "sk-or-secret", "model": "m1"}}},
         "tts": {
-            "selected": "yandex",
+            "variants": [{"provider": "yandex", "enabled": True}],
             "instances": {"yandex": {"api_key": "AQVN-secret", "voice": "jane", "speed": 1.2}},
         },
-        "core": {"openweathermap": {"api_key": "weather-secret", "city": "Москва"}},
+        "core": {
+            "openweathermap": {"api_key": "weather-secret", "city": "Москва"},
+            "chains": [{"name": "main", "stt": "groq", "handler": "openrouter"}],
+        },
     }
 
 
@@ -37,9 +37,9 @@ def _service(tmp_path):
     return ConfigService(_doc(), _deps(), path=str(tmp_path / "config.json"))
 
 
-def test_get_returns_validated_selected_config(tmp_path):
+def test_instance_config_returns_validated_config(tmp_path):
     svc = _service(tmp_path)
-    tts_cfg = svc.get("tts")
+    tts_cfg = svc.instance_config("tts", "yandex")
     assert tts_cfg.__class__.__name__ == "YandexTtsConfig"
     assert tts_cfg.voice == "jane"
     assert tts_cfg.speed == 1.2
@@ -47,7 +47,7 @@ def test_get_returns_validated_selected_config(tmp_path):
 
 def test_create_builds_backend(tmp_path):
     svc = _service(tmp_path)
-    backend = svc.create("tts")
+    backend = svc.create_instance("tts", "yandex")
     assert backend.__class__.__name__ == "YandexTtsBackend"
 
 
@@ -59,9 +59,9 @@ def test_create_adhoc_builds_backend_from_overrides(tmp_path):
     backend = svc.create_adhoc("tts", "fishaudio", {"api_key": "k"})
     assert backend.__class__.__name__ == "FishAudioTtsBackend"
     assert backend.api_key == "k"
-    # The stored doc is untouched: selection unchanged, no fishaudio instance created.
+    # The stored doc is untouched: variants unchanged, no fishaudio instance created.
     doc = svc.document()
-    assert doc["tts"]["selected"] == "yandex"
+    assert doc["tts"]["variants"] == [{"provider": "yandex", "enabled": True}]
     assert "fishaudio" not in doc["tts"]["instances"]
 
 
@@ -221,7 +221,7 @@ def test_apply_persists_and_updates_get(tmp_path):
     svc = ConfigService(_doc(), _deps(), path=path)
     svc.apply({"tts": {"instances": {"yandex": {"voice": "filipp"}}}})
 
-    assert svc.get("tts").voice == "filipp"
+    assert svc.instance_config("tts", "yandex").voice == "filipp"
     # Persisted to disk, with the secret intact (not corrupted to "**********").
     saved = config_store.load(path)
     assert saved["tts"]["instances"]["yandex"]["voice"] == "filipp"
@@ -236,7 +236,7 @@ def test_apply_invalid_patch_raises_and_does_not_persist(tmp_path):
 
     import os
     assert not os.path.exists(path)        # nothing written
-    assert svc.get("tts").speed == 1.2     # in-memory state unchanged
+    assert svc.instance_config("tts", "yandex").speed == 1.2     # in-memory state unchanged
 
 
 def test_on_change_fires_after_successful_apply(tmp_path):
@@ -267,9 +267,9 @@ def test_apply_deep_merge_preserves_untouched_siblings(tmp_path):
     svc.apply({"tts": {"instances": {"yandex": {"voice": "zahar"}}}})
 
     # The targeted leaf changed.
-    assert svc.get("tts").voice == "zahar"
+    assert svc.instance_config("tts", "yandex").voice == "zahar"
     # A sibling in a DIFFERENT category survives in memory.
-    assert svc.get("stt").api_key == "gsk-secret"
+    assert svc.instance_config("stt", "groq").api_key == "gsk-secret"
     # A core value survives in memory.
     assert svc.core.openweathermap.city == "Москва"
 
@@ -280,28 +280,25 @@ def test_apply_deep_merge_preserves_untouched_siblings(tmp_path):
     assert saved["core"]["openweathermap"]["city"] == "Москва"
 
 
-def test_command_vocabulary_empty_for_cloud_llm(tmp_path):
-    # The default config selects a cloud LLM (openrouter), which offers no closed
-    # vocabulary -> command_vocabulary() is [] (a free-form LLM imposes no grammar).
+def test_vocabulary_empty_for_cloud_llm(tmp_path):
+    # A cloud LLM handler (openrouter) offers no closed vocabulary -> [] (a free-form
+    # LLM imposes no grammar on the chain's STT).
     svc = _service(tmp_path)
-    assert svc.command_vocabulary() == []
+    assert svc.vocabulary("openrouter") == []
 
 
-def test_command_vocabulary_uses_simple_nlu_words_when_selected(tmp_path):
-    # With simple-nlu selected, command_vocabulary() returns its alias/verb/number
-    # words (the provider-agnostic vocabulary() hook), provider-agnostically.
+def test_vocabulary_uses_simple_nlu_words(tmp_path):
+    # vocabulary(id) returns the handler instance's alias/verb/number words (the
+    # provider-agnostic vocabulary() hook) — the words a narrowing chain restricts to.
     from src.plugins.llm.simple_nlu import nlu_vocabulary
 
     doc = _doc()
     aliases = "свет в зале, люстра = bright_room_light"
     actions = "on = включи\noff = выключи"
-    doc["llm"] = {
-        "selected": "simple-nlu",
-        "instances": {"simple-nlu": {"aliases": aliases, "actions": actions}},
-    }
+    doc["llm"]["instances"]["simple-nlu"] = {"aliases": aliases, "actions": actions}
     svc = ConfigService(doc, _deps(), path=str(tmp_path / "config.json"))
 
-    vocab = svc.command_vocabulary()
+    vocab = svc.vocabulary("simple-nlu")
     assert vocab == nlu_vocabulary(aliases, actions)
     # Non-empty and contains the spoken phrase/verb words.
     assert "свет" in vocab and "включи" in vocab
@@ -309,26 +306,120 @@ def test_command_vocabulary_uses_simple_nlu_words_when_selected(tmp_path):
 
 def test_base_provider_vocabulary_returns_empty(tmp_path):
     # The base hook (used by every cloud LLM provider) returns [] — the contract
-    # that keeps command_vocabulary() provider-agnostic.
+    # that keeps vocabulary() provider-agnostic.
     from src.plugins.base import get_provider
 
     svc = _service(tmp_path)
     prov = get_provider("llm", "openrouter")
-    assert prov.vocabulary(svc.get("llm")) == []
+    assert prov.vocabulary(svc.instance_config("llm", "openrouter")) == []
 
 
 def test_provider_returns_selected_provider_object(tmp_path):
-    # provider() must hand back the SELECTED provider singleton (same identity as the
-    # service's own get_provider path) — not a freshly built backend and not a ConfigModel.
+    # provider() must hand back the SELECTED provider singleton of a slot category
+    # (same identity as the service's own get_provider path) — not a backend.
     from src.plugins.base import get_provider
-    from src.plugins.tts.yandex import YandexTtsBackend, YandexTtsConfig, YandexTtsProvider
+    from src.plugins.vad.webrtc import WebRtcVadBackend
 
     svc = _service(tmp_path)
-    prov = svc.provider("tts")
+    prov = svc.provider("vad")
 
-    # Exact type and identity: the registry singleton for the selected provider.
-    assert type(prov) is YandexTtsProvider
-    assert prov is get_provider("tts", "yandex")
-    # Not the config model and not a backend instance.
-    assert not isinstance(prov, YandexTtsConfig)
-    assert not isinstance(prov, YandexTtsBackend)
+    assert prov is get_provider("vad", "webrtc")
+    assert not isinstance(prov, WebRtcVadBackend)
+
+
+# --- recognition chains: pools, validation, catalog flags ---------------------------
+
+def test_create_instance_builds_any_pool_provider(tmp_path):
+    # create_instance builds one provider instance of a pool category from its stored
+    # settings; instance_config validates it (defaults for an absent instance).
+    svc = _service(tmp_path)
+    assert svc.create_instance("stt", "groq").__class__.__name__ == "GroqSttBackend"
+    assert svc.instance_config("llm", "openrouter").model == "m1"
+    assert svc.instance_config("llm", "groq").__class__.__name__ == "GroqLlmConfig"
+
+
+@pytest.mark.parametrize("chains, message", [
+    ([], "at least one enabled chain"),
+    ([{"name": "a", "enabled": False, "stt": "groq", "handler": "openrouter"}],
+     "at least one enabled chain"),
+    ([{"name": " ", "stt": "groq", "handler": "openrouter"}], "needs a name"),
+    ([{"name": "a", "stt": "groq", "handler": "openrouter"},
+      {"name": "a", "stt": "vosk", "handler": "simple-nlu"}], "duplicate"),
+    ([{"name": "a", "stt": "nope", "handler": "openrouter"}], "Unknown stt provider"),
+    # A disabled chain is validated too: enabling it later must not break the runtime.
+    ([{"name": "a", "stt": "groq", "handler": "openrouter"},
+      {"name": "b", "enabled": False, "stt": "groq", "handler": "nope"}],
+     "Unknown llm provider"),
+])
+def test_chains_validated_on_init_and_apply(tmp_path, chains, message):
+    bad = _doc()
+    bad["core"]["chains"] = chains
+    with pytest.raises(ValueError, match=message):
+        ConfigService(bad, _deps(), path=str(tmp_path / "config.json"))
+    svc = _service(tmp_path)
+    with pytest.raises(ValueError, match=message):
+        svc.apply({"core": {"chains": chains}})
+    assert svc.core.chains[0].name == "main"   # nothing applied
+
+
+def test_chain_referenced_instance_config_is_validated(tmp_path):
+    # Every instance a chain references must validate; an unreferenced broken one is
+    # not the chains' business.
+    svc = _service(tmp_path)
+    with pytest.raises(ValidationError):
+        svc.apply({"stt": {"instances": {"groq": {"temperature": "hot"}}}})
+
+
+def test_catalog_pool_categories_have_no_selected_and_vocabulary_flags(tmp_path):
+    cat = {c["id"]: c for c in _service(tmp_path).catalog()["categories"]}
+    assert "selected" not in cat["stt"] and "selected" not in cat["llm"]
+    assert "selected" not in cat["tts"]
+    assert cat["tts"]["variants"] == [{"provider": "yandex", "enabled": True}]
+    stt = {p["id"]: p for p in cat["stt"]["providers"]}
+    assert stt["vosk"]["supports_vocabulary"] is True
+    assert stt["groq"]["supports_vocabulary"] is False
+    llm = {p["id"]: p for p in cat["llm"]["providers"]}
+    assert llm["simple-nlu"]["has_vocabulary"] is True
+    assert llm["openrouter"]["has_vocabulary"] is False
+    # core.chains is a list property: annotated with its apply class.
+    assert _service(tmp_path).catalog()["core"]["schema"]["properties"]["chains"]["apply"] \
+        == "rebuild_backends"
+
+
+# --- TTS variants: validation, order, PATCH ---------------------------------------
+
+@pytest.mark.parametrize("variants, message", [
+    ([], "at least one enabled variant"),
+    ([{"provider": "yandex", "enabled": False}], "at least one enabled variant"),
+    ([{"provider": "yandex"}, {"provider": "yandex", "enabled": False}], "duplicate"),
+    ([{"provider": "yandex"}, {"provider": "nope"}], "Unknown tts provider"),
+])
+def test_tts_variants_validated_on_init_and_apply(tmp_path, variants, message):
+    bad = _doc()
+    bad["tts"]["variants"] = variants
+    with pytest.raises(ValueError, match=message):
+        ConfigService(bad, _deps(), path=str(tmp_path / "config.json"))
+    svc = _service(tmp_path)
+    with pytest.raises(ValueError, match=message):
+        svc.apply({"tts": {"variants": variants}})
+    assert svc.tts_variants() == ["yandex"]   # nothing applied
+
+
+def test_disabled_tts_variant_instance_is_validated(tmp_path):
+    # A disabled variant is validated too: enabling it later must not break the runtime.
+    svc = _service(tmp_path)
+    with pytest.raises(ValidationError):
+        svc.apply({"tts": {"variants": [{"provider": "yandex"},
+                                        {"provider": "fishaudio", "enabled": False}],
+                           "instances": {"fishaudio": {"speed": 9.9}}}})
+
+
+def test_tts_variants_patch_replaces_list_and_skips_disabled(tmp_path):
+    # PATCH replaces the whole list; tts_variants() is the enabled ones in list order.
+    svc = _service(tmp_path)
+    svc.apply({"tts": {"variants": [{"provider": "piper", "enabled": True},
+                                    {"provider": "silero", "enabled": False},
+                                    {"provider": "yandex", "enabled": True}]}})
+    assert svc.tts_variants() == ["piper", "yandex"]
+    svc.apply({"tts": {"variants": [{"provider": "yandex", "enabled": True}]}})
+    assert svc.document()["tts"]["variants"] == [{"provider": "yandex", "enabled": True}]

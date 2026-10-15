@@ -40,16 +40,20 @@ const DEFAULT_PHRASE = "Привет! Это проверка голоса: ра
 const PHRASE_PLACEHOLDER = "Phrase to synthesize";
 
 // Minimal catalog mirroring /api/catalog: all three provider stages so the
-// STT/LLM pages render too (they must NOT show the voice-test card).
+// STT/LLM pages render too (they must NOT show the voice-test card). tts lists
+// its variants; stt/llm have no selected provider.
 function makeCatalog() {
   const schema = { type: "object", properties: { base_url: { type: "string" } } };
   const cat = (id, pid) => ({
     id,
-    selected: pid,
     providers: [{ id: pid, label: pid, schema, values: { base_url: "http://initial" } }],
   });
   return {
-    categories: [cat("stt", "groq"), cat("llm", "openrouter"), cat("tts", "piper")],
+    categories: [
+      cat("stt", "groq"),
+      cat("llm", "openrouter"),
+      { ...cat("tts", "piper"), variants: [{ provider: "piper", enabled: true }] },
+    ],
     core: { schema: {}, values: {} },
   };
 }

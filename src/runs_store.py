@@ -33,7 +33,9 @@ CREATE TABLE IF NOT EXISTS runs (
   audio_ms INTEGER, audio_bytes INTEGER, audio_fmt TEXT,
   error_stage TEXT, error_text TEXT,
   rounds_json TEXT,
-  request_json TEXT
+  request_json TEXT,
+  chain TEXT,
+  attempts_json TEXT
 );
 """
 
@@ -54,8 +56,9 @@ CREATE TABLE IF NOT EXISTS run_tts_audio (
 );
 """
 
-# Columns persisted on insert, in order. `id` autoincrements; `rounds_json` is
-# derived from rec["rounds"] separately, so it is appended last by insert().
+# Columns persisted on insert, in order. `id` autoincrements; the `*_json` columns
+# are derived from rec["rounds"/"request"/"attempts"] separately, so insert()
+# appends them last.
 _INSERT_COLS = [
     "ts", "device", "result", "reason", "stt_text", "llm_text", "stress_text",
     "filler_text",
@@ -63,6 +66,7 @@ _INSERT_COLS = [
     "t_wakeword", "wakeword_score",
     "t_vad", "t_stt", "t_llm", "t_stress", "t_tts", "t_filler", "t_total",
     "audio_ms", "audio_bytes", "audio_fmt", "error_stage", "error_text",
+    "chain",
 ]
 
 # Summary columns returned by list() (rounds_json is intentionally omitted).
@@ -71,6 +75,7 @@ _LIST_COLS = [
     "tokens",
     "t_wakeword", "wakeword_score",
     "t_vad", "t_stt", "t_llm", "t_stress", "t_tts", "t_filler", "t_total",
+    "chain",
 ]
 
 _DAY_SECONDS = 86400
@@ -110,20 +115,23 @@ class RunsStore:
         for col, decl in (("filler_text", "TEXT"), ("t_filler", "INTEGER"),
                           ("request_json", "TEXT"), ("t_stress", "INTEGER"),
                           ("stress_text", "TEXT"),
-                          ("t_wakeword", "INTEGER"), ("wakeword_score", "REAL")):
+                          ("t_wakeword", "INTEGER"), ("wakeword_score", "REAL"),
+                          ("chain", "TEXT"), ("attempts_json", "TEXT")):
             if col not in existing:
                 self._conn.execute(f"ALTER TABLE runs ADD COLUMN {col} {decl}")
         self._conn.commit()
 
     def insert(self, rec: dict) -> int:
-        """Insert one run; rec["rounds"] (a list) is JSON-encoded into rounds_json.
+        """Insert one run; rec["rounds"] and rec["attempts"] (lists) and
+        rec["request"] are JSON-encoded into their `*_json` columns.
 
         Missing keys default to None. Returns the new row id.
         """
         values = [rec.get(col) for col in _INSERT_COLS]
         values.append(json.dumps(rec.get("rounds") or [], ensure_ascii=False))
         values.append(json.dumps(rec.get("request"), ensure_ascii=False))
-        cols = _INSERT_COLS + ["rounds_json", "request_json"]
+        values.append(json.dumps(rec.get("attempts") or [], ensure_ascii=False))
+        cols = _INSERT_COLS + ["rounds_json", "request_json", "attempts_json"]
         placeholders = ", ".join("?" for _ in cols)
         sql = f"INSERT INTO runs ({', '.join(cols)}) VALUES ({placeholders})"
         with self._lock:
@@ -207,14 +215,17 @@ class RunsStore:
         """On-disk size of this store's SQLite file (+ WAL/SHM sidecars), in bytes."""
         return db_file_size(self._path)
 
-    def _filter_sql(self, device, result, search):
+    def _filter_sql(self, device, result, search, chain):
         """Build the shared WHERE clause + params for list()/count() from the
-        device/result/search filters. Returns (clause, params)."""
+        device/result/search/chain filters. Returns (clause, params)."""
         where = []
         params: list = []
         if device:
             where.append("device = ?")
             params.append(device)
+        if chain:
+            where.append("chain = ?")
+            params.append(chain)
         if result:
             if result == "errors":
                 where.append("result = ?")
@@ -234,10 +245,12 @@ class RunsStore:
         clause = (" WHERE " + " AND ".join(where)) if where else ""
         return clause, params
 
-    def list(self, *, device=None, result=None, search=None, limit=100, offset=0) -> list[dict]:
+    def list(self, *, device=None, result=None, search=None, chain=None, limit=100,
+             offset=0) -> list[dict]:
         """Recent runs (newest first) as summary dicts, with optional filters.
 
         - device: exact match.
+        - chain: exact match on the recognition chain that served the run.
         - result: "errors" -> result='error'; "rejected" -> result='rejected'
           (wakeword-gated runs); "ok" -> result IN ('ok','tool'); anything else ->
           exact match.
@@ -247,7 +260,7 @@ class RunsStore:
         Rows are ordered by id DESC (newest-first, stable and unique).
         rounds_json is omitted from the summary payload.
         """
-        clause, params = self._filter_sql(device, result, search)
+        clause, params = self._filter_sql(device, result, search, chain)
         sql = (
             f"SELECT {', '.join(_LIST_COLS)}, "
             "EXISTS(SELECT 1 FROM run_audio WHERE run_audio.run_id = runs.id) "
@@ -262,17 +275,17 @@ class RunsStore:
             rows = self._conn.execute(sql, params).fetchall()
         return [dict(r) for r in rows]
 
-    def count(self, *, device=None, result=None, search=None) -> int:
+    def count(self, *, device=None, result=None, search=None, chain=None) -> int:
         """Total number of runs matching the filters (for paginated UIs)."""
-        clause, params = self._filter_sql(device, result, search)
+        clause, params = self._filter_sql(device, result, search, chain)
         # Reads share the write connection on worker threads — hold the lock too.
         with self._lock:
             row = self._conn.execute(f"SELECT COUNT(*) AS n FROM runs{clause}", params).fetchone()
         return int(row["n"])
 
     def get(self, run_id) -> dict | None:
-        """Full row for one run, with rounds_json/request_json parsed back into
-        `rounds`/`request`."""
+        """Full row for one run, with rounds_json/request_json/attempts_json parsed
+        back into `rounds`/`request`/`attempts`."""
         # Same Connection as writes from a worker thread: hold the write lock.
         with self._lock:
             row = self._conn.execute(
@@ -296,6 +309,11 @@ class RunsStore:
             rec["request"] = json.loads(raw_req) if raw_req else None
         except (ValueError, json.JSONDecodeError):
             rec["request"] = None
+        raw_att = rec.pop("attempts_json", None)
+        try:
+            rec["attempts"] = json.loads(raw_att) if raw_att else []
+        except (ValueError, json.JSONDecodeError):
+            rec["attempts"] = []
         # Channel count of the stored utterance WAV (panel renders per-channel
         # players for stereo). Called OUTSIDE the lock block above: audio_channels
         # re-acquires self._lock itself and the lock is not reentrant.
@@ -303,13 +321,15 @@ class RunsStore:
         return rec
 
     def metrics(self, *, now: float) -> dict:
-        """Aggregate metrics over the last 24h. Returns zeros/None when empty."""
+        """Aggregate metrics over the last 24h. Returns zeros/None when empty.
+        `per_chain` maps each recognition chain that served runs in the window to
+        {"served": that run count, "avg_ms": their mean t_total}."""
         since = now - _DAY_SECONDS
         # Same Connection as writes from a worker thread: hold the write lock.
         with self._lock:
             rows = self._conn.execute(
-                "SELECT result, t_total, t_wakeword, t_vad, t_stt, t_llm, t_stress, t_tts "
-                "FROM runs WHERE ts >= ?",
+                "SELECT result, chain, t_total, t_wakeword, t_vad, t_stt, t_llm, t_stress, "
+                "t_tts FROM runs WHERE ts >= ?",
                 (since,),
             ).fetchall()
         if len(rows) == 0:
@@ -320,6 +340,7 @@ class RunsStore:
                 "error_rate": 0.0,
                 "rejected_24h": 0,
                 "per_stage_avg_ms": {"vad": None, "wakeword": None, "stt": None, "llm": None, "stress": None, "tts": None},
+                "per_chain": {},
             }
 
         # Gated wake-word rejects abort before STT/LLM/TTS. They must NOT distort the
@@ -345,6 +366,7 @@ class RunsStore:
                     "wakeword": _avg(r["t_wakeword"] for r in rows),
                     "stt": None, "llm": None, "stress": None, "tts": None,
                 },
+                "per_chain": _per_chain(rows),
             }
 
         totals = sorted(r["t_total"] for r in served if r["t_total"] is not None)
@@ -366,6 +388,7 @@ class RunsStore:
                 "stress": _avg(r["t_stress"] for r in served),
                 "tts": _avg(r["t_tts"] for r in served),
             },
+            "per_chain": _per_chain(rows),
         }
 
     def prune(self, *, now: float, retention_days: int):
@@ -452,6 +475,16 @@ def _avg(values):
     if not nums:
         return None
     return sum(nums) / len(nums)
+
+
+def _per_chain(rows) -> dict:
+    """{chain: {"served": runs that chain served, "avg_ms": their mean t_total}}; runs
+    no chain served (chain NULL) are left out."""
+    totals: dict[str, list] = {}
+    for r in rows:
+        if r["chain"] is not None:
+            totals.setdefault(r["chain"], []).append(r["t_total"])
+    return {name: {"served": len(ts), "avg_ms": _avg(ts)} for name, ts in totals.items()}
 
 
 def summary_row(rec: dict, run_id: int, has_audio: bool = False) -> dict:
