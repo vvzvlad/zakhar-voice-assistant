@@ -66,8 +66,6 @@ def action_for(path: str) -> str:
         return "live"          # capture.enabled/dir are read per-run via the Runtime read-through
     if path.startswith("core.ack"):
         return "live"          # ack.enabled/sound_path are read per-run via the Runtime read-through
-    if path in ("core.audio.public_base_url", "core.audio.ttl", "core.audio.stream_tts"):
-        return "live"          # stream_tts is read per run via the Runtime read-through
     if path.startswith("core.audio"):            # host/port -> rebind
         return "rebuild_audio"
     if path.startswith("core.prompt"):           # system_prompt_path read live
@@ -85,7 +83,7 @@ def action_for(path: str) -> str:
         return "rebuild_reminders"
     if path.startswith("core.runs"):
         return "rebuild_runs"
-    if path.startswith("core.devices") or path.startswith("core.esphome"):
+    if path.startswith("core.devices"):
         return "rebuild_devices"
     # stage providers
     if (path.startswith("vad") or path.startswith("wakeword") or path.startswith("stt")
@@ -100,7 +98,7 @@ def action_for(path: str) -> str:
 # Actions whose work is performed off the panel request task, in the queue-draining
 # task (run_loop -> apply_job), because they may block (model loads, socket re-bind,
 # SQLite open/prune, tool-source start network I/O, http-client rebuild, device
-# reconnect start, reminders store open/close).
+# connection updates, reminders store open/close).
 ASYNC_ACTIONS = {"rebuild_backends", "rebuild_audio", "rebuild_runs",
                  "rebuild_tools", "rebuild_http",
                  "rebuild_devices", "rebuild_reminders"}
@@ -152,15 +150,12 @@ class Reconfigurator:
     def on_config_change(self, paths) -> None:
         """ConfigService.on_change callback (SYNC, runs on the panel request task).
         Live fields are already effective through the Runtime read-through; here we
-        (a) reinit logging if the level changed, (b) push live audio.ttl onto the
-        running server, and (c) hand heavy/blocking rebuilds to the main-task queue.
+        (a) reinit logging if the level changed and (b) hand heavy/blocking rebuilds
+        to the main-task queue.
         Must stay fast: no blocking work and no model loads happen here."""
         actions = {action_for(p) for p in paths}
         if "logging" in actions:
             setup_logging(self.rt.core.log_level)
-        # audio.ttl is live-applied by mutating the running server (it caches ttl).
-        if "core.audio.ttl" in paths and self.rt.audio_server is not None:
-            self.rt.audio_server.ttl = self.rt.core.audio.ttl
         # Hand heavy/blocking rebuilds to the main-task queue (drained by run_loop).
         if actions & ASYNC_ACTIONS:
             self.queue.put_nowait(set(paths))
@@ -261,17 +256,17 @@ class Reconfigurator:
             )
 
     async def _rebuild_audio(self) -> None:
-        """Re-bind the audio server to the configured host/port without a restart."""
+        """Re-bind the device server to the configured host/port without a restart."""
         core = self.rt.core
         try:
-            await self.rt.audio_server.rebind(core.audio.host, core.audio.port)
-            logger.info(f"audio server re-bound to {core.audio.host}:{core.audio.port}")
+            await self.rt.manager.rebind(core.audio.host, core.audio.port)
+            logger.info(f"device server re-bound to {core.audio.host}:{core.audio.port}")
         except Exception as e:
             # rebind() already tore down the old binding before failing, so the
-            # audio server is now DOWN; nothing serves TTS until a restart.
+            # device server is now DOWN; no device can connect until a restart.
             logger.error(
-                f"audio re-bind to {core.audio.host}:{core.audio.port} failed: {e}; "
-                f"audio server is now DOWN until a restart"
+                f"device server re-bind to {core.audio.host}:{core.audio.port} failed: {e}; "
+                f"device server is now DOWN until a restart"
             )
 
     async def _rebuild_runs(self) -> None:
@@ -314,10 +309,10 @@ class Reconfigurator:
             self.rt.panel.runs_store = store
 
     async def _rebuild_devices(self) -> None:
-        """Reconcile ESPHome device clients with the current config (hot)."""
+        """Apply the device config to the live device connections (hot)."""
         try:
             await self.rt.manager.reconfigure()
-            logger.info("device clients reconciled (hot)")
+            logger.info("device connections reconciled (hot)")
         except Exception as e:
             logger.error(f"device reconfigure failed: {e}")
 

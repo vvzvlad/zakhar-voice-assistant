@@ -21,7 +21,7 @@ Models and check (e)
 The image carries no models (production mounts `/app/models`). First boot copies
 templates/default_config.json, which selects `tts: piper` with
 `voice_path: models/ru_RU-ruslan-medium.onnx`. `PiperTtsBackend.__init__` loads it eagerly
-(src/plugins/tts/piper.py) and src/app.py builds the TTS backend before `audio_server.start()`, so a
+(src/plugins/tts/piper.py) and src/app.py builds the TTS backend before `DeviceManager.start()`, so a
 bare container logs the startup line and the config creation, then dies with
 `FileNotFoundError: ... 'models/ru_RU-ruslan-medium.onnx.json'`. /health and the panel never answer.
 
@@ -311,12 +311,12 @@ EXPECTED_VERSION_ENV = "SMOKE_EXPECTED_VERSION"
 LIBCXX_SONAMES = ["libc++.so.1", "libc++abi.so.1"]
 
 # The modules imported to prove the wheels really installed and the sources really got copied.
-# src.app is the composition root and pulls in nearly everything (zeroconf, aioesphomeapi, mcp,
+# src.app is the composition root and pulls in nearly everything (aiohttp, soxr, mcp,
 # httpx, pydantic, the whole src.plugins registry); the other four are the ones with a direct
 # production consequence — the two servers, the config store and the version resolver. Note that
 # importing src.plugins does NOT import piper/vosk/ten_vad: those are deliberately lazy, imported
 # inside their backends' constructors, which is why (c) has to load the native library by hand.
-SRC_MODULES = ["src.version", "src.config_store", "src.audio_server", "src.panel_api", "src.app"]
+SRC_MODULES = ["src.version", "src.config_store", "src.device_server", "src.panel_api", "src.app"]
 
 
 def describe(error):
@@ -668,7 +668,7 @@ def check_imports():
     """Every module that matters imports inside the image.
 
     An import here is a statement about the WHEELS, not about this repo's syntax: src.app pulls in
-    zeroconf, aioesphomeapi, httpx, pydantic, mcp and the whole src.plugins registry, so a
+    aiohttp, soxr, httpx, pydantic, mcp and the whole src.plugins registry, so a
     requirements.txt whose transitive tree failed to resolve on this base image fails right here
     instead of at the first boot on the deployment.
     """
@@ -746,9 +746,9 @@ if __name__ == "__main__":
 HTTP_PROBE = r'''
 """Runs INSIDE the SERVING container, fed to `python -u -` over stdin.
 
-Answers the two questions that only a running application can answer: is the audio server serving
+Answers the two questions that only a running application can answer: is the device server serving
 /health, and is the admin panel answering. Both are polled rather than sampled once — the container
-has just been started and the panel comes up after the audio server — and both are reached over the
+has just been started and the panel comes up after the device server — and both are reached over the
 container's own loopback with nothing but the standard library, which is precisely what
 docker-compose.yml's healthcheck does.
 
@@ -824,7 +824,7 @@ def main():
     expected_version = os.environ.get(EXPECTED_VERSION_ENV) or ""
 
     health_target = "GET {} answers 200 within {} s".format(AUDIO_URL, BUDGET)
-    body_target = "...and its body is the audio server's own 'ok'"
+    body_target = "...and its body is the device server's own 'ok'"
     status, body, error = fetch(AUDIO_URL, deadline)
     if status == 200:
         rows.append((health_target, None))
@@ -832,13 +832,13 @@ def main():
             rows.append((body_target, None))
         else:
             rows.append((body_target, (
-                "it answered 200 with {!r}. AudioServer._handle_health returns the literal 'ok', so "
+                "it answered 200 with {!r}. DeviceManager._handle_health returns the literal 'ok', so "
                 "something else is answering on this port".format(body[:200]))))
     else:
         reason = (
             "it answered {!r} (last error: {}). This is the endpoint docker-compose.yml's "
             "healthcheck probes, so an image that fails here is one Docker will report as unhealthy "
-            "forever — and, because src/app.py starts the audio server only after every backend has "
+            "forever — and, because src/app.py starts the device server only after every backend has "
             "been constructed, the usual cause is a backend that could not be built".format(
                 status, describe(error) if error is not None else "none"))
         rows.append((health_target, reason))
@@ -910,12 +910,12 @@ if __name__ == "__main__":
 
 # The program fed to `python -u -` inside the BARE container, only when it is still alive after
 # BAREBOOT_EXIT_BUDGET. An answer on /health proves the eager backend construction got past (the
-# audio server starts after it); a live process alone could be deadlocked or retrying. Separate from
+# device server starts after it); a live process alone could be deadlocked or retrying. Separate from
 # the HTTP probe, which needs a version in the environment and checks the panel.
 BAREBOOT_HEALTH_PROBE = r'''
 """Runs INSIDE the BARE container when it has outlived the gate's exit budget.
 
-One question: is the audio server answering /health? src/app.py starts it only after every eager
+One question: is the device server answering /health? src/app.py starts it only after every eager
 backend has been built, so an answer here means the boot got through the load that this container
 is not supposed to be able to complete — and that is the only evidence that turns "still running"
 into "the eager model load became lazy".
@@ -952,7 +952,7 @@ def main():
             # An HTTP answer, just not the one wanted. Something IS listening and speaking HTTP, so
             # retrying is pointless — but it is not a pass either: the verdict below still requires
             # 200 and a body of "ok", and /health has exactly one handler, so anything else means
-            # the thing answering on this port is not the audio server this check is about. Breaking
+            # the thing answering on this port is not the device server this check is about. Breaking
             # here is what turns that into a reported status instead of a spent budget.
             status, body = error.code, ""
             break
@@ -1179,7 +1179,7 @@ def build_serving_config(template):
     stage switched off.
 
     The only deviation from production's configuration:
-    * TTS: the image has no models and Piper loads its voice eagerly before the audio server
+    * TTS: the image has no models and Piper loads its voice eagerly before the device server
       starts. The fake api_key only satisfies the cloud provider's constructor.
     * Stress: the template enables RuAccent, which src/app.py loads in the background once the
       panel is up (a ~360 MB HuggingFace download; a failure is swallowed by src/reconfig.py).
@@ -1284,7 +1284,7 @@ def run_probe(name, started, program, timeout, marker, expected_targets, prefix,
 
 
 def bareboot_serves(name):
-    """Ask a SURVIVING bare container whether its audio server actually answers.
+    """Ask a SURVIVING bare container whether its device server actually answers.
 
     Returns (serving, output). Runs over `docker exec` because the container's loopback is not the
     runner's. Both the marker and a zero exit are required.
@@ -1354,7 +1354,7 @@ def judge_bare_outcome(name, outcome_target, state, state_output, still_running,
     * Stopped: judged by bareboot_stop_reason() on the settled log.
     * Alive and answering /health: the eager Piper load became lazy; accepted.
     * Alive and not answering: a slow ordinary death (still inside `svc.create("tts")`, before the
-      audio server starts) looks the same as a deadlock, and the container may have died during the
+      device server starts) looks the same as a deadlock, and the container may have died during the
       probe. So state and log are re-read, and a container that has since stopped is judged as a
       stop.
     """
@@ -1406,7 +1406,7 @@ def judge_bare_outcome(name, outcome_target, state, state_output, still_running,
                    "a second `docker inspect` could not be read at all ({}), so this verdict rests "
                    "on the state at the exit budget".format(excerpt(state_output)))
     return (outcome_target, (
-        "the container is still up {} s after its startup line, but its audio server never "
+        "the container is still up {} s after its startup line, but its device server never "
         "answered /health from inside it. Alive is not the same as up: src/app.py builds every "
         "eager backend BEFORE it starts that server, so a container that is running and not serving "
         "is one still inside that construction. It is not the known Piper stop running late either "
@@ -1703,7 +1703,7 @@ def check_serving_final_log(name, started, stress_provider):
     """(g) The two verdicts that can only be taken once the serving container has settled.
 
     Returns (rows, logs). Reads the log after the boot wait, the HTTP probe and the liveness check:
-    audio_server.start(), the panel, the MCP endpoint and the deferred stress/wakeword loads all run
+    the device server's start, the panel, the MCP endpoint and the deferred stress/wakeword loads all run
     after the TTS line, and a traceback in a background asyncio task kills neither the process nor
     the probe, so only this log read sees it.
 

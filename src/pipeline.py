@@ -1,14 +1,14 @@
-"""Per-speaker voice pipeline: mic PCM -> STT -> LLM -> TTS -> audio URL.
+"""Per-device voice pipeline: mic PCM -> STT -> LLM -> TTS -> device playback.
 
-One Pipeline instance per speaker. It owns its own audio buffer and lock; the
-brain, TTS backend and audio server are stateless shared dependencies injected
-by the DeviceClient.
+One Pipeline instance per device name. It owns its own audio buffer and lock; the
+brain and TTS backend are stateless shared dependencies, and the device server
+injects the transport hooks (send_event, play, has_speaker).
 
 Server-side VAD end-pointing
 ----------------------------
-The HA Voice PE speaker fires its wake word on-device and then streams mic PCM
-to us continuously (silence included). It NEVER signals end-of-speech, so the
-device's handle_stop is effectively never called. To know when the user has
+The device fires its wake word on-device and then streams mic PCM to us
+continuously (silence included). It has no end-pointing of its own
+(docs/device-protocol.md), so on_stop has no caller on the wire. To know when the user has
 finished speaking we run the configured VAD stage backend over the incoming PCM
 (one VadSession per run, see src/vad.py) and finalize the utterance once it
 reports an endpoint (speech followed by enough trailing silence), a hard max
@@ -34,9 +34,7 @@ from src.audio_prep import (
     vad_boost,
     write_wav,
 )
-from src.audio_codec import PLAYABLE_MIMES, to_playable
-from src.audio_server import tts_url
-from src.tts import TtsBackend
+from src.tts import TtsBackend, pcm_rate
 from src.pipeline_events import StageEvent
 from src.llm_text import clean_llm_output
 from src.prompt import build_system_prompt
@@ -50,39 +48,8 @@ from src.vad import SAMPLE_RATE, EndpointPolicy  # noqa: F401  (SAMPLE_RATE re-e
 
 # Generous hard memory cap (~60s of 16 kHz / 16-bit mono PCM). VAD should end the
 # utterance long before this; the cap only guards against unbounded growth if VAD
-# misbehaves, and also forces a finalize when reached. This applies to NORMAL
-# (wake-word) runs only; a manual capture sizes its own cap to the requested
-# duration (see _capture_cap_bytes) so a long sample isn't truncated here.
+# misbehaves, and also forces a finalize when reached.
 HARD_CAP_BYTES = SAMPLE_RATE * 2 * 60
-
-# Maximum duration (seconds) of a manual "record X seconds" capture. Single source
-# of truth shared by the panel API / ESPHome client validation; the device-side
-# template number caps at the same value in esphome/zakhar-voice-preroll.yaml.
-CAPTURE_MAX_SECONDS = 300
-
-# How long an armed manual capture stays valid waiting for its voice_assistant.start
-# to arrive (the press -> start round-trip). If the button press is lost or the
-# device never starts, the flag expires after this so it can't silently hijack a
-# later real wake-word run. This is the arm-arrival window only — it is independent
-# of (and much shorter than) the requested capture audio duration.
-ARM_TTL = 5.0
-
-class CaptureBusyError(Exception):
-    """A manual capture is already armed/in-flight on this pipeline.
-
-    Raised by arm_capture() when a second concurrent capture is requested for the
-    same device while the first is still pending. The panel API maps it to HTTP 409
-    ("capture already in progress") — the device can't record two samples at once.
-    """
-
-
-class CaptureEmptyError(Exception):
-    """A manual capture finished but produced no audio (empty PCM buffer).
-
-    Distinct from offline/missing-entity/busy errors (HTTP 409): this is a
-    server-side capture failure, so the panel API maps it to HTTP 500. Raised
-    (via the capture Future) by _finish_capture when the buffered PCM is empty.
-    """
 
 
 class Pipeline:
@@ -112,7 +79,7 @@ class Pipeline:
         # finalize the utterance: a grammar-Vosk keyword spotter verifies the pre-roll
         # head and either confirms (proceed exactly as normal) or rejects (abort the
         # run silently — no STT/LLM/TTS, no ack — and stop the device). Inactive for
-        # capture runs, non-wake runs, and a None/passthrough backend.
+        # non-wake runs and a None/passthrough backend.
         self._wakeword_pending = False     # gate active, verdict not yet in
         self._wakeword_confirmed = False   # verdict accepted OR gate inactive -> normal streaming
         self._wakeword_task: asyncio.Task | None = None
@@ -133,32 +100,20 @@ class Pipeline:
         # Logging-only flag: warn once per run if mic.channel=1 but no 2nd channel.
         self._mic_fallback_logged = False
 
-        # Manual "record X seconds" capture (see arm_capture). _capture_armed is set
-        # BEFORE the device's voice_assistant.start fires; the next on_start consumes
-        # it into the per-run _capture_run flag so a normal wake-word run is never
-        # affected. In a capture run we skip VAD/STT/LLM/TTS entirely and, when the
-        # device stops or the server-side deadline passes, return the PCM as WAV
-        # bytes to the API caller (ephemeral — nothing is written to the server).
-        # _capture_future is that channel: _finish_capture resolves it with the
-        # in-memory WAV bytes (or fails it when the armed run never produces audio),
-        # and DeviceClient.capture() awaits it.
-        self._capture_armed = False
-        self._capture_seconds = 0
-        self._capture_run = False
-        self._capture_deadline = 0.0
-        self._capture_future: asyncio.Future | None = None
-        # Deadline (time.monotonic()) by which the armed capture's start must arrive;
-        # set in arm_capture, checked in on_start so a lost press can't hijack a later run.
-        self._capture_arm_deadline = 0.0
+        # The finalized run (STT -> LLM -> TTS) started from on_audio; a new wake
+        # cancels it (see on_start).
+        self._run_task: asyncio.Task | None = None
 
-        # Injected by DeviceClient on connect (bound to the live API client).
+        # Transport hooks, injected by the device server: send_event(event, data)
+        # (sync), play(mime, bytes | async chunks) (returns once the device has
+        # played it) and has_speaker (a device without one gets no TTS at all).
         self.send_event = None
-        self.send_audio = None
-        self.send_announcement = None
+        self.play = None
+        self.has_speaker = False
 
-        # Background "filler" announcement tasks (early "I'll go check it" lines). Kept
-        # in a set so a still-playing announcement isn't garbage-collected mid-flight;
-        # each task removes itself on completion. Fire-and-forget — never awaited by the run.
+        # Background "filler" play tasks (early "I'll go check it" lines). Kept in a
+        # set so a still-playing filler isn't garbage-collected mid-flight; each task
+        # removes itself on completion. Fire-and-forget — never awaited by the run.
         self._filler_tasks = set()
 
         # Background end-of-phrase "ack" chime tasks (the server-side «блям» played the
@@ -176,7 +131,7 @@ class Pipeline:
         # the lock) so the finalized broadcast never overtakes a partial. None = idle.
         self._live_send_tail = None
 
-    # Read-through convenience properties: external callers (DeviceClient.announce,
+    # Read-through convenience properties: external callers (the device server,
     # tests) and the run logic below all reach config/backends THROUGH the runtime,
     # so a reconfiguration (live field change or backend swap) takes effect without
     # rebuilding the pipeline.
@@ -219,10 +174,6 @@ class Pipeline:
         return self.rt.hub
 
     @property
-    def audio_server(self):
-        return self.rt.audio_server
-
-    @property
     def runs_store(self):
         return self.rt.runs_store
 
@@ -233,10 +184,6 @@ class Pipeline:
     @property
     def run_events(self):
         return self.rt.run_events
-
-    @property
-    def public_base_url(self):
-        return self.rt.core.audio.public_base_url
 
     @property
     def _context_path(self):
@@ -251,104 +198,28 @@ class Pipeline:
                 event_type, {str(k): str(v) for k, v in (data or {}).items()}
             )
 
-    def arm_capture(self, seconds: int) -> "asyncio.Future[bytes]":
-        """Arm a manual capture-only run of `seconds` for the NEXT voice_assistant start.
+    async def on_start(self, conversation_id, wake_word_phrase) -> None:
+        """Handle a wake: cancel the older run, reset ALL per-run state, announce the run.
 
-        Called by DeviceClient.capture() BEFORE it presses the device button, so the
-        flag is already set when the resulting on_start arrives. The server-side
-        capture deadline (seconds + small margin) is a safety net in case the device
-        never signals stop; the device normally stops itself after `seconds`. A
-        separate arm-arrival deadline (ARM_TTL) bounds how long the flag waits for its
-        start so a lost press can't silently capture a later real wake-word run.
-
-        Returns an asyncio.Future the caller awaits for the recorded WAV bytes (the
-        manual capture is ephemeral — nothing is written to disk). The Future
-        resolves with the WAV bytes in _finish_capture, or fails with an exception
-        if the armed run aborts / expires without producing audio.
-        """
-        # Busy-guard: refuse a second concurrent capture on the same
-        # pipeline. If a previous capture Future is still pending (armed and waiting,
-        # or a capture run is in flight), the device is already recording for another
-        # caller — racing a new arm here would overwrite that Future and leave the
-        # first awaiter hung until timeout. Reject with a distinct CaptureBusyError so
-        # the API can map it to HTTP 409.
-        if self._capture_future is not None and not self._capture_future.done():
-            raise CaptureBusyError(f"{self.name} capture already in progress")
-        # Safety net: never overwrite a still-pending Future. The busy-guard above
-        # already rejects that case, so this is unreachable in normal flow — but if it
-        # were ever bypassed, fail the orphan instead of silently dropping it so its
-        # awaiter can't hang forever. (_fail_capture_future is a no-op on a done one.)
-        self._fail_capture_future("superseded")
-        self._capture_armed = True
-        self._capture_seconds = seconds
-        self._capture_future = asyncio.get_running_loop().create_future()
-        # Small margin so the device's own stop wins under normal timing; the deadline
-        # only ends the capture if the device-stop is lost.
-        self._capture_deadline = time.monotonic() + seconds + 2.0
-        # Arm-arrival deadline: the press -> voice_assistant.start round-trip must land
-        # within ARM_TTL. If it doesn't (lost press / device never starts), on_start
-        # clears the stale flag instead of hijacking a later real wake-word run.
-        self._capture_arm_deadline = time.monotonic() + ARM_TTL
-        return self._capture_future
-
-    def _capture_cap_bytes(self) -> int:
-        """Byte cap for the in-flight capture run, sized to the requested duration.
-
-        A capture run must NOT be truncated by the 60 s normal-run HARD_CAP_BYTES:
-        the user may have asked for up to CAPTURE_MAX_SECONDS. This returns a cap of
-        (_capture_seconds + 2) s of PCM (a couple seconds of margin), so the byte cap
-        is only a safety net sized to the request — the capture still ends primarily
-        on the device stop (on_stop) or the time-based deadline.
-        """
-        return (self._capture_seconds + 2) * SAMPLE_RATE * 2
-
-    def _fail_capture_future(self, message: str) -> None:
-        """Reject the pending capture Future so a waiting caller never hangs.
-
-        Safe to call when there is no Future or it's already resolved (no-op).
-        """
-        fut = self._capture_future
-        self._capture_future = None
-        if fut is not None and not fut.done():
-            fut.set_exception(RuntimeError(message))
-
-    def disarm_capture(self) -> None:
-        """Cancel a pending manual capture (e.g. the caller timed out waiting).
-
-        Clears the armed flag and fails the still-pending Future so the armed state
-        can't hijack a later run and the timed-out caller gets a clean error. If a
-        capture was already streaming (_capture_run), a later _finish_capture finds
-        the Future already done/None and is a safe no-op — no double-set.
-
-        Because arm_capture's busy-guard refuses a second concurrent capture,
-        there is only ever one armed Future per pipeline at a time, so this can only
-        ever fail the Future the matching capture() created — never a different
-        request's Future.
-        """
-        self._capture_armed = False
-        self._fail_capture_future("capture cancelled")
-
-    async def on_start(
-        self, conversation_id, flags, audio_settings, wake_word_phrase
-    ) -> int:
-        """Handle voice_assistant start: reset ALL per-run state, announce run."""
+        Everything before the first await is synchronous, so the older run (its run
+        task, a pending wake-word verify, its ack/filler plays) is cancelled before
+        any of it can run again."""
+        if any(t is not None and not t.done() for t in (self._run_task, self._wakeword_task)):
+            logger.info(f"{self.name}: new wake cancels the running run")
+        # Cancellation of an already-finished task is a no-op. Not awaited: each
+        # cancelled task unwinds on its own (the ack/filler sets self-clean via their
+        # done-callbacks); snapshot the sets first since those callbacks mutate them.
+        for task in (self._run_task, self._wakeword_task,
+                     *self._ack_tasks, *self._filler_tasks):
+            if task is not None:
+                task.cancel()
+        self._run_task = None
+        # A streaming STT session of a run that was never finalized; a finalized run
+        # owns (and closes) its own session.
+        stale_stream, self._stt_stream = self._stt_stream, None
         self._conversation_id = conversation_id or ""
         self._buffer.clear()
         self._buffer2.clear()
-        # Best-effort close a lingering streaming STT session from a prior aborted
-        # run before starting this one (await is fine here — on_start is not the hot
-        # path). Then null it so this run opens its own.
-        if self._stt_stream is not None:
-            try:
-                await self._stt_stream.aclose()
-            except Exception:  # noqa: BLE001 - defensive cleanup, never break a new run
-                pass
-            self._stt_stream = None
-        # Best-effort cancel a leftover wake-word verify task from a prior aborted
-        # run before resetting the gate state, so an in-flight verdict can't act on
-        # this fresh run. Cancellation of an already-finished task is a no-op.
-        if self._wakeword_task is not None:
-            self._wakeword_task.cancel()
         self._wakeword_pending = False
         self._wakeword_confirmed = False
         self._wakeword_task = None
@@ -360,54 +231,11 @@ class Pipeline:
         self._finalized = False
         self._audio_logged = False
         self._mic_fallback_logged = False
-        # Best-effort cancel any still-pending ack/filler announce tasks from a prior
-        # run before starting this one. Both are fire-and-forget on the announce
-        # channel and can linger up to the 30 s announce timeout; the ack fires on
-        # every non-empty phrase, so without this they could accumulate across runs
-        # and even outlive a reconnect. Cancelling here bounds their lifetime to ~one
-        # run. We do NOT await them — each task self-removes via its done-callback,
-        # and cancellation of an already-finished task is a no-op. Snapshot to a list
-        # first since the done-callbacks mutate the sets. Fully isolated/defensive.
-        for task in [*self._ack_tasks, *self._filler_tasks]:
-            task.cancel()
-        # Consume any armed capture into a per-run flag so a normal wake-word run
-        # (armed == False) is completely unaffected.
-        #
-        # Two guards before consuming the flag:
-        #  - Expiry: if the arm-arrival deadline has passed, the button press
-        #    was likely lost / the device never started. Clear the stale flag and run
-        #    this as a NORMAL run, so a later genuine wake word isn't silently captured.
-        #  - Wake-word discrimination: a manual start from the button carries
-        #    NO wake_word_phrase, whereas a real wake-word run has a non-empty phrase.
-        #    Only consume the flag for a phraseless (manual) start; if a phrased run
-        #    arrives while armed, leave the flag set so the genuine manual start still
-        #    gets captured.
-        if self._capture_armed and time.monotonic() > self._capture_arm_deadline:
-            logger.warning(
-                f"{self.name}: armed capture expired before start arrived; "
-                f"running normally"
-            )
-            self._capture_armed = False
-            # Fail the pending Future so the awaiting caller doesn't hang for the
-            # full wait_for timeout — the capture will never produce audio now.
-            self._fail_capture_future("capture armed but no start arrived")
-        # Only a phraseless (manual button) start consumes the flag; a phrased real
-        # wake word leaves it armed for the genuine manual start still to come.
-        self._capture_run = self._capture_armed and not wake_word_phrase
-        if self._capture_run:
-            self._capture_armed = False
-            self._capture_deadline = time.monotonic() + self._capture_seconds + 2.0
-            logger.info(
-                f"{self.name}: ⏺️ capture run started "
-                f"({self._capture_seconds}s, cid={conversation_id})"
-            )
-            self._emit(StageEvent.RUN_START, {})
-            return 0  # Capture-only: no STT_START, no VAD/STT/LLM/TTS.
+        await self._close_stt_stream(stale_stream)
         # Open the per-run VAD session. The end-pointing POLICY (generic thresholds)
         # is read live off core.vad here, while the speech classifier itself is the
         # swappable vad stage backend. One session per run, so a hot-swapped backend
-        # or a changed policy applies on the next run. Capture runs returned above
-        # and never open a session (no VAD in capture mode).
+        # or a changed policy applies on the next run.
         vad_cfg = self.core.vad
         # Capture the identity from the SAME backend ref used to open the session,
         # so a hot-swap mid-run can't mislabel the finalize log line.
@@ -423,14 +251,13 @@ class Pipeline:
         self._emit(StageEvent.RUN_START, {})
         self._emit(StageEvent.STT_START, {})
         # Server-side wake-word gate decision. Gate only a REAL wake-word run
-        # (non-empty phrase), never a capture run, and only when a real verifier is
+        # (non-empty phrase), and only when a real verifier is
         # loaded — a None backend (warm-up not done) or a PassthroughVerifier (stage
         # disabled) skips the gate entirely so behavior is unchanged. RUN_START /
         # STT_START above fire for BOTH paths (they don't light the LED).
         wb = self.rt.wakeword_backend
         gate = (
             bool(wake_word_phrase)
-            and not self._capture_run
             and wb is not None
             and not isinstance(wb, PassthroughVerifier)
         )
@@ -442,8 +269,8 @@ class Pipeline:
             self._wakeword_confirmed = False
             self._stt_stream = None
             logger.info(f"{self.name}: 🛡️ wake-word gate pending (cid={conversation_id})")
-            return 0  # 0 = audio comes in-band over the API connection.
-        # Ungated (disabled/None/passthrough/non-wake/capture): proceed exactly as
+            return
+        # Ungated (disabled/None/passthrough/non-wake): proceed exactly as
         # before — confirm immediately, emit STT_VAD_START and open the STT stream.
         self._wakeword_confirmed = True
         # Speech is already in-stream (pre-roll captured the command), so the device
@@ -451,7 +278,6 @@ class Pipeline:
         # STT_VAD_END (thinking) is emitted in _run once VAD finalizes the utterance.
         self._emit(StageEvent.STT_VAD_START, {})
         self._open_stt_stream()
-        return 0  # 0 = audio comes in-band over the API connection.
 
     def _open_stt_stream(self) -> None:
         """Open the optional live streaming STT session for this run (synchronous).
@@ -488,19 +314,18 @@ class Pipeline:
         stored diagnostic WAV can carry both channels in stereo — it never reaches
         VAD or STT.
 
-        The speaker streams continuously and never signals end-of-speech, so we
+        The device streams continuously and never signals end-of-speech, so we
         detect it here: VAD over the PCM finalizes the utterance once speech is
         followed by enough trailing silence (or a max length / no-speech timeout).
 
-        All buffer and VAD state updates happen SYNCHRONOUSLY (no await) before we
-        decide to finalize, so concurrent eager on_audio tasks can't corrupt the
-        buffer mid-update; the claim/snapshot in _claim() is likewise synchronous,
-        so only _run() awaits.
+        Never suspends: the whole update is synchronous and a finalized run is
+        started as its own task (_run_task), so the device server's read loop can
+        await this per frame without ever waiting on a run.
         """
         if self._finalized:
             return  # Ignore late audio for an already-finalized run.
 
-        # Select the mic channel for the WHOLE pipeline (capture + VAD + STT) from
+        # Select the mic channel for the WHOLE pipeline (VAD + STT) from
         # config (0 = processed, 1 = less-processed/quieter). Channel 1 uses the
         # device's second stream when present; if it's missing, fall back to channel 0
         # and warn once per run. Read live off self.core, so panel changes take effect
@@ -518,25 +343,6 @@ class Pipeline:
                 )
         else:
             other = data2  # may be None when the device streams a single channel
-
-        # Manual capture-only mode: accumulate PCM, run NO VAD/STT/LLM/TTS. End on the
-        # device stop (on_stop) or when the server-side deadline (seconds + margin) is
-        # exceeded — whichever comes first; the buffered PCM is then returned as WAV
-        # bytes to the caller (never persisted). The byte cap here is sized to the
-        # requested duration (NOT the 60 s normal-run HARD_CAP_BYTES) so a long capture
-        # isn't silently truncated at 60 s; it's just a memory safety net.
-        if self._capture_run:
-            if not self._audio_logged:
-                self._audio_logged = True
-                logger.info(f"{self.name}: ⏺️ capturing sample...")
-            cap_bytes = self._capture_cap_bytes()
-            self._buffer.extend(data)
-            if len(self._buffer) >= cap_bytes:
-                del self._buffer[cap_bytes:]
-                await self._finish_capture("maxlen")
-            elif time.monotonic() >= self._capture_deadline:
-                await self._finish_capture("deadline")
-            return
 
         # Wake-word gate pending: the verifier hasn't ruled yet. Keep accumulating
         # the buffer (channel-select below feeds _buffer/_buffer2) but DON'T feed the
@@ -629,15 +435,16 @@ class Pipeline:
                 + " ".join(f"{k}={v}" for k, v in state.items())
             )
 
-        # All synchronous state is updated above; claim+run last (the only await).
-        # _claim() is synchronous and happens-before any await, so it's atomic
-        # relative to other eager on_audio tasks — no audio loss, no double finalize.
+        # All synchronous state is updated above; claim last. _claim() is atomic (no
+        # await), so a run is finalized exactly once and no audio is lost.
         if reason is not None:
             claimed = self._claim()
             if claimed is not None:
                 # Snapshot the conversation id synchronously with the claim so a
                 # re-triggered wake word can't relabel this run's events.
-                await self._run(reason, claimed[0], self._conversation_id, pcm2=claimed[1])
+                self._run_task = asyncio.create_task(
+                    self._run(reason, claimed[0], self._conversation_id, pcm2=claimed[1])
+                )
 
     def _claim(self) -> tuple[bytes, bytes] | None:
         """Atomically claim this run for finalization and snapshot the audio.
@@ -738,10 +545,10 @@ class Pipeline:
 
         Claims the run (so a concurrent device-stop / VAD finalize can't also run it)
         and funnels through _run with a reject reason. _run records the run as
-        'rejected', skips STT/LLM/TTS and the ack chime, and emits RUN_END — which is
-        what makes the device stop streaming mid-utterance (the confirmed abort on this
-        firmware). `error` distinguishes a timeout/internal error (wakeword_error) from
-        a genuine non-match (wakeword_reject).
+        'rejected', skips STT/LLM/TTS and the ack chime, and emits RUN_END — which the
+        device server sends as `state idle`, so the device stops streaming the mic and
+        ends its session. `error` distinguishes a timeout/internal error (wakeword_error)
+        from a genuine non-match (wakeword_reject).
         """
         if self._finalized:
             return
@@ -790,12 +597,10 @@ class Pipeline:
             return self.llm_cfg.reply_rate_limit
         return self.llm_cfg.reply_error
 
-    async def _close_stt_stream(self) -> None:
-        """Idempotently close and drop the live streaming STT session, if any."""
-        if self._stt_stream is None:
+    async def _close_stt_stream(self, stream) -> None:
+        """Close a streaming STT session, if any; a failure is logged, never raised."""
+        if stream is None:
             return
-        stream = self._stt_stream
-        self._stt_stream = None
         try:
             await stream.aclose()
         except Exception as e:  # noqa: BLE001 - cleanup must never break the run
@@ -812,7 +617,8 @@ class Pipeline:
         if self._wakeword_task is not None:
             self._wakeword_task.cancel()
         if not self._finalized:
-            await self._close_stt_stream()
+            stream, self._stt_stream = self._stt_stream, None
+            await self._close_stt_stream(stream)
 
     async def _run(self, reason, pcm, conversation_id, pcm2: bytes = b"") -> None:
         """Run STT -> LLM -> TTS -> events on the already-claimed audio, once.
@@ -820,8 +626,10 @@ class Pipeline:
         The caller claims the run via _claim() (which sets _finalized, snapshots
         and clears the buffer) and passes the snapshotted pcm here. The lock only
         provides defensive serialization; _claim() already guarantees single entry.
-        RUN_END is always sent.
+        RUN_END is always sent. The run takes over the streaming STT session of the
+        claimed utterance, so a cancelled run's cleanup never touches the next one.
         """
+        stt_stream, self._stt_stream = self._stt_stream, None
         pending_run = None
         try:
             async with self._lock:
@@ -835,7 +643,7 @@ class Pipeline:
                 if not pcm:
                     # Truly-empty audio: nothing to transcribe and nothing to record.
                     logger.info(f"{self.name}: empty audio, ending run")
-                    await self._close_stt_stream()
+                    await self._close_stt_stream(stt_stream)
                     self._emit(StageEvent.RUN_END, {})
                     return
 
@@ -843,19 +651,8 @@ class Pipeline:
                 # a short confirmation chime to the speaker NOW as immediate "got it"
                 # feedback, before STT/LLM/TTS run. Fire-and-forget (scheduled, never
                 # awaited) so it never delays STT; tracked in a set so it isn't GC'd
-                # mid-playback. The manual capture-only path bypasses _run entirely, so a
-                # capture never beeps.
-                #
-                # Announce-channel overlap (ack <-> filler): both the ack here and the
-                # early slow-tool "filler" (_deliver_filler) play over the SAME
-                # send_announcement (await_response) path. In the narrow window where a
-                # slow-tool filler fires while the ~300 ms ack announce is still playing,
-                # the two announces may duck/queue against each other on the device. This
-                # is non-fatal — both are isolated, best-effort, and never awaited by the
-                # run. The FINAL TTS reply (TTS_END) ALSO reaches the device's single
-                # media-player announcement slot, so to avoid dropping the reply the run
-                # serializes it behind a still-playing filler in _await_filler_playback()
-                # (awaited just before emitting TTS_END).
+                # mid-playback. The ack, a filler and the reply are separate play()
+                # streams, queued in call order on the device.
                 #
                 # A wake-word REJECT aborts the run silently — no ack chime — so the
                 # mis-trigger never beeps at the user.
@@ -867,8 +664,7 @@ class Pipeline:
                 # downstream consumer in this run uses the trimmed sample: STT, the t_vad
                 # metric, the capture-session WAV and the stored diagnostic audio. Read live
                 # off core.vad so it hot-applies. trim_start_pcm never returns empty audio,
-                # so the non-empty guard above still holds afterwards. The manual
-                # "record N seconds" capture-only path bypasses _run and is unaffected.
+                # so the non-empty guard above still holds afterwards.
                 trim_ms = self.core.vad.trim_start_ms
                 if trim_ms > 0:
                     trimmed = trim_start_pcm(pcm, trim_ms)
@@ -931,8 +727,8 @@ class Pipeline:
                 # t_vad is the captured-utterance duration in ms (the "VAD capture"
                 # segment shown in the UI waterfall), derived from the PCM length —
                 # NOT the CPU time spent running the VAD.
-                # audio_ms is intentionally left None for now: we don't decode the
-                # synthesized mp3 to measure its playback duration yet.
+                # audio_ms is intentionally left None for now: the reply's playback
+                # duration is not measured yet.
                 # Native TTS reply audio captured during synthesis (see the TTS section) and
                 # stored after the run is inserted, mirroring the utterance-audio store. Stays
                 # None unless synthesis produced bytes, so a failed/empty TTS stores nothing.
@@ -971,7 +767,8 @@ class Pipeline:
                         )
                         record["result"] = "rejected"
                         record["reason"] = reason
-                        await self._close_stt_stream()
+                        await self._close_stt_stream(stt_stream)
+                        stt_stream = None
                         self._emit(StageEvent.STT_END, {"text": ""})
                         self._emit(StageEvent.RUN_END, {})
                         return
@@ -988,7 +785,8 @@ class Pipeline:
                         )
                         # Discard any streaming session WITHOUT reading its result —
                         # we never want a transcript for silence.
-                        await self._close_stt_stream()
+                        await self._close_stt_stream(stt_stream)
+                        stt_stream = None
                         self._emit(StageEvent.STT_END, {"text": ""})
                         self._emit(StageEvent.RUN_END, {})
                         return
@@ -1005,8 +803,8 @@ class Pipeline:
                         # Streaming-capable backends already recognized DURING speech
                         # (fed in on_audio): finish() forces the final transcript.
                         # Otherwise fall back to a one-shot batch transcribe().
-                        if self._stt_stream is not None:
-                            text = await self._stt_stream.finish()
+                        if stt_stream is not None:
+                            text = await stt_stream.finish()
                         else:
                             text = await stt.transcribe(pcm)
                     except StageError as e:
@@ -1062,11 +860,11 @@ class Pipeline:
                         # run, and only for a SLOW tool (so instant smart-home actions don't
                         # double-talk). The slow KNOWLEDGE comes from the tool source via
                         # hub.is_slow (each source declares whether its tools are slow).
-                        # Schedule synthesis+announce as a fire-and-forget task
+                        # Schedule synthesis+play as a fire-and-forget task
                         # so the slow tool is NOT delayed by filler TTS. Synchronous
                         # gate/dedup first (no await before we decide), then schedule.
                         nonlocal filler_fired
-                        if filler_fired or self.send_announcement is None:
+                        if filler_fired or not self.has_speaker:
                             return
                         if not any(self.hub.is_slow(n) for n in tool_names):
                             return  # fast action: the final reply alone is enough
@@ -1192,130 +990,54 @@ class Pipeline:
                         self._emit_live(record)
 
                     self._emit(StageEvent.TTS_START, {"text": reply})
-                    # Read the backend property ONCE: the same ref both synthesizes
-                    # and labels the log lines, so they can never diverge.
-                    tts = self.tts_backend
-                    try:
-                        tts_t = time.perf_counter()
-                        if self.core.audio.stream_tts:
-                            # Streaming TTS: register a stream URL and emit
-                            # TTS_END as soon as synthesis STARTS — the speaker
-                            # fetches the URL itself and plays while the backend
-                            # is still producing audio. Errors raised before the
-                            # URL exists (connect/auth, put_stream) fall through
-                            # to the existing except below, exactly like the
-                            # buffered path.
+                    # A device without a speaker gets the reply text only: no synthesis.
+                    if self.has_speaker:
+                        # Read the backend property ONCE: the same ref both synthesizes
+                        # and labels the log lines, so they can never diverge.
+                        tts = self.tts_backend
+                        try:
+                            tts_t = time.perf_counter()
                             mime, chunks = await self._synthesize_stream(tts, reply, "ru")
-                            tts_chunks = []
-                            ext, url, feed_task = await self.serve_audio_stream(
-                                mime, self._tee_chunks(chunks, tts_chunks)
-                            )
-                            try:
-                                # t_tts = time-to-stream-start: the user-perceived TTS
-                                # latency (total synth time is logged after the feed).
-                                record["t_tts"] = int((time.perf_counter() - tts_t) * 1000)
-                                logger.info(
-                                    f"{self.name}: 🔊 TTS [{self._backend_desc(tts)}] "
-                                    f"stream start ({time.perf_counter() - tts_t:.2f}s) "
-                                    f"▶ serving {url}"
-                                )
-                                # Serialize the final reply behind any still-playing early
-                                # filler: both reach the device's single media-player
-                                # announcement slot, so overlapping them makes the device
-                                # drop the reply. (Streaming branch: the stream URL is already
-                                # live and buffering, so the device plays the moment we emit
-                                # TTS_END below.)
-                                await self._await_filler_playback()
-                                self._emit(StageEvent.TTS_END, {"url": url})  # speaker starts fetching NOW
-                                try:
-                                    # Synthesis is still running; wait for the whole
-                                    # feed before closing the run record.
-                                    served_bytes = await feed_task
-                                except Exception as e:
-                                    # Mid-stream TTS failure. TTS_END was already
-                                    # emitted, so the speaker may play a truncated
-                                    # clip — acceptable; record the failure honestly.
-                                    # Same precedence as the buffered except below:
-                                    # never clobber an earlier (LLM) root cause.
-                                    record["result"] = "error"
-                                    if record["error_stage"] is None:
-                                        record["error_stage"] = "TTS"
-                                        record["error_text"] = str(e)
-                                    logger.error(
-                                        f"{self.name}: TTS [{self._backend_desc(tts)}] "
-                                        f"failed mid-stream: {e}"
-                                    )
-                                else:
-                                    record["audio_bytes"] = served_bytes
-                                    record["audio_fmt"] = ext
-                                    # Keep the full native clip for the run's stored TTS audio (see finally).
-                                    tts_audio = b"".join(tts_chunks)
-                                    tts_mime = mime
-                                    logger.info(
-                                        f"{self.name}: 🔊 TTS stream complete "
-                                        f"({time.perf_counter() - tts_t:.2f}s total, "
-                                        f"{served_bytes} bytes)"
-                                    )
-                            finally:
-                                # Orphan guard: if anything between obtaining the
-                                # feed task and consuming its result raises (e.g.
-                                # a custom send_event failing on TTS_END) or the
-                                # run is cancelled, the task would otherwise never
-                                # be awaited ("Task exception was never retrieved").
-                                # On the happy/handled paths the task is already
-                                # done: cancel() is then a no-op and the re-await
-                                # only re-surfaces an already-consumed result/
-                                # exception, logged at debug.
-                                if not feed_task.done():
-                                    feed_task.cancel()
-                                try:
-                                    await feed_task
-                                except BaseException as fe:  # noqa: BLE001 - reaping must not mask the original error
-                                    logger.debug(
-                                        f"{self.name}: TTS feed task reaped: {fe!r}"
-                                    )
-                        else:
-                            mime, audio = await tts.synthesize(reply, "ru")
+                            # t_tts = time-to-stream-start: the user-perceived TTS
+                            # latency (the device plays while synthesis continues).
                             record["t_tts"] = int((time.perf_counter() - tts_t) * 1000)
                             logger.info(
                                 f"{self.name}: 🔊 TTS [{self._backend_desc(tts)}] "
-                                f"({time.perf_counter() - tts_t:.2f}s, "
-                                f"{len(audio)} bytes)"
+                                f"stream start ({time.perf_counter() - tts_t:.2f}s)"
                             )
-                            ext, url, served_bytes = await self.serve_audio(mime, audio)
-                            # Record what the speaker actually downloads (post-transcode),
-                            # not the backend's native-format size.
-                            record["audio_bytes"] = served_bytes
-                            record["audio_fmt"] = ext
+                            tts_chunks = []
+                            try:
+                                await self.play(mime, self._tee_chunks(chunks, tts_chunks))
+                            finally:
+                                # The tee only closes `chunks` once it has started.
+                                await self._close_stream(chunks)
+                            clip = b"".join(tts_chunks)
+                            record["audio_bytes"] = len(clip)
+                            record["audio_fmt"] = mime.partition(";")[0].rpartition("/")[2]
                             # Keep the full native clip for the run's stored TTS audio (see
-                            # finally). Set only AFTER a successful serve_audio so a serving/
-                            # transcode failure stores nothing — symmetric with the streaming
-                            # branch, which captures only in its post-feed success path.
-                            tts_audio = audio
-                            tts_mime = mime
-                            logger.info(f"{self.name}: ▶ serving {url}")
-                            # Serialize the final reply behind any still-playing early
-                            # filler: both reach the device's single media-player
-                            # announcement slot, so overlapping them makes the device
-                            # drop the reply. (Buffered branch: the clip is already fully
-                            # synthesized and served, so the device plays it the moment we
-                            # emit TTS_END below.)
-                            await self._await_filler_playback()
-                            self._emit(StageEvent.TTS_END, {"url": url})
-                    except Exception as e:
-                        # No TTS_END on failure; the run still ends cleanly.
-                        # result="error" unconditionally, but only claim the stage/
-                        # text if nothing earlier set them: when the LLM already
-                        # reported an error (error_stage="LLM") we continued into TTS
-                        # anyway, so a TTS failure here must not overwrite the LLM
-                        # root cause.
-                        record["result"] = "error"
-                        if record["error_stage"] is None:
-                            record["error_stage"] = "TTS"
-                            record["error_text"] = str(e)
-                        logger.error(
-                            f"{self.name}: TTS [{self._backend_desc(tts)}] failed: {e}"
-                        )
+                            # finally); raw PCM is stored as WAV so the panel can play it.
+                            rate = pcm_rate(mime)
+                            if rate is not None:
+                                tts_audio, tts_mime = pcm_to_wav_bytes(clip, rate=rate), "audio/wav"
+                            else:
+                                tts_audio, tts_mime = clip, mime
+                            logger.info(
+                                f"{self.name}: 🔊 TTS played "
+                                f"({time.perf_counter() - tts_t:.2f}s total, {len(clip)} bytes)"
+                            )
+                        except Exception as e:
+                            # The run still ends cleanly. result="error" unconditionally,
+                            # but only claim the stage/text if nothing earlier set them:
+                            # when the LLM already reported an error (error_stage="LLM") we
+                            # continued into TTS anyway, so a TTS failure here must not
+                            # overwrite the LLM root cause.
+                            record["result"] = "error"
+                            if record["error_stage"] is None:
+                                record["error_stage"] = "TTS"
+                                record["error_text"] = str(e)
+                            logger.error(
+                                f"{self.name}: TTS [{self._backend_desc(tts)}] failed: {e}"
+                            )
 
                     logger.info(
                         f"{self.name}: ✅ run complete in {time.perf_counter() - t0:.2f}s"
@@ -1335,9 +1057,9 @@ class Pipeline:
                     # Single cleanup point for the streaming STT session covering every
                     # path out of the inner try (no_speech, STT error, empty/non-empty
                     # success, later-stage exceptions). finish() already drains/closes
-                    # the gRPC call, so this is an idempotent ref-nulling no-op there;
-                    # for the error/early-exit paths it actually closes the session.
-                    await self._close_stt_stream()
+                    # the gRPC call, so this is a no-op there; for the error/early-exit
+                    # paths it actually closes the session.
+                    await self._close_stt_stream(stt_stream)
                     # Record the run on every non-empty-pcm path (empty-STT return,
                     # success, TTS-fail, exception). A recording failure must never
                     # break the run or swallow RUN_END, so it is fully wrapped.
@@ -1419,9 +1141,8 @@ class Pipeline:
         tools and conversation context, optionally spoken on the speaker.
 
         A simplified mirror of the LLM/TTS portion of `_run`: no audio, no VAD/STT
-        and NO voice-assistant events (`_emit` is never called — there is no live
-        ESPHome voice session for a text run, so VA events would hit a live voice
-        connection out of band). Serialized with voice runs via the same per-device
+        and NO stage events (`_emit` is never called — there is no voice session
+        for a text run, so stage events would reach the device out of band). Serialized with voice runs via the same per-device
         lock. The run is recorded to the runs store with reason="text" and the
         request in stt_text, so the panel run log shows it in the usual column.
 
@@ -1600,23 +1321,6 @@ class Pipeline:
             "error_text": record["error_text"],
         }
 
-    async def serve_audio(self, mime: str, audio: bytes) -> tuple[str, str, int]:
-        """Adapt the clip to a playable format and cache it; return (ext, url, nbytes).
-
-        THE delivery boundary: TTS backends return their engine's NATIVE format
-        (e.g. Piper -> audio/wav) and this single put-point adapts it to what
-        the speaker firmware can decode (to_playable, run off-loop because the
-        WAV->MP3 transcode blocks). The single adapt+put+tts_url path behind
-        every audio-serving caller in the pipeline; also the public helper for
-        device-layer callers that already hold ready audio bytes (e.g. the
-        panel chime preview via play_media). `nbytes` is the size of the SERVED
-        clip — what the speaker actually downloads (post-transcode).
-        """
-        mime, audio = await asyncio.to_thread(to_playable, mime, audio)
-        audio_id = self.audio_server.put(audio, mime)
-        ext, url = tts_url(self.public_base_url, audio_id, mime)
-        return ext, url, len(audio)
-
     @staticmethod
     async def _synthesize_stream(backend, text: str, lang: str = "ru"):
         """Resolve `backend`'s streaming synthesis entry point.
@@ -1650,8 +1354,8 @@ class Pipeline:
     async def _tee_chunks(chunks, sink):
         """Pass-through wrapper over a TTS chunk async-iterator that also appends each
         chunk to `sink`, so _run keeps a copy of the full streamed clip to store as the
-        run's TTS audio. Preserves serve_audio_stream's ownership invariant: on early
-        close (aclose), the underlying iterator is closed too."""
+        run's TTS audio. On early close (aclose), the underlying iterator is closed
+        too, so the backend's open response is always released."""
         try:
             async for chunk in chunks:
                 sink.append(chunk)
@@ -1659,163 +1363,34 @@ class Pipeline:
         finally:
             await Pipeline._close_stream(chunks)
 
-    async def serve_audio_stream(self, mime, chunks):
-        """Streaming delivery boundary: serve `chunks` (an async iterator of
-        audio bytes) under a URL available IMMEDIATELY, while synthesis runs.
-
-        Returns (ext, url, feed_task) where feed_task resolves to the total
-        served bytes once the whole clip has been fed (or raises on a mid-stream
-        synthesis failure — the URL was already handed out by then).
-
-        OWNERSHIP INVARIANT: once called, this method owns the `chunks`
-        iterator and guarantees it is always either fully consumed or
-        explicitly closed. Streaming TTS backends open their HTTP response
-        BEFORE returning the iterator and release it from the generator's
-        finally, which only runs if the generator is iterated or closed —
-        dropping the iterator un-iterated would leak the open response.
-
-        A mime the speaker can't decode (e.g. Piper's WAV, which is unplayable
-        from mid-stream anyway) falls back to the buffered path: drain the
-        iterator fully and go through serve_audio (the transcode boundary); the
-        returned awaitable is then already resolved to nbytes.
-        """
-        if mime not in PLAYABLE_MIMES:
-            # Drain branch: an exception raised BY the iterator self-terminates
-            # the generator, but one raised downstream (serve_audio after a
-            # successful drain) would not touch it — close on ANY failure for a
-            # uniform guarantee (aclose on a finished generator is a no-op).
-            try:
-                audio = b"".join([c async for c in chunks])
-                ext, url, nbytes = await self.serve_audio(mime, audio)
-            except BaseException:
-                await self._close_stream(chunks)
-                raise
-            done = asyncio.get_running_loop().create_future()
-            done.set_result(nbytes)
-            return ext, url, done
-        try:
-            audio_id, feed = self.audio_server.put_stream(mime)
-            ext, url = tts_url(self.public_base_url, audio_id, mime)
-
-            async def _feed():
-                total = 0
-                try:
-                    async for chunk in chunks:
-                        total += len(chunk)
-                        feed.write(chunk)
-                except BaseException:
-                    # Mid-stream failure (or cancellation): readers that got nothing
-                    # see a 404, readers mid-send get a truncated clip; the caller
-                    # awaits this task and records the error. The iterator either
-                    # self-terminated (the error came from it) or is closed here
-                    # (no-op when already finished) — the invariant holds.
-                    feed.abort()
-                    await Pipeline._close_stream(chunks)
-                    raise
-                feed.close()
-                return total
-
-            return ext, url, asyncio.create_task(_feed())
-        except BaseException:
-            # Anything failing between receiving the iterator and the feed task
-            # taking ownership (put_stream, URL building, task creation) would
-            # drop the iterator un-iterated; close it before propagating.
-            await self._close_stream(chunks)
-            raise
-
     async def speak(self, text: str) -> None:
-        """Public entry for proactive speech (reminders, external callers).
-
-        Synthesizes via the CURRENT tts stage, serves the clip, and plays it
-        on the announcement channel (ducks current audio, plays while idle).
-        The single text->speaker path shared by the filler and the device
-        layer's announce. Raises on failure (callers decide isolation).
+        """Public entry for proactive speech (reminders, external callers) and the
+        filler: synthesize via the CURRENT tts stage and play it on the device,
+        returning once it has played. A device without a speaker gets no synthesis
+        at all. Raises on failure (callers decide isolation).
         """
+        if not self.has_speaker:
+            return
         # Read the backend property ONCE: the same ref both synthesizes and
         # labels the log line, so they can never diverge.
         backend = self.tts_backend
-        if self.core.audio.stream_tts:
-            # Streaming: announce the stream URL as soon as synthesis starts;
-            # the clip plays while the feed completes.
-            mime, chunks = await self._synthesize_stream(backend, text, "ru")
-            _ext, url, feed_task = await self.serve_audio_stream(mime, chunks)
-            logger.info(
-                f"{self.name}: 🔔 announce [tts={self._backend_desc(backend)}]: "
-                f"{text!r} -> {url}"
-            )
-            try:
-                if self.send_announcement is not None:
-                    await self.send_announcement(media_id=url, timeout=30.0, text=text)
-            except BaseException:
-                # The announce itself failed (or was cancelled) BEFORE the feed
-                # task was consumed: cancel a still-running feed (no point
-                # finishing a synthesis nobody will play — and an instant
-                # announce failure must not block on a long stream), then
-                # await the task so it is never orphaned, suppressing ITS
-                # failure (logged) so a feed error can't mask the original
-                # announce error. Mirrors the orphan guard in _run.
-                if not feed_task.done():
-                    feed_task.cancel()
-                try:
-                    await feed_task
-                except BaseException as fe:  # noqa: BLE001 - must not mask the announce error
-                    logger.debug(f"{self.name}: announce TTS feed failed: {fe!r}")
-                raise
-            # Await the feed AFTER the announce returns (the announcement plays
-            # while the feed completes) so a mid-stream synthesis failure still
-            # surfaces to the caller and the task is never orphaned.
-            await feed_task
-            return
-        mime, audio = await backend.synthesize(text, "ru")
-        _ext, url, _nbytes = await self.serve_audio(mime, audio)
-        logger.info(
-            f"{self.name}: 🔔 announce [tts={self._backend_desc(backend)}]: "
-            f"{text!r} -> {url}"
-        )
-        if self.send_announcement is not None:
-            await self.send_announcement(media_id=url, timeout=30.0, text=text)
+        mime, chunks = await self._synthesize_stream(backend, text, "ru")
+        logger.info(f"{self.name}: 🔔 speak [tts={self._backend_desc(backend)}]: {text!r}")
+        await self.play(mime, chunks)
 
     async def _deliver_filler(self, text: str) -> None:
-        """Speak an early 'filler' line on the announcement channel via speak().
+        """Speak an early 'filler' line via speak().
 
-        The announcement ducks any current audio and plays immediately, so the user
-        hears a short 'I'll go check it' line while the slow tool + final LLM round
-        run, instead of waiting in silence. Fully isolated: a synthesis/announce
-        failure or its playback time must NEVER affect or delay the main run (which
-        keeps its own final TTS_END for the real answer).
+        It is queued on the device ahead of the reply, so the user hears a short
+        'I'll go check it' line while the slow tool + final LLM round run, instead of
+        waiting in silence. Fully isolated: a synthesis/play failure must NEVER affect
+        the main run.
         """
         try:
             logger.info(f"{self.name}: 🗣️ filler: {text!r}")
             await self.speak(text)
         except Exception as e:
-            logger.error(f"{self.name}: filler announce failed: {e}")
-
-    async def _await_filler_playback(self, timeout: float = 30.0) -> None:
-        """Block until any in-flight early-filler announcement has finished PLAYING
-        on the device, before the final answer's TTS is handed to the device.
-
-        Why this is required: on the speaker firmware the early filler (delivered via
-        send_announcement / send_voice_assistant_announcement_await_response) and the
-        final reply (delivered via the StageEvent.TTS_END event) BOTH play through the
-        SAME media-player 'announcement' slot and share ONE device-side playback-state
-        machine. When they overlap in time the device drops the reply — the filler is
-        heard, the answer is silent. The reply's synthesis already overlapped most of
-        the filler's playback, so by the time the reply is ready the filler is usually
-        nearly done; waiting out the small remainder here removes the race.
-
-        Fully isolated: a filler that errors or never finishes must never break or hang
-        the run. The wait is bounded by `timeout`, and asyncio.wait does NOT cancel
-        still-pending tasks on timeout (a stuck announce keeps running and self-reaps
-        via its done-callback). The filler tasks swallow their own exceptions (see
-        _deliver_filler), so nothing propagates here.
-        """
-        pending = [t for t in self._filler_tasks if not t.done()]
-        if not pending:
-            return
-        try:
-            await asyncio.wait(pending, timeout=timeout)
-        except Exception as e:  # noqa: BLE001 - waiting on the filler must never break the run
-            logger.debug(f"{self.name}: filler playback wait skipped: {e!r}")
+            logger.error(f"{self.name}: filler failed: {e}")
 
     def _ack_clip_bytes(self) -> tuple[str, bytes]:
         """Return (mime, audio) for the end-of-phrase ack clip, building/caching once.
@@ -1839,80 +1414,30 @@ class Pipeline:
     def _schedule_ack(self) -> None:
         """Schedule the fire-and-forget end-of-phrase ack chime, if enabled.
 
-        Synchronous gate (no await before the decision): enabled toggle + a bound
-        announcement channel. Building/serving the clip and the announce call all run
-        inside the background task so STT is never delayed. Tracked in _ack_tasks so the
-        still-playing announcement isn't garbage-collected; each task removes itself.
+        Synchronous gate (no await before the decision): enabled toggle + a device
+        speaker. Building the clip and the play call run inside the background task
+        so STT is never delayed. Tracked in _ack_tasks so the still-playing chime
+        isn't garbage-collected; each task removes itself.
         """
-        if not self.core.ack.enabled or self.send_announcement is None:
+        if not self.core.ack.enabled or not self.has_speaker:
             return
         task = asyncio.create_task(self._play_ack())
         self._ack_tasks.add(task)
         task.add_done_callback(self._ack_tasks.discard)
 
     async def _play_ack(self) -> None:
-        """Serve the ack clip through the audio cache and play it on the announce path.
-
-        Mirrors _deliver_filler: ducks current audio and plays immediately. Fully
-        isolated — a build/serve/announce failure must NEVER affect or delay the run
-        (which keeps its own final TTS for the real answer).
+        """Play the ack clip on the device. Fully isolated — a build/play failure must
+        NEVER affect or delay the run (which keeps its own final TTS for the answer).
         """
         try:
             mime, audio = self._ack_clip_bytes()
-            _ext, url, _nbytes = await self.serve_audio(mime, audio)
-            logger.info(f"{self.name}: 🔔 end-of-phrase ack -> {url}")
-            if self.send_announcement is not None:
-                await self.send_announcement(media_id=url, timeout=30.0, text="")
+            logger.info(f"{self.name}: 🔔 end-of-phrase ack")
+            await self.play(mime, audio)
         except Exception as e:
             logger.error(f"{self.name}: end-of-phrase ack failed: {e}")
 
-    async def _finish_capture(self, reason: str) -> None:
-        """End a manual capture run: return the buffered PCM as WAV bytes, end the run.
-
-        EPHEMERAL: NO STT/LLM/TTS and NOTHING written to disk. Claims the run
-        synchronously (so a concurrent on_audio/on_stop can't double-finalize),
-        builds the WAV bytes in memory and resolves the capture Future with them so
-        DeviceClient.capture() can hand them back to the API caller. Empty audio
-        fails the Future instead (so the caller surfaces an error rather than an
-        empty WAV). Always emits RUN_END so the device returns to idle, and clears
-        the per-run capture flag.
-        """
-        claimed = self._claim()
-        if claimed is None:
-            return  # Already finalized by a concurrent path.
-        # Manual capture stays MONO: the second channel is discarded.
-        pcm = claimed[0]
-        self._capture_run = False
-        logger.info(
-            f"{self.name}: ⏺️ capture ended ({len(pcm)} bytes, "
-            f"~{len(pcm) / (SAMPLE_RATE * 2):.1f}s, reason={reason})"
-        )
-        fut = self._capture_future
-        self._capture_future = None
-        if pcm:
-            # Build the WAV container in memory (cheap, no disk) and hand it to the
-            # awaiting caller. Resolve on the loop thread — this coroutine runs there.
-            wav = pcm_to_wav_bytes(pcm)
-            if fut is not None and not fut.done():
-                fut.set_result(wav)
-            logger.info(
-                f"{self.name}: 🎧 captured sample -> {len(wav)} WAV bytes "
-                f"(in-memory, {len(pcm)} PCM bytes)"
-            )
-        else:
-            # No audio is a server-side capture failure, NOT an offline/missing-entity
-            # condition — use a distinct type so the API maps it to HTTP 500, not 409.
-            logger.info(f"{self.name}: capture produced no audio")
-            if fut is not None and not fut.done():
-                fut.set_exception(CaptureEmptyError("capture produced no audio"))
-        # Return the device to idle. No STT/LLM/TTS events are sent for a capture run.
-        self._emit(StageEvent.RUN_END, {})
-
     async def on_stop(self, abort: bool = False) -> None:
-        """Explicit device stop: finalize the run (exactly once)."""
-        if self._capture_run:
-            await self._finish_capture("device_stop")
-            return
+        """Explicit stop: finalize the run (exactly once)."""
         if self._wakeword_pending and not self._wakeword_confirmed:
             # A stop before the verdict must NOT bypass the gate into STT/LLM/TTS.
             # Cancel the in-flight verify and abort this run as a reject.

@@ -6,9 +6,11 @@ tmp config file and drives a fresh PanelServer app.
 """
 
 import asyncio
+import io
 import json
 import re
 import time
+import wave
 
 import aiohttp
 import httpx
@@ -296,12 +298,10 @@ async def test_options_unknown_plugin_returns_404(tmp_path):
 @respx.mock
 async def test_tts_test_synthesizes_with_draft_settings(tmp_path):
     # The endpoint builds an AD-HOC fishaudio backend from the request's settings
-    # (NOT the stored config, which selects yandex) and streams back the upstream
-    # audio bytes in the provider's native format.
+    # (NOT the stored config, which selects yandex) and returns the upstream raw
+    # PCM wrapped as WAV for the browser.
     route = respx.post(FISH_TTS_URL).mock(
-        return_value=httpx.Response(
-            200, content=b"MP3-BYTES", headers={"Content-Type": "audio/mpeg"}
-        )
+        return_value=httpx.Response(200, content=b"PCMBYTES")
     )
     client, svc = await _client(tmp_path)
     try:
@@ -311,8 +311,10 @@ async def test_tts_test_synthesizes_with_draft_settings(tmp_path):
             "text": "Привет, проверка голоса",
         })
         assert resp.status == 200
-        assert resp.headers["Content-Type"] == "audio/mpeg"
-        assert await resp.read() == b"MP3-BYTES"
+        assert resp.headers["Content-Type"] == "audio/wav"
+        with wave.open(io.BytesIO(await resp.read())) as w:
+            assert w.getframerate() == 44100
+            assert w.readframes(w.getnframes()) == b"PCMBYTES"
         assert route.call_count == 1
         # The stored config was never touched by the ad-hoc build.
         assert svc.document()["tts"]["selected"] == "yandex"
@@ -422,11 +424,7 @@ async def test_tts_test_piper_missing_voice_path_returns_422(tmp_path):
 async def test_tts_test_text_at_500_char_cap_returns_200(tmp_path):
     # Boundary: the 500-char cap is inclusive and measured AFTER strip, so both
     # exactly-500 text and 500 significant chars padded with whitespace pass.
-    respx.post(FISH_TTS_URL).mock(
-        return_value=httpx.Response(
-            200, content=b"MP3-BYTES", headers={"Content-Type": "audio/mpeg"}
-        )
-    )
+    respx.post(FISH_TTS_URL).mock(return_value=httpx.Response(200, content=b"PCMBYTES"))
     client, _svc_ = await _client(tmp_path)
     try:
         for text in ("а" * 500, "  \n" + "а" * 500 + "  \t"):
@@ -436,7 +434,6 @@ async def test_tts_test_text_at_500_char_cap_returns_200(tmp_path):
                 "text": text,
             })
             assert resp.status == 200
-            assert await resp.read() == b"MP3-BYTES"
     finally:
         await client.close()
 
@@ -814,7 +811,7 @@ async def test_get_system(tmp_path):
 
 
 async def test_get_system_includes_device_statuses(tmp_path):
-    devices = [{"name": "x", "host": "y", "enabled": True, "online": True, "versions": []}]
+    devices = [{"name": "x", "enabled": True, "online": True, "versions": []}]
     client, _svc_ = await _client(tmp_path, device_status=lambda: devices)
     try:
         resp = await client.get("/api/system")
@@ -871,7 +868,7 @@ async def test_runs_stream_heartbeat_carries_reloading(tmp_path):
 
 
 async def test_get_devices(tmp_path):
-    devices = [{"name": "x", "host": "y", "online": True}]
+    devices = [{"name": "x", "online": True}]
     client, _svc_ = await _client(tmp_path, device_status=lambda: devices)
     try:
         resp = await client.get("/api/devices")
@@ -1059,7 +1056,7 @@ async def test_capture_failure_surfaces_via_status(tmp_path, exc, needle):
 async def test_capture_empty_recording_surfaces_as_error(tmp_path):
     # An empty recording (CaptureEmptyError) is a capture failure too: it surfaces
     # via the status endpoint as state "error".
-    from src.pipeline import CaptureEmptyError
+    from src.device_server import CaptureEmptyError
 
     async def cap(device, seconds):
         raise CaptureEmptyError("capture produced no audio")
@@ -1708,7 +1705,7 @@ async def test_runs_stream_heartbeat_carries_device_statuses(tmp_path):
     # The 1 s heartbeat is the panel's live device-status feed: it must embed the
     # device_status() snapshot so the Devices page updates without polling.
     hub = RunEventsHub()
-    devices = [{"name": "x", "host": "y", "enabled": True, "online": False, "versions": []}]
+    devices = [{"name": "x", "enabled": True, "online": False, "versions": []}]
     client, _svc_ = await _client(
         tmp_path, run_events=hub, heartbeat_interval=0.05,
         device_status=lambda: devices,

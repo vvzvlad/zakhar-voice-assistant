@@ -1,13 +1,13 @@
 import io
 import wave
+from types import SimpleNamespace
 
 import httpx
 import numpy as np
 import pytest
 import respx
 
-from src.audio_codec import to_playable, wav_to_mp3
-from src.chime import build_ack_clip, make_ack_chime_mp3
+from src.chime import build_ack_clip, make_ack_chime_wav
 from src.plugins.tts._ru_text import expand_units, sanitize_plus_stress
 from src.plugins.tts.fishaudio import FISH_TTS_URL, FishAudioTtsBackend
 from src.plugins.tts.piper import (
@@ -37,7 +37,7 @@ YANDEX_URL = YANDEX_V3_URL
 
 
 def _make_wav(sample_rate: int = 16000, channels: int = 1, seconds: float = 0.1) -> bytes:
-    """Build a tiny in-memory 16-bit PCM WAV of silence for transcoding tests."""
+    """Build a tiny in-memory 16-bit PCM WAV of silence."""
     frames = int(sample_rate * seconds)
     pcm = b"\x00\x00" * frames * channels  # 16-bit zeros (silence)
     buf = io.BytesIO()
@@ -49,85 +49,22 @@ def _make_wav(sample_rate: int = 16000, channels: int = 1, seconds: float = 0.1)
     return buf.getvalue()
 
 
-def test_wav_to_mp3_produces_mp3_frame():
-    wav = _make_wav()
-    out = wav_to_mp3(wav)
-    assert out  # non-empty
-    assert out[0] == 0xFF  # MP3 frame sync byte
-
-
-def test_wav_to_mp3_stereo_16bit():
-    out = wav_to_mp3(_make_wav(channels=2))
-    assert out  # non-empty
-    assert out[0] == 0xFF  # MP3 frame sync byte
-
-
-def test_wav_to_mp3_mono_8khz_16bit():
-    out = wav_to_mp3(_make_wav(sample_rate=8000))
-    assert out  # non-empty
-    assert out[0] == 0xFF  # MP3 frame sync byte
-
-
-def test_wav_to_mp3_rejects_24bit_wav():
-    # lameenc assumes 16-bit PCM, so a 24-bit WAV would be mis-encoded into
-    # distorted audio. It must raise instead.
-    frames = 100
-    buf = io.BytesIO()
-    with wave.open(buf, "wb") as wf:
-        wf.setnchannels(1)
-        wf.setsampwidth(3)  # 24-bit
-        wf.setframerate(16000)
-        wf.writeframes(b"\x00\x00\x00" * frames)
-    with pytest.raises(ValueError) as exc:
-        wav_to_mp3(buf.getvalue())
-    assert "24-bit" in str(exc.value)
-
-
-# --- to_playable (delivery-boundary format adaptation, R8) -------------------
-
-
-def test_to_playable_mp3_passthrough():
-    # Already speaker-decodable -> untouched bytes, same mime, no transcode.
-    assert to_playable("audio/mpeg", b"\xff\xf3mp3") == ("audio/mpeg", b"\xff\xf3mp3")
-
-
-def test_to_playable_flac_passthrough():
-    assert to_playable("audio/flac", b"fLaC....") == ("audio/flac", b"fLaC....")
-
-
-def test_to_playable_wav_transcodes_to_mp3():
-    # WAV is not speaker-decodable -> transcoded to MP3 at the delivery boundary.
-    wav = _make_wav()
-    mime, out = to_playable("audio/wav", wav)
-    assert mime == "audio/mpeg"
-    assert out  # non-empty
-    assert out[0] == 0xFF  # MP3 frame sync byte
-    assert out != wav
-
-
-def test_to_playable_unknown_mime_passthrough():
-    # Unknown formats are served as-is (same lenient behavior as tts_url).
-    assert to_playable("audio/ogg", b"OggS") == ("audio/ogg", b"OggS")
-
-
-def test_make_ack_chime_mp3_is_deterministic_mp3():
+def test_make_ack_chime_wav_is_deterministic_wav():
     # The end-of-phrase ack chime is synthesized once and cached, so it must be
-    # both a valid MP3 (frame sync byte) and byte-for-byte deterministic across
-    # calls (same inputs -> identical bytes -> stable cache key).
-    a = make_ack_chime_mp3()
-    b = make_ack_chime_mp3()
-    assert a  # non-empty
-    assert a[0] == 0xFF  # MP3 frame sync byte
-    assert a == b        # deterministic: identical bytes on every build
+    # both a valid 16-bit WAV and byte-for-byte deterministic across calls.
+    a = make_ack_chime_wav()
+    assert a == make_ack_chime_wav()
+    with wave.open(io.BytesIO(a)) as w:
+        assert (w.getnchannels(), w.getsampwidth()) == (1, 2)
+        assert w.getnframes() > 0
 
 
-def test_make_ack_chime_mp3_edge_short_tone_no_gap():
+def test_make_ack_chime_wav_edge_short_tone_no_gap():
     # tone_ms=1 makes n smaller than the default ~8 ms ramps and gap_ms=0 yields a
     # zero-length gap — pins the edge clamp (edge <= n // 2) and the n <= 0 guard:
-    # must still produce a valid non-empty MP3, not raise.
-    out = make_ack_chime_mp3(tone_ms=1, gap_ms=0)
-    assert out  # non-empty
-    assert out[0] == 0xFF  # MP3 frame sync byte
+    # must still produce a valid non-empty WAV, not raise.
+    with wave.open(io.BytesIO(make_ack_chime_wav(tone_ms=1, gap_ms=0))) as w:
+        assert w.getnframes() > 0
 
 
 # --- build_ack_clip (file-based chime loading + synthesized fallback) ---------
@@ -135,54 +72,43 @@ def test_make_ack_chime_mp3_edge_short_tone_no_gap():
 
 @pytest.mark.parametrize("sound_path", ["", "   ", "/no/such/file.wav"])
 def test_build_ack_clip_empty_or_missing_path_yields_synthesized_chime(sound_path):
-    # make_ack_chime_mp3 is deterministic, so the fallback is byte-comparable.
-    assert build_ack_clip(sound_path) == ("audio/mpeg", make_ack_chime_mp3())
+    # make_ack_chime_wav is deterministic, so the fallback is byte-comparable.
+    assert build_ack_clip(sound_path) == ("audio/wav", make_ack_chime_wav())
 
 
-def test_build_ack_clip_corrupt_wav_falls_back_to_synthesized_chime(tmp_path):
-    # A .wav file that is not actually a WAV must NOT raise — playback must never
-    # go silent — and falls back to the synthesized chime.
-    bad = tmp_path / "chime.wav"
-    bad.write_bytes(b"garbage")
-    assert build_ack_clip(str(bad)) == ("audio/mpeg", make_ack_chime_mp3())
-
-
-def test_build_ack_clip_wav_is_transcoded_to_mp3(tmp_path):
-    wav = _make_wav()
-    p = tmp_path / "chime.wav"
-    p.write_bytes(wav)
-    mime, audio = build_ack_clip(str(p))
-    assert mime == "audio/mpeg"
-    assert audio  # non-empty
-    assert audio != wav        # transcoded, not served verbatim
-    assert audio[0] == 0xFF    # MP3 frame sync byte
-
-
-def test_build_ack_clip_uppercase_wav_extension_also_transcoded(tmp_path):
+@pytest.mark.parametrize("filename", ["chime.wav", "chime.WAV"])
+def test_build_ack_clip_wav_served_as_is(tmp_path, filename):
     # Extension matching is case-insensitive: "chime.WAV" is still a WAV.
     wav = _make_wav()
-    p = tmp_path / "chime.WAV"
+    p = tmp_path / filename
     p.write_bytes(wav)
-    mime, audio = build_ack_clip(str(p))
-    assert mime == "audio/mpeg"
-    assert audio and audio != wav
-    assert audio[0] == 0xFF
+    assert build_ack_clip(str(p)) == ("audio/wav", wav)
 
 
-def test_build_ack_clip_flac_served_verbatim(tmp_path):
-    raw = b"fLaC-not-really-flac"
-    p = tmp_path / "chime.flac"
-    p.write_bytes(raw)
-    assert build_ack_clip(str(p)) == ("audio/flac", raw)
+def _make_24bit_wav() -> bytes:
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(3)
+        wf.setframerate(16000)
+        wf.writeframes(b"\x00\x00\x00" * 100)
+    return buf.getvalue()
 
 
-@pytest.mark.parametrize("filename", ["chime.mp3", "chime.xyz"])
-def test_build_ack_clip_mp3_and_unknown_ext_served_verbatim(tmp_path, filename):
-    # mp3 (and any unknown extension) is served verbatim as audio/mpeg.
-    raw = b"\xff\xf3raw-bytes"
+@pytest.mark.parametrize(
+    "filename,raw",
+    [
+        ("chime.wav", b"garbage"),       # not actually a WAV
+        ("chime.wav", _make_24bit_wav()),  # the device server plays 16-bit only
+        ("chime.mp3", b"\xff\xf3raw"),     # chimes are WAV only
+        ("chime.flac", b"fLaC"),
+    ],
+)
+def test_build_ack_clip_unusable_file_falls_back_to_synthesized_chime(tmp_path, filename, raw):
+    # Playback must never go silent: anything but a 16-bit WAV falls back.
     p = tmp_path / filename
     p.write_bytes(raw)
-    assert build_ack_clip(str(p)) == ("audio/mpeg", raw)
+    assert build_ack_clip(str(p)) == ("audio/wav", make_ack_chime_wav())
 
 
 def test_split_sentences_basic():
@@ -334,7 +260,7 @@ def test_yandex_backend_requires_api_key():
 
 
 @respx.mock
-async def test_yandex_synthesize_posts_mp3_and_returns_audio():
+async def test_yandex_synthesize_posts_pcm_and_returns_audio():
     import base64
     import json
 
@@ -350,14 +276,16 @@ async def test_yandex_synthesize_posts_mp3_and_returns_audio():
         # Canonical LLM->TTS text: the model's own "+vowel" stress notation,
         # which is also Yandex SpeechKit's native markup.
         mime, audio = await backend.synthesize("прив+ет", "ru")
-    assert mime == "audio/mpeg"
+    assert mime == "audio/pcm;rate=48000"
     assert audio == audio_bytes
     req = route.calls.last.request
     assert req.headers["Authorization"] == "Api-Key k"
     sent = json.loads(route.calls.last.request.content)
     assert {"voice": "zahar"} in sent["hints"]
     assert {"role": "neutral"} in sent["hints"]
-    assert sent["outputAudioSpec"]["containerAudio"]["containerAudioType"] == "MP3"
+    assert sent["outputAudioSpec"] == {
+        "rawAudio": {"audioEncoding": "LINEAR16_PCM", "sampleRateHertz": 48000}
+    }
     assert "прив+ет" in sent["text"]   # "+vowel" markup passes through untouched
 
 
@@ -388,7 +316,7 @@ async def test_yandex_synthesize_chunks_long_text_and_concatenates_audio():
                                    timeout=10)
         mime, audio = await backend.synthesize(_LONG_REPLY, "ru")
 
-    assert mime == "audio/mpeg"
+    assert mime == "audio/pcm;rate=48000"
     # (a) one POST per chunk.
     assert route.call_count == num_calls
     # (b) every request stays within the v3 250-char limit.
@@ -439,6 +367,8 @@ class _StubVoice:
     write a default number of frames. synthesize(sentence) is the streaming
     generator counterpart, yielding _StubAudioChunk blocks driven by the same maps."""
 
+    config = SimpleNamespace(sample_rate=_STUB_RATE)
+
     def __init__(self, frames_for=None, raises=(), default_frames=10):
         self.frames_for = frames_for or {}
         self.raises = set(raises)
@@ -464,8 +394,7 @@ class _StubVoice:
 
 
 def _synth_wav(backend, text):
-    """Run _synth and return its raw WAV output (the backend's native format
-    since R8 — no MP3 transcode in synthesis), so the silence padding / frame
+    """Run _synth and return its raw WAV output, so the silence padding / frame
     alignment is observable at the byte level."""
     return backend._synth(text)
 
@@ -533,9 +462,8 @@ def test_synth_empty_frames_fragment_contributes_no_gap():
 
 
 async def test_piper_synthesize_returns_native_wav():
-    # R8 contract: the backend returns its engine's NATIVE format (audio/wav),
-    # NOT a device-ready MP3 — adapting to the speaker is the delivery
-    # boundary's job (audio_codec.to_playable in pipeline.serve_audio).
+    # The buffered path returns the engine's NATIVE format (audio/wav); adapting to
+    # the device is the device server's job.
     voice = _StubVoice(default_frames=5)
     backend = PiperTtsBackend.from_voice(voice, sentence_silence=0.0)
 
@@ -549,48 +477,38 @@ async def test_piper_synthesize_returns_native_wav():
         assert r.readframes(r.getnframes()) == b"\x11\x22" * 5
 
 
-async def test_piper_synthesize_stream_yields_mp3():
-    # Native streaming: multi-sentence input -> audio/mpeg with real (lameenc)
-    # MP3 bytes flowing incrementally. The concatenated stream is a valid MP3.
+async def test_piper_synthesize_stream_yields_pcm_per_sentence():
+    # Native streaming: one raw PCM block per sentence at the voice's rate, the
+    # inter-sentence silence prepended to every block after the first.
     voice = _StubVoice(default_frames=200)
-    backend = PiperTtsBackend.from_voice(voice, sentence_silence=0.0)
+    backend = PiperTtsBackend.from_voice(voice, sentence_silence=0.1)
 
     mime, chunks = await backend.synthesize_stream("Раз. Два.", "ru")
     got = [c async for c in chunks]
 
-    assert mime == "audio/mpeg"
-    assert got  # at least one MP3 block was emitted
-    joined = b"".join(got)
-    assert joined  # non-empty MP3 byte stream
-    assert joined[0] == 0xFF  # MP3 frame sync byte (like test_wav_to_mp3_produces_mp3_frame)
+    assert mime == f"audio/pcm;rate={_STUB_RATE}"
+    speech = b"\x11\x22" * 200
+    assert got == [speech, b"\x00" * (int(_STUB_RATE * 0.1) * 2) + speech]
 
 
-async def test_piper_synthesize_stream_unvoiceable_empty_stream_no_encoder():
+async def test_piper_synthesize_stream_unvoiceable_empty_stream():
     # "…" is dropped by split_sentences -> nothing to synthesize: the stream yields
-    # NOTHING and no encoder is ever built (no trailing flush frames either).
+    # NOTHING.
     voice = _StubVoice(default_frames=5)
     backend = PiperTtsBackend.from_voice(voice, sentence_silence=0.4)
 
     mime, chunks = await backend.synthesize_stream("…", "ru")
-    got = [c async for c in chunks]
-
-    assert mime == "audio/mpeg"
-    assert got == []
+    assert [c async for c in chunks] == []
 
 
 async def test_piper_synthesize_stream_skips_raising_sentence():
     # One sentence raises in synthesize() (skip path), the other still produces
-    # audio: the stream is non-empty and valid despite the skipped fragment.
+    # audio: the stream carries only the surviving sentence.
     voice = _StubVoice(frames_for={"Раз.": 200}, raises={"Два."})
     backend = PiperTtsBackend.from_voice(voice, sentence_silence=0.0)
 
-    mime, chunks = await backend.synthesize_stream("Раз. Два.", "ru")
-    got = [c async for c in chunks]
-
-    assert mime == "audio/mpeg"
-    joined = b"".join(got)
-    assert joined  # the surviving sentence still produced MP3
-    assert joined[0] == 0xFF  # MP3 frame sync byte
+    _mime, chunks = await backend.synthesize_stream("Раз. Два.", "ru")
+    assert [c async for c in chunks] == [b"\x11\x22" * 200]
 
 
 # --- Backend-side adaptation chains (canonical "+stress" contract, R3) -------
@@ -695,7 +613,7 @@ async def test_yandex_synthesize_unvoiceable_input_makes_no_request():
                                    timeout=10)
         for text in ("…", ""):
             mime, audio = await backend.synthesize(text, "ru")
-            assert (mime, audio) == ("audio/mpeg", b"")
+            assert (mime, audio) == ("audio/pcm;rate=48000", b"")
     assert not route.called
 
 
@@ -747,13 +665,12 @@ async def test_fishaudio_synthesize_posts_json_and_returns_audio():
 
     audio_bytes = b"\xff\xf3fish-mp3"
     route = respx.post(FISH_TTS_URL).mock(
-        return_value=httpx.Response(200, content=audio_bytes,
-                                    headers={"Content-Type": "audio/mpeg"}))
+        return_value=httpx.Response(200, content=audio_bytes))
     async with httpx.AsyncClient() as client:
         backend = FishAudioTtsBackend(client, api_key="k", reference_id="ref-1",
                                       model="s2-pro", speed=1.2, timeout=10)
         mime, audio = await backend.synthesize("привет", "ru")
-    assert mime == "audio/mpeg"
+    assert mime == "audio/pcm;rate=44100"
     assert audio == audio_bytes
     req = route.calls.last.request
     # Auth is a Bearer key; the TTS model generation travels as a `model` header.
@@ -761,7 +678,7 @@ async def test_fishaudio_synthesize_posts_json_and_returns_audio():
     assert req.headers["model"] == "s2-pro"
     sent = json.loads(req.content)
     assert sent["text"] == "привет"
-    assert sent["format"] == "mp3"
+    assert (sent["format"], sent["sample_rate"]) == ("pcm", 44100)
     assert sent["prosody"]["speed"] == 1.2
     assert sent["reference_id"] == "ref-1"
 
@@ -814,7 +731,7 @@ async def test_fishaudio_synthesize_unvoiceable_input_makes_no_request():
                                       model="s2-pro", speed=1.0, timeout=10)
         for text in ("...", "…", ""):
             mime, audio = await backend.synthesize(text, "ru")
-            assert (mime, audio) == ("audio/mpeg", b"")
+            assert (mime, audio) == ("audio/pcm;rate=44100", b"")
     assert not route.called
 
 
@@ -857,7 +774,7 @@ async def test_fishaudio_synthesize_stream_yields_chunks_with_same_request():
                                       model="s2-pro", speed=1.2, timeout=10)
         mime, chunks = await backend.synthesize_stream("привет", "ru")
         got = [c async for c in chunks]
-    assert mime == "audio/mpeg"
+    assert mime == "audio/pcm;rate=44100"
     # Chunks are delivered exactly as the server yields them, in order.
     assert got == [b"\xff\xf3aa", b"bbb"]
     # The streamed request carries the SAME headers/payload as the buffered one.
@@ -866,7 +783,7 @@ async def test_fishaudio_synthesize_stream_yields_chunks_with_same_request():
     assert req.headers["model"] == "s2-pro"
     sent = json.loads(req.content)
     assert sent["text"] == "привет"
-    assert sent["format"] == "mp3"
+    assert (sent["format"], sent["sample_rate"]) == ("pcm", 44100)
     assert sent["prosody"]["speed"] == 1.2
     assert sent["reference_id"] == "ref-1"
 
@@ -888,6 +805,28 @@ async def test_fishaudio_synthesize_stream_error_raises_before_iteration():
 
 
 @respx.mock
+async def test_fishaudio_stream_closed_before_reading_releases_the_response():
+    # Closing the stream before the first chunk (the device could not play) must
+    # still close the open streamed response.
+    class _Body(httpx.AsyncByteStream):
+        closed = False
+
+        async def __aiter__(self):
+            yield b"\x01\x00"
+
+        async def aclose(self):
+            _Body.closed = True
+
+    respx.post(FISH_TTS_URL).mock(return_value=httpx.Response(200, stream=_Body()))
+    async with httpx.AsyncClient() as client:
+        backend = FishAudioTtsBackend(client, api_key="k", reference_id="",
+                                      model="s2-pro", speed=1.0, timeout=10)
+        _mime, chunks = await backend.synthesize_stream("привет", "ru")
+        await chunks.aclose()
+    assert _Body.closed
+
+
+@respx.mock
 async def test_fishaudio_synthesize_stream_unvoiceable_empty_stream_no_request():
     route = respx.post(FISH_TTS_URL).mock(
         return_value=httpx.Response(200, content=b"\xff\xf3mp3"))
@@ -896,7 +835,7 @@ async def test_fishaudio_synthesize_stream_unvoiceable_empty_stream_no_request()
                                       model="s2-pro", speed=1.0, timeout=10)
         mime, chunks = await backend.synthesize_stream("…", "ru")
         got = [c async for c in chunks]
-    assert (mime, got) == ("audio/mpeg", [])
+    assert (mime, got) == ("audio/pcm;rate=44100", [])
     assert not route.called
 
 
@@ -928,9 +867,9 @@ async def test_yandex_synthesize_stream_yields_one_audio_block_per_post_in_order
         assert route.call_count == 1
         got = [c async for c in chunks]
 
-    assert mime == "audio/mpeg"
+    assert mime == "audio/pcm;rate=48000"
     assert route.call_count == num_calls
-    # One decoded MP3 block per POST, yielded in request order.
+    # One decoded audio block per POST, yielded in request order.
     assert got == audios
 
 
@@ -949,6 +888,28 @@ async def test_yandex_synthesize_stream_first_request_error_raises_before_iterat
 
 
 @respx.mock
+async def test_yandex_stream_closed_before_reading_releases_the_response():
+    # Same as the Fish twin: the eagerly opened first response is closed even when
+    # the stream is closed before its first chunk.
+    class _Body(httpx.AsyncByteStream):
+        closed = False
+
+        async def __aiter__(self):
+            yield b"{}"
+
+        async def aclose(self):
+            _Body.closed = True
+
+    respx.post(YANDEX_V3_URL).mock(return_value=httpx.Response(200, stream=_Body()))
+    async with httpx.AsyncClient() as client:
+        backend = YandexTtsBackend(client, api_key="k", voice="zahar",
+                                   role="neutral", speed=1.0, timeout=10)
+        _mime, chunks = await backend.synthesize_stream("привет", "ru")
+        await chunks.aclose()
+    assert _Body.closed
+
+
+@respx.mock
 async def test_yandex_synthesize_stream_unvoiceable_empty_stream_no_request():
     route = respx.post(YANDEX_URL).mock(
         return_value=httpx.Response(200, text="{}",
@@ -958,7 +919,7 @@ async def test_yandex_synthesize_stream_unvoiceable_empty_stream_no_request():
                                    role="neutral", speed=1.0, timeout=10)
         mime, chunks = await backend.synthesize_stream("…", "ru")
         got = [c async for c in chunks]
-    assert (mime, got) == ("audio/mpeg", [])
+    assert (mime, got) == ("audio/pcm;rate=48000", [])
     assert not route.called
 
 
@@ -983,10 +944,10 @@ async def test_yandex_synthesize_stream_decodes_multiple_audiochunks_in_one_resp
                                    role="neutral", speed=1.0, timeout=10)
         mime, chunks = await backend.synthesize_stream("Привет. Как дела?", "ru")
         got = [c async for c in chunks]
-    assert mime == "audio/mpeg"
+    assert mime == "audio/pcm;rate=48000"
     # One short reply -> exactly one POST...
     assert route.call_count == 1
-    # ...but three separate decoded MP3 blocks, in arrival order.
+    # ...but three separate decoded audio blocks, in arrival order.
     assert got == blocks
 
 
@@ -1085,10 +1046,10 @@ async def test_default_synthesize_stream_adapter_yields_single_chunk():
     # single-chunk stream, so every backend is streamable.
     class _Buffered(TtsBackend):
         async def synthesize(self, text, lang="ru"):
-            return ("audio/mpeg", b"WHOLE-CLIP")
+            return ("audio/wav", b"WHOLE-CLIP")
 
     mime, chunks = await _Buffered().synthesize_stream("привет")
-    assert mime == "audio/mpeg"
+    assert mime == "audio/wav"
     assert [c async for c in chunks] == [b"WHOLE-CLIP"]
 
 
@@ -1097,10 +1058,10 @@ async def test_default_synthesize_stream_adapter_skips_empty_audio():
     # empty chunk.
     class _Silent(TtsBackend):
         async def synthesize(self, text, lang="ru"):
-            return ("audio/mpeg", b"")
+            return ("audio/wav", b"")
 
     mime, chunks = await _Silent().synthesize_stream("…")
-    assert mime == "audio/mpeg"
+    assert mime == "audio/wav"
     assert [c async for c in chunks] == []
 
 
@@ -1243,8 +1204,8 @@ def test_silero_synth_all_unpronounceable_returns_valid_silent_clip():
 
 
 async def test_silero_synthesize_returns_native_wav():
-    # R8 contract: the backend returns its engine's NATIVE format (audio/wav) at
-    # the configured sample rate, NOT a device-ready MP3.
+    # The backend returns its engine's NATIVE format (audio/wav) at the configured
+    # sample rate.
     rate = 24000
     model = _StubSileroModel(default_samples=5)
     backend = SileroTtsBackend.from_model(model, sample_rate=rate, sentence_silence=0.0)

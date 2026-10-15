@@ -14,18 +14,12 @@ from src.audio_prep import (
 )
 from src.core_config import (
     AckConfig,
-    AudioConfig,
     ContextConfig,
     CoreConfig,
     PromptConfig,
 )
 from src.llm import LlmResult
-from src.pipeline import (
-    SAMPLE_RATE,
-    CaptureBusyError,
-    CaptureEmptyError,
-    Pipeline,
-)
+from src.pipeline import SAMPLE_RATE, Pipeline
 from src.llm_text import clean_llm_output
 from src.pipeline_events import StageEvent
 from src.plugins.llm.base import LlmConfig
@@ -34,10 +28,7 @@ from src.prompt_store import PromptStore
 from src.runs_store import _LIST_COLS
 from src.runtime import Runtime
 from src.stage_errors import StageError
-from src.tts import TtsBackend
-
-PUBLIC_BASE_URL = "http://10.0.0.10:8200"
-
+from src.tts import OwnedChunks, TtsBackend, pcm_mime
 
 class FakeSvc:
     """Tiny ConfigService stand-in for the Runtime: just exposes a live CoreConfig
@@ -78,47 +69,17 @@ class FakeTtsBackend(TtsBackend):
         return (self.mime, self.audio)
 
 
-class _FakeStreamFeed:
-    """StreamFeed double mirroring its write/close/abort surface. close() lands
-    the joined clip in the owning FakeAudioServer's `calls` list, so existing
-    assertions on `calls` keep their meaning (the pipeline awaits the feed task
-    before the run record is written)."""
+class FakePlayer:
+    """The device's play hook: drains each clip (bytes or async chunks) and records
+    (audio, mime), so tests can assert on what reached the device."""
 
-    def __init__(self, server, content_type):
-        self._server = server
-        self._content_type = content_type
-        self.chunks = []
-        self.done = False
-        self.failed = False
-
-    def write(self, chunk):
-        if chunk:
-            self.chunks.append(chunk)
-
-    def close(self):
-        self.done = True
-        self._server.calls.append((b"".join(self.chunks), self._content_type))
-
-    def abort(self):
-        self.done = True
-        self.failed = True
-
-
-class FakeAudioServer:
     def __init__(self):
-        self.calls = []    # records (data, content_type) for assertions
-        self.streams = []  # the _FakeStreamFeed of each put_stream() call
+        self.calls = []
 
-    def put(self, data, content_type="audio/mpeg"):
-        self.calls.append((data, content_type))
-        return "abc123"
-
-    def put_stream(self, content_type="audio/mpeg"):
-        # Mirror of AudioServer.put_stream for the streaming TTS path: same id
-        # as put() so URL assertions hold for both paths.
-        feed = _FakeStreamFeed(self, content_type)
-        self.streams.append(feed)
-        return "abc123", feed
+    async def __call__(self, mime, audio):
+        if not isinstance(audio, (bytes, bytearray)):
+            audio = b"".join([c async for c in audio])
+        self.calls.append((bytes(audio), mime))
 
 
 class FakeRunsStore:
@@ -179,10 +140,9 @@ def make_pipeline(tmp_path, monkeypatch, name="dev", stt_text="распозна�
     # attribute, so isolate per-test context files by monkeypatching DATA_DIR to
     # tmp_path BEFORE the pipeline (and its _context_path) is built.
     monkeypatch.setattr("src.config_store.DATA_DIR", str(tmp_path))
-    audio_server = FakeAudioServer()
-    # The end-of-phrase ack chime is ON by default in CoreConfig, but it shares the
-    # announce channel that the filler tests inspect; default it OFF here so existing
-    # tests see only the announcements they assert on, and let ack tests opt in (ack=True).
+    # The end-of-phrase ack chime is ON by default in CoreConfig, but it is one more
+    # play() call; default it OFF here so tests see only the plays they assert on,
+    # and let ack tests opt in (ack=True).
     # The pipeline now assembles the system prompt itself (build_system_prompt in
     # _run reads the active PromptStore profile), so seed a tmp store from a tmp
     # legacy prompt file to keep tests hermetic.
@@ -190,7 +150,6 @@ def make_pipeline(tmp_path, monkeypatch, name="dev", stt_text="распозна�
     prompt_path.write_text("PROMPT BODY <<<<<TDW>>>>>", encoding="utf-8")
     prompt_store = PromptStore(str(tmp_path / "prompts.db"), seed_path=str(prompt_path))
     core = CoreConfig(
-        audio=AudioConfig(public_base_url=PUBLIC_BASE_URL),
         context=ContextConfig(),
         ack=AckConfig(enabled=ack),
         prompt=PromptConfig(system_prompt_path=str(prompt_path)),
@@ -209,7 +168,6 @@ def make_pipeline(tmp_path, monkeypatch, name="dev", stt_text="распозна�
         # Default hub double: the filler tests' slow tools are slow, everything
         # else (set_light, ...) is fast — the same shape the real ToolHub exposes.
         hub=hub or FakeToolHub(slow_tools={"search_events", "google", "get_current_weather"}),
-        audio_server=audio_server,
         runs_store=runs_store,
         run_events=run_events,
         prompt_store=prompt_store,
@@ -217,6 +175,8 @@ def make_pipeline(tmp_path, monkeypatch, name="dev", stt_text="распозна�
     pipeline = Pipeline(name, rt)
     events = []
     pipeline.send_event = lambda et, data: events.append((et, data))
+    pipeline.play = FakePlayer()
+    pipeline.has_speaker = True
     return pipeline, events
 
 
@@ -304,11 +264,17 @@ def assert_all_str(events):
             assert isinstance(v, str)
 
 
+async def settle(pipeline):
+    """Wait for the run that a finalizing on_audio started as its own task."""
+    if pipeline._run_task is not None:
+        await pipeline._run_task
+
+
 async def test_happy_path(tmp_path, monkeypatch):
     patch_llm(monkeypatch, reply="готово")
     pipeline, events = make_pipeline(tmp_path, monkeypatch, stt_text="включи свет")
 
-    assert await pipeline.on_start("cid", 0, None, None) == 0
+    await pipeline.on_start("cid", None)
     await pipeline.on_audio(b"\x01\x02" * 100)
     await pipeline.on_stop(False)
 
@@ -321,57 +287,14 @@ async def test_happy_path(tmp_path, monkeypatch):
         StageEvent.INTENT_START,
         StageEvent.INTENT_END,
         StageEvent.TTS_START,
-        StageEvent.TTS_END,
         StageEvent.RUN_END,
     ]
 
     data = dict(events)
     assert data[StageEvent.STT_END] == {"text": "включи свет"}
     assert data[StageEvent.TTS_START] == {"text": "готово"}
-    url = data[StageEvent.TTS_END]["url"]
-    assert url.endswith("/tts/abc123.mp3")
-    assert url.startswith(PUBLIC_BASE_URL)
-    # MP3 backend -> audio_server stored the audio/mpeg mime.
-    assert pipeline.audio_server.calls == [(b"MP3", "audio/mpeg")]
-    assert_all_str(events)
-
-
-async def test_happy_path_wav_backend_served_as_mp3(tmp_path, monkeypatch):
-    # The whole point of R8: a WAV-producing backend (like Piper) returns its
-    # NATIVE format, and the delivery boundary (serve_audio -> to_playable)
-    # transcodes it — the audio server holds audio/mpeg and the url ends .mp3.
-    patch_llm(monkeypatch, reply="готово")
-    # A real (tiny, silent) WAV: to_playable parses it for the MP3 transcode.
-    buf = io.BytesIO()
-    with wave.open(buf, "wb") as wf:
-        wf.setnchannels(1)
-        wf.setsampwidth(2)
-        wf.setframerate(16000)
-        wf.writeframes(b"\x00\x00" * 160)
-    wav_bytes = buf.getvalue()
-    pipeline, events = make_pipeline(
-        tmp_path, monkeypatch,
-        stt_text="включи свет",
-        tts_backend=FakeTtsBackend(mime="audio/wav", audio=wav_bytes),
-        runs_store=(runs := FakeRunsStore()),
-    )
-
-    await pipeline.on_start("cid", 0, None, None)
-    await pipeline.on_audio(b"\x01\x02" * 100)
-    await pipeline.on_stop(False)
-
-    data = dict(events)
-    url = data[StageEvent.TTS_END]["url"]
-    assert url.endswith("/tts/abc123.mp3")
-    # The cache holds the TRANSCODED clip, not the backend's native WAV.
-    [(served_audio, served_mime)] = pipeline.audio_server.calls
-    assert served_mime == "audio/mpeg"
-    assert served_audio[0] == 0xFF  # MP3 frame sync byte
-    assert served_audio != wav_bytes
-    # The run record reports what the speaker downloads (post-transcode).
-    rec = runs.records[-1]
-    assert rec["audio_fmt"] == "mp3"
-    assert rec["audio_bytes"] == len(served_audio)
+    # The synthesized clip reached the device's play hook with the backend's mime.
+    assert pipeline.play.calls == [(b"MP3", "audio/mpeg")]
     assert_all_str(events)
 
 
@@ -379,7 +302,7 @@ async def test_empty_audio(tmp_path, monkeypatch):
     patch_llm(monkeypatch)
     pipeline, events = make_pipeline(tmp_path, monkeypatch)
 
-    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_start("cid", None)
     await pipeline.on_stop(False)
 
     assert types_of(events) == [
@@ -395,7 +318,7 @@ async def test_empty_stt(tmp_path, monkeypatch):
     patch_llm(monkeypatch)
     pipeline, events = make_pipeline(tmp_path, monkeypatch, stt_text="")
 
-    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_start("cid", None)
     await pipeline.on_audio(b"\x01\x02" * 100)
     await pipeline.on_stop(False)
 
@@ -473,7 +396,7 @@ async def test_mic_auto_gain_boosts_vad_feed_but_buffers_raw(tmp_path, monkeypat
     backend = RecordingVadBackend()
     pipeline.rt.vad_backend = backend
 
-    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_start("cid", None)
     peak = 3000
     loud = _const_chunk(peak)
     quiet = _const_chunk(100)
@@ -497,7 +420,7 @@ async def test_mic_auto_gain_off_feeds_verbatim_and_tracks_no_peak(tmp_path, mon
     backend = RecordingVadBackend()
     pipeline.rt.vad_backend = backend
 
-    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_start("cid", None)
     loud = _const_chunk(3000)
     await pipeline.on_audio(loud)
 
@@ -515,7 +438,7 @@ async def test_mic_auto_gain_preroll_below_floor_fed_verbatim(tmp_path, monkeypa
     backend = RecordingVadBackend()
     pipeline.rt.vad_backend = backend
 
-    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_start("cid", None)
     preroll = _const_chunk(VAD_BOOST_FLOOR - 20)
     await pipeline.on_audio(preroll)
 
@@ -533,11 +456,11 @@ async def test_mic_auto_gain_peak_resets_between_runs(tmp_path, monkeypatch):
     backend = RecordingVadBackend()
     pipeline.rt.vad_backend = backend
 
-    await pipeline.on_start("cid1", 0, None, None)
+    await pipeline.on_start("cid1", None)
     await pipeline.on_audio(_const_chunk(3000))
     assert pipeline._vad_peak == 3000
 
-    await pipeline.on_start("cid2", 0, None, None)
+    await pipeline.on_start("cid2", None)
     quiet = _const_chunk(VAD_BOOST_FLOOR - 20)  # would be boosted at peak=3000
     await pipeline.on_audio(quiet)
 
@@ -550,7 +473,7 @@ async def test_pipelines_are_independent(tmp_path, monkeypatch):
     a, _ = make_pipeline(tmp_path, monkeypatch, name="a")
     b, _ = make_pipeline(tmp_path, monkeypatch, name="b")
 
-    await a.on_start("cid", 0, None, None)
+    await a.on_start("cid", None)
     await a.on_audio(b"\x01\x02" * 100)
 
     # Pushing audio only into "a" must not touch "b".
@@ -573,7 +496,6 @@ FULL_SEQUENCE = [
     StageEvent.INTENT_START,
     StageEvent.INTENT_END,
     StageEvent.TTS_START,
-    StageEvent.TTS_END,
     StageEvent.RUN_END,
 ]
 
@@ -585,9 +507,10 @@ async def test_vad_endpoint_finalize(tmp_path, monkeypatch):
     # 3 speech frames (>= 40 ms min) then 6 silence frames (>= 100 ms) -> endpoint.
     install_fake_vad(pipeline, [True, True, True, False, False, False, False, False, False])
 
-    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_start("cid", None)
     # 9 frames in one chunk so all are processed in a single on_audio call.
     await pipeline.on_audio(FRAME * 9)
+    await settle(pipeline)
 
     assert types_of(events) == FULL_SEQUENCE
     assert pipeline._finalized is True
@@ -606,9 +529,10 @@ async def test_vad_maxlen_finalize(tmp_path, monkeypatch):
     # Always speech: no trailing silence, so only the max-length cap can finalize.
     install_fake_vad(pipeline, [True])
 
-    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_start("cid", None)
     # max_utterance_ms=400 -> 20 frames; feed 21 to cross the cap.
     await pipeline.on_audio(FRAME * 21)
+    await settle(pipeline)
 
     assert pipeline._finalized is True
     assert StageEvent.RUN_END in types_of(events)
@@ -640,9 +564,10 @@ async def test_vad_no_speech_finalize(tmp_path, monkeypatch):
 
     pipeline.stt_backend.transcribe = spy_transcribe
 
-    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_start("cid", None)
     # no_speech_timeout_ms=200 -> 10 frames; feed 11 to cross it.
     await pipeline.on_audio(FRAME * 11)
+    await settle(pipeline)
 
     assert pipeline._finalized is True
     # STT must never run on a no-speech utterance.
@@ -679,9 +604,10 @@ async def test_no_speech_run_is_recorded_as_empty(tmp_path, monkeypatch):
 
     pipeline.stt_backend.transcribe = spy_transcribe
 
-    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_start("cid", None)
     # no_speech_timeout_ms=200 -> 10 frames; feed 11 to cross it.
     await pipeline.on_audio(FRAME * 11)
+    await settle(pipeline)
 
     # STT never ran, but the run is recorded once as an empty run.
     assert stt_calls == []
@@ -706,9 +632,10 @@ async def test_run_broadcast_on_no_speech(tmp_path, monkeypatch):
     # Never any speech: only the no-speech timeout can finalize.
     install_fake_vad(pipeline, [False])
 
-    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_start("cid", None)
     # no_speech_timeout_ms=200 -> 10 frames; feed 11 to cross it.
     await pipeline.on_audio(FRAME * 11)
+    await settle(pipeline)
 
     # The empty run is recorded once AND broadcast once to live subscribers.
     assert len(store.records) == 1
@@ -736,12 +663,12 @@ async def test_vad_backend_hot_swap_applies_on_next_run(tmp_path, monkeypatch):
 
     first, second = RecordingBackend(), RecordingBackend()
     pipeline.rt.vad_backend = first
-    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_start("cid", None)
     assert (first.opened, second.opened) == (1, 0)
 
     # Hot-swap: the next run opens its session from the NEW backend.
     pipeline.rt.vad_backend = second
-    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_start("cid", None)
     assert (first.opened, second.opened) == (1, 1)
 
 
@@ -762,7 +689,6 @@ async def test_finalize_once_race(tmp_path, monkeypatch):
         StageEvent.INTENT_START,
         StageEvent.INTENT_END,
         StageEvent.TTS_START,
-        StageEvent.TTS_END,
         StageEvent.RUN_END,
     ]
 
@@ -796,7 +722,7 @@ async def test_history_flows_across_runs(tmp_path, monkeypatch):
     pipeline, _ = make_pipeline(tmp_path, monkeypatch, name="hist", stt_text="первый вопрос")
 
     # Run 1.
-    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_start("cid", None)
     await pipeline.on_audio(b"\x01\x02" * 100)
     await pipeline.on_stop(False)
 
@@ -819,7 +745,7 @@ async def test_history_flows_across_runs(tmp_path, monkeypatch):
     # Run 2 on the same pipeline instance with a different utterance.
     # on_start resets all per-run state (including _finalized).
     pipeline.stt_backend.text = "второй вопрос"
-    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_start("cid", None)
     await pipeline.on_audio(b"\x01\x02" * 100)
     await pipeline.on_stop(False)
 
@@ -836,7 +762,7 @@ async def test_run_recorded_on_happy_path(tmp_path, monkeypatch):
     store = FakeRunsStore()
     pipeline, _ = make_pipeline(tmp_path, monkeypatch, stt_text="включи свет", runs_store=store)
 
-    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_start("cid", None)
     await pipeline.on_audio(b"\x01\x02" * 100)
     await pipeline.on_stop(False)
 
@@ -852,15 +778,14 @@ async def test_run_recorded_on_happy_path(tmp_path, monkeypatch):
     assert rec["t_vad"] > 0
     assert "t_stt" in rec and "t_llm" in rec and "t_tts" in rec
     assert rec["audio_bytes"] == len(b"MP3")
-    assert rec["audio_fmt"] == "mp3"
+    assert rec["audio_fmt"] == "mpeg"
     assert rec["error_stage"] is None
 
 
 async def test_tts_audio_stored_on_happy_path(tmp_path, monkeypatch):
     # A normal voice run stores the GENERATED TTS reply audio (native backend
-    # format + mime) keyed by the new run_id. Default stream_tts=True, so this
-    # exercises the streaming + tee path: the playable MP3 clip streams through
-    # serve_audio_stream and the tee keeps a copy for the store.
+    # format + mime) keyed by the new run_id: the clip streams to the play hook
+    # and the tee keeps a copy for the store.
     patch_llm(monkeypatch, reply="готово")
     store = FakeRunsStore()
     pipeline, _ = make_pipeline(
@@ -869,7 +794,7 @@ async def test_tts_audio_stored_on_happy_path(tmp_path, monkeypatch):
         runs_store=store,
     )
 
-    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_start("cid", None)
     await pipeline.on_audio(b"\x01\x02" * 100)
     await pipeline.on_stop(False)
 
@@ -881,30 +806,30 @@ async def test_tts_audio_stored_on_happy_path(tmp_path, monkeypatch):
     assert store.get_tts_audio(run_id) == (b"MP3", "audio/mpeg")
 
 
-async def test_tts_audio_stored_native_wav_before_transcode(tmp_path, monkeypatch):
-    # A WAV-native backend (Piper-like) can't stream from mid-stream: the run
-    # drains the iterator and transcodes to MP3 for the speaker. The stored TTS
-    # audio must be the NATIVE WAV captured by the tee BEFORE the transcode.
+async def test_tts_audio_raw_pcm_stored_as_wav(tmp_path, monkeypatch):
+    # A raw-PCM backend (Yandex / Fish / Piper streaming): the stored TTS audio is
+    # the native clip in a WAV container at the backend's rate, so the panel can
+    # play it; the record names the native format.
     patch_llm(monkeypatch, reply="готово")
-    buf = io.BytesIO()
-    with wave.open(buf, "wb") as wf:
-        wf.setnchannels(1)
-        wf.setsampwidth(2)
-        wf.setframerate(16000)
-        wf.writeframes(b"\x00\x00" * 160)
-    wav_bytes = buf.getvalue()
+    pcm = b"\x01\x00\x02\x00" * 80
     store = FakeRunsStore()
     pipeline, _ = make_pipeline(
         tmp_path, monkeypatch, stt_text="включи свет",
-        tts_backend=FakeTtsBackend(mime="audio/wav", audio=wav_bytes),
+        tts_backend=FakeTtsBackend(mime="audio/pcm;rate=24000", audio=pcm),
         runs_store=store,
     )
 
-    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_start("cid", None)
     await pipeline.on_audio(b"\x01\x02" * 100)
     await pipeline.on_stop(False)
 
-    assert store.get_tts_audio(1) == (wav_bytes, "audio/wav")
+    audio, mime = store.get_tts_audio(1)
+    assert mime == "audio/wav"
+    with wave.open(io.BytesIO(audio), "rb") as w:
+        assert (w.getframerate(), w.getnchannels(), w.getsampwidth()) == (24000, 1, 2)
+        assert w.readframes(w.getnframes()) == pcm
+    assert pipeline.play.calls == [(pcm, "audio/pcm;rate=24000")]
+    assert store.records[0]["audio_fmt"] == "pcm"
 
 
 async def test_run_accentizes_tts_text_but_keeps_llm_text_original(tmp_path, monkeypatch):
@@ -931,7 +856,7 @@ async def test_run_accentizes_tts_text_but_keeps_llm_text_original(tmp_path, mon
         tts_backend=tts, runs_store=store, stress_backend=FakeAccentizer(),
     )
 
-    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_start("cid", None)
     await pipeline.on_audio(b"\x01\x02" * 100)
     await pipeline.on_stop(False)
 
@@ -971,7 +896,7 @@ async def test_run_accent_noop_leaves_stress_text_empty(tmp_path, monkeypatch):
         tts_backend=tts, runs_store=store, stress_backend=NoopAccentizer(),
     )
 
-    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_start("cid", None)
     await pipeline.on_audio(b"\x01\x02" * 100)
     await pipeline.on_stop(False)
 
@@ -1001,7 +926,7 @@ async def test_run_records_llm_result_observability_fields(tmp_path, monkeypatch
     store = FakeRunsStore()
     pipeline, _ = make_pipeline(tmp_path, monkeypatch, stt_text="включи свет", runs_store=store)
 
-    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_start("cid", None)
     await pipeline.on_audio(b"\x01\x02" * 100)
     await pipeline.on_stop(False)
 
@@ -1029,7 +954,7 @@ async def test_llm_error_records_partial_observability(tmp_path, monkeypatch):
     store = FakeRunsStore()
     pipeline, _ = make_pipeline(tmp_path, monkeypatch, stt_text="включи свет", runs_store=store)
 
-    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_start("cid", None)
     await pipeline.on_audio(b"\x01\x02" * 100)
     await pipeline.on_stop(False)
 
@@ -1050,7 +975,7 @@ async def test_utterance_audio_stored_on_happy_path(tmp_path, monkeypatch):
     store = FakeRunsStore()
     pipeline, _ = make_pipeline(tmp_path, monkeypatch, stt_text="включи свет", runs_store=store)
 
-    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_start("cid", None)
     await pipeline.on_audio(b"\x01\x02" * 100)
     await pipeline.on_stop(False)
 
@@ -1073,9 +998,10 @@ async def test_utterance_audio_stored_on_no_speech_run(tmp_path, monkeypatch):
     # Never any speech: only the no-speech timeout can finalize.
     install_fake_vad(pipeline, [False])
 
-    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_start("cid", None)
     # no_speech_timeout_ms=200 -> 10 frames; feed 11 to cross it.
     await pipeline.on_audio(FRAME * 11)
+    await settle(pipeline)
 
     # Audio stored even though STT was skipped.
     assert len(store.audio_calls) == 1
@@ -1092,7 +1018,7 @@ async def test_utterance_audio_not_stored_when_disabled(tmp_path, monkeypatch):
     pipeline, _ = make_pipeline(tmp_path, monkeypatch, stt_text="включи свет", runs_store=store)
     pipeline.rt.core.runs.store_audio = False
 
-    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_start("cid", None)
     await pipeline.on_audio(b"\x01\x02" * 100)
     await pipeline.on_stop(False)
 
@@ -1111,7 +1037,7 @@ async def test_run_broadcast_on_happy_path(tmp_path, monkeypatch):
         tmp_path, monkeypatch, stt_text="включи свет", runs_store=store, run_events=hub,
     )
 
-    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_start("cid", None)
     await pipeline.on_audio(b"\x01\x02" * 100)
     await pipeline.on_stop(False)
 
@@ -1140,7 +1066,7 @@ async def test_run_streams_live_stage_updates(tmp_path, monkeypatch):
         tmp_path, monkeypatch, stt_text="включи свет", runs_store=store, run_events=hub,
     )
 
-    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_start("cid", None)
     await pipeline.on_audio(b"\x01\x02" * 100)
     await pipeline.on_stop(False)
 
@@ -1175,9 +1101,10 @@ async def test_no_live_partial_on_no_speech(tmp_path, monkeypatch):
     # Never any speech: only the no-speech timeout can finalize.
     install_fake_vad(pipeline, [False])
 
-    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_start("cid", None)
     # no_speech_timeout_ms=200 -> 10 frames; feed 11 to cross it.
     await pipeline.on_audio(FRAME * 11)
+    await settle(pipeline)
 
     assert len(hub.broadcasts) == 1
     assert not hub.broadcasts[0]["run"].get("live")
@@ -1190,7 +1117,7 @@ async def test_no_broadcast_without_hub(tmp_path, monkeypatch):
     store = FakeRunsStore()
     pipeline, _ = make_pipeline(tmp_path, monkeypatch, stt_text="включи свет", runs_store=store)
 
-    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_start("cid", None)
     await pipeline.on_audio(b"\x01\x02" * 100)
     await pipeline.on_stop(False)
 
@@ -1202,7 +1129,7 @@ async def test_run_recorded_on_empty_stt(tmp_path, monkeypatch):
     store = FakeRunsStore()
     pipeline, _ = make_pipeline(tmp_path, monkeypatch, stt_text="", runs_store=store)
 
-    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_start("cid", None)
     await pipeline.on_audio(b"\x01\x02" * 100)
     await pipeline.on_stop(False)
 
@@ -1225,7 +1152,7 @@ async def test_run_broadcast_on_empty_stt(tmp_path, monkeypatch):
         tmp_path, monkeypatch, stt_text="", runs_store=store, run_events=hub,
     )
 
-    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_start("cid", None)
     await pipeline.on_audio(b"\x01\x02" * 100)
     await pipeline.on_stop(False)
 
@@ -1245,7 +1172,7 @@ async def test_truly_empty_audio_not_recorded(tmp_path, monkeypatch):
     store = FakeRunsStore()
     pipeline, _ = make_pipeline(tmp_path, monkeypatch, runs_store=store)
 
-    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_start("cid", None)
     await pipeline.on_stop(False)
 
     assert store.records == []
@@ -1274,7 +1201,7 @@ async def test_llm_error_then_tts_fail_keeps_error_stage_llm(tmp_path, monkeypat
         runs_store=store,
     )
 
-    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_start("cid", None)
     await pipeline.on_audio(b"\x01\x02" * 100)
     await pipeline.on_stop(False)
 
@@ -1295,7 +1222,7 @@ async def test_llm_stage_error_speaks_reply_error(tmp_path, monkeypatch):
         tmp_path, monkeypatch, stt_text="включи свет", runs_store=store,
     )
 
-    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_start("cid", None)
     await pipeline.on_audio(b"\x01\x02" * 100)
     await pipeline.on_stop(False)
 
@@ -1308,7 +1235,6 @@ async def test_llm_stage_error_speaks_reply_error(tmp_path, monkeypatch):
         StageEvent.INTENT_START,
         StageEvent.INTENT_END,
         StageEvent.TTS_START,
-        StageEvent.TTS_END,
         StageEvent.RUN_END,
     ]
     data = dict(events)
@@ -1329,7 +1255,7 @@ async def test_llm_rate_limit_speaks_reply_rate_limit(tmp_path, monkeypatch):
         tmp_path, monkeypatch, stt_text="привет", runs_store=store,
     )
 
-    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_start("cid", None)
     await pipeline.on_audio(b"\x01\x02" * 100)
     await pipeline.on_stop(False)
 
@@ -1354,7 +1280,7 @@ async def test_llm_stage_error_does_not_append_context(tmp_path, monkeypatch):
     patch_llm(monkeypatch, error=StageError("llm", "boom"))
     pipeline, _ = make_pipeline(tmp_path, monkeypatch, stt_text="привет")
 
-    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_start("cid", None)
     await pipeline.on_audio(b"\x01\x02" * 100)
     await pipeline.on_stop(False)
 
@@ -1373,7 +1299,7 @@ async def test_stt_stage_error_records_error_and_stays_silent(tmp_path, monkeypa
         runs_store=store,
     )
 
-    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_start("cid", None)
     await pipeline.on_audio(b"\x01\x02" * 100)
     await pipeline.on_stop(False)
 
@@ -1387,7 +1313,7 @@ async def test_stt_stage_error_records_error_and_stays_silent(tmp_path, monkeypa
         StageEvent.RUN_END,
     ]
     assert dict(events)[StageEvent.STT_END] == {"text": ""}
-    assert pipeline.audio_server.calls == []  # nothing synthesized/served
+    assert pipeline.play.calls == []  # nothing synthesized/served
     rec = store.records[0]
     assert rec["result"] == "error"
     assert rec["error_stage"] == "STT"
@@ -1406,7 +1332,7 @@ async def test_raw_capture_writes_wav_when_enabled(tmp_path, monkeypatch):
     pipeline.rt.core.capture.dir = str(cap_dir)
 
     pcm = b"\x01\x02" * 100  # 400 bytes -> 200 16-bit frames
-    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_start("cid", None)
     await pipeline.on_audio(pcm)
     await pipeline.on_stop(False)
 
@@ -1430,7 +1356,7 @@ async def test_raw_capture_disabled_by_default_writes_nothing(tmp_path, monkeypa
     pipeline.rt.core.capture.dir = str(cap_dir)
     assert pipeline.rt.core.capture.enabled is False
 
-    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_start("cid", None)
     await pipeline.on_audio(b"\x01\x02" * 100)
     await pipeline.on_stop(False)
 
@@ -1448,137 +1374,6 @@ def _read_wav_bytes(wav_bytes):
             w.getnchannels(), w.getsampwidth(), w.getframerate(),
             w.getnframes(), w.readframes(w.getnframes()),
         )
-
-
-async def test_capture_run_returns_wav_bytes_and_skips_pipeline(tmp_path, monkeypatch):
-    # An armed capture run resolves its Future with the streamed PCM as in-memory
-    # WAV bytes and runs NO STT/LLM/TTS: only RUN_START and RUN_END are emitted,
-    # neither the STT backend nor the LLM is ever called, and NOTHING is written to
-    # the capture dir (the manual capture is ephemeral).
-    cap_dir = tmp_path / "captures"
-    store = FakeRunsStore()
-    pipeline, events = make_pipeline(
-        tmp_path, monkeypatch, name="dev", stt_text="должно быть проигнорировано", runs_store=store,
-    )
-    pipeline.rt.core.capture.dir = str(cap_dir)
-
-    # Track STT/LLM invocation: in capture mode neither must run.
-    stt_calls = []
-    orig_transcribe = pipeline.stt_backend.transcribe
-
-    async def spy_transcribe(pcm):
-        stt_calls.append(pcm)
-        return await orig_transcribe(pcm)
-
-    pipeline.stt_backend.transcribe = spy_transcribe
-    llm_calls = []
-
-    class SpyLlmStage:
-        def __init__(self, backend, hub, cfg):
-            pass
-
-        async def respond(self, req, *, on_filler=None):
-            llm_calls.append(req)
-            return make_llm_result("nope")
-
-    monkeypatch.setattr("src.llm.LlmStage", SpyLlmStage)
-
-    pcm = b"\x01\x02" * 100  # 400 bytes -> 200 16-bit frames
-    future = pipeline.arm_capture(5)
-    assert pipeline._capture_armed is True
-    await pipeline.on_start("cid", 0, None, None)
-    # arming is consumed into the per-run flag.
-    assert pipeline._capture_armed is False
-    assert pipeline._capture_run is True
-    await pipeline.on_audio(pcm)
-    await pipeline.on_stop(False)
-
-    # Only the capture-only event pair, NO STT/INTENT/TTS events.
-    assert types_of(events) == [
-        StageEvent.RUN_START,
-        StageEvent.RUN_END,
-    ]
-    assert stt_calls == [] and llm_calls == []
-    # No run recorded: capture-only never touches the runs store.
-    assert store.records == []
-    # The capture flag is cleared so the next start is a normal run.
-    assert pipeline._capture_run is False
-
-    # The Future resolved with a valid 16k/mono/16-bit WAV matching the PCM.
-    assert future.done()
-    nch, sw, fr, nframes, frames = _read_wav_bytes(future.result())
-    assert (nch, sw, fr) == (1, 2, 16000)
-    assert nframes == len(pcm) // 2  # 2-byte samples
-    assert frames == pcm
-    # Ephemeral: nothing written to the capture dir for the manual path.
-    assert not cap_dir.exists() or list(cap_dir.glob("*.wav")) == []
-
-
-async def test_capture_run_ends_on_deadline(tmp_path, monkeypatch):
-    # When the device never signals stop, the server-side deadline ends the capture
-    # on the next audio chunk and still resolves the Future with WAV bytes + emits
-    # RUN_END — and writes nothing to disk.
-    cap_dir = tmp_path / "captures"
-    pipeline, events = make_pipeline(tmp_path, monkeypatch, name="dev")
-    pipeline.rt.core.capture.dir = str(cap_dir)
-
-    future = pipeline.arm_capture(5)
-    await pipeline.on_start("cid", 0, None, None)
-    # Force the deadline into the past so the next chunk ends the capture.
-    pipeline._capture_deadline = 0.0
-    await pipeline.on_audio(b"\x03\x04" * 50)  # 100 bytes
-
-    assert pipeline._capture_run is False
-    assert types_of(events) == [
-        StageEvent.RUN_START,
-        StageEvent.RUN_END,
-    ]
-    assert future.done()
-    _nch, _sw, _fr, _n, frames = _read_wav_bytes(future.result())
-    assert frames == b"\x03\x04" * 50
-    assert not cap_dir.exists() or list(cap_dir.glob("*.wav")) == []
-
-    # A later device stop must NOT emit anything again (finalize-once).
-    before = len(events)
-    await pipeline.on_stop(False)
-    assert len(events) == before
-
-
-async def test_capture_longer_than_60s_is_not_truncated_at_hard_cap(tmp_path, monkeypatch):
-    # A capture for > 60 s must NOT be cut at the 60 s normal-run HARD_CAP_BYTES:
-    # the capture branch sizes its own cap to (_capture_seconds + 2) s. Drive the
-    # branch with > 60 s of PCM and _capture_seconds = 120, then stop the device and
-    # assert the returned WAV contains ALL streamed bytes (well past HARD_CAP_BYTES).
-    from src.pipeline import HARD_CAP_BYTES, SAMPLE_RATE
-
-    pipeline, events = make_pipeline(tmp_path, monkeypatch, name="dev")
-    pipeline.rt.core.capture.dir = str(tmp_path / "captures")
-
-    future = pipeline.arm_capture(120)  # requested 120 s capture
-    await pipeline.on_start("cid", 0, None, None)
-    assert pipeline._capture_run is True
-    # The capture-specific cap is duration-based, not the 60 s HARD_CAP.
-    assert pipeline._capture_cap_bytes() == (120 + 2) * SAMPLE_RATE * 2
-    assert pipeline._capture_cap_bytes() > HARD_CAP_BYTES
-
-    # Stream ~65 s of PCM in 1 s chunks: more than HARD_CAP_BYTES (60 s) but under the
-    # 122 s capture cap, so none of it may be dropped.
-    one_second = b"\x05\x06" * SAMPLE_RATE  # SAMPLE_RATE * 2 bytes = 1 s of 16-bit PCM
-    total = bytearray()
-    for _ in range(65):
-        await pipeline.on_audio(bytes(one_second))
-        total.extend(one_second)
-    # Still capturing: neither the byte cap nor the deadline has fired.
-    assert pipeline._capture_run is True
-    assert len(total) > HARD_CAP_BYTES  # we really did exceed the 60 s normal cap
-
-    await pipeline.on_stop(False)
-    assert pipeline._capture_run is False
-    assert future.done()
-    _nch, _sw, _fr, _n, frames = _read_wav_bytes(future.result())
-    # ALL streamed bytes survive — not truncated at 60 s HARD_CAP_BYTES.
-    assert frames == bytes(total)
-    assert len(frames) > HARD_CAP_BYTES
 
 
 async def test_normal_run_hard_cap_truncates_at_60s(tmp_path, monkeypatch):
@@ -1604,201 +1399,15 @@ async def test_normal_run_hard_cap_truncates_at_60s(tmp_path, monkeypatch):
 
     pipeline.stt_backend.transcribe = spy
 
-    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_start("cid", None)
     # 65 s worth of PCM in a single chunk -> HARD_CAP fires, buffer trimmed to 60 s.
     await pipeline.on_audio(b"\x07\x08" * (SAMPLE_RATE * 65))
+    await settle(pipeline)
 
     assert pipeline._finalized is True
     assert StageEvent.RUN_END in types_of(events)
     # The transcribed PCM was capped at exactly the 60 s HARD_CAP_BYTES.
     assert captured["len"] == HARD_CAP_BYTES
-
-
-async def test_capture_arming_does_not_affect_normal_run(tmp_path, monkeypatch):
-    # A normal wake-word run on a pipeline that was NEVER armed runs the full
-    # STT->LLM->TTS path unchanged.
-    patch_llm(monkeypatch, reply="готово")
-    cap_dir = tmp_path / "captures"
-    pipeline, events = make_pipeline(tmp_path, monkeypatch, stt_text="включи свет")
-    pipeline.rt.core.capture.dir = str(cap_dir)
-
-    assert pipeline._capture_run is False
-    await pipeline.on_start("cid", 0, None, None)
-    await pipeline.on_audio(b"\x01\x02" * 100)
-    await pipeline.on_stop(False)
-
-    assert types_of(events) == FULL_SEQUENCE
-    # No manual-capture WAV written for a normal run.
-    assert not cap_dir.exists() or list(cap_dir.glob("*_manual_*.wav")) == []
-
-
-async def test_capture_run_after_normal_run_is_isolated(tmp_path, monkeypatch):
-    # Arm only the SECOND run on a reused pipeline: run 1 is a normal full pipeline,
-    # run 2 is capture-only. Confirms arming is per-run and does not leak backwards.
-    patch_llm(monkeypatch, reply="готово")
-    cap_dir = tmp_path / "captures"
-    pipeline, events = make_pipeline(tmp_path, monkeypatch, name="dev", stt_text="включи свет")
-    pipeline.rt.core.capture.dir = str(cap_dir)
-
-    # Run 1: normal.
-    await pipeline.on_start("cid", 0, None, None)
-    await pipeline.on_audio(b"\x01\x02" * 100)
-    await pipeline.on_stop(False)
-    assert types_of(events) == FULL_SEQUENCE
-    events.clear()
-
-    # Run 2: capture-only.
-    pcm = b"\x05\x06" * 80
-    future = pipeline.arm_capture(3)
-    await pipeline.on_start("cid", 0, None, None)
-    await pipeline.on_audio(pcm)
-    await pipeline.on_stop(False)
-    assert types_of(events) == [
-        StageEvent.RUN_START,
-        StageEvent.RUN_END,
-    ]
-    # Capture returns WAV bytes via the Future; nothing is written to disk.
-    assert future.done()
-    _nch, _sw, _fr, _n, frames = _read_wav_bytes(future.result())
-    assert frames == pcm
-    assert not cap_dir.exists() or list(cap_dir.glob("*.wav")) == []
-
-
-async def test_expired_arm_does_not_capture_later_run(tmp_path, monkeypatch):
-    # If the button press is lost / the device never starts, the armed flag
-    # must expire instead of silently turning a later real wake-word run into a
-    # capture-only run. Arm, blow past the arm-arrival deadline, then start a normal
-    # run: it must run the full STT->LLM->TTS path, not capture.
-    patch_llm(monkeypatch, reply="готово")
-    cap_dir = tmp_path / "captures"
-    pipeline, events = make_pipeline(tmp_path, monkeypatch, name="dev", stt_text="включи свет")
-    pipeline.rt.core.capture.dir = str(cap_dir)
-
-    future = pipeline.arm_capture(5)
-    assert pipeline._capture_armed is True
-    # Force the arm-arrival deadline into the past: the press effectively never landed.
-    pipeline._capture_arm_deadline = 0.0
-
-    # A real wake-word run arrives later (with a phrase). It must NOT be captured.
-    await pipeline.on_start("cid", 0, None, "захар")
-    assert pipeline._capture_run is False
-    assert pipeline._capture_armed is False  # stale flag cleared, not consumed
-    # The pending capture Future is failed so a waiting caller doesn't hang.
-    assert future.done()
-    with pytest.raises(RuntimeError):
-        future.result()
-    await pipeline.on_audio(b"\x01\x02" * 100)
-    await pipeline.on_stop(False)
-
-    assert types_of(events) == FULL_SEQUENCE
-    assert not cap_dir.exists() or list(cap_dir.glob("*.wav")) == []
-
-
-async def test_wake_word_run_while_armed_keeps_flag_for_manual_start(tmp_path, monkeypatch):
-    # Between arm_capture() and the button-initiated start, a real wake word
-    # could fire. Its on_start carries a wake_word_phrase, so it must NOT consume the
-    # armed flag: it runs as a normal assistant run, and the flag survives so the
-    # later phraseless manual start still gets captured.
-    patch_llm(monkeypatch, reply="готово")
-    cap_dir = tmp_path / "captures"
-    pipeline, events = make_pipeline(tmp_path, monkeypatch, name="dev", stt_text="включи свет")
-    pipeline.rt.core.capture.dir = str(cap_dir)
-
-    future = pipeline.arm_capture(5)
-    assert pipeline._capture_armed is True
-
-    # A genuine wake-word run sneaks in WITH a phrase while armed.
-    await pipeline.on_start("cid", 0, None, "захар")
-    assert pipeline._capture_run is False           # not captured
-    assert pipeline._capture_armed is True          # flag preserved for the manual start
-    await pipeline.on_audio(b"\x01\x02" * 100)
-    await pipeline.on_stop(False)
-    assert types_of(events) == FULL_SEQUENCE        # ran the full assistant pipeline
-    assert not cap_dir.exists() or list(cap_dir.glob("*.wav")) == []
-    events.clear()
-
-    # Now the genuine manual start arrives (no phrase) and consumes the flag.
-    await pipeline.on_start("cid", 0, None, None)
-    assert pipeline._capture_run is True
-    assert pipeline._capture_armed is False
-    pcm = b"\x07\x08" * 60
-    await pipeline.on_audio(pcm)
-    await pipeline.on_stop(False)
-
-    assert types_of(events) == [
-        StageEvent.RUN_START,
-        StageEvent.RUN_END,
-    ]
-    # The capture resolved its Future with WAV bytes; nothing on disk.
-    assert future.done()
-    _nch, _sw, _fr, _n, frames = _read_wav_bytes(future.result())
-    assert frames == pcm
-    assert not cap_dir.exists() or list(cap_dir.glob("*.wav")) == []
-
-
-async def test_second_concurrent_capture_is_rejected_first_still_completes(
-    tmp_path, monkeypatch
-):
-    # While one capture is armed/in-flight, a second arm_capture on the SAME
-    # pipeline must be refused with CaptureBusyError (no future overwrite, no cross-
-    # request cancellation) — and the FIRST capture must still complete normally.
-    cap_dir = tmp_path / "captures"
-    pipeline, events = make_pipeline(tmp_path, monkeypatch, name="dev")
-    pipeline.rt.core.capture.dir = str(cap_dir)
-
-    # First capture armed and still pending (no start/audio yet).
-    first = pipeline.arm_capture(5)
-    assert pipeline._capture_armed is True
-    assert not first.done()
-
-    # A second concurrent capture is rejected; the first future is untouched.
-    with pytest.raises(CaptureBusyError):
-        pipeline.arm_capture(5)
-    assert pipeline._capture_future is first  # not overwritten by the rejected arm
-    assert not first.done()
-
-    # The first capture now runs to completion and resolves its own future.
-    pcm = b"\x01\x02" * 100
-    await pipeline.on_start("cid", 0, None, None)
-    assert pipeline._capture_run is True
-    await pipeline.on_audio(pcm)
-    await pipeline.on_stop(False)
-
-    assert types_of(events) == [
-        StageEvent.RUN_START,
-        StageEvent.RUN_END,
-    ]
-    assert first.done()
-    _nch, _sw, _fr, _n, frames = _read_wav_bytes(first.result())
-    assert frames == pcm
-
-    # With the first capture finished (future done), a fresh capture is allowed again.
-    second = pipeline.arm_capture(3)
-    assert second is not first
-
-
-async def test_capture_empty_audio_fails_future_with_capture_empty_error(
-    tmp_path, monkeypatch
-):
-    # A capture run that produces NO audio fails the future with the distinct
-    # CaptureEmptyError (mapped to HTTP 500 server-side), not a generic RuntimeError.
-    cap_dir = tmp_path / "captures"
-    pipeline, events = make_pipeline(tmp_path, monkeypatch, name="dev")
-    pipeline.rt.core.capture.dir = str(cap_dir)
-
-    future = pipeline.arm_capture(5)
-    await pipeline.on_start("cid", 0, None, None)
-    # Device stops without ever streaming any audio -> empty PCM buffer.
-    await pipeline.on_stop(False)
-
-    assert future.done()
-    with pytest.raises(CaptureEmptyError):
-        future.result()
-    assert types_of(events) == [
-        StageEvent.RUN_START,
-        StageEvent.RUN_END,
-    ]
-    assert pipeline._capture_run is False
 
 
 async def test_tts_fail_without_prior_error_sets_tts_stage(tmp_path, monkeypatch):
@@ -1813,7 +1422,7 @@ async def test_tts_fail_without_prior_error_sets_tts_stage(tmp_path, monkeypatch
         runs_store=store,
     )
 
-    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_start("cid", None)
     await pipeline.on_audio(b"\x01\x02" * 100)
     await pipeline.on_stop(False)
 
@@ -1880,7 +1489,7 @@ async def test_stt_receives_trimmed_pcm(tmp_path, monkeypatch):
     pipeline.stt_backend.transcribe = spy_transcribe
 
     fed = b"\x01\x02" * 400  # 800 bytes
-    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_start("cid", None)
     await pipeline.on_audio(fed)
     await pipeline.on_stop(False)
 
@@ -1909,7 +1518,7 @@ async def test_stt_receives_full_pcm_when_trim_exceeds_short_utterance(
     pipeline.stt_backend.transcribe = spy_transcribe
 
     fed = b"\x01\x02" * 400  # 800 bytes, far shorter than 6400
-    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_start("cid", None)
     await pipeline.on_audio(fed)
     await pipeline.on_stop(False)
 
@@ -1931,7 +1540,7 @@ async def test_trim_applies_to_record_and_stored_audio(tmp_path, monkeypatch):
     pipeline.rt.core.vad.trim_start_ms = 10
 
     fed = b"\x01\x02" * 400  # 800 bytes
-    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_start("cid", None)
     await pipeline.on_audio(fed)
     await pipeline.on_stop(False)
 
@@ -1969,7 +1578,7 @@ async def test_run_top_level_exception_is_recorded_and_run_ends(tmp_path, monkey
     pipeline, events = make_pipeline(tmp_path, monkeypatch, stt_text="включи свет", runs_store=store)
     pipeline.rt.stt_backend = RaisingSttBackend(RuntimeError("boom"))
 
-    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_start("cid", None)
     await pipeline.on_audio(b"\x01\x02" * 100)
     await pipeline.on_stop(False)
 
@@ -2010,7 +1619,7 @@ async def test_run_record_insert_failure_is_isolated(tmp_path, monkeypatch):
         tmp_path, monkeypatch, stt_text="включи свет", runs_store=store, run_events=hub,
     )
 
-    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_start("cid", None)
     await pipeline.on_audio(b"\x01\x02" * 100)
     await pipeline.on_stop(False)  # must not raise
 
@@ -2041,7 +1650,7 @@ async def test_put_audio_failure_is_isolated(tmp_path, monkeypatch):
         tmp_path, monkeypatch, stt_text="включи свет", runs_store=store, run_events=hub,
     )
 
-    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_start("cid", None)
     await pipeline.on_audio(b"\x01\x02" * 100)
     await pipeline.on_stop(False)  # must not raise
 
@@ -2074,7 +1683,7 @@ async def test_broadcast_failure_is_isolated(tmp_path, monkeypatch):
         tmp_path, monkeypatch, stt_text="включи свет", runs_store=store, run_events=hub,
     )
 
-    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_start("cid", None)
     await pipeline.on_audio(b"\x01\x02" * 100)
     await pipeline.on_stop(False)  # must not raise
 
@@ -2099,7 +1708,7 @@ async def test_raw_capture_to_disk_failure_is_isolated(tmp_path, monkeypatch):
 
     monkeypatch.setattr("src.pipeline.write_wav", boom)
 
-    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_start("cid", None)
     await pipeline.on_audio(b"\x01\x02" * 100)
     await pipeline.on_stop(False)  # must not raise
 
@@ -2107,64 +1716,23 @@ async def test_raw_capture_to_disk_failure_is_isolated(tmp_path, monkeypatch):
     assert types_of(events) == FULL_SEQUENCE
 
 
-async def test_disarm_capture_cancels_pending_future_and_allows_rearm(tmp_path, monkeypatch):
-    # disarm_capture (the caller-timed-out path) clears the armed flag and fails the
-    # still-pending capture Future with RuntimeError("capture cancelled"), so the
-    # waiting caller gets a clean error and a fresh arm_capture is allowed afterwards.
-    pipeline, _ = make_pipeline(tmp_path, monkeypatch, name="dev")
-    pipeline.rt.core.capture.dir = str(tmp_path / "captures")
-
-    future = pipeline.arm_capture(5)
-    assert pipeline._capture_armed is True
-    assert not future.done()
-
-    pipeline.disarm_capture()
-
-    assert pipeline._capture_armed is False
-    assert future.done()
-    with pytest.raises(RuntimeError, match="capture cancelled"):
-        future.result()
-
-    # A subsequent arm is allowed (the busy-guard sees the prior Future resolved).
-    second = pipeline.arm_capture(3)
-    assert second is not future
-    assert pipeline._capture_armed is True
+# --- early "filler" line (slow-tool placeholder, played ahead of the reply) -------
 
 
-async def test_capture_maxlen_finalize_ignores_late_chunk(tmp_path, monkeypatch):
-    # A ~1 s capture finalizes on the maxlen branch when ONE chunk exceeds the byte
-    # cap; a second chunk arriving after finalize is ignored (no second finalize, the
-    # Future already resolved, the buffer not re-grown past the cap).
-    pipeline, events = make_pipeline(tmp_path, monkeypatch, name="dev")
-    pipeline.rt.core.capture.dir = str(tmp_path / "captures")
+class EchoTts(TtsBackend):
+    """TTS double whose 'audio' is the UTF-8 text, so the played clips tell apart."""
 
-    future = pipeline.arm_capture(1)  # ~1 s capture
-    await pipeline.on_start("cid", 0, None, None)
-    assert pipeline._capture_run is True
-    cap = pipeline._capture_cap_bytes()  # (1 + 2) s of PCM
+    def __init__(self):
+        self.calls = []  # (text, lang) per synthesize
 
-    # One chunk larger than the cap -> finalize on the "maxlen" branch.
-    await pipeline.on_audio(b"\x09\x0a" * cap)  # 2 * cap bytes, well over the cap
-
-    assert pipeline._capture_run is False
-    assert pipeline._finalized is True
-    assert future.done()
-    # The capture truncated the buffer to exactly the cap (maxlen branch).
-    assert len(pipeline._buffer) <= cap
-    buffer_after_finalize = len(pipeline._buffer)
-    runend_count = types_of(events).count(StageEvent.RUN_END)
-    result_before = future.result()
-
-    # A SECOND chunk after finalize is ignored: no second finalize, Future unchanged,
-    # the buffer is not re-grown.
-    await pipeline.on_audio(b"\xff\xff" * cap)
-
-    assert types_of(events).count(StageEvent.RUN_END) == runend_count
-    assert future.result() == result_before
-    assert len(pipeline._buffer) == buffer_after_finalize <= cap
+    async def synthesize(self, text, lang="ru"):
+        self.calls.append((text, lang))
+        return ("audio/x-test", text.encode())
 
 
-# --- early "filler" line (slow-tool placeholder via the announce channel) --------
+def played_texts(pipeline):
+    """Texts of the clips played so far through the fake play hook (EchoTts)."""
+    return [audio.decode() for audio, _ in pipeline.play.calls]
 
 
 async def test_filler_fires_when_any_tool_in_round_is_slow(tmp_path, monkeypatch):
@@ -2175,109 +1743,54 @@ async def test_filler_fires_when_any_tool_in_round_is_slow(tmp_path, monkeypatch
         monkeypatch, tool_names=["set_light", "search_events"],
         content="Секунду…", reply="готово",
     )
-    pipeline, _ = make_pipeline(tmp_path, monkeypatch, stt_text="свет и календарь")
-    announcer = FakeAnnouncer()
-    pipeline.send_announcement = announcer
+    pipeline, _ = make_pipeline(tmp_path, monkeypatch, stt_text="свет и календарь",
+                                tts_backend=EchoTts())
 
-    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_start("cid", None)
     await pipeline.on_audio(b"\x01\x02" * 100)
     await pipeline.on_stop(False)
     await _drain_filler_tasks(pipeline)
 
-    assert len(announcer.calls) == 1
-
-
-async def test_final_reply_waits_for_filler_playback(tmp_path, monkeypatch):
-    # The early filler and the final reply both play through the device's single
-    # media-player announcement slot, so the run must not emit the final TTS_END
-    # while the filler announce is still playing. Here a gated announcer blocks; the run
-    # must park before TTS_END until it is released.
-    import asyncio
-    patch_llm_with_filler(
-        monkeypatch, tool_names=["search_events"],
-        content="Щас гляну…", reply="готово",
-    )
-    pipeline, events = make_pipeline(tmp_path, monkeypatch, stt_text="погода")
-
-    class GatedAnnouncer:
-        def __init__(self):
-            self.called = asyncio.Event()
-            self.release = asyncio.Event()
-        async def __call__(self, **kwargs):
-            self.called.set()
-            await self.release.wait()
-
-    announcer = GatedAnnouncer()
-    pipeline.send_announcement = announcer
-
-    await pipeline.on_start("cid", 0, None, None)
-    await pipeline.on_audio(b"\x01\x02" * 100)
-    run = asyncio.create_task(pipeline.on_stop(False))
-    # The run reaches the filler announce and parks there (the fix awaits it before TTS_END).
-    await asyncio.wait_for(announcer.called.wait(), timeout=2.0)
-    # The final reply must NOT have been emitted while the filler is still playing.
-    assert StageEvent.TTS_END not in [et for et, _ in events]
-    # Release the filler; the run then emits the final reply.
-    announcer.release.set()
-    await asyncio.wait_for(run, timeout=2.0)
-    assert StageEvent.TTS_END in [et for et, _ in events]
-
-
-class FakeAnnouncer:
-    """Async recorder for the announcement channel: records the kwargs of each call."""
-
-    def __init__(self):
-        self.calls = []  # records the kwargs dict per announce
-
-    async def __call__(self, **kwargs):
-        self.calls.append(kwargs)
+    assert sorted(played_texts(pipeline)) == sorted([clean_llm_output("Секунду…"), "готово"])
 
 
 # --- pipeline.speak() (public proactive-speech entry) -------------------------
 
-async def test_speak_synthesizes_serves_and_announces(tmp_path, monkeypatch):
-    # speak() is the single text->speaker path: synthesize via the current tts
-    # stage, serve the clip on the shared audio cache, announce the served URL.
-    class _RecordingTts(FakeTtsBackend):
-        def __init__(self):
-            super().__init__(mime="audio/mpeg", audio=b"MP3")
-            self.calls = []  # (text, lang)
-
-        async def synthesize(self, text, lang="ru"):
-            self.calls.append((text, lang))
-            return await super().synthesize(text, lang)
-
-    tts = _RecordingTts()
+async def test_speak_synthesizes_and_plays(tmp_path, monkeypatch):
+    # speak() is the single text->device path: synthesize via the current tts
+    # stage and hand the clip to the device's play hook.
+    tts = EchoTts()
     pipeline, _ = make_pipeline(tmp_path, monkeypatch, tts_backend=tts)
-    announcer = FakeAnnouncer()
-    pipeline.send_announcement = announcer
 
     await pipeline.speak("привет")
 
     assert tts.calls == [("привет", "ru")]
-    assert pipeline.audio_server.calls == [(b"MP3", "audio/mpeg")]
-    assert announcer.calls == [{
-        "media_id": f"{PUBLIC_BASE_URL}/tts/abc123.mp3",
-        "timeout": 30.0,
-        "text": "привет",
-    }]
+    assert pipeline.play.calls == [("привет".encode(), "audio/x-test")]
+
+
+async def test_speak_without_speaker_synthesizes_nothing(tmp_path, monkeypatch):
+    # A device without a speaker gets no TTS at all.
+    tts = EchoTts()
+    pipeline, _ = make_pipeline(tmp_path, monkeypatch, tts_backend=tts)
+    pipeline.has_speaker = False
+
+    await pipeline.speak("привет")
+
+    assert tts.calls == []
+    assert pipeline.play.calls == []
 
 
 async def test_speak_propagates_synthesis_errors(tmp_path, monkeypatch):
     # speak() raises on failure — isolation is the CALLER's job (the filler wraps
-    # it in try/except; DeviceClient.announce lets it surface to the API caller).
+    # it in try/except; Device.announce lets it surface to the API caller).
     class _BoomTts:
         async def synthesize(self, text, lang="ru"):
             raise RuntimeError("tts down")
 
     pipeline, _ = make_pipeline(tmp_path, monkeypatch, tts_backend=_BoomTts())
-    announcer = FakeAnnouncer()
-    pipeline.send_announcement = announcer
     with pytest.raises(RuntimeError, match="tts down"):
         await pipeline.speak("hi")
-    # Nothing served, nothing announced.
-    assert pipeline.audio_server.calls == []
-    assert announcer.calls == []
+    assert pipeline.play.calls == []
 
 
 def patch_llm_with_filler(monkeypatch, *, tool_names, content, reply="готово", times=1):
@@ -2301,39 +1814,31 @@ def patch_llm_with_filler(monkeypatch, *, tool_names, content, reply="готов
 
 
 async def _drain_filler_tasks(pipeline):
-    """Await any fire-and-forget filler announcement tasks so a test can assert on
-    their side effects (the run does NOT await them itself)."""
+    """Await any fire-and-forget filler tasks so a test can assert on their side
+    effects (the run does NOT await them itself)."""
     import asyncio
     if pipeline._filler_tasks:
         await asyncio.gather(*list(pipeline._filler_tasks))
 
 
-async def test_filler_announced_for_slow_tool(tmp_path, monkeypatch):
-    # A slow tool round carrying spoken content -> the filler is synthesized and the
-    # announcement channel is awaited with a media_id URL + text; the run record
-    # carries filler_text / t_filler.
+async def test_filler_played_for_slow_tool(tmp_path, monkeypatch):
+    # A slow tool round carrying spoken content -> the filler is synthesized and
+    # played; the run record carries filler_text / t_filler.
     patch_llm_with_filler(
         monkeypatch, tool_names=["search_events"], content="Щас гляну…", reply="готово",
     )
     store = FakeRunsStore()
     pipeline, _ = make_pipeline(
         tmp_path, monkeypatch, stt_text="что у меня в календаре", runs_store=store,
+        tts_backend=EchoTts(),
     )
-    announcer = FakeAnnouncer()
-    pipeline.send_announcement = announcer
 
-    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_start("cid", None)
     await pipeline.on_audio(b"\x01\x02" * 100)
     await pipeline.on_stop(False)
     await _drain_filler_tasks(pipeline)
 
-    # The announcement fired exactly once with a URL media_id and the spoken text.
-    assert len(announcer.calls) == 1
-    call = announcer.calls[0]
-    assert call["media_id"].endswith("/tts/abc123.mp3")
-    assert call["media_id"].startswith(PUBLIC_BASE_URL)
-    assert call["text"] == clean_llm_output("Щас гляну…")
-    # The run record captured the filler.
+    assert clean_llm_output("Щас гляну…") in played_texts(pipeline)
     assert len(store.records) == 1
     rec = store.records[0]
     assert rec["filler_text"] == clean_llm_output("Щас гляну…")
@@ -2341,86 +1846,86 @@ async def test_filler_announced_for_slow_tool(tmp_path, monkeypatch):
 
 
 async def test_no_filler_for_fast_tool(tmp_path, monkeypatch):
-    # A fast smart-home tool (set_light) -> NO announcement, no filler recorded.
+    # A fast smart-home tool (set_light) -> only the reply is played, no filler recorded.
     patch_llm_with_filler(
         monkeypatch, tool_names=["set_light"], content="Ну изволь, включил.", reply="готово",
     )
     store = FakeRunsStore()
     pipeline, _ = make_pipeline(
-        tmp_path, monkeypatch, stt_text="включи свет", runs_store=store,
+        tmp_path, monkeypatch, stt_text="включи свет", runs_store=store, tts_backend=EchoTts(),
     )
-    announcer = FakeAnnouncer()
-    pipeline.send_announcement = announcer
 
-    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_start("cid", None)
     await pipeline.on_audio(b"\x01\x02" * 100)
     await pipeline.on_stop(False)
     await _drain_filler_tasks(pipeline)
 
-    assert announcer.calls == []
+    assert played_texts(pipeline) == ["готово"]
     assert store.records[0]["filler_text"] == ""
     assert store.records[0]["t_filler"] is None
 
 
 async def test_filler_dedup_at_most_once_per_run(tmp_path, monkeypatch):
-    # Two callback invocations in one run -> only one announcement (speak-at-most-once).
+    # Two callback invocations in one run -> the filler plays once (speak-at-most-once).
     patch_llm_with_filler(
         monkeypatch, tool_names=["google"], content="Щас погуглю…", reply="готово", times=2,
     )
-    pipeline, _ = make_pipeline(tmp_path, monkeypatch, stt_text="погугли погоду")
-    announcer = FakeAnnouncer()
-    pipeline.send_announcement = announcer
+    pipeline, _ = make_pipeline(tmp_path, monkeypatch, stt_text="погугли погоду",
+                                tts_backend=EchoTts())
 
-    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_start("cid", None)
     await pipeline.on_audio(b"\x01\x02" * 100)
     await pipeline.on_stop(False)
     await _drain_filler_tasks(pipeline)
 
-    assert len(announcer.calls) == 1
+    assert played_texts(pipeline).count(clean_llm_output("Щас погуглю…")) == 1
 
 
-async def test_no_filler_when_send_announcement_none(tmp_path, monkeypatch):
-    # The default make_pipeline leaves send_announcement None: the slow-tool filler
-    # must be a no-op (no error, nothing recorded).
+async def test_no_filler_without_speaker(tmp_path, monkeypatch):
+    # A device without a speaker: the slow-tool filler is a no-op (nothing scheduled,
+    # nothing recorded) and the reply is not synthesized either.
     patch_llm_with_filler(
         monkeypatch, tool_names=["search_events"], content="Щас гляну…", reply="готово",
     )
     store = FakeRunsStore()
-    pipeline, _ = make_pipeline(
-        tmp_path, monkeypatch, stt_text="что в календаре", runs_store=store,
+    tts = EchoTts()
+    pipeline, events = make_pipeline(
+        tmp_path, monkeypatch, stt_text="что в календаре", runs_store=store, tts_backend=tts,
     )
-    assert pipeline.send_announcement is None
+    pipeline.has_speaker = False
 
-    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_start("cid", None)
     await pipeline.on_audio(b"\x01\x02" * 100)
     await pipeline.on_stop(False)
     await _drain_filler_tasks(pipeline)
 
-    # No filler scheduled, no record fields set.
     assert pipeline._filler_tasks == set()
     assert store.records[0]["filler_text"] == ""
     assert store.records[0]["t_filler"] is None
+    assert tts.calls == []
+    assert pipeline.play.calls == []
+    # The reply text still reaches the device.
+    assert dict(events)[StageEvent.TTS_START] == {"text": "готово"}
 
 
 async def test_no_filler_when_content_blank_after_processing(tmp_path, monkeypatch):
     # Content that reduces to empty after clean_llm_output (whitespace / stripped
-    # tags) -> no announcement even for a slow tool.
+    # tags) -> no filler even for a slow tool.
     patch_llm_with_filler(
         monkeypatch, tool_names=["search_events"], content="   ", reply="готово",
     )
     store = FakeRunsStore()
     pipeline, _ = make_pipeline(
         tmp_path, monkeypatch, stt_text="что в календаре", runs_store=store,
+        tts_backend=EchoTts(),
     )
-    announcer = FakeAnnouncer()
-    pipeline.send_announcement = announcer
 
-    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_start("cid", None)
     await pipeline.on_audio(b"\x01\x02" * 100)
     await pipeline.on_stop(False)
     await _drain_filler_tasks(pipeline)
 
-    assert announcer.calls == []
+    assert played_texts(pipeline) == ["готово"]
     assert store.records[0]["filler_text"] == ""
 
 
@@ -2435,143 +1940,102 @@ async def _drain_ack_tasks(pipeline):
         await asyncio.gather(*list(pipeline._ack_tasks))
 
 
+def wav_plays(pipeline):
+    """The WAV clips played so far (the chime; the fake TTS reply is not WAV)."""
+    return [audio for audio, mime in pipeline.play.calls if mime == "audio/wav"]
+
+
 async def test_ack_scheduled_on_phrase_end(tmp_path, monkeypatch):
-    # End-of-phrase ack enabled (default) + a bound announce channel -> the chime is
-    # played once via the announce path with a media_id URL the instant the run starts.
+    # End-of-phrase ack enabled + a device speaker -> the synthesized chime (WAV) is
+    # played once, alongside the reply.
     patch_llm(monkeypatch, reply="готово")
     pipeline, _ = make_pipeline(tmp_path, monkeypatch, stt_text="включи свет", ack=True)
-    assert pipeline.core.ack.enabled is True
-    announcer = FakeAnnouncer()
-    pipeline.send_announcement = announcer
 
-    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_start("cid", None)
     await pipeline.on_audio(b"\x01\x02" * 100)
     await pipeline.on_stop(False)
     await _drain_ack_tasks(pipeline)
 
-    assert len(announcer.calls) == 1
-    call = announcer.calls[0]
-    assert call["media_id"].endswith("/tts/abc123.mp3")
-    assert call["media_id"].startswith(PUBLIC_BASE_URL)
+    [chime] = wav_plays(pipeline)
+    with wave.open(io.BytesIO(chime), "rb") as w:
+        assert w.getnframes() > 0
 
 
 async def test_ack_not_scheduled_when_disabled(tmp_path, monkeypatch):
-    # ack.enabled = False -> no ack task scheduled, no announcement.
+    # ack.enabled = False -> no ack task scheduled, no chime played.
     patch_llm(monkeypatch, reply="готово")
     pipeline, _ = make_pipeline(tmp_path, monkeypatch, stt_text="включи свет", ack=True)
     pipeline.rt.core.ack.enabled = False
-    announcer = FakeAnnouncer()
-    pipeline.send_announcement = announcer
 
-    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_start("cid", None)
     await pipeline.on_audio(b"\x01\x02" * 100)
     await pipeline.on_stop(False)
     await _drain_ack_tasks(pipeline)
 
     assert pipeline._ack_tasks == set()
-    assert announcer.calls == []
+    assert wav_plays(pipeline) == []
 
 
-async def test_ack_not_scheduled_for_capture_run(tmp_path, monkeypatch):
-    # A manual capture-only run bypasses _run entirely (no STT/LLM/TTS), so it must NOT
-    # beep — even with ack enabled and a bound announce channel.
-    patch_llm(monkeypatch, reply="готово")
-    pipeline, _ = make_pipeline(tmp_path, monkeypatch, ack=True)
-    assert pipeline.core.ack.enabled is True
-    announcer = FakeAnnouncer()
-    pipeline.send_announcement = announcer
-
-    fut = pipeline.arm_capture(1)
-    # A phraseless (manual button) start consumes the arm into a capture-only run.
-    await pipeline.on_start("cid", 0, None, None)
-    assert pipeline._capture_run is True
-    await pipeline.on_audio(b"\x01\x02" * 100)
-    await pipeline.on_stop(False)  # device_stop -> _finish_capture, never _run
-    await _drain_ack_tasks(pipeline)
-
-    assert fut.done()
-    assert pipeline._ack_tasks == set()
-    assert announcer.calls == []
-
-
-async def test_ack_not_scheduled_without_announce_channel(tmp_path, monkeypatch):
-    # No bound announce channel (send_announcement is None) -> the ack is a silent
-    # no-op even when enabled (mirrors the filler's None guard).
+async def test_ack_not_scheduled_without_speaker(tmp_path, monkeypatch):
+    # A device without a speaker never gets playback, the chime included.
     patch_llm(monkeypatch, reply="готово")
     pipeline, _ = make_pipeline(tmp_path, monkeypatch, stt_text="включи свет", ack=True)
-    assert pipeline.send_announcement is None
+    pipeline.has_speaker = False
 
-    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_start("cid", None)
     await pipeline.on_audio(b"\x01\x02" * 100)
     await pipeline.on_stop(False)
     await _drain_ack_tasks(pipeline)
 
     assert pipeline._ack_tasks == set()
+    assert pipeline.play.calls == []
 
 
 async def test_ack_uses_configured_sound_file_when_present(tmp_path, monkeypatch):
-    # A configured WAV sound_path that exists on disk is the operator's «блям», but the
-    # speaker firmware can't decode WAV, so it must be transcoded to MP3 (not served
-    # verbatim as audio/wav). Assert the served clip is a firmware-decodable MP3.
-    import wave
-
+    # A configured WAV sound_path that exists on disk is played verbatim (the
+    # delivery boundary converts it for the device).
     patch_llm(monkeypatch, reply="готово")
     pipeline, _ = make_pipeline(tmp_path, monkeypatch, stt_text="включи свет", ack=True)
-    audio_server = pipeline.audio_server  # FakeAudioServer records (data, content_type)
     blyam = tmp_path / "blyam.wav"
     with wave.open(str(blyam), "wb") as wf:
         wf.setnchannels(1)
         wf.setsampwidth(2)  # 16-bit PCM
         wf.setframerate(8000)
         wf.writeframes(b"\x00\x00" * 256)  # a few frames of silence
-    raw_wav_bytes = blyam.read_bytes()
     pipeline.rt.core.ack.sound_path = str(blyam)
-    pipeline.send_announcement = FakeAnnouncer()
 
-    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_start("cid", None)
     await pipeline.on_audio(b"\x01\x02" * 100)
     await pipeline.on_stop(False)
     await _drain_ack_tasks(pipeline)
 
-    # No clip was served verbatim as audio/wav (the firmware can't decode WAV).
-    assert not [c for c in audio_server.calls if c[1] == "audio/wav"], (
-        f"WAV must not be served verbatim, got {audio_server.calls}"
-    )
-    # The ack chime is a transcoded, firmware-decodable MP3 (starts with the 0xFF frame
-    # sync). The TTS reply is also served as audio/mpeg but carries the fake b"MP3"
-    # payload, so select the real MP3 ack by its frame sync rather than by serve order.
-    mpeg = [c[0] for c in audio_server.calls if c[1] == "audio/mpeg"]
-    assert mpeg, f"expected a transcoded audio/mpeg ack, got {audio_server.calls}"
-    ack_mp3 = [b for b in mpeg if b[:1] == b"\xff"]  # MP3 frame sync -> firmware-decodable
-    assert ack_mp3, f"no firmware-decodable MP3 ack served, got {audio_server.calls}"
-    assert ack_mp3[0] != raw_wav_bytes        # genuinely transcoded, not served verbatim
+    assert wav_plays(pipeline) == [blyam.read_bytes()]
 
 
 async def test_ack_is_fire_and_forget_does_not_delay_finalize(tmp_path, monkeypatch):
-    # The end-of-phrase ack must be truly fire-and-forget: even if the announce
-    # channel is STUCK (a slow/hung device announce that never returns), the run's
-    # finalize path (on_audio -> _run -> on_stop) must STILL complete without waiting
-    # for the ack. We block send_announcement on an asyncio.Event that is never set;
-    # if the run awaited the ack, the call below would hang forever (and the test would
-    # time out). It returning proves STT/LLM/TTS are never gated on the ack announce.
+    # The end-of-phrase ack must be truly fire-and-forget: even if its play is STUCK
+    # (the device never reports it played), the run's finalize path must STILL
+    # complete without waiting for the ack. If the run awaited the ack, the calls
+    # below would hang and hit the timeout.
     import asyncio
 
     patch_llm(monkeypatch, reply="готово")
     pipeline, events = make_pipeline(tmp_path, monkeypatch, stt_text="включи свет", ack=True)
-    assert pipeline.core.ack.enabled is True
 
-    stuck = asyncio.Event()  # never set -> the announce blocks forever
-    announce_calls = []  # kwargs of each ack announce
+    stuck = asyncio.Event()  # never set -> the chime's play blocks forever
+    chime_plays = []
+    reply_play = pipeline.play
 
-    async def stuck_announce(**kwargs):
-        announce_calls.append(kwargs)
-        await stuck.wait()  # hang here indefinitely, simulating a stuck announce
+    async def play(mime, audio):
+        if mime == "audio/wav":
+            chime_plays.append(audio)
+            await stuck.wait()
+        else:
+            await reply_play(mime, audio)
 
-    pipeline.send_announcement = stuck_announce
+    pipeline.play = play
 
-    # The whole finalize path must complete despite the stuck ack. Bound it with a
-    # timeout so a regression (the run awaiting the ack) fails loudly instead of hanging.
-    await asyncio.wait_for(pipeline.on_start("cid", 0, None, None), timeout=5.0)
+    await asyncio.wait_for(pipeline.on_start("cid", None), timeout=5.0)
     await asyncio.wait_for(pipeline.on_audio(b"\x01\x02" * 100), timeout=5.0)
     await asyncio.wait_for(pipeline.on_stop(False), timeout=5.0)
 
@@ -2579,16 +2043,11 @@ async def test_ack_is_fire_and_forget_does_not_delay_finalize(tmp_path, monkeypa
     assert types_of(events) == FULL_SEQUENCE
     assert pipeline._finalized is True
 
-    # Let the scheduled (still-stuck) ack task reach its blocked announce call so we
-    # can assert it was invoked. It never completes, so we do NOT drain _ack_tasks.
+    # Let the scheduled (still-stuck) ack task reach its blocked play call.
     await asyncio.sleep(0)
-    assert len(announce_calls) == 1
-    # The ack announce carries empty text (it's a chime, not a spoken line).
-    assert announce_calls[0]["text"] == ""
-
-    # The ack task is still pending (blocked on the unset Event), proving the run did
-    # not await it. Cancel it so the test doesn't leak a pending task.
-    assert pipeline._ack_tasks  # still tracked, not yet done
+    assert len(chime_plays) == 1
+    # Still pending, proving the run did not await it; cancel so nothing leaks.
+    assert pipeline._ack_tasks
     for task in list(pipeline._ack_tasks):
         task.cancel()
 
@@ -2652,14 +2111,14 @@ def test_highpass_empty_safe():
 async def test_mic_channel1_uses_second_stream(tmp_path, monkeypatch):
     pipeline, _ = make_pipeline(tmp_path, monkeypatch)
     pipeline.core.vad.mic_channel = 1  # live config: take the less-processed channel
-    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_start("cid", None)
     await pipeline.on_audio(b"\x00\x00", b"\x11\x11")  # ch0 zeros, ch1 = 0x1111
     assert bytes(pipeline._buffer) == b"\x11\x11"
 
 
 async def test_mic_channel0_uses_first_stream(tmp_path, monkeypatch):
     pipeline, _ = make_pipeline(tmp_path, monkeypatch)  # default channel 0
-    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_start("cid", None)
     await pipeline.on_audio(b"\x22\x22", b"\x11\x11")
     assert bytes(pipeline._buffer) == b"\x22\x22"
 
@@ -2667,7 +2126,7 @@ async def test_mic_channel0_uses_first_stream(tmp_path, monkeypatch):
 async def test_mic_channel1_falls_back_to_first_when_no_second_stream(tmp_path, monkeypatch):
     pipeline, _ = make_pipeline(tmp_path, monkeypatch)
     pipeline.core.vad.mic_channel = 1
-    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_start("cid", None)
     await pipeline.on_audio(b"\x22\x22", None)  # device sent only one channel
     assert bytes(pipeline._buffer) == b"\x22\x22"
 
@@ -2716,7 +2175,7 @@ def test_pcm_to_wav_bytes_stereo_pads_shorter_channel():
 async def test_on_audio_buffers_other_channel_for_mic_channel0(tmp_path, monkeypatch):
     # With mic_channel=0 the pipeline buffer gets ch0 and the diagnostic buffer ch1.
     pipeline, _ = make_pipeline(tmp_path, monkeypatch)  # default channel 0
-    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_start("cid", None)
     await pipeline.on_audio(b"\x22\x22", b"\x11\x11")
     assert bytes(pipeline._buffer) == b"\x22\x22"
     assert bytes(pipeline._buffer2) == b"\x11\x11"
@@ -2726,7 +2185,7 @@ async def test_on_audio_buffers_other_channel_for_mic_channel1(tmp_path, monkeyp
     # With mic_channel=1 the channels swap: buffer gets ch1, the diagnostic buffer ch0.
     pipeline, _ = make_pipeline(tmp_path, monkeypatch)
     pipeline.core.vad.mic_channel = 1
-    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_start("cid", None)
     await pipeline.on_audio(b"\x22\x22", b"\x11\x11")
     assert bytes(pipeline._buffer) == b"\x11\x11"
     assert bytes(pipeline._buffer2) == b"\x22\x22"
@@ -2734,7 +2193,7 @@ async def test_on_audio_buffers_other_channel_for_mic_channel1(tmp_path, monkeyp
 
 async def test_on_audio_no_second_stream_leaves_buffer2_empty(tmp_path, monkeypatch):
     pipeline, _ = make_pipeline(tmp_path, monkeypatch)
-    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_start("cid", None)
     await pipeline.on_audio(b"\x22\x22", None)
     assert bytes(pipeline._buffer) == b"\x22\x22"
     assert bytes(pipeline._buffer2) == b""
@@ -2747,7 +2206,7 @@ async def test_stored_run_audio_is_stereo_when_second_channel_streamed(tmp_path,
     store = FakeRunsStore()
     pipeline, _ = make_pipeline(tmp_path, monkeypatch, stt_text="включи свет", runs_store=store)
 
-    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_start("cid", None)
     await pipeline.on_audio(b"\x01\x02" * 100, b"\x03\x04" * 100)
     await pipeline.on_stop(False)
 
@@ -2765,7 +2224,7 @@ async def test_stored_run_audio_stays_mono_without_second_channel(tmp_path, monk
     store = FakeRunsStore()
     pipeline, _ = make_pipeline(tmp_path, monkeypatch, stt_text="включи свет", runs_store=store)
 
-    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_start("cid", None)
     await pipeline.on_audio(b"\x01\x02" * 100)
     await pipeline.on_stop(False)
 
@@ -2791,14 +2250,13 @@ async def test_llm_non_stage_exception_is_recorded_and_never_spoken(tmp_path, mo
         tmp_path, monkeypatch, stt_text="включи свет", runs_store=store,
     )
 
-    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_start("cid", None)
     await pipeline.on_audio(b"\x01\x02" * 100)
     await pipeline.on_stop(False)
 
     types = types_of(events)
     # No TTS stage was ever entered: the raw error text must not be spoken.
     assert StageEvent.TTS_START not in types
-    assert StageEvent.TTS_END not in types
     # The error event is emitted before RUN_END, and RUN_END still fires.
     assert StageEvent.ERROR in types
     assert StageEvent.RUN_END in types
@@ -2814,22 +2272,7 @@ async def test_llm_non_stage_exception_is_recorded_and_never_spoken(tmp_path, mo
     assert rec["result"] == "error"
     assert rec["error_stage"] == "pipeline"
     assert "oops" in rec["error_text"]
-    assert pipeline.audio_server.calls == []
-
-
-async def test_speak_without_announce_channel_synthesizes_but_does_not_announce(
-    tmp_path, monkeypatch
-):
-    # speak() with no bound announce channel (send_announcement is None) must not
-    # raise: the clip is still synthesized and served on the audio cache, but the
-    # announce step is skipped (the guard makes it a silent no-op).
-    pipeline, _ = make_pipeline(tmp_path, monkeypatch)
-    assert pipeline.send_announcement is None
-
-    await pipeline.speak("привет")  # must not raise
-
-    # TTS ran and the clip was served on the shared audio cache.
-    assert pipeline.audio_server.calls == [(b"MP3", "audio/mpeg")]
+    assert pipeline.play.calls == []
 
 
 async def test_run_completes_headless_when_send_event_is_none(tmp_path, monkeypatch):
@@ -2843,7 +2286,7 @@ async def test_run_completes_headless_when_send_event_is_none(tmp_path, monkeypa
     )
     pipeline.send_event = None  # drop the recording transport installed by the harness
 
-    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_start("cid", None)
     await pipeline.on_audio(b"\x01\x02" * 100)
     await pipeline.on_stop(False)  # must not raise anywhere along the run
 
@@ -2854,7 +2297,7 @@ async def test_run_completes_headless_when_send_event_is_none(tmp_path, monkeypa
     assert rec["stt_text"] == "включи свет"
     assert rec["llm_text"] == "готово"
     # The reply audio was still synthesized and served despite no event transport.
-    assert pipeline.audio_server.calls == [(b"MP3", "audio/mpeg")]
+    assert pipeline.play.calls == [(b"MP3", "audio/mpeg")]
 
 
 async def test_intent_end_payload_carries_conversation_id(tmp_path, monkeypatch):
@@ -2863,7 +2306,7 @@ async def test_intent_end_payload_carries_conversation_id(tmp_path, monkeypatch)
     patch_llm(monkeypatch, reply="готово")
     pipeline, events = make_pipeline(tmp_path, monkeypatch, stt_text="включи свет")
 
-    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_start("cid", None)
     await pipeline.on_audio(b"\x01\x02" * 100)
     await pipeline.on_stop(False)
 
@@ -2884,18 +2327,16 @@ async def test_filler_think_block_stripped_before_announce(tmp_path, monkeypatch
     store = FakeRunsStore()
     pipeline, _ = make_pipeline(
         tmp_path, monkeypatch, stt_text="что у меня в календаре", runs_store=store,
+        tts_backend=EchoTts(),
     )
-    announcer = FakeAnnouncer()
-    pipeline.send_announcement = announcer
 
-    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_start("cid", None)
     await pipeline.on_audio(b"\x01\x02" * 100)
     await pipeline.on_stop(False)
     await _drain_filler_tasks(pipeline)
 
-    # The announced and the recorded filler text are exactly the cleaned line.
-    assert len(announcer.calls) == 1
-    assert announcer.calls[0]["text"] == "Щас гляну"
+    # The played and the recorded filler text are exactly the cleaned line.
+    assert "Щас гляну" in played_texts(pipeline)
     assert store.records[0]["filler_text"] == "Щас гляну"
 
 
@@ -2924,7 +2365,7 @@ class RestartingSttBackend:
     async def transcribe(self, pcm):
         # on_start takes no run lock, so awaiting it directly cannot deadlock; it
         # resets per-run state and overwrites pipeline._conversation_id in place.
-        await self.pipeline.on_start(self.new_cid, 0, None, None)
+        await self.pipeline.on_start(self.new_cid, None)
         return self.text
 
 
@@ -2936,7 +2377,7 @@ async def test_intent_end_keeps_conversation_id_snapshotted_at_claim(tmp_path, m
     pipeline, events = make_pipeline(tmp_path, monkeypatch)
     pipeline.rt.stt_backend = RestartingSttBackend(pipeline, "cid2")
 
-    await pipeline.on_start("cid1", 0, None, None)
+    await pipeline.on_start("cid1", None)
     await pipeline.on_audio(b"\x01\x02" * 100)
     await pipeline.on_stop(False)
 
@@ -2971,7 +2412,7 @@ async def test_llm_reply_reaches_tts_verbatim(tmp_path, monkeypatch):
         tmp_path, monkeypatch, stt_text="какая погода", tts_backend=tts,
     )
 
-    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_start("cid", None)
     await pipeline.on_audio(b"\x01\x02" * 100)
     await pipeline.on_stop(False)
 
@@ -3002,7 +2443,7 @@ async def test_llm_request_carries_assembled_prompt_and_device(tmp_path, monkeyp
     monkeypatch.setattr("src.llm.LlmStage", CapturingLlmStage)
     pipeline, _ = make_pipeline(tmp_path, monkeypatch, stt_text="включи свет")
 
-    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_start("cid", None)
     await pipeline.on_audio(b"\x01\x02" * 100)
     await pipeline.on_stop(False)
 
@@ -3034,7 +2475,7 @@ async def test_llm_backend_hot_swap_applies_on_next_run(tmp_path, monkeypatch):
     pipeline, _ = make_pipeline(tmp_path, monkeypatch, stt_text="включи свет")
     old = pipeline.rt.llm_backend
 
-    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_start("cid", None)
     await pipeline.on_audio(b"\x01\x02" * 100)
     await pipeline.on_stop(False)
     assert backends == [old]
@@ -3042,74 +2483,10 @@ async def test_llm_backend_hot_swap_applies_on_next_run(tmp_path, monkeypatch):
     # Hot-swap: the next run's stage is constructed with the NEW backend object.
     new = object()
     pipeline.rt.llm_backend = new
-    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_start("cid", None)
     await pipeline.on_audio(b"\x01\x02" * 100)
     await pipeline.on_stop(False)
     assert backends == [old, new]
-
-
-# --- serve_audio edges (the delivery boundary's url/verbatim contract) ------------
-
-
-async def test_serve_audio_flac_served_verbatim_with_flac_url(tmp_path, monkeypatch):
-    # FLAC is natively playable: served verbatim (no transcode), ".flac" url,
-    # nbytes equal to the input size.
-    pipeline, _ = make_pipeline(tmp_path, monkeypatch)
-    data = b"fLaC" + b"\x01\x02\x03" * 20
-
-    ext, url, nbytes = await pipeline.serve_audio("audio/flac", data)
-
-    assert pipeline.audio_server.calls == [(data, "audio/flac")]
-    assert ext == "flac"
-    assert url.endswith(".flac")
-    assert nbytes == len(data)
-
-
-async def test_serve_audio_unknown_mime_served_as_is_with_mp3_url(tmp_path, monkeypatch):
-    # Unknown mimes pass through to_playable untouched and tts_url falls back to
-    # the ".mp3" extension (the real _EXT_FOR_MIME default) — pin that lenient
-    # contract here.
-    pipeline, _ = make_pipeline(tmp_path, monkeypatch)
-    data = b"OggS" + b"\x07" * 40
-
-    ext, url, nbytes = await pipeline.serve_audio("audio/ogg", data)
-
-    # Served verbatim under its own mime; the url extension falls back to .mp3.
-    assert pipeline.audio_server.calls == [(data, "audio/ogg")]
-    assert ext == "mp3"
-    assert url.endswith(".mp3")
-    assert nbytes == len(data)
-
-
-async def test_speak_wav_native_tts_is_transcoded_at_delivery(tmp_path, monkeypatch):
-    # speak() (the announce/filler/reminder path) goes through the same delivery
-    # boundary as the main run: a WAV-native TTS backend (like Piper) must reach
-    # the speaker as MP3, never as raw WAV the firmware can't decode.
-    buf = io.BytesIO()
-    with wave.open(buf, "wb") as wf:
-        wf.setnchannels(1)
-        wf.setsampwidth(2)
-        wf.setframerate(16000)
-        wf.writeframes(b"\x00\x00" * 160)
-    wav_bytes = buf.getvalue()
-    pipeline, _ = make_pipeline(
-        tmp_path, monkeypatch,
-        tts_backend=FakeTtsBackend(mime="audio/wav", audio=wav_bytes),
-    )
-    announcer = FakeAnnouncer()
-    pipeline.send_announcement = announcer
-
-    await pipeline.speak("привет")
-
-    # The audio cache holds the transcoded MP3 clip, not the backend's native WAV.
-    [(served, mime)] = pipeline.audio_server.calls
-    assert mime == "audio/mpeg"
-    assert served != wav_bytes
-    assert served[0] == 0xFF  # MP3 frame sync byte
-    # The announcement points the speaker at the .mp3 url.
-    assert len(announcer.calls) == 1
-    assert announcer.calls[0]["media_id"].endswith(".mp3")
-    assert announcer.calls[0]["media_id"].startswith(PUBLIC_BASE_URL)
 
 
 async def test_llm_stage_error_without_partial_attribute(tmp_path, monkeypatch):
@@ -3125,7 +2502,7 @@ async def test_llm_stage_error_without_partial_attribute(tmp_path, monkeypatch):
         tmp_path, monkeypatch, stt_text="включи свет", runs_store=store,
     )
 
-    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_start("cid", None)
     await pipeline.on_audio(b"\x01\x02" * 100)
     await pipeline.on_stop(False)
 
@@ -3149,9 +2526,9 @@ async def test_llm_stage_error_without_partial_attribute(tmp_path, monkeypatch):
 
 
 async def test_run_text_happy_path(tmp_path, monkeypatch):
-    # A text run does the full LLM turn, appends context, speaks the reply on the
-    # announce channel, records the run (reason="text", request in stt_text) and
-    # broadcasts the finalized summary — all WITHOUT any VA events.
+    # A text run does the full LLM turn, appends context, plays the reply on the
+    # device, records the run (reason="text", request in stt_text) and broadcasts
+    # the finalized summary — all WITHOUT any stage events.
     from src import context
 
     patch_llm(monkeypatch, reply="готово")
@@ -3160,8 +2537,6 @@ async def test_run_text_happy_path(tmp_path, monkeypatch):
     pipeline, events = make_pipeline(
         tmp_path, monkeypatch, runs_store=store, run_events=hub,
     )
-    announcer = FakeAnnouncer()
-    pipeline.send_announcement = announcer
 
     result = await pipeline.run_text("включи свет")
 
@@ -3183,10 +2558,9 @@ async def test_run_text_happy_path(tmp_path, monkeypatch):
         {"role": "user", "content": "включи свет"},
         {"role": "assistant", "content": "готово"},
     ]
-    # The reply was spoken: synthesized, served and announced.
-    assert pipeline.audio_server.calls == [(b"MP3", "audio/mpeg")]
-    assert [c["text"] for c in announcer.calls] == ["готово"]
-    # No voice-assistant events for a text run (no ESPHome voice session).
+    # The reply was spoken: synthesized and played.
+    assert pipeline.play.calls == [(b"MP3", "audio/mpeg")]
+    # No stage events for a text run (no voice session).
     assert events == []
     # Exactly one finalized broadcast, after the insert (id echoes the store).
     assert len(hub.broadcasts) == 1
@@ -3219,7 +2593,7 @@ async def test_run_text_llm_error_speaks_fallback_and_skips_context(tmp_path, mo
     assert rec["error_stage"] == "LLM"
     assert rec["llm_text"] == LlmConfig().reply_error
     # The fallback phrase is still spoken (TTS ran).
-    assert pipeline.audio_server.calls == [(b"MP3", "audio/mpeg")]
+    assert pipeline.play.calls == [(b"MP3", "audio/mpeg")]
     assert events == []
 
 
@@ -3237,16 +2611,13 @@ async def test_run_text_speak_false_skips_tts(tmp_path, monkeypatch):
     pipeline, events = make_pipeline(
         tmp_path, monkeypatch, tts_backend=SpyTts(), runs_store=store,
     )
-    announcer = FakeAnnouncer()
-    pipeline.send_announcement = announcer
 
     result = await pipeline.run_text("включи свет", speak=False)
 
     assert result["result"] == "ok"
     assert result["reply"] == "готово"
     assert tts_calls == []
-    assert announcer.calls == []
-    assert pipeline.audio_server.calls == []
+    assert pipeline.play.calls == []
     assert store.records[0]["t_tts"] == 0
     assert events == []
 
@@ -3284,120 +2655,13 @@ async def test_run_text_without_store_or_hub(tmp_path, monkeypatch):
     assert events == []
 
 
-# --- streaming TTS (stream_tts flag, serve_audio_stream) --------------------------
-
-
-async def test_streaming_tts_emits_stream_url_and_records_total_bytes(tmp_path, monkeypatch):
-    # End-to-end streaming run with a slow generator backend: TTS_END carries the
-    # stream URL (handed out while synthesis still runs) and the run record's
-    # audio_bytes equals the total fed through the stream.
-    import asyncio
-
-    class _StreamingTts(TtsBackend):
-        async def synthesize(self, text, lang="ru"):
-            raise AssertionError("streaming path must not call buffered synthesize")
-
-        async def synthesize_stream(self, text, lang="ru"):
-            async def _gen():
-                yield b"chunk1"
-                await asyncio.sleep(0)  # synthesis keeps running after TTS_END
-                yield b"chunk2"
-
-            return ("audio/mpeg", _gen())
-
-    patch_llm(monkeypatch, reply="готово")
-    store = FakeRunsStore()
-    pipeline, events = make_pipeline(
-        tmp_path, monkeypatch, stt_text="включи свет",
-        tts_backend=_StreamingTts(), runs_store=store,
-    )
-
-    await pipeline.on_start("cid", 0, None, None)
-    await pipeline.on_audio(b"\x01\x02" * 100)
-    await pipeline.on_stop(False)
-
-    data = dict(events)
-    url = data[StageEvent.TTS_END]["url"]
-    assert url.endswith("/tts/abc123.mp3")
-    assert url.startswith(PUBLIC_BASE_URL)
-    # The whole clip went through the stream feed (closed -> landed in calls)...
-    assert len(pipeline.audio_server.streams) == 1
-    assert pipeline.audio_server.calls == [(b"chunk1chunk2", "audio/mpeg")]
-    # ...and the record carries the total streamed bytes (feed awaited by the run).
-    rec = store.records[0]
-    assert rec["result"] == "ok"
-    assert rec["audio_bytes"] == len(b"chunk1chunk2")
-    assert rec["audio_fmt"] == "mp3"
-
-
-async def test_streaming_tts_wav_backend_falls_back_to_buffered_transcode(tmp_path, monkeypatch):
-    # A WAV-native backend (Piper-like) can't be played from mid-stream: the
-    # streaming run must drain the iterator and fall back through serve_audio
-    # (the transcode boundary, put()) — never put_stream.
-    patch_llm(monkeypatch, reply="готово")
-    buf = io.BytesIO()
-    with wave.open(buf, "wb") as wf:
-        wf.setnchannels(1)
-        wf.setsampwidth(2)
-        wf.setframerate(16000)
-        wf.writeframes(b"\x00\x00" * 160)
-    wav_bytes = buf.getvalue()
-    pipeline, events = make_pipeline(
-        tmp_path, monkeypatch, stt_text="включи свет",
-        tts_backend=FakeTtsBackend(mime="audio/wav", audio=wav_bytes),
-    )
-    assert pipeline.core.audio.stream_tts is True  # streaming run, WAV fallback inside
-
-    await pipeline.on_start("cid", 0, None, None)
-    await pipeline.on_audio(b"\x01\x02" * 100)
-    await pipeline.on_stop(False)
-
-    assert pipeline.audio_server.streams == []  # no stream entry for a WAV clip
-    [(served, mime)] = pipeline.audio_server.calls  # put() used (transcode path)
-    assert mime == "audio/mpeg"
-    assert served[0] == 0xFF  # MP3 frame sync byte: genuinely transcoded
-    assert dict(events)[StageEvent.TTS_END]["url"].endswith(".mp3")
-
-
-async def test_stream_tts_disabled_uses_buffered_path(tmp_path, monkeypatch):
-    # The kill-switch: stream_tts=False restores buffer-then-serve — buffered
-    # synthesize() runs and the clip lands via put(), never put_stream.
-    class _RecordingTts(FakeTtsBackend):
-        def __init__(self):
-            super().__init__()
-            self.synth_calls = []   # (text, lang) per buffered synthesize
-            self.stream_calls = []  # (text, lang) per synthesize_stream
-
-        async def synthesize(self, text, lang="ru"):
-            self.synth_calls.append((text, lang))
-            return await super().synthesize(text, lang)
-
-        async def synthesize_stream(self, text, lang="ru"):
-            self.stream_calls.append((text, lang))
-            return await super().synthesize_stream(text, lang)
-
-    patch_llm(monkeypatch, reply="готово")
-    tts = _RecordingTts()
-    pipeline, events = make_pipeline(
-        tmp_path, monkeypatch, stt_text="включи свет", tts_backend=tts,
-    )
-    pipeline.rt.core.audio.stream_tts = False  # read live per run
-
-    await pipeline.on_start("cid", 0, None, None)
-    await pipeline.on_audio(b"\x01\x02" * 100)
-    await pipeline.on_stop(False)
-
-    assert tts.synth_calls == [("готово", "ru")]
-    assert tts.stream_calls == []
-    assert pipeline.audio_server.streams == []
-    assert pipeline.audio_server.calls == [(b"MP3", "audio/mpeg")]
-    assert dict(events)[StageEvent.TTS_END]["url"].endswith("/tts/abc123.mp3")
+# --- streaming TTS --------------------------------------------------------------
 
 
 async def test_streaming_tts_midstream_error_records_tts_stage(tmp_path, monkeypatch):
-    # A generator failing AFTER the URL was handed out (mid-stream): the run
-    # still completes cleanly (RUN_END, no top-level ERROR), the record blames
-    # TTS, and the feed task's error is consumed — no unhandled task exception.
+    # A generator failing AFTER playback started (mid-stream): the error surfaces
+    # from the play hook, the run still completes cleanly (RUN_END, no top-level
+    # ERROR) and the record blames TTS.
     class _ExplodingStreamTts(TtsBackend):
         async def synthesize(self, text, lang="ru"):
             return ("audio/mpeg", b"")
@@ -3416,211 +2680,52 @@ async def test_streaming_tts_midstream_error_records_tts_stage(tmp_path, monkeyp
         tts_backend=_ExplodingStreamTts(), runs_store=store,
     )
 
-    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_start("cid", None)
     await pipeline.on_audio(b"\x01\x02" * 100)
     await pipeline.on_stop(False)
 
     types = types_of(events)
-    assert StageEvent.TTS_END in types   # the URL had already been emitted
     assert StageEvent.RUN_END in types
     assert StageEvent.ERROR not in types  # handled mid-stream, not a pipeline crash
     rec = store.records[0]
     assert rec["result"] == "error"
     assert rec["error_stage"] == "TTS"
     assert "stream boom" in rec["error_text"]
-    # The aborted feed never landed a clip on the audio server.
-    assert pipeline.audio_server.calls == []
-    [feed] = pipeline.audio_server.streams
-    assert feed.failed is True
+    # The aborted clip was not recorded as played, nor stored.
+    assert pipeline.play.calls == []
+    assert store.tts_audio_calls == []
 
 
-class _ClosableChunkIter:
-    """Async chunk-iterator double recording aclose() calls: stands in for a
-    streaming backend's generator, whose open HTTP response is only released
-    when the iterator is iterated or explicitly closed."""
+async def test_streaming_tts_released_when_play_fails_before_reading(tmp_path, monkeypatch):
+    # The device cannot play (it went offline) and never reads the stream: the
+    # backend's already-open response must still be released.
+    released = []
 
-    def __init__(self, chunks=()):
-        self._chunks = iter(chunks)
-        self.closed = False
-        self.iterated = False
-
-    def __aiter__(self):
-        return self
-
-    async def __anext__(self):
-        self.iterated = True
-        try:
-            return next(self._chunks)
-        except StopIteration:
-            raise StopAsyncIteration from None
-
-    async def aclose(self):
-        self.closed = True
-
-
-async def test_serve_audio_stream_closes_iterator_when_put_stream_raises(tmp_path, monkeypatch):
-    # The ownership invariant: serve_audio_stream must close the iterator when
-    # anything between receiving it and the feed task's first iteration raises
-    # (here: put_stream). Otherwise the backend's open streamed HTTP response
-    # (released from the generator's finally) would leak.
-    pipeline, _events = make_pipeline(tmp_path, monkeypatch)
-
-    def _boom(content_type="audio/mpeg"):
-        raise RuntimeError("put_stream boom")
-
-    monkeypatch.setattr(pipeline.audio_server, "put_stream", _boom)
-    it = _ClosableChunkIter([b"never-served"])
-
-    with pytest.raises(RuntimeError, match="put_stream boom"):
-        await pipeline.serve_audio_stream("audio/mpeg", it)
-
-    assert it.closed is True
-    assert it.iterated is False  # dropped BEFORE the first iteration — the leak window
-    assert pipeline.audio_server.streams == []  # nothing was registered
-
-
-async def test_serve_audio_stream_closes_iterator_when_drain_fallback_fails(tmp_path, monkeypatch):
-    # Same invariant on the non-playable (drain) branch: when serve_audio fails
-    # AFTER a successful drain, the branch still explicitly closes the iterator.
-    pipeline, _events = make_pipeline(tmp_path, monkeypatch)
-
-    async def _boom(mime, audio):
-        raise RuntimeError("serve_audio boom")
-
-    monkeypatch.setattr(pipeline, "serve_audio", _boom)
-    it = _ClosableChunkIter([b"wav-bytes"])
-
-    with pytest.raises(RuntimeError, match="serve_audio boom"):
-        await pipeline.serve_audio_stream("audio/wav", it)  # non-playable mime
-
-    assert it.closed is True
-
-
-async def test_streaming_tts_emit_failure_on_tts_end_reaps_feed_task(tmp_path, monkeypatch):
-    # A custom send_event raising on TTS_END lands in the window between the
-    # feed task's creation and its await. The orphan guard must cancel/await
-    # the task (no "Task exception was never retrieved") and the run records
-    # the error through the existing pipeline catch-all.
-    import asyncio
-
-    class _StreamingTts(TtsBackend):
+    class _OpenStreamTts(TtsBackend):
         async def synthesize(self, text, lang="ru"):
-            raise AssertionError("streaming path must not call buffered synthesize")
+            return ("audio/wav", b"")
 
         async def synthesize_stream(self, text, lang="ru"):
             async def _gen():
-                yield b"chunk1"
-                await asyncio.sleep(0)
-                yield b"chunk2"
+                yield b"\x01\x00"
 
-            return ("audio/mpeg", _gen())
+            async def _release():
+                released.append(True)
+
+            return (pcm_mime(16000), OwnedChunks(_gen(), _release))
+
+    async def offline_play(mime, audio):
+        raise RuntimeError("dev cannot play: offline")
 
     patch_llm(monkeypatch, reply="готово")
-    store = FakeRunsStore()
-    pipeline, events = make_pipeline(
-        tmp_path, monkeypatch, stt_text="включи свет",
-        tts_backend=_StreamingTts(), runs_store=store,
-    )
+    pipeline, _events = make_pipeline(tmp_path, monkeypatch, tts_backend=_OpenStreamTts())
+    pipeline.play = offline_play
 
-    # Capture the feed task handed to the run so its fate can be asserted.
-    feed_tasks = []
-    orig_serve = pipeline.serve_audio_stream
-
-    async def _capturing_serve(mime, chunks):
-        ext, url, task = await orig_serve(mime, chunks)
-        feed_tasks.append(task)
-        return ext, url, task
-
-    monkeypatch.setattr(pipeline, "serve_audio_stream", _capturing_serve)
-
-    # send_event keeps recording events but explodes exactly on TTS_END.
-    orig_send = pipeline.send_event
-
-    def _exploding_send(event_type, data):
-        orig_send(event_type, data)
-        if event_type == StageEvent.TTS_END:
-            raise RuntimeError("emit boom")
-
-    pipeline.send_event = _exploding_send
-
-    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_start("cid", None)
     await pipeline.on_audio(b"\x01\x02" * 100)
     await pipeline.on_stop(False)
 
-    # The run survived (RUN_END fired) and recorded the emit failure honestly
-    # (the TTS-section except catches it: nothing earlier claimed the stage).
-    types = types_of(events)
-    assert StageEvent.RUN_END in types
-    rec = store.records[0]
-    assert rec["result"] == "error"
-    assert rec["error_stage"] == "TTS"
-    assert "emit boom" in rec["error_text"]
-    # The feed task was reaped (cancelled + awaited), never orphaned.
-    [task] = feed_tasks
-    assert task.done()
-    assert task.cancelled()
-
-
-async def test_speak_streaming_announce_failure_cancels_feed_task(tmp_path, monkeypatch):
-    # speak() with an instantly-failing announce while synthesis would run for
-    # a long time: the guard must CANCEL the still-running feed task before
-    # reaping it (mirroring _run's orphan guard), so the announce error
-    # surfaces promptly instead of after the whole synthesis.
-    import asyncio
-    import time
-
-    never_set = asyncio.Event()  # the "synthesis" would block forever on this
-
-    class _SlowStreamTts(TtsBackend):
-        async def synthesize(self, text, lang="ru"):
-            raise AssertionError("streaming path must not call buffered synthesize")
-
-        async def synthesize_stream(self, text, lang="ru"):
-            async def _gen():
-                yield b"chunk1"
-                await never_set.wait()  # never completes without cancellation
-                yield b"chunk2"
-
-            return ("audio/mpeg", _gen())
-
-    pipeline, _ = make_pipeline(tmp_path, monkeypatch, tts_backend=_SlowStreamTts())
-
-    # Capture the feed task handed to speak() so its fate can be asserted.
-    feed_tasks = []
-    orig_serve = pipeline.serve_audio_stream
-
-    async def _capturing_serve(mime, chunks):
-        ext, url, task = await orig_serve(mime, chunks)
-        feed_tasks.append(task)
-        return ext, url, task
-
-    monkeypatch.setattr(pipeline, "serve_audio_stream", _capturing_serve)
-
-    async def _announce_boom(**kwargs):
-        # Yield once (a real announce suspends on I/O) so the feed task gets
-        # scheduled and is genuinely mid-stream when the failure hits.
-        await asyncio.sleep(0)
-        raise RuntimeError("announce down")
-
-    pipeline.send_announcement = _announce_boom
-
-    # Bound the whole call AND time it: without the cancel, speak() would block
-    # on the never-finishing feed until wait_for's 2s timeout (whose cancellation
-    # would reap the task as a side effect) instead of re-raising the announce
-    # error promptly — so the prompt-failure proof is the elapsed time.
-    start = time.monotonic()
-    with pytest.raises(RuntimeError, match="announce down"):
-        await asyncio.wait_for(pipeline.speak("привет"), 2)
-    assert time.monotonic() - start < 1.0  # failed fast, not at the 2s bound
-
-    # The feed task was reaped (cancelled + awaited), never orphaned...
-    [task] = feed_tasks
-    assert task.done()
-    assert task.cancelled()
-    # ...and the aborted feed never landed a clip on the audio server.
-    [feed] = pipeline.audio_server.streams
-    assert feed.failed is True
-    assert pipeline.audio_server.calls == []
+    assert released == [True]
 
 
 # --- streaming STT disconnect cleanup (Pipeline.on_disconnect) ---------------------
@@ -3664,7 +2769,7 @@ async def test_on_disconnect_closes_unfinalized_streaming_session(tmp_path, monk
     stt = _StreamingSttBackend()
     pipeline, _events = make_pipeline(tmp_path, monkeypatch, stt_backend=stt)
     install_fake_vad(pipeline, [False])  # no endpoint -> run never finalizes
-    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_start("cid", None)
     assert pipeline._stt_stream is stt.session
     assert pipeline._finalized is False
 
@@ -3679,7 +2784,7 @@ async def test_on_disconnect_skips_finalized_run(tmp_path, monkeypatch):
     stt = _StreamingSttBackend()
     pipeline, _events = make_pipeline(tmp_path, monkeypatch, stt_backend=stt)
     install_fake_vad(pipeline, [False])
-    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_start("cid", None)
     # Simulate _claim() having taken the run (the run is being processed by _run).
     pipeline._finalized = True
 
@@ -3716,7 +2821,7 @@ async def test_on_start_non_streaming_backend_falls_back_silently(tmp_path, monk
     pipeline, _events = make_pipeline(tmp_path, monkeypatch, stt_backend=stt)
     install_fake_vad(pipeline, [False])
 
-    assert await pipeline.on_start("cid", 0, None, None) == 0
+    await pipeline.on_start("cid", None)
     assert pipeline._stt_stream is None
 
 
@@ -3728,6 +2833,6 @@ async def test_on_start_streaming_open_failure_falls_back_to_batch(tmp_path, mon
     pipeline, _events = make_pipeline(tmp_path, monkeypatch, stt_backend=stt)
     install_fake_vad(pipeline, [False])
 
-    assert await pipeline.on_start("cid", 0, None, None) == 0
+    await pipeline.on_start("cid", None)
     assert stt.open_called is True
     assert pipeline._stt_stream is None

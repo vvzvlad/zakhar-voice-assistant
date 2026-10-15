@@ -150,12 +150,10 @@ export async function downloadCaptureResult(device) {
     URL.revokeObjectURL(url);
   }
 }
-// Start a streaming voice test: POST the CURRENT (possibly unsaved) TTS draft to
-// /api/tts/test and return the raw Response so the caller can stream the body via
-// MediaSource (true streaming playback) or buffer it into a Blob (fallback). The
-// backend always sends any error as a JSON body with a non-2xx status BEFORE the
-// audio stream starts, so error shaping here mirrors request()/the old
-// testTtsVoice. `signal` (optional) lets the caller abort the in-flight request.
+// Start a voice test: POST the CURRENT (possibly unsaved) TTS draft to
+// /api/tts/test and return the raw Response (a WAV body) for the caller to play.
+// The backend always sends any error as a JSON body with a non-2xx status BEFORE
+// the audio starts, so error shaping here mirrors request(). `signal` (optional) lets the caller abort the in-flight request.
 export const streamTtsVoice = async (provider, settings, text, signal) => {
   let resp;
   try {

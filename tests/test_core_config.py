@@ -47,11 +47,20 @@ def test_mcp_server_requires_name():
 
 def test_device_config_enabled_defaults_true_and_round_trips_false():
     # Old config.json entries carry no `enabled` -> they must validate as enabled.
-    d = DeviceConfig(name="a", host="10.0.0.1", psk="p")
+    d = DeviceConfig(name="a")
     assert d.enabled is True
     # enabled=False survives a dump/validate round trip (persisted config flag).
-    off = DeviceConfig(name="a", host="10.0.0.1", psk="p", enabled=False)
+    off = DeviceConfig(name="a", enabled=False)
     assert DeviceConfig.model_validate(off.model_dump()).enabled is False
+
+
+def test_device_config_cutoffs_default_and_are_percent():
+    d = DeviceConfig(name="a")
+    assert (d.wake_cutoff, d.vad_cutoff) == (80, 30)
+    with pytest.raises(ValidationError):
+        DeviceConfig(name="a", wake_cutoff=101)
+    with pytest.raises(ValidationError):
+        DeviceConfig(name="a", vad_cutoff=-1)
 
 
 def test_vad_trim_start_ms_defaults_to_200():
@@ -148,9 +157,3 @@ def test_core_config_vad_has_mic_fields():
     assert vad.mic_channel == 0
     assert vad.mic_normalize is False
     assert vad.mic_highpass is False
-
-
-def test_audio_stream_tts_defaults_true():
-    # Streaming TTS delivery is on by default; old docs carry no
-    # core.audio.stream_tts key, so the default must cover them.
-    assert CoreConfig().audio.stream_tts is True

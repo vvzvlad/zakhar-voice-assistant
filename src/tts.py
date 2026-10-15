@@ -22,8 +22,47 @@ def split_sentences(text: str) -> list[str]:
     return [p.strip() for p in parts if p.strip() and re.search(r"\w", p, re.UNICODE)]
 
 
+# Raw audio from a TTS backend: signed 16-bit little-endian mono PCM, no header,
+# at the rate carried in the mime ("audio/pcm;rate=48000").
+def pcm_mime(rate: int) -> str:
+    """Mime of raw s16le mono PCM at `rate` Hz."""
+    return f"audio/pcm;rate={rate}"
+
+
+def pcm_rate(mime: str) -> int | None:
+    """Sample rate of a pcm_mime() string, or None for any other mime."""
+    base, _, param = mime.partition(";")
+    if base.strip() != "audio/pcm":
+        return None
+    key, _, value = param.partition("=")
+    return int(value) if key.strip() == "rate" else None
+
+
+class OwnedChunks:
+    """A chunk iterator that owns an already-open resource (a streamed HTTP response).
+    aclose() releases it even before the first chunk: an async generator closed
+    before it started never runs its own finally."""
+
+    def __init__(self, chunks, release):
+        self._chunks = chunks
+        self._release = release
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        return await self._chunks.__anext__()
+
+    async def aclose(self):
+        try:
+            await self._chunks.aclose()
+        finally:
+            await self._release()
+
+
 class TtsBackend(ABC):
-    """Abstract TTS backend: text -> (mime, audio_bytes)."""
+    """Abstract TTS backend: text -> (mime, audio_bytes). The mime is "audio/wav"
+    or a pcm_mime()."""
 
     @abstractmethod
     async def synthesize(self, text: str, lang: str = "ru") -> tuple[str, bytes]:

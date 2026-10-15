@@ -8,8 +8,8 @@ the backend constructor, only when a real model is loaded; numpy and loguru are 
 only heavy-ish imports at module top-level.
 
 Synthesis returns the engine's NATIVE format — WAV mono 16-bit at the configured
-sample rate (audio/wav); adapting it to what the consumer can play is the delivery
-boundary's job (see audio_codec.to_playable), not synthesis'. The canonical
+sample rate (audio/wav); adapting it to what the device plays is the delivery
+boundary's job, not synthesis'. The canonical
 LLM->TTS text arrives in "+vowel" stress notation (e.g. "прив+ет"), which is
 EXACTLY Silero's own stress notation (the "+" precedes the stressed vowel), so the
 markup is KEPT (like the Yandex backend) — only unit expansion and stray-'+' cleanup
@@ -45,8 +45,7 @@ class SileroTtsBackend(TtsBackend):
     The model is loaded once and shared. Synthesis is blocking (PyTorch on CPU),
     so it runs in a worker thread. Returns the engine's NATIVE format — WAV mono
     16-bit at the configured sample rate (audio/wav); adapting it to what the
-    consumer can play is the delivery boundary's job (see audio_codec.to_playable),
-    not synthesis'.
+    device plays is the delivery boundary's job, not synthesis'.
     """
 
     def __init__(self, model_path: str | None = None, *, speaker: str = "xenia",

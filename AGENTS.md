@@ -1,10 +1,11 @@
 # Agent Instructions — zakhar-voice-assistant
 
-Client-side voice assistant for a "HA Voice PE" ESP32 speaker. It connects to the
-speaker over the ESPHome Native API (as the client), then runs the pipeline:
+Server-side voice assistant for ESP32 voice devices (the "HA Voice PE" speaker, the wall
+panel). Devices connect to it over the WebSocket device protocol (`docs/device-protocol.md`,
+`src/device_server.py` on `core.audio.port`), then it runs the pipeline:
 STT (cloud Whisper, default Groq) → LLM (default Claude Haiku 4.5 via OpenRouter) →
 smart-home tools via an external MCP server → RuAccent (Russian stress placement) →
-TTS (offline Piper / cloud Yandex SpeechKit / Fish Audio), and serves the resulting audio back to N speakers.
+TTS (offline Piper / cloud Yandex SpeechKit / Fish Audio), and plays the resulting audio back on the devices.
 It replaces Home Assistant in this loop. Smart-home control is an MCP integration:
 the app is an MCP client (running an agentic tool-calling loop) that connects to an
 external smart-home MCP server hosted in Node-RED (node-red-contrib-mcp-server)
@@ -72,7 +73,7 @@ only setting is `core.agent_mcp.enabled`, panel-editable and read live per reque
   provider's fields. Adding a provider = one new plugin file; zero changes to the core.
 - `core.*` holds non-provider settings (context, audio, vad — end-pointing thresholds +
   mic conditioning, network, openweathermap, mcp_servers,
-  calendar, esphome, agent_mcp, prompt, panel, runs, reminders, devices, tts_timeout,
+  calendar, agent_mcp, prompt, panel, runs, reminders, devices, tts_timeout,
   log_level) as plain `CoreConfig` pydantic sections.
 - API keys are plain string fields in the JSON (trusted-LAN service, no masking). `data/`
   is gitignored so `config.json` never gets committed.

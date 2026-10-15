@@ -8,7 +8,7 @@ serves the agent-facing MCP endpoint at /mcp (an aiohttp→ASGI bridge into the
 FastMCP streamable-HTTP session manager, see src/agent_mcp.AgentMcpEndpoint);
 the `core.agent_mcp.enabled` toggle is read live per request.
 
-Start/stop mirror AudioServer (AppRunner + TCPSite). CORS is restricted to the
+Start/stop mirror the device server (AppRunner + TCPSite). CORS is restricted to the
 hardcoded `_ALLOWED_ORIGINS` allowlist (empty — see below); it never reflects a
 wildcard, so an arbitrary web page can't read the unauthenticated config (which
 carries plaintext secrets) via the operator's browser. The prod frontend is
@@ -33,11 +33,12 @@ from multidict import CIMultiDict
 from pydantic import ValidationError
 
 from src import config_store
-from src.audio_server import ext_for_mime
+from src.audio_prep import pcm_to_wav_bytes
 from src.capture_jobs import CaptureJobManager
+from src.device_server import CAPTURE_MAX_SECONDS, CaptureBusyError
 from src.plugins.base import get_provider
-from src.pipeline import CAPTURE_MAX_SECONDS, CaptureBusyError
 from src.runs_store import db_file_size
+from src.tts import pcm_rate
 
 # HTTP methods the API exposes (used by the CORS preflight headers).
 _ALLOW_METHODS = "GET, POST, PATCH, PUT, DELETE, OPTIONS"
@@ -62,13 +63,21 @@ _ALLOWED_ORIGINS: frozenset[str] = frozenset()
 # (e.g. "assets/chimes/Chime_SFX_001.wav") so they match how the pipeline opens
 # core.ack.sound_path (the app runs from the repo root).
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-_CHIME_EXTS = (".wav", ".mp3", ".flac")
+_CHIME_EXTS = (".wav",)
+
+# Stored TTS audio mime -> download file extension.
+_EXT_FOR_MIME = {"audio/wav": "wav", "audio/mpeg": "mp3", "audio/flac": "flac"}
+
+
+def ext_for_mime(mime: str) -> str:
+    """File extension for a stored TTS audio mime; defaults to mp3 for unknown types."""
+    return _EXT_FOR_MIME.get(mime, "mp3")
 
 
 def list_chimes(root: str = _REPO_ROOT) -> list[str]:
     """Return sorted repo-root-relative paths of the bundled chime audio files.
 
-    Scans <root>/assets/chimes for audio files (wav/mp3/flac). Returns an empty list
+    Scans <root>/assets/chimes for WAV files. Returns an empty list
     when the directory is missing or unreadable."""
     abs_dir = os.path.join(root, "assets", "chimes")
     try:
@@ -184,8 +193,8 @@ class PanelServer:
         # device_status: optional callable -> list[dict]; static_dir: optional path to built frontend
         # device_capture: optional async callable (device_name, seconds) -> bytes that records a
         #   manual sample and returns it as WAV bytes (DeviceManager.capture). It is run by a
-        #   CaptureJobManager as a background task (so a browser disconnect can't cancel it and
-        #   reboot the device); the capture endpoints poll/download that job. None -> the
+        #   CaptureJobManager as a background task (so a browser disconnect can't cancel it);
+        #   the capture endpoints poll/download that job. None -> the
         #   manager is not built and every /api/capture* endpoint returns 503.
         # runs_store: optional RunsStore for the observability endpoints (None -> empty/zeros)
         # tool_sources: optional zero-arg callable -> list[dict] (ToolHub.describe()), None -> []
@@ -225,7 +234,7 @@ class PanelServer:
         self.device_wake_prob_get = device_wake_prob_get
         self.device_wake_prob_set = device_wake_prob_set
         # Background capture jobs: the recording runs as a server-side task so a
-        # browser disconnect cannot cancel it (and reboot the device).
+        # browser disconnect cannot cancel it.
         self._capture_jobs = CaptureJobManager(device_capture) if device_capture is not None else None
         self.static_dir = static_dir
         self.runs_store = runs_store
@@ -341,7 +350,7 @@ class PanelServer:
         the provider's own ConfigModel, so any TTS plugin works with zero per-provider
         code here.
 
-        Status codes: 200 audio (the provider's native format), 400 bad input,
+        Status codes: 200 audio (WAV), 400 bad input,
         404 unknown provider, 422 invalid settings / empty or too-long text /
         nothing to synthesize, 502 upstream synthesis failure.
         """
@@ -408,9 +417,17 @@ class PanelServer:
             # Close the iterator so a streaming backend releases its HTTP response.
             await _aclose_quietly(aiter)
             return web.json_response({"error": "nothing to synthesize"}, status=422)
-        # Serve the backend's NATIVE format (audio/mpeg or audio/wav); browsers
-        # decode both, so no transcoding here. No Content-Length -> aiohttp uses
-        # chunked transfer encoding.
+        rate = pcm_rate(mime)
+        if rate is not None:
+            # Browsers cannot play headerless PCM: wrap the whole clip as WAV.
+            try:
+                pcm = first + b"".join([c async for c in aiter])
+            except (RuntimeError, httpx.HTTPError) as e:
+                await _aclose_quietly(aiter)
+                return web.json_response({"error": str(e)}, status=502)
+            return web.Response(body=pcm_to_wav_bytes(pcm, rate=rate), content_type="audio/wav")
+        # A WAV backend is served as is. No Content-Length -> aiohttp uses chunked
+        # transfer encoding.
         resp = web.StreamResponse(status=200)
         resp.content_type = mime
         await resp.prepare(request)
@@ -741,7 +758,7 @@ class PanelServer:
         Body: {"device": "<name>", "seconds": <int 1..300>}. The device records that
         many seconds of mic audio (no STT/LLM/TTS). The recording runs as a
         SERVER-SIDE background task and is NOT tied to this HTTP request, so closing
-        the browser does not cancel it (cancelling reboots the device). The browser
+        the browser does not cancel it. The browser
         then polls GET /api/capture for the live countdown and downloads the result
         via GET /api/capture/result.
 
@@ -906,8 +923,9 @@ class PanelServer:
 
     async def _get_run_tts_audio(self, request: web.Request) -> web.Response:
         """Serve the stored generated TTS reply audio for one run (inline, playable/
-        downloadable). The blob is the TTS backend's native format; the stored mime is
-        used as the Content-Type and to pick the download extension."""
+        downloadable). The blob is the TTS backend's native clip (raw PCM is stored as
+        WAV); the stored mime is used as the Content-Type and to pick the download
+        extension."""
         if self.runs_store is None:
             return web.json_response({"error": "not found"}, status=404)
         try:

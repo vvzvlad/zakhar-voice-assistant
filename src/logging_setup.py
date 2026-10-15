@@ -1,6 +1,6 @@
 """Route the Python standard ``logging`` module through loguru.
 
-Third-party libraries (httpx, mcp, aioesphomeapi, ...) emit via stdlib
+Third-party libraries (httpx, mcp, ...) emit via stdlib
 ``logging`` and would otherwise bypass loguru entirely, printing raw lines that
 do not match our unified ``timestamp | LEVEL | module:func:line - message``
 format. Installing loguru's documented ``InterceptHandler`` on the root stdlib
@@ -178,7 +178,3 @@ def setup_logging(level: str) -> None:
     logging.basicConfig(handlers=[InterceptHandler()], level=0, force=True)
     for name in _NOISY_LOGGERS:
         logging.getLogger(name).setLevel(logging.WARNING)
-    # aioesphomeapi logs EVERY streamed audio frame (with the full PCM payload) at
-    # DEBUG, which floods the log when the app runs at DEBUG. Pin it to INFO so the
-    # useful connect/handshake lines stay but the per-frame audio dump is dropped.
-    logging.getLogger("aioesphomeapi").setLevel(logging.INFO)

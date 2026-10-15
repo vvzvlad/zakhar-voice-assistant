@@ -1,7 +1,7 @@
 """Tests for the composition-root helpers in src.app.
 
 These cover the small pure helpers extracted out of async main(): first-boot config
-creation, the legacy-mcp warning and the empty-public_base_url warning. They assert
+creation and the legacy-mcp warning. They assert
 observable behaviour (returned doc, save calls, emitted log records), so each fails
 if the targeted logic is broken.
 """
@@ -11,7 +11,6 @@ import contextlib
 from loguru import logger
 
 from src import app, config_store
-from src.core_config import CoreConfig
 
 
 @contextlib.contextmanager
@@ -33,7 +32,7 @@ def capture_logs(level="INFO"):
 
 def test_load_or_create_config_first_boot(monkeypatch):
     # An empty store means first boot: the template must be read, saved, and returned.
-    template_doc = {"version": 1, "core": {"audio": {"public_base_url": "http://x:8080"}}}
+    template_doc = {"version": 1, "core": {"audio": {"port": 8200}}}
     saved = []
 
     monkeypatch.setattr(config_store, "load", lambda *a, **k: {})
@@ -72,7 +71,7 @@ def test_load_or_create_config_first_boot(monkeypatch):
 def test_load_or_create_config_existing_config(monkeypatch):
     # A non-empty store must be returned verbatim, WITHOUT saving or touching the
     # template (guards against clobbering an operator's config every boot).
-    existing = {"version": 1, "core": {"audio": {"public_base_url": "http://op:9000"}}}
+    existing = {"version": 1, "core": {"audio": {"port": 9000}}}
 
     monkeypatch.setattr(config_store, "load", lambda *a, **k: existing)
 
@@ -109,25 +108,3 @@ def test_warn_legacy_mcp_silent_on_new_key():
     with capture_logs() as records:
         app.warn_legacy_mcp(doc)
     assert not any("legacy 'core.mcp'" in r for r in records)
-
-
-# --- validate_boot_config --------------------------------------------------
-
-
-def test_validate_boot_config_warns_on_empty_public_base_url():
-    # Empty public_base_url -> "play nothing" warning fires.
-    core = CoreConfig()  # default public_base_url is ""
-    assert core.audio.public_base_url == ""
-    with capture_logs() as records:
-        app.validate_boot_config(core)
-    warned = [r for r in records if "public_base_url is empty" in r]
-    assert len(warned) == 1
-    assert "WARNING" in warned[0]
-
-
-def test_validate_boot_config_silent_on_set_public_base_url():
-    # Non-empty public_base_url -> silent.
-    core = CoreConfig(audio={"public_base_url": "http://this-host:8080"})
-    with capture_logs() as records:
-        app.validate_boot_config(core)
-    assert not any("public_base_url is empty" in r for r in records)

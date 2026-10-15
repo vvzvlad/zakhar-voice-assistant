@@ -10,7 +10,7 @@ rebuilding the pipelines.
 
 class Runtime:
     def __init__(self, svc, *, vad_backend, stt_backend, llm_backend, tts_backend,
-                 hub, audio_server, runs_store=None, run_events=None,
+                 hub, runs_store=None, run_events=None,
                  prompt_store=None, stress_backend=None, wakeword_backend=None):
         self.svc = svc
         # Swappable runtime objects (rebuilt by the reconfigurator in later tiers).
@@ -27,16 +27,14 @@ class Runtime:
         self.stress_backend = stress_backend
         self.tts_backend = tts_backend
         self.hub = hub
-        self.audio_server = audio_server
         self.runs_store = runs_store
         self.run_events = run_events
         self.prompt_store = prompt_store  # PromptStore (system-prompt profiles)
         # Set post-construction in app.py; mutated by the Reconfigurator on hot-reload.
-        self.manager = None         # DeviceManager (used by Tier 3c device rebuild)
+        self.manager = None         # DeviceManager (device server; device rebuild + rebind)
         self.scheduler = None       # ReminderScheduler | None (Tier 3c reminders toggle)
         self.reminders_store = None  # RemindersStore | None (swapped by a reminders toggle)
         self.panel = None           # PanelServer (so a runs-store swap reaches its endpoints)
-        self.zc = None              # zeroconf AsyncZeroconf (Tier 3c device rebuild)
 
     @property
     def core(self):

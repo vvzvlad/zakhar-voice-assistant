@@ -38,6 +38,7 @@ class StubPipeline:
 
     def __init__(self, reply="готово"):
         self.reply = reply
+        self.has_speaker = True
         self.calls = []  # (text, speak) per run_text call
 
     async def run_text(self, text, speak=True):
@@ -51,7 +52,7 @@ class StubPipeline:
 
 
 class StubClient:
-    """DeviceClient double: cfg.name, online flag, announce recorder, pipeline."""
+    """Device double: cfg.name, online flag, announce recorder, pipeline."""
 
     def __init__(self, name, online=True):
         self.cfg = SimpleNamespace(name=name)
@@ -71,7 +72,7 @@ def make_rt(clients=(), runs_store=None, svc=None):
     manager = SimpleNamespace(
         clients=clients,
         statuses=lambda: [
-            {"name": c.cfg.name, "host": "h", "enabled": True, "online": c.online}
+            {"name": c.cfg.name, "enabled": True, "online": c.online}
             for c in clients
         ],
     )
@@ -205,6 +206,17 @@ async def test_say_defaults_to_first_online():
 
     assert out == {"ok": True, "device": "b"}
     assert online.announced == ["привет"]
+
+
+async def test_say_without_device_prefers_an_online_speaker():
+    panel, kitchen = StubClient("panel"), StubClient("kitchen")
+    panel.pipeline.has_speaker = False
+    rt = make_rt(clients=[panel, kitchen])
+
+    out = await call(rt, "say", {"text": "привет"})
+
+    assert out == {"ok": True, "device": "kitchen"}
+    assert panel.announced == []
 
 
 async def test_say_no_online_device():

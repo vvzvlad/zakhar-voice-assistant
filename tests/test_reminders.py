@@ -542,6 +542,7 @@ class _FakeClientCfg:
 
 class _FakeClient:
     def __init__(self, name, online):
+        self.name = name
         self.cfg = _FakeClientCfg(name)
         self.online = online
         self.announced = []
@@ -551,11 +552,18 @@ class _FakeClient:
 
 
 def _manager_with(clients):
-    """Build a DeviceManager without running its __init__ (avoids real APIClient)."""
-    from src.esphome_client import DeviceManager
-    mgr = DeviceManager.__new__(DeviceManager)
-    mgr.clients = clients
-    return mgr
+    """A DeviceManager whose device list is `clients` (no runtime, no server)."""
+    from src.device_server import DeviceManager
+
+    class _Manager(DeviceManager):
+        def __init__(self):
+            pass
+
+        @property
+        def clients(self):
+            return clients
+
+    return _Manager()
 
 
 def test_announce_routes_to_named_online_client():

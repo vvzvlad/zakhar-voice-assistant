@@ -1,0 +1,106 @@
+// @vitest-environment jsdom
+// Devices page: every write of the device list starts from the server's current
+// list (a cutoff set from a slider, a device that connected while the page was
+// open), the Edit dialog shows the name read-only and why its controls cannot
+// load, and a slider write or a newly connected device refreshes the app's config
+// snapshot.
+import React from "react";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { render, screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
+import { Devices } from "../pages/integrations.jsx";
+import { useAppData } from "../appData.jsx";
+import * as api from "../api.js";
+
+vi.mock("../appData.jsx", () => ({ useAppData: vi.fn() }));
+vi.mock("../api.js", () => ({
+  getConfig: vi.fn(),
+  getDeviceControls: vi.fn(),
+  setDeviceControl: vi.fn(),
+  getWakeProbability: vi.fn(async () => ({ online: true, value: null })),
+  setWakeProbabilityStream: vi.fn(async () => ({})),
+}));
+
+afterEach(cleanup);
+
+// What the page rendered from: kitchen at the old cutoff, no hall yet.
+const STALE = [{ name: "kitchen", enabled: true, wake_cutoff: 80, vad_cutoff: 30 }];
+// What the server holds by the time of the write.
+const FRESH = [
+  { name: "kitchen", enabled: true, wake_cutoff: 55, vad_cutoff: 30 },
+  { name: "hall", enabled: true, wake_cutoff: 80, vad_cutoff: 30 },
+];
+
+let data;
+beforeEach(() => {
+  vi.clearAllMocks();
+  api.getConfig.mockResolvedValue({ core: { devices: FRESH } });
+  data = {
+    catalog: { core: { values: { devices: STALE, audio: { port: 8200 } } } },
+    system: { devices: [{ name: "kitchen", online: true, versions: [] }] },
+    patch: vi.fn(async () => {}),
+    refreshConfig: vi.fn(async () => {}),
+  };
+  useAppData.mockReturnValue(data);
+});
+
+describe("Devices page", () => {
+  it("toggles enabled on the server's current list", async () => {
+    render(<Devices />);
+    fireEvent.click(screen.getByText("Disable"));
+    await waitFor(() => expect(data.patch).toHaveBeenCalledTimes(1));
+    expect(data.patch).toHaveBeenCalledWith({ core: { devices: [
+      { ...FRESH[0], enabled: false },
+      FRESH[1],
+    ] } });
+  });
+
+  it("adds to the server's current list", async () => {
+    render(<Devices />);
+    fireEvent.click(screen.getByText("Add speaker"));
+    fireEvent.change(screen.getByPlaceholderText("e.g. hallway"), { target: { value: "porch" } });
+    fireEvent.click(screen.getByText("Save"));
+    await waitFor(() => expect(data.patch).toHaveBeenCalledTimes(1));
+    expect(data.patch).toHaveBeenCalledWith({ core: { devices: [
+      ...FRESH, { name: "porch", enabled: true },
+    ] } });
+  });
+
+  it("shows why the controls cannot load (a disabled device is a 404)", async () => {
+    api.getDeviceControls.mockRejectedValue(new Error("unknown device 'kitchen'"));
+    render(<Devices />);
+    fireEvent.click(screen.getByText("Edit"));
+    expect(await screen.findByText("unknown device 'kitchen'")).toBeInTheDocument();
+    expect(screen.queryByText("Loading…")).toBeNull();
+  });
+
+  it("re-reads the config when the heartbeat lists a device the page does not know", async () => {
+    data.system = { devices: [
+      { name: "kitchen", online: true, versions: [] },
+      { name: "hall", online: true, versions: [] },
+    ] };
+    render(<Devices />);
+    await waitFor(() => expect(data.refreshConfig).toHaveBeenCalledTimes(1));
+  });
+
+  it("edit shows the name read-only and a slider write refreshes the config", async () => {
+    const snap = {
+      device: "kitchen", online: true, versions: [],
+      controls: [{ id: "wake_probability_cutoff", name: "Wake word cutoff", value: 80, min: 0, max: 100, step: 1, unit: "%" }],
+    };
+    api.getDeviceControls.mockResolvedValue(snap);
+    api.setDeviceControl.mockResolvedValue(snap);
+    render(<Devices />);
+    fireEvent.click(screen.getByText("Edit"));
+
+    const name = screen.getByDisplayValue("kitchen");
+    expect(name).toHaveAttribute("readonly");
+    expect(screen.queryByText("Save")).toBeNull();
+
+    await screen.findByText("Wake word cutoff");
+    const track = document.querySelector(".z-trk");
+    track.getBoundingClientRect = () => ({ left: 0, width: 100, top: 0, height: 10, right: 100, bottom: 10 });
+    fireEvent(track, new MouseEvent("pointerdown", { bubbles: true, clientX: 55 }));
+    await waitFor(() => expect(api.setDeviceControl).toHaveBeenCalledWith("kitchen", "wake_probability_cutoff", 55));
+    await waitFor(() => expect(data.refreshConfig).toHaveBeenCalledTimes(1));
+  });
+});

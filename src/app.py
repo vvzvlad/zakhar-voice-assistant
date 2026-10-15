@@ -8,14 +8,12 @@ import time
 
 import httpx
 from loguru import logger
-from zeroconf.asyncio import AsyncZeroconf
 
 import src.plugins  # noqa: F401  triggers provider registration
 from src import config_store
 from src.agent_mcp import AgentMcpEndpoint
-from src.audio_server import AudioServer
 from src.config_service import ConfigDoc, ConfigService
-from src.esphome_client import DeviceManager
+from src.device_server import DeviceManager
 from src.panel_api import PanelServer
 from src.plugins.base import Deps
 from src.prompt_store import PromptStore
@@ -50,20 +48,6 @@ def warn_legacy_mcp(doc: dict) -> None:
         logger.warning(
             "config: legacy 'core.mcp' is ignored — add external servers under "
             "'core.mcp_servers' (panel: Tool sources)."
-        )
-
-
-def validate_boot_config(core) -> None:
-    """Warn when the parsed config would make speakers play nothing.
-
-    Fail loudly: an empty public_base_url yields host-less TTS URLs that speakers
-    silently fail to fetch (the run otherwise logs as successful).
-    """
-    if not core.audio.public_base_url:
-        logger.warning(
-            f"audio.public_base_url is empty — speakers will receive host-less TTS "
-            f"URLs (e.g. /tts/<id>.mp3) and play nothing. Set core.audio.public_base_url "
-            f"in data/config.json (e.g. http://<this-host>:{core.audio.port})."
         )
 
 
@@ -128,11 +112,6 @@ async def main() -> None:
     # panel WebSocket endpoint (consumers). Cheap; always created.
     run_events = RunEventsHub()
 
-    validate_boot_config(core)
-
-    audio_server = AudioServer(core.audio.host, core.audio.port, core.audio.ttl)
-    await audio_server.start()
-
     # Built-in reminders MCP (one-shot voice reminders). The scheduler needs the device
     # manager to deliver; the manager needs the hub that holds this source — so the
     # deliver callback is late-bound after the manager is constructed (below). The
@@ -159,24 +138,20 @@ async def main() -> None:
 
     # Mutable runtime holder shared by reference across all pipelines. Live config
     # is read THROUGH it (via svc); backends/subsystems are swappable attributes for
-    # later hot-reload tiers. Built once hub/audio_server exist, before the manager.
+    # later hot-reload tiers. Built once the hub exists, before the manager.
     rt = Runtime(
         svc,
         vad_backend=vad_backend,
         stt_backend=stt_backend, llm_backend=llm_backend, tts_backend=tts_backend,
         stress_backend=stress_backend, wakeword_backend=wakeword_backend,
-        hub=hub, audio_server=audio_server,
+        hub=hub,
         runs_store=runs_store, run_events=run_events,
         prompt_store=prompt_store,
     )
 
-    # Async instance: aioesphomeapi consumes it directly, and shutdown below awaits
-    # async_close() so unregister runs inside the loop (a sync Zeroconf.close() would
-    # skip it with a blocking-i/o warning).
-    zc = AsyncZeroconf()
-    manager = DeviceManager(zc, rt)
-    # Back-refs so the Reconfigurator can reach these subsystems on hot-reload.
-    rt.zc = zc
+    # The device server (/device WebSocket + /health on core.audio.host/port).
+    manager = DeviceManager(rt)
+    # Back-ref so the Reconfigurator can reach it on hot-reload.
     rt.manager = manager
 
     # Hot-reload coordinator: classifies each config change and applies what can be
@@ -239,9 +214,9 @@ async def main() -> None:
         # Back-ref so the Reconfigurator can re-point the panel's runs-store at a
         # hot-swapped store. Set before the reconfig loop can run.
         rt.panel = panel
+        await manager.start()
         # panel.start()/stop() own the agent MCP endpoint's lifecycle too.
         await panel.start()
-        await manager.start()
         if scheduler is not None:
             await scheduler.start()
         # Drain heavy reconfiguration jobs in this (main) task so blocking model
@@ -272,7 +247,6 @@ async def main() -> None:
             await rt.scheduler.stop()
         await manager.stop()
         await hub.stop()
-        await audio_server.stop()
         # Close the CURRENT clients from deps: _rebuild_http may have swapped (and
         # already closed) the boot-time client_ext local, so deps holds the live ones.
         # httpx aclose() is idempotent, so re-closing an already-closed client is safe.
@@ -283,4 +257,3 @@ async def main() -> None:
         prompt_store.close()
         if rt.reminders_store is not None:
             rt.reminders_store.close()
-        await zc.async_close()
