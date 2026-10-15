@@ -310,7 +310,7 @@ async def test_vosk_empty_pcm_short_circuits_without_recognizer():
     model = _RecordingModel()
     backend = VoskSttBackend("unused/path", model=model)
 
-    def _fail_factory():
+    def _fail_factory(vocabulary):
         model.recognizer_requested = True
         raise AssertionError("recognizer must not be constructed for empty PCM")
 
@@ -328,7 +328,7 @@ async def test_vosk_decode_extracts_and_strips_text():
     backend = VoskSttBackend("unused/path", model=model)
 
     rec = _StubRecognizer('{"text": "  привет  "}')
-    backend._make_recognizer = lambda: rec
+    backend._make_recognizer = lambda vocabulary: rec
 
     result = await backend.transcribe(b"\x01\x02" * 100)
 
@@ -339,7 +339,12 @@ async def test_vosk_decode_extracts_and_strips_text():
     assert rec.set_words_calls == [False]
 
 
-def test_vosk_make_recognizer_uses_grammar_when_vocab_present(monkeypatch):
+@pytest.mark.parametrize("vocabulary, grammar", [
+    (["привет", "захар"], ('["привет", "захар", "[unk]"]',)),  # words + "[unk]" sentinel
+    (None, ()),   # no vocabulary -> plain full-vocab recognizer
+    ([], ()),     # an empty list is no closed vocabulary either
+])
+def test_vosk_make_recognizer_grammar_follows_vocabulary(monkeypatch, vocabulary, grammar):
     import sys
     import types
 
@@ -352,116 +357,46 @@ def test_vosk_make_recognizer_uses_grammar_when_vocab_present(monkeypatch):
 
     fake.KaldiRecognizer = FakeKaldi
     monkeypatch.setitem(sys.modules, "vosk", fake)
-    backend = VoskSttBackend("unused/path", model=object(), vocabulary=lambda: ["привет", "захар"])
-    backend._make_recognizer()
-    # grammar arg is the JSON list of words + "[unk]"
-    assert calls == [(16000, ('["привет", "захар", "[unk]"]',))]
+    VoskSttBackend("unused/path", model=object())._make_recognizer(vocabulary)
+    assert calls == [(16000, grammar)]
 
 
-def test_vosk_make_recognizer_no_grammar_when_vocab_none(monkeypatch):
-    import sys
-    import types
+async def test_vosk_transcribe_and_open_stream_pass_vocabulary_per_call():
+    # The vocabulary is a per-call argument (the chain decides), not backend state:
+    # each call builds its recognizer from exactly the words it was given.
+    backend = VoskSttBackend("unused/path", model=object())
+    seen = []
 
-    calls = []
-    fake = types.ModuleType("vosk")
+    def factory(vocabulary):
+        seen.append(vocabulary)
+        return _StubRecognizer('{"text": "свет"}')
 
-    class FakeKaldi:
-        def __init__(self, model, rate, *grammar):
-            calls.append((rate, grammar))
-
-    fake.KaldiRecognizer = FakeKaldi
-    monkeypatch.setitem(sys.modules, "vosk", fake)
-    # No accessor at all -> plain full-vocab recognizer (no grammar arg).
-    backend = VoskSttBackend("unused/path", model=object(), vocabulary=None)
-    backend._make_recognizer()
-    assert calls == [(16000, ())]
-
-
-def test_vosk_make_recognizer_no_grammar_when_vocab_empty(monkeypatch):
-    import sys
-    import types
-
-    calls = []
-    fake = types.ModuleType("vosk")
-
-    class FakeKaldi:
-        def __init__(self, model, rate, *grammar):
-            calls.append((rate, grammar))
-
-    fake.KaldiRecognizer = FakeKaldi
-    monkeypatch.setitem(sys.modules, "vosk", fake)
-    # An accessor returning [] means "no closed vocabulary" -> full-vocab recognizer.
-    backend = VoskSttBackend("unused/path", model=object(), vocabulary=lambda: [])
-    backend._make_recognizer()
-    assert calls == [(16000, ())]
+    backend._make_recognizer = factory
+    assert await backend.transcribe(b"\x01\x02", vocabulary=["свет"]) == "свет"
+    assert await backend.transcribe(b"\x01\x02") == "свет"
+    session = backend.open_stream(vocabulary=["включи"])
+    await session.aclose()
+    assert seen == [["свет"], None, ["включи"]]
+    assert VoskSttBackend.supports_vocabulary is True
 
 
-def test_vosk_current_vocab_swallows_errors_and_falls_back():
-    # A vocabulary accessor that raises must NEVER break STT: _current_vocab returns
-    # [] (full vocabulary) instead of propagating the error.
-    def boom():
-        raise RuntimeError("vocab source down")
-
-    backend = VoskSttBackend("unused/path", model=object(), vocabulary=boom)
-    assert backend._current_vocab() == []
-
-    # A callable returning a list is passed through verbatim.
-    backend2 = VoskSttBackend("unused/path", model=object(), vocabulary=lambda: ["свет"])
-    assert backend2._current_vocab() == ["свет"]
-
-    # No accessor -> [].
-    backend3 = VoskSttBackend("unused/path", model=object(), vocabulary=None)
-    assert backend3._current_vocab() == []
-
-
-async def test_vosk_decode_strips_unk_sentinel():
-    # The closed-vocab "[unk]" sentinel must never leak into the transcript fed to
-    # the NLU: it is stripped from the decoded text.
+async def test_vosk_decode_keeps_unk_sentinel():
+    # A word outside the closed vocabulary decodes as "[unk]"; it stays in the
+    # transcript so the handler sees that an unknown word was said.
     model = _RecordingModel()
     backend = VoskSttBackend("unused/path", model=model)
-    backend._make_recognizer = lambda: _StubRecognizer('{"text": "включи [unk] свет"}')
+    backend._make_recognizer = lambda vocabulary: _StubRecognizer('{"text": "включи [unk] свет"}')
 
     result = await backend.transcribe(b"\x01\x02" * 100)
 
-    assert result == "включи свет"
-
-
-def test_vosk_provider_create_wires_vocabulary_per_flag(monkeypatch):
-    # VoskSttProvider.create() hands deps.command_vocabulary to the backend only when
-    # restrict_to_nlu is on; otherwise vocabulary=None. Use a recording stub backend
-    # so no real Vosk model is loaded.
-    import src.plugins.stt.vosk as vosk_mod
-
-    seen = []
-
-    class _RecordingBackend:
-        def __init__(self, model_path, *, model=None, vocabulary=None):
-            seen.append((model_path, vocabulary))
-
-    monkeypatch.setattr(vosk_mod, "VoskSttBackend", _RecordingBackend)
-
-    cb = lambda: ["свет"]  # noqa: E731 - terse sentinel accessor
-    deps = Deps(http_cloud=None, http_local=None, command_vocabulary=cb)
-
-    vosk_mod.VoskSttProvider().create(VoskSttConfig(restrict_to_nlu=True), deps)
-    vosk_mod.VoskSttProvider().create(VoskSttConfig(restrict_to_nlu=False), deps)
-
-    assert seen[0][1] is cb        # flag on -> the live accessor is wired
-    assert seen[1][1] is None      # flag off -> no vocabulary restriction
-
-
-def test_vosk_backend_stores_vocabulary_accessor():
-    # Backend-level wiring: the vocabulary accessor passed to the constructor is the
-    # exact object the backend reads from (no real model loaded — model is injected).
-    cb = lambda: ["захар"]  # noqa: E731
-    assert VoskSttBackend("p", model=object(), vocabulary=cb)._vocabulary is cb
+    assert result == "включи [unk] свет"
 
 
 async def test_vosk_decode_missing_text_key_returns_empty():
     model = _RecordingModel()
     backend = VoskSttBackend("unused/path", model=model)
 
-    backend._make_recognizer = lambda: _StubRecognizer('{"result": []}')
+    backend._make_recognizer = lambda vocabulary: _StubRecognizer('{"result": []}')
 
     result = await backend.transcribe(b"\x01\x02" * 100)
 
@@ -486,7 +421,7 @@ async def test_vosk_decode_exception_raises_stage_error():
     # A recognizer crash must surface as StageError("stt", ...) per the SttBackend
     # contract — NOT escape as the raw RuntimeError (which the pipeline does not catch).
     backend = VoskSttBackend("unused/path", model=_RecordingModel())
-    backend._make_recognizer = lambda: _RaisingRecognizer()
+    backend._make_recognizer = lambda vocabulary: _RaisingRecognizer()
 
     with pytest.raises(StageError) as ei:
         await backend.transcribe(b"\x01\x02" * 100)
@@ -501,7 +436,7 @@ async def test_vosk_malformed_final_result_raises_stage_error():
     # FinalResult() returning non-JSON must surface as StageError("stt", ...),
     # not leak a raw json.JSONDecodeError out of transcribe().
     backend = VoskSttBackend("unused/path", model=_RecordingModel())
-    backend._make_recognizer = lambda: _StubRecognizer("not-json{{{")
+    backend._make_recognizer = lambda vocabulary: _StubRecognizer("not-json{{{")
 
     with pytest.raises(StageError) as ei:
         await backend.transcribe(b"\x01\x02" * 100)
@@ -546,9 +481,9 @@ class _StubStreamRecognizer:
         return self._final
 
 
-async def test_vosk_stream_finish_returns_final_with_unk_stripped():
+async def test_vosk_stream_finish_returns_final_with_unk_kept():
     # Common short-utterance path: AcceptWaveform always False, the whole transcript
-    # comes from FinalResult() at the end, with the "[unk]" sentinel stripped.
+    # comes from FinalResult() at the end, the "[unk]" sentinel included.
     rec = _StubStreamRecognizer(final='{"text": "включи [unk] свет"}')
     session = VoskStreamSession(rec)
     session.feed(b"\x01\x02" * 100)
@@ -556,7 +491,7 @@ async def test_vosk_stream_finish_returns_final_with_unk_stripped():
 
     result = await session.finish()
 
-    assert result == "включи свет"
+    assert result == "включи [unk] свет"
 
 
 async def test_vosk_stream_joins_midutterance_segment_and_tail():
@@ -615,7 +550,7 @@ async def test_vosk_open_stream_builds_session_with_recognizer():
     # live streaming session routed through feed()/finish().
     backend = VoskSttBackend("unused/path", model=_RecordingModel())
     rec = _StubStreamRecognizer(final='{"text": ""}')
-    backend._make_recognizer = lambda: rec
+    backend._make_recognizer = lambda vocabulary: rec
 
     session = backend.open_stream()
     try:

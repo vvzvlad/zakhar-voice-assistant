@@ -168,9 +168,14 @@ def test_migration_adds_filler_columns_to_old_db(tmp_path):
     assert "t_ruaccent" not in cols
     assert "stress_text" in cols
 
+    assert "chain" in cols and "attempts_json" in cols
+
     rid = store.insert(_rec(filler_text="Ну, погуглю…", t_filler=77, stress_text="Гот+ово.",
-                            request={"system_prompt": "p", "context": [], "user_text": "u", "tools": []}))
+                            request={"system_prompt": "p", "context": [], "user_text": "u", "tools": []},
+                            chain="main", attempts=[{"kind": "tts", "provider": "piper"}]))
     got = store.get(rid)
+    assert got["chain"] == "main"
+    assert got["attempts"] == [{"kind": "tts", "provider": "piper"}]
     assert got["filler_text"] == "Ну, погуглю…"
     assert got["t_filler"] == 77
     assert got["t_stress"] == 0
@@ -419,6 +424,7 @@ def test_metrics_empty(tmp_path):
         "error_rate": 0.0,
         "rejected_24h": 0,
         "per_stage_avg_ms": {"vad": None, "wakeword": None, "stt": None, "llm": None, "stress": None, "tts": None},
+        "per_chain": {},
     }
     store.close()
 
@@ -712,4 +718,58 @@ def test_prune_deletes_orphaned_tts_audio(tmp_path):
     assert store.get(old) is None
     assert store.get_tts_audio(old) is None
     assert store.get_tts_audio(keep) == (b"recent-mp3", "audio/mpeg")
+    store.close()
+
+
+# --- recognition chains and attempts ------------------------------------------
+
+def test_insert_and_get_chain_and_attempts_round_trip(tmp_path):
+    store = _store(tmp_path)
+    attempts = [
+        {"kind": "chain", "chain": "fast", "stt": "vosk", "handler": "simple-nlu",
+         "text": "свет", "outcome": "declined", "error": None, "t_stt": 90, "t_handler": 3},
+        {"kind": "tts", "provider": "yandex", "outcome": "error", "error": "503", "t": 40},
+        {"kind": "tts", "provider": "piper", "outcome": "spoke", "error": None, "t": 120},
+    ]
+    rid = store.insert(_rec(chain="smart", attempts=attempts))
+    got = store.get(rid)
+    assert got["chain"] == "smart"
+    assert got["attempts"] == attempts
+    assert "attempts_json" not in got
+    # A run recorded without them reads back as no chain and no attempts.
+    bare = store.get(store.insert(_rec()))
+    assert (bare["chain"], bare["attempts"]) == (None, [])
+    store.close()
+
+
+def test_list_and_count_filter_by_chain(tmp_path):
+    store = _store(tmp_path)
+    store.insert(_rec(chain="fast"))
+    store.insert(_rec(chain="smart"))
+    store.insert(_rec(chain="fast", device="kitchen"))
+    store.insert(_rec())
+    assert [r["chain"] for r in store.list(chain="fast")] == ["fast", "fast"]
+    assert store.count(chain="fast") == 2
+    assert store.count(chain="fast", device="kitchen") == 1
+    assert store.count(chain="fas") == 0      # exact match, not LIKE
+    assert store.count() == 4
+    store.close()
+
+
+def test_summary_and_live_rows_carry_chain():
+    assert summary_row(_rec(chain="fast"), 1)["chain"] == "fast"
+    assert live_row(_rec(chain="fast"))["chain"] == "fast"
+
+
+def test_metrics_per_chain_served_and_avg(tmp_path):
+    store = _store(tmp_path)
+    now = time.time()
+    store.insert(_rec(ts=now, chain="fast", t_total=400))
+    store.insert(_rec(ts=now, chain="fast", t_total=600))
+    store.insert(_rec(ts=now, chain="smart", t_total=9000))
+    store.insert(_rec(ts=now, result="empty"))                          # no chain served it
+    store.insert(_rec(ts=now - 2 * 86400, chain="smart", t_total=1))   # outside the window
+    m = store.metrics(now=now)
+    assert m["per_chain"] == {"fast": {"served": 2, "avg_ms": 500},
+                              "smart": {"served": 1, "avg_ms": 9000}}
     store.close()

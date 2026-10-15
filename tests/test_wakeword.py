@@ -317,10 +317,10 @@ def test_config_keywords_force_lowercased_at_config_layer():
 def _doc():
     return {
         "version": 1,
-        "stt": {"selected": "groq", "instances": {"groq": {"api_key": "gsk-secret"}}},
-        "llm": {"selected": "openrouter", "instances": {"openrouter": {"api_key": "k", "model": "m"}}},
-        "tts": {"selected": "piper", "instances": {"piper": {}}},
-        "core": {},
+        "stt": {"instances": {"groq": {"api_key": "gsk-secret"}}},
+        "llm": {"instances": {"openrouter": {"api_key": "k", "model": "m"}}},
+        "tts": {"variants": [{"provider": "piper", "enabled": True}], "instances": {"piper": {}}},
+        "core": {"chains": [{"name": "main", "stt": "groq", "handler": "openrouter"}]},
     }
 
 

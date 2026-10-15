@@ -19,7 +19,7 @@ class OpenAICompatLlmBackend(LlmBackend):
         self.extra_headers = extra_headers
         self.timeout = timeout
 
-    async def complete(self, messages, tools):
+    async def complete(self, messages, tools, *, has_next=False):
         payload = {
             "messages": messages,
             "model": self.model,

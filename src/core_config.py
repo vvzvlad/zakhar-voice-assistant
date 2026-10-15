@@ -218,6 +218,21 @@ class AckConfig(BaseModel):
     )
 
 
+class ChainConfig(BaseModel):
+    """One recognition chain: an STT provider and the handler (llm provider) that
+    takes its text. Each utterance goes through the enabled chains in list order
+    until one answers."""
+    name: str
+    enabled: bool = True
+    stt: str          # stt provider id (its settings live in stt.instances.<id>)
+    handler: str      # llm provider id (its settings live in llm.instances.<id>)
+    # Restrict the STT to the handler's closed vocabulary when the STT supports it.
+    narrow: bool = True
+    # Start this chain's STT at speech, alongside the first chain's, instead of
+    # only when the chain is reached.
+    parallel: bool = False
+
+
 class CoreConfig(BaseModel):
     context: ContextConfig = ContextConfig()
     audio: AudioConfig = AudioConfig()
@@ -234,5 +249,6 @@ class CoreConfig(BaseModel):
     capture: CaptureConfig = CaptureConfig()
     ack: AckConfig = AckConfig()
     devices: list[DeviceConfig] = []
+    chains: list[ChainConfig] = []
     tts_timeout: int = 30
     log_level: str = "INFO"

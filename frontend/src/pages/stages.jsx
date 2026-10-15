@@ -1,11 +1,13 @@
 import React, { useState, useEffect, useRef } from "react";
-import { Selector, PageHeader, FormSaveBar } from "../components/primitives.jsx";
+import { Selector, PageHeader, FormSaveBar, Toggle } from "../components/primitives.jsx";
 import SchemaForm from "../components/SchemaForm.jsx";
 import { useAppData } from "../appData.jsx";
 import { useStageForm, errorLines } from "../useStageForm.js";
 import { getOptions, getChimes, playChime, streamTtsVoice } from "../api.js";
 import { playAudioResponse } from "../streamAudio.js";
 import { buildVoiceMarker } from "../voiceMarker.js";
+import { pendingTab, clearTab } from "../navStore.js";
+import { chainsOf, chainsUsing, moveItem, settingsPageFor, COMMANDS_PROVIDER } from "../chains.js";
 import NluCatalogEditor from "../components/NluCatalogEditor.jsx";
 
 function Card({ title, sub, children, foot }) {
@@ -225,11 +227,26 @@ function VoiceMarkerCard({ provider, settings }) {
   </Card>;
 }
 
-// ── Generic provider stage (STT / LLM / TTS) ──────────────────────────────
-function ProviderStage({ cat, title, crumb, desc }) {
-  const { catalog, patch, system } = useAppData();
+// `q` (optional) is the server-side search string for remote-search fields;
+// forwarded only when present so plain fields keep the legacy call shape.
+const optionsLoader = (cat, providerId) => async (field, q) => {
+  const r = await (q ? getOptions(cat, providerId, field, q) : getOptions(cat, providerId, field));
+  return r.options;
+};
+
+function ReloadingBanner({ cat, label }) {
   // This stage's backend is being hot-reloaded (model load in flight) per the heartbeat.
-  const isReloading = (system?.reloading || []).includes(cat);
+  const { system } = useAppData();
+  if (!(system?.reloading || []).includes(cat)) return null;
+  return <div className="z-banner warn">
+    <span className="z-spin" />
+    <span><b>Applying…</b> loading the {label} backend — downloading the model on first use can take a while.</span>
+  </div>;
+}
+
+// ── Generic provider stage with a selected provider (Wakeword / Accents) ──
+function ProviderStage({ cat, title, crumb, desc }) {
+  const { catalog, patch } = useAppData();
   const category = catalog.categories.find((c) => c.id === cat);
   const selected = category.selected;
   const prov = category.providers.find((p) => p.id === selected) || category.providers[0];
@@ -242,21 +259,9 @@ function ProviderStage({ cat, title, crumb, desc }) {
     try { await patch({ [cat]: { selected: newId } }); } catch { /* surfaced elsewhere */ }
   };
 
-  // `q` (optional) is the server-side search string for remote-search fields;
-  // forwarded only when present so plain fields keep the legacy call shape.
-  const optionsFor = async (field, q) => {
-    const r = await (q ? getOptions(cat, selected, field, q) : getOptions(cat, selected, field));
-    return r.options;
-  };
-
   return <div className="z-page narrow">
     <PageHeader title={title} crumb={crumb} desc={desc} />
-    {isReloading && (
-      <div className="z-banner warn">
-        <span className="z-spin" />
-        <span><b>Applying…</b> loading the {prov.label} backend — downloading the model on first use can take a while.</span>
-      </div>
-    )}
+    <ReloadingBanner cat={cat} label={prov.label} />
     <Selector
       label="Provider"
       options={category.providers.map((p) => p.id)}
@@ -268,28 +273,127 @@ function ProviderStage({ cat, title, crumb, desc }) {
       <Card title={prov.label} foot={<FormSaveBar dirty={dirty} saving={saving} onSave={save} errors={errorLines(err)} />}>
         {/* key={selected}: dynamic selects fetch their option list once on mount, and
             providers often share an identical field set, so without the key a provider
-            switch would be reconciled in place and keep the PREVIOUS provider's options
-            (e.g. OpenRouter's model catalog shown under Groq). The key forces a remount
-            so every DynamicSelect refetches for the newly selected provider. */}
-        {/* simple-nlu manages `aliases`/`actions` through the NluCatalogEditor below,
-            so hide the raw textareas for that provider only; every other field stays. */}
-        <SchemaForm
-          key={selected}
-          schema={prov.schema}
-          values={draft}
-          onChange={onChange}
-          optionsFor={optionsFor}
-          skip={cat === "llm" && selected === "simple-nlu" ? ["aliases", "actions"] : []}
-        />
+            switch would be reconciled in place and keep the PREVIOUS provider's options.
+            The key forces a remount so every DynamicSelect refetches. */}
+        <SchemaForm key={selected} schema={prov.schema} values={draft} onChange={onChange}
+          optionsFor={optionsLoader(cat, selected)} />
       </Card>
-      {/* Offline-NLU only: per-value entity/action inputs sourced live from the MCP catalog. */}
-      {cat === "llm" && selected === "simple-nlu" && <NluCatalogEditor draft={draft} onChange={onChange} />}
-      {/* TTS only: test the CURRENT (unsaved) draft settings with an in-browser playback. */}
-      {cat === "tts" && <VoiceTestCard provider={selected} settings={draft} />}
-      {/* TTS only: ready-to-copy prompt marker built from the same live draft. */}
-      {cat === "tts" && <VoiceMarkerCard provider={selected} settings={draft} />}
     </div>
   </div>;
+}
+
+// ── Provider settings without a selected provider (STT / LLM / TTS / Commands) ──
+// Which provider runs is decided elsewhere (the Chains page, the TTS variant
+// list), so these pages show one provider's settings at a time behind tabs.
+
+// The tab to show: a provider requested by a "configure" link from another page,
+// else `preferred` (the provider in use), else the first one.
+function useProviderTab(cat, providers, preferred) {
+  const ids = providers.map((p) => p.id);
+  const [tab, setTab] = useState(() => {
+    const requested = pendingTab(cat);
+    if (ids.includes(requested)) return requested;
+    return ids.includes(preferred) ? preferred : ids[0];
+  });
+  useEffect(() => { clearTab(cat); }, [cat]);
+  // Fall back when the catalog no longer has the tab's provider.
+  return [ids.includes(tab) ? tab : ids[0], setTab];
+}
+
+// Switching a tab only changes which provider's settings are shown; it never PATCHes.
+function ProviderTabs({ providers, tab, onTab }) {
+  const prov = providers.find((p) => p.id === tab);
+  return <Selector label="Provider settings" options={providers.map((p) => p.id)} value={tab}
+    onChange={onTab} caption={prov?.label} />;
+}
+
+// One provider's settings form. Saving patches only that provider's instance and
+// never touches routing. Render it with key={provider id}: the remount drops the
+// previous tab's draft and makes every DynamicSelect refetch for the new provider.
+// `usage` is a line shown above the form; `children(draft, onChange)` renders
+// extra cards bound to the same live draft.
+function ProviderSettings({ cat, prov, usage, skip = [], children }) {
+  const { patch } = useAppData();
+  const buildPatch = (draft) => ({ [cat]: { instances: { [prov.id]: draft } } });
+  const { draft, onChange, dirty, saving, err, save } = useStageForm(prov.values, buildPatch, patch);
+  return <>
+    <Card title={prov.label} foot={<FormSaveBar dirty={dirty} saving={saving} onSave={save} errors={errorLines(err)} />}>
+      {usage && <div className="z-fh" style={{ margin: 0, padding: "11px 0 2px" }}>{usage}</div>}
+      <SchemaForm schema={prov.schema} values={draft} onChange={onChange}
+        optionsFor={optionsLoader(cat, prov.id)} skip={skip} />
+    </Card>
+    {children && children(draft, onChange)}
+  </>;
+}
+
+function usageLine(chains, field, id) {
+  const names = chainsUsing(chains, field, id);
+  return names.length ? `Used in chains: ${names.join(", ")}` : "Not used in any chain";
+}
+
+// STT and LLM: provider tabs; `field` is the chain field that names this
+// category's provider. The offline command engine is excluded from the LLM tabs
+// (it has its own Commands page).
+function ChainProviderStage({ cat, field, title, crumb, desc }) {
+  const { catalog, config } = useAppData();
+  const chains = chainsOf(config);
+  const category = catalog.categories.find((c) => c.id === cat);
+  const providers = category.providers.filter((p) => settingsPageFor(cat, p.id) === cat);
+  const [tab, setTab] = useProviderTab(cat, providers, chains.find((c) => c.enabled)?.[field]);
+  const prov = providers.find((p) => p.id === tab);
+
+  return <div className="z-page narrow">
+    <PageHeader title={title} crumb={crumb} desc={desc} />
+    {prov && <ReloadingBanner cat={cat} label={prov.label} />}
+    {prov
+      ? <>
+        <ProviderTabs providers={providers} tab={tab} onTab={setTab} />
+        <div className="z-grid">
+          <ProviderSettings key={tab} cat={cat} prov={prov} usage={usageLine(chains, field, tab)} />
+        </div>
+      </>
+      : <div className="z-card"><div className="z-empty"><b>No providers</b>The backend reports no providers for this stage.</div></div>}
+  </div>;
+}
+
+// TTS variants: the ordered fallback list (tts.variants) — the next enabled
+// variant takes over when a provider fails before the speaker gets any audio.
+// Edited as one draft and saved as ONE patch of the whole array (PATCH replaces
+// lists). "Configure" only switches the settings tab below.
+function TtsVariantsCard({ variants, providers, onConfigure }) {
+  const { patch } = useAppData();
+  const buildPatch = (d) => ({ tts: { variants: d.variants } });
+  const { draft, onChange, dirty, saving, err, save } = useStageForm({ variants }, buildPatch, patch);
+  const list = draft.variants || [];
+  const set = (next) => onChange("variants", next);
+  const unlisted = providers.filter((p) => !list.some((v) => v.provider === p.id));
+  const labelOf = (id) => providers.find((p) => p.id === id)?.label;
+
+  return <Card title="Variants" sub="tried in order until one starts speaking"
+    foot={<FormSaveBar dirty={dirty} saving={saving} onSave={save} errors={errorLines(err)} />}>
+    {list.length === 0 && <div className="z-fh" style={{ padding: "11px 0" }}>Add at least one enabled variant — the server rejects a list without one.</div>}
+    {list.map((v, i) => <div key={v.provider} className="z-f row" data-testid="tts-variant" style={{ opacity: v.enabled ? 1 : 0.55 }}>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 10, minWidth: 0 }}>
+        <span className="mono" style={{ color: "var(--mut2)", fontSize: 11 }}>{i + 1}</span>
+        <b className="mono" style={{ fontSize: 12.5 }}>{v.provider}</b>
+        {labelOf(v.provider) && <span className="z-fh" style={{ marginTop: 0 }}>{labelOf(v.provider)}</span>}
+      </div>
+      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+        <Toggle sm on={!!v.enabled} onChange={(on) => set(list.map((x, j) => (j === i ? { ...x, enabled: on } : x)))} />
+        <button type="button" className="z-mini" aria-label="Move up" disabled={i === 0} onClick={() => set(moveItem(list, i, -1))}>↑</button>
+        <button type="button" className="z-mini" aria-label="Move down" disabled={i === list.length - 1} onClick={() => set(moveItem(list, i, 1))}>↓</button>
+        <button type="button" className="z-mini" onClick={() => onConfigure(v.provider)}>Configure</button>
+        <button type="button" className="z-mini" onClick={() => set(list.filter((_, j) => j !== i))}>Remove</button>
+      </div>
+    </div>)}
+    {unlisted.length > 0 && <div className="z-f row">
+      <span className="z-fh" style={{ marginTop: 0 }}>Add a variant</span>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 6, justifyContent: "flex-end" }}>
+        {unlisted.map((p) => <button type="button" key={p.id} className="z-mini"
+          onClick={() => set([...list, { provider: p.id, enabled: true }])}>+ {p.id}</button>)}
+      </div>
+    </div>}
+  </Card>;
 }
 
 export function Wakeword() {
@@ -297,20 +401,65 @@ export function Wakeword() {
     desc="Server-side wake-word verifier. Re-checks the captured phrase actually started with the wake word and rejects false triggers before STT." />;
 }
 export function STT() {
-  return <ProviderStage cat="stt" title="STT · Speech to text" crumb="Pipeline / Stage 03"
-    desc="Recognize the captured phrase. Cloud Whisper or offline Vosk." />;
+  return <ChainProviderStage cat="stt" field="stt" title="STT · Speech to text" crumb="Providers"
+    desc="Settings of each speech recognizer: cloud Whisper or offline Vosk. Which one runs is set on the Chains page." />;
 }
 export function LLM() {
-  return <ProviderStage cat="llm" title="LLM · Reasoning & tools" crumb="Pipeline / Stage 04"
-    desc="Generates the reply and calls smart-home tools over MCP. OpenAI-compatible chat completions." />;
+  return <ChainProviderStage cat="llm" field="handler" title="LLM · Reasoning & tools" crumb="Providers"
+    desc="Settings of each chat model that generates the reply and calls smart-home tools over MCP. Which one runs is set on the Chains page." />;
+}
+export function Commands() {
+  const { catalog, config } = useAppData();
+  const llm = catalog.categories.find((c) => c.id === "llm");
+  const prov = llm?.providers.find((p) => p.id === COMMANDS_PROVIDER);
+  return <div className="z-page narrow">
+    <PageHeader title="Commands · Offline command engine" crumb="Providers"
+      desc="The offline command engine answers smart-home commands from its own vocabulary without an LLM. Spoken names and verbs come from the MCP tool catalog." />
+    {prov
+      ? <div className="z-grid">
+        {/* `aliases`/`actions` are edited through the NluCatalogEditor below, so
+            their raw textareas are hidden; every other field stays. */}
+        <ProviderSettings cat="llm" prov={prov} usage={usageLine(chainsOf(config), "handler", prov.id)}
+          skip={["aliases", "actions"]}>
+          {(draft, onChange) => <NluCatalogEditor draft={draft} onChange={onChange} />}
+        </ProviderSettings>
+      </div>
+      : <div className="z-card"><div className="z-empty"><b>Unavailable</b>The backend has no offline command engine.</div></div>}
+  </div>;
 }
 export function Accents() {
-  return <ProviderStage cat="stress" title="Accents · Stress placement" crumb="Pipeline / Stage 05"
+  return <ProviderStage cat="stress" title="Accents · Stress placement" crumb="Pipeline / Stage 04"
     desc="Place Russian word stress on the reply text so TTS pronounces it correctly." />;
 }
 export function TTS() {
-  return <ProviderStage cat="tts" title="TTS · Text to speech" crumb="Pipeline / Stage 06"
-    desc="Synthesize the reply to audio served to the speakers." />;
+  const { catalog } = useAppData();
+  const category = catalog.categories.find((c) => c.id === "tts");
+  const providers = category.providers;
+  const variants = category.variants || [];
+  const [tab, setTab] = useProviderTab("tts", providers, variants.find((v) => v.enabled)?.provider);
+  const prov = providers.find((p) => p.id === tab);
+
+  return <div className="z-page narrow">
+    <PageHeader title="TTS · Text to speech" crumb="Pipeline / Stage 05"
+      desc="Synthesize the reply to audio served to the speakers. Variants are tried in order; settings are per provider." />
+    {prov && <ReloadingBanner cat="tts" label={prov.label} />}
+    <div className="z-grid">
+      <TtsVariantsCard variants={variants} providers={providers} onConfigure={setTab} />
+      {prov && <div>
+        <ProviderTabs providers={providers} tab={tab} onTab={setTab} />
+        <div className="z-grid">
+          <ProviderSettings key={tab} cat="tts" prov={prov}>
+            {(draft) => <>
+              {/* Test the CURRENT (unsaved) draft settings with an in-browser playback. */}
+              <VoiceTestCard provider={tab} settings={draft} />
+              {/* Ready-to-copy prompt marker built from the same live draft. */}
+              <VoiceMarkerCard provider={tab} settings={draft} />
+            </>}
+          </ProviderSettings>
+        </div>
+      </div>}
+    </div>
+  </div>;
 }
 
 // ── VAD (catalog category + core sub-sections) ────────────────────────────
@@ -332,13 +481,6 @@ function ProviderCard({ cat, sub }) {
     try { await patch({ [cat]: { selected: newId } }); } catch { /* surfaced elsewhere */ }
   };
 
-  // `q` (optional) is the server-side search string for remote-search fields;
-  // forwarded only when present so plain fields keep the legacy call shape.
-  const optionsFor = async (field, q) => {
-    const r = await (q ? getOptions(cat, selected, field, q) : getOptions(cat, selected, field));
-    return r.options;
-  };
-
   return <Card title={prov.label} sub={sub} foot={<FormSaveBar dirty={dirty} saving={saving} onSave={save} errors={errorLines(err)} />}>
     <Selector
       label="Provider"
@@ -350,7 +492,7 @@ function ProviderCard({ cat, sub }) {
     {/* key={selected}: see ProviderStage — remount the form on provider switch so
         DynamicSelect fields (which fetch options on mount) refetch for the new
         provider instead of keeping the previous provider's option list. */}
-    <SchemaForm key={selected} schema={prov.schema} values={draft} onChange={onChange} optionsFor={optionsFor} />
+    <SchemaForm key={selected} schema={prov.schema} values={draft} onChange={onChange} optionsFor={optionsLoader(cat, selected)} />
   </Card>;
 }
 

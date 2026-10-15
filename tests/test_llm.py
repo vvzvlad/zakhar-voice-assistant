@@ -7,7 +7,7 @@ import pytest
 from src.llm import LlmRequest, LlmResult, LlmStage
 from src.plugins.llm.base import LlmConfig
 from src.llm_text import clean_llm_output
-from src.stage_errors import StageError
+from src.stage_errors import Declined, StageError
 from src.tool_hub import ToolHub
 
 MAX_TOOL_ROUNDS = 5
@@ -67,16 +67,18 @@ class FakeLlmBackend:
 
     Each scripted item is either a dict (returned as the provider JSON) or an
     Exception instance (raised), so tests can drive both happy and error paths.
-    Records the (messages, tools) of each call for assertions.
+    Records the (messages, tools) and the has_next flag of each call for assertions.
     """
 
     def __init__(self, responses):
         self._responses = list(responses)
         self._i = 0
         self.seen = []  # list of (messages, tools)
+        self.has_next = []  # has_next of each call
 
-    async def complete(self, messages, tools):
+    async def complete(self, messages, tools, *, has_next=False):
         self.seen.append((list(messages), tools))
+        self.has_next.append(has_next)
         item = self._responses[self._i]
         self._i += 1
         if isinstance(item, BaseException):
@@ -140,7 +142,7 @@ def _http_status_error(status_code, json_body=None):
 
 
 async def _respond(backend, hub, text, *, history=None, max_tool_rounds=MAX_TOOL_ROUNDS,
-                   device=None, on_filler=None):
+                   device=None, on_filler=None, has_next=False):
     """Drive an LlmStage with a ready-made request and return the LlmResult.
 
     The system prompt is passed directly (assembled by the orchestrator in
@@ -155,6 +157,7 @@ async def _respond(backend, hub, text, *, history=None, max_tool_rounds=MAX_TOOL
             device=device,
         ),
         on_filler=on_filler,
+        has_next=has_next,
     )
 
 
@@ -254,6 +257,7 @@ async def test_rate_limit_raises_stage_error():
     assert partial["model"] is None and partial["tokens"] is None
     assert partial["rounds"] == []
     assert partial["request"]["user_text"] == "привет"
+    assert partial["tool_used"] is False
 
 
 async def test_non_2xx_raises_stage_error_with_reason():
@@ -533,10 +537,11 @@ def test_llm_stage_contract_pin():
     # fakes — update them when this test changes.
     sig = inspect.signature(LlmStage.respond)
     params = list(sig.parameters.values())
-    assert [p.name for p in params] == ["self", "req", "on_filler"]
+    assert [p.name for p in params] == ["self", "req", "on_filler", "has_next"]
     assert params[0].kind is inspect.Parameter.POSITIONAL_OR_KEYWORD
     assert params[1].kind is inspect.Parameter.POSITIONAL_OR_KEYWORD
     assert params[2].kind is inspect.Parameter.KEYWORD_ONLY
+    assert params[3].kind is inspect.Parameter.KEYWORD_ONLY
 
     assert {f.name for f in dataclasses.fields(LlmResult)} == {
         "reply", "model", "tokens", "rounds", "request_debug", "tool_used",
@@ -566,6 +571,26 @@ async def test_mid_loop_failure_attaches_partial_from_completed_rounds():
     assert partial["rounds"][0]["note"] == "tool call"
     assert partial["tokens"] == 30
     assert partial["model"] == "m1"
+    # A tool already ran: the chain runner must not hand the request to another chain.
+    assert partial["tool_used"] is True
+
+
+@pytest.mark.parametrize("has_next", [False, True])
+async def test_has_next_reaches_every_backend_round(has_next):
+    hub = StubHub(tools=[SET_LIGHT_TOOL])
+    backend = FakeLlmBackend([_tool_call("set_light", "{}"), _final("Готово.")])
+    await _respond(backend, hub, "включи свет", has_next=has_next)
+    assert backend.has_next == [has_next, has_next]
+
+
+async def test_declined_propagates_unchanged():
+    # A handler declining (e.g. a closed-vocabulary NLU with a later chain to try) is
+    # not a stage failure: the Declined reaches the chain runner as is.
+    hub = StubHub(tools=[SET_LIGHT_TOOL])
+    backend = FakeLlmBackend([Declined("Не понял")])
+    with pytest.raises(Declined) as ei:
+        await _respond(backend, hub, "что-то", has_next=True)
+    assert ei.value.reply == "Не понял"
 
 
 async def test_non_2xx_with_non_json_body_raises_clean_stage_error():

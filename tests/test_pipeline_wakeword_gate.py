@@ -426,7 +426,7 @@ async def test_gate_accept_streaming_feeds_backlog_once(tmp_path, monkeypatch):
 
     await pipeline.on_start("cid", 0, None, WAKE)
     # No stream opened while gating.
-    assert pipeline._stt_stream is None
+    assert pipeline._stt_streams == {}
     assert stt.session.fed == []
 
     backlog = b"\x01\x02" * 30000  # > 48000-byte window
@@ -434,7 +434,7 @@ async def test_gate_accept_streaming_feeds_backlog_once(tmp_path, monkeypatch):
     await _drain_verify(pipeline)
 
     # On confirm the stream opened and the whole backlog was fed once.
-    assert pipeline._stt_stream is stt.session
+    assert pipeline._stt_streams == {"main": stt.session}
     assert stt.session.fed == [backlog]
 
     # A further chunk after confirm feeds incrementally (not the backlog again).

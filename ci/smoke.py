@@ -19,7 +19,7 @@ image `python`. The outer side uses only the standard library.
 Models and check (e)
 --------------------
 The image carries no models (production mounts `/app/models`). First boot copies
-templates/default_config.json, which selects `tts: piper` with
+templates/default_config.json, whose only TTS variant is `piper` with
 `voice_path: models/ru_RU-ruslan-medium.onnx`. `PiperTtsBackend.__init__` loads it eagerly
 (src/plugins/tts/piper.py) and src/app.py builds the TTS backend before `audio_server.start()`, so a
 bare container logs the startup line and the config creation, then dies with
@@ -1188,7 +1188,7 @@ def build_serving_config(template):
     """
     document = json.loads(json.dumps(template))  # deep copy: the caller keeps the pristine template
     tts = document.setdefault("tts", {})
-    tts["selected"] = SMOKE_TTS_PROVIDER
+    tts["variants"] = [{"provider": SMOKE_TTS_PROVIDER, "enabled": True}]
     tts.setdefault("instances", {})[SMOKE_TTS_PROVIDER] = {"api_key": SMOKE_TTS_KEY}
     stress = document.setdefault("stress", {})
     selected_stress = selected_stress_provider(template)
@@ -1353,9 +1353,9 @@ def judge_bare_outcome(name, outcome_target, state, state_output, still_running,
 
     * Stopped: judged by bareboot_stop_reason() on the settled log.
     * Alive and answering /health: the eager Piper load became lazy; accepted.
-    * Alive and not answering: a slow ordinary death (still inside `svc.create("tts")`, before the
-      audio server starts) looks the same as a deadlock, and the container may have died during the
-      probe. So state and log are re-read, and a container that has since stopped is judged as a
+    * Alive and not answering: a slow ordinary death (still inside
+      `svc.create_instance("tts", ...)`, before the audio server starts) looks the same as a
+      deadlock, and the container may have died during the probe. So state and log are re-read, and a container that has since stopped is judged as a
       stop.
     """
     if state is None:

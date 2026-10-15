@@ -8,7 +8,6 @@ self-registers via @register on `import src.plugins`.
 
 import os
 from collections import defaultdict
-from collections.abc import Callable
 from dataclasses import dataclass
 
 import httpx
@@ -22,12 +21,6 @@ class Deps:
     http_cloud: httpx.AsyncClient   # proxied client for cloud APIs (STT/LLM/Yandex TTS)
     http_local: httpx.AsyncClient   # direct (non-proxied) client for local services
     tts_timeout: int = 30
-    # Optional accessor returning the current closed command vocabulary (Russian
-    # words) for offline STT grammar restriction, or [] when no closed vocabulary
-    # applies (e.g. the active intent engine is a free-form LLM). Wired by the runtime
-    # (app.py) to read live config; stays None in contexts that don't provide it
-    # (tests, adhoc backend builds) — consumers must treat None as "no vocabulary".
-    command_vocabulary: Callable[[], list[str]] | None = None
 
 
 # Shared schema annotation for the `model` field: rendered as a dynamic select
@@ -64,6 +57,8 @@ class Provider:
     label: str = ""           # human label for the UI
     ConfigModel: type[BaseModel] = BaseModel
     uses_http_cloud: bool = False   # True if create() builds a backend bound to deps.http_cloud (proxied)
+    # stt only: the backend takes a closed vocabulary per call (SttBackend.supports_vocabulary).
+    supports_vocabulary: bool = False
 
     def create(self, cfg: BaseModel, deps: Deps):
         raise NotImplementedError
@@ -100,9 +95,9 @@ class Provider:
 
     def vocabulary(self, cfg: BaseModel) -> list[str]:
         """Optional closed command vocabulary this provider understands (Russian
-        words), for offline STT grammar restriction. Default: none. A provider that
-        maps utterances to a fixed command set (e.g. the offline Simple NLU intent
-        engine) overrides this; free-form LLM providers leave it empty."""
+        words), which a recognition chain narrows its STT to. Default: none. A
+        provider that maps utterances to a fixed command set (e.g. the offline Simple
+        NLU intent engine) overrides this; free-form LLM providers leave it empty."""
         return []
 
 

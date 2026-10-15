@@ -1,0 +1,872 @@
+{
+ "tools": [
+  {
+   "type": "function",
+   "function": {
+    "name": "set_light",
+    "parameters": {
+     "properties": {
+      "device_id": {
+       "type": "string",
+       "enum": [
+        "bright_room_light",
+        "low_room_light",
+        "table_light",
+        "kitchen_light",
+        "toilet_light",
+        "bathroom_light",
+        "corridor_light"
+       ]
+      },
+      "state": {
+       "type": "string",
+       "enum": [
+        "on",
+        "off"
+       ]
+      }
+     },
+     "required": [
+      "device_id",
+      "state"
+     ],
+     "type": "object"
+    }
+   }
+  },
+  {
+   "type": "function",
+   "function": {
+    "name": "set_dimmer",
+    "parameters": {
+     "properties": {
+      "device_id": {
+       "type": "string",
+       "enum": [
+        "night_light"
+       ]
+      },
+      "brightness": {
+       "type": "integer",
+       "minimum": 0,
+       "maximum": 100
+      }
+     },
+     "required": [
+      "device_id",
+      "brightness"
+     ],
+     "type": "object"
+    }
+   }
+  },
+  {
+   "type": "function",
+   "function": {
+    "name": "set_switch",
+    "parameters": {
+     "properties": {
+      "device_id": {
+       "type": "string",
+       "enum": [
+        "monitors"
+       ]
+      },
+      "state": {
+       "type": "string",
+       "enum": [
+        "on",
+        "off"
+       ]
+      }
+     },
+     "required": [
+      "device_id",
+      "state"
+     ],
+     "type": "object"
+    }
+   }
+  },
+  {
+   "type": "function",
+   "function": {
+    "name": "set_lock",
+    "parameters": {
+     "properties": {
+      "device_id": {
+       "type": "string",
+       "enum": [
+        "main_lock"
+       ]
+      },
+      "action": {
+       "type": "string",
+       "enum": [
+        "lock",
+        "unlock"
+       ]
+      }
+     },
+     "required": [
+      "device_id",
+      "action"
+     ],
+     "type": "object"
+    }
+   }
+  },
+  {
+   "type": "function",
+   "function": {
+    "name": "set_scene",
+    "parameters": {
+     "properties": {
+      "scene": {
+       "type": "string",
+       "enum": [
+        "night",
+        "morning"
+       ]
+      }
+     },
+     "required": [
+      "scene"
+     ],
+     "type": "object"
+    }
+   }
+  },
+  {
+   "type": "function",
+   "function": {
+    "name": "state",
+    "parameters": {
+     "properties": {},
+     "type": "object"
+    }
+   }
+  },
+  {
+   "type": "function",
+   "function": {
+    "name": "tavily_search",
+    "parameters": {
+     "properties": {
+      "query": {
+       "description": "Search query",
+       "type": "string"
+      },
+      "max_results": {
+       "default": 5,
+       "description": "The maximum number of search results to return",
+       "type": "integer"
+      },
+      "search_depth": {
+       "default": "basic",
+       "description": "The depth of the search. 'basic' for generic results, 'advanced' for more thorough search, 'fast' for optimized low latency with high relevance, 'ultra-fast' for prioritizing latency above all else",
+       "enum": [
+        "basic",
+        "advanced",
+        "fast",
+        "ultra-fast"
+       ],
+       "type": "string"
+      },
+      "topic": {
+       "const": "general",
+       "default": "general",
+       "description": "The category of the search. This will determine which of our agents will be used for the search",
+       "type": "string"
+      },
+      "time_range": {
+       "anyOf": [
+        {
+         "enum": [
+          "day",
+          "week",
+          "month",
+          "year"
+         ],
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "The time range back from the current date to include in the search results"
+      },
+      "include_images": {
+       "default": false,
+       "description": "Include a list of query-related images in the response",
+       "type": "boolean"
+      },
+      "include_image_descriptions": {
+       "default": false,
+       "description": "Include a list of query-related images and their descriptions in the response",
+       "type": "boolean"
+      },
+      "include_raw_content": {
+       "default": false,
+       "description": "Include the cleaned and parsed HTML content of each search result",
+       "type": "boolean"
+      },
+      "include_domains": {
+       "default": [],
+       "description": "A list of domains to specifically include in the search results, if the user asks to search on specific sites set this to the domain of the site",
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      },
+      "exclude_domains": {
+       "default": [],
+       "description": "List of domains to specifically exclude, if the user asks to exclude a domain set this to the domain of the site",
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      },
+      "country": {
+       "default": "",
+       "description": "Boost search results from a specific country. Must be a full country name (e.g., 'United States', 'Japan', 'Germany'). ISO country codes (e.g., 'us', 'jp') are not supported. Available only if topic is general. See https://docs.tavily.com/documentation/api-reference/search for the full list of supported countries.",
+       "type": "string"
+      },
+      "include_favicon": {
+       "default": false,
+       "description": "Whether to include the favicon URL for each result",
+       "type": "boolean"
+      },
+      "start_date": {
+       "default": "",
+       "description": "Will return all results after the specified start date. Required to be written in the format YYYY-MM-DD.",
+       "type": "string"
+      },
+      "end_date": {
+       "default": "",
+       "description": "Will return all results before the specified end date. Required to be written in the format YYYY-MM-DD",
+       "type": "string"
+      },
+      "exact_match": {
+       "anyOf": [
+        {
+         "type": "boolean"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "Only return results containing the exact phrase(s) in quotes in your query"
+      }
+     },
+     "required": [
+      "query"
+     ],
+     "type": "object",
+     "additionalProperties": false
+    }
+   }
+  },
+  {
+   "type": "function",
+   "function": {
+    "name": "tavily_extract",
+    "parameters": {
+     "properties": {
+      "urls": {
+       "description": "List of URLs to extract content from",
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      },
+      "extract_depth": {
+       "default": "basic",
+       "description": "Use 'advanced' for LinkedIn, protected sites, or tables/embedded content",
+       "enum": [
+        "basic",
+        "advanced"
+       ],
+       "type": "string"
+      },
+      "include_images": {
+       "default": false,
+       "description": "Include images from pages",
+       "type": "boolean"
+      },
+      "format": {
+       "default": "markdown",
+       "description": "Output format",
+       "enum": [
+        "markdown",
+        "text"
+       ],
+       "type": "string"
+      },
+      "include_favicon": {
+       "default": false,
+       "description": "Include favicon URLs",
+       "type": "boolean"
+      },
+      "query": {
+       "default": "",
+       "description": "Query to rerank content chunks by relevance",
+       "type": "string"
+      }
+     },
+     "required": [
+      "urls"
+     ],
+     "type": "object",
+     "additionalProperties": false
+    }
+   }
+  },
+  {
+   "type": "function",
+   "function": {
+    "name": "tavily_crawl",
+    "parameters": {
+     "properties": {
+      "url": {
+       "description": "The root URL to begin the crawl",
+       "type": "string"
+      },
+      "max_depth": {
+       "default": 1,
+       "description": "Max depth of the crawl. Defines how far from the base URL the crawler can explore.",
+       "minimum": 1,
+       "type": "integer"
+      },
+      "max_breadth": {
+       "default": 20,
+       "description": "Max number of links to follow per level of the tree (i.e., per page)",
+       "minimum": 1,
+       "type": "integer"
+      },
+      "limit": {
+       "default": 50,
+       "description": "Total number of links the crawler will process before stopping",
+       "minimum": 1,
+       "type": "integer"
+      },
+      "instructions": {
+       "default": "",
+       "description": "Natural language instructions for the crawler. Instructions specify which types of pages the crawler should return.",
+       "type": "string"
+      },
+      "select_paths": {
+       "default": [],
+       "description": "Regex patterns to select only URLs with specific path patterns (e.g., /docs/.*, /api/v1.*)",
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      },
+      "select_domains": {
+       "default": [],
+       "description": "Regex patterns to restrict crawling to specific domains or subdomains (e.g., ^docs\\.example\\.com$)",
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      },
+      "allow_external": {
+       "default": true,
+       "description": "Whether to return external links in the final response",
+       "type": "boolean"
+      },
+      "extract_depth": {
+       "default": "basic",
+       "description": "Advanced extraction retrieves more data, including tables and embedded content, with higher success but may increase latency",
+       "enum": [
+        "basic",
+        "advanced"
+       ],
+       "type": "string"
+      },
+      "format": {
+       "default": "markdown",
+       "description": "The format of the extracted web page content. markdown returns content in markdown format. text returns plain text and may increase latency.",
+       "enum": [
+        "markdown",
+        "text"
+       ],
+       "type": "string"
+      },
+      "include_favicon": {
+       "default": false,
+       "description": "Whether to include the favicon URL for each result",
+       "type": "boolean"
+      }
+     },
+     "required": [
+      "url"
+     ],
+     "type": "object",
+     "additionalProperties": false
+    }
+   }
+  },
+  {
+   "type": "function",
+   "function": {
+    "name": "tavily_map",
+    "parameters": {
+     "properties": {
+      "url": {
+       "description": "The root URL to begin the mapping",
+       "type": "string"
+      },
+      "max_depth": {
+       "default": 1,
+       "description": "Max depth of the mapping. Defines how far from the base URL the crawler can explore",
+       "minimum": 1,
+       "type": "integer"
+      },
+      "max_breadth": {
+       "default": 20,
+       "description": "Max number of links to follow per level of the tree (i.e., per page)",
+       "minimum": 1,
+       "type": "integer"
+      },
+      "limit": {
+       "default": 50,
+       "description": "Total number of links the crawler will process before stopping",
+       "minimum": 1,
+       "type": "integer"
+      },
+      "instructions": {
+       "default": "",
+       "description": "Natural language instructions for the crawler",
+       "type": "string"
+      },
+      "select_paths": {
+       "default": [],
+       "description": "Regex patterns to select only URLs with specific path patterns (e.g., /docs/.*, /api/v1.*)",
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      },
+      "select_domains": {
+       "default": [],
+       "description": "Regex patterns to restrict crawling to specific domains or subdomains (e.g., ^docs\\.example\\.com$)",
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      },
+      "allow_external": {
+       "default": true,
+       "description": "Whether to return external links in the final response",
+       "type": "boolean"
+      }
+     },
+     "required": [
+      "url"
+     ],
+     "type": "object",
+     "additionalProperties": false
+    }
+   }
+  },
+  {
+   "type": "function",
+   "function": {
+    "name": "tavily_research",
+    "parameters": {
+     "properties": {
+      "input": {
+       "description": "A comprehensive description of the research task",
+       "type": "string"
+      },
+      "model": {
+       "default": "auto",
+       "description": "Defines the degree of depth of the research. 'mini' is good for narrow tasks with few subtopics. 'pro' is good for broad tasks with many subtopics",
+       "enum": [
+        "mini",
+        "pro",
+        "auto"
+       ],
+       "type": "string"
+      }
+     },
+     "required": [
+      "input"
+     ],
+     "type": "object",
+     "additionalProperties": false
+    }
+   }
+  },
+  {
+   "type": "function",
+   "function": {
+    "name": "get_current_weather",
+    "parameters": {
+     "properties": {
+      "city": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "title": "City"
+      }
+     },
+     "title": "get_current_weatherArguments",
+     "type": "object"
+    }
+   }
+  },
+  {
+   "type": "function",
+   "function": {
+    "name": "get_weather_forecast",
+    "parameters": {
+     "properties": {
+      "date": {
+       "title": "Date",
+       "type": "string"
+      },
+      "city": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "title": "City"
+      }
+     },
+     "required": [
+      "date"
+     ],
+     "title": "get_weather_forecast_toolArguments",
+     "type": "object"
+    }
+   }
+  },
+  {
+   "type": "function",
+   "function": {
+    "name": "get_today_events",
+    "parameters": {
+     "properties": {},
+     "title": "get_today_eventsArguments",
+     "type": "object"
+    }
+   }
+  },
+  {
+   "type": "function",
+   "function": {
+    "name": "get_week_events",
+    "parameters": {
+     "properties": {},
+     "title": "get_week_eventsArguments",
+     "type": "object"
+    }
+   }
+  },
+  {
+   "type": "function",
+   "function": {
+    "name": "get_events",
+    "parameters": {
+     "properties": {
+      "start": {
+       "title": "Start",
+       "type": "string"
+      },
+      "end": {
+       "title": "End",
+       "type": "string"
+      }
+     },
+     "required": [
+      "start",
+      "end"
+     ],
+     "title": "get_eventsArguments",
+     "type": "object"
+    }
+   }
+  },
+  {
+   "type": "function",
+   "function": {
+    "name": "search_events",
+    "parameters": {
+     "properties": {
+      "query": {
+       "title": "Query",
+       "type": "string"
+      },
+      "start": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "title": "Start"
+      },
+      "end": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "title": "End"
+      }
+     },
+     "required": [
+      "query"
+     ],
+     "title": "search_eventsArguments",
+     "type": "object"
+    }
+   }
+  },
+  {
+   "type": "function",
+   "function": {
+    "name": "get_event_by_uid",
+    "parameters": {
+     "properties": {
+      "uid": {
+       "title": "Uid",
+       "type": "string"
+      }
+     },
+     "required": [
+      "uid"
+     ],
+     "title": "get_event_by_uidArguments",
+     "type": "object"
+    }
+   }
+  },
+  {
+   "type": "function",
+   "function": {
+    "name": "create_event",
+    "parameters": {
+     "properties": {
+      "summary": {
+       "title": "Summary",
+       "type": "string"
+      },
+      "start": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "title": "Start"
+      },
+      "end": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "title": "End"
+      },
+      "description": {
+       "default": "",
+       "title": "Description",
+       "type": "string"
+      },
+      "location": {
+       "default": "",
+       "title": "Location",
+       "type": "string"
+      },
+      "priority": {
+       "anyOf": [
+        {
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "title": "Priority"
+      },
+      "recurrence": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "title": "Recurrence"
+      },
+      "reminders": {
+       "anyOf": [
+        {
+         "items": {
+          "type": "integer"
+         },
+         "type": "array"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "title": "Reminders"
+      }
+     },
+     "required": [
+      "summary"
+     ],
+     "title": "create_eventArguments",
+     "type": "object"
+    }
+   }
+  },
+  {
+   "type": "function",
+   "function": {
+    "name": "delete_event",
+    "parameters": {
+     "properties": {
+      "uid": {
+       "title": "Uid",
+       "type": "string"
+      }
+     },
+     "required": [
+      "uid"
+     ],
+     "title": "delete_eventArguments",
+     "type": "object"
+    }
+   }
+  },
+  {
+   "type": "function",
+   "function": {
+    "name": "list_calendars",
+    "parameters": {
+     "properties": {},
+     "title": "list_calendarsArguments",
+     "type": "object"
+    }
+   }
+  },
+  {
+   "type": "function",
+   "function": {
+    "name": "set_reminder",
+    "parameters": {
+     "properties": {
+      "text": {
+       "title": "Text",
+       "type": "string"
+      },
+      "in_minutes": {
+       "anyOf": [
+        {
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "title": "In Minutes"
+      },
+      "at": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "title": "At"
+      }
+     },
+     "required": [
+      "text"
+     ],
+     "title": "set_reminderArguments",
+     "type": "object"
+    }
+   }
+  },
+  {
+   "type": "function",
+   "function": {
+    "name": "list_reminders",
+    "parameters": {
+     "properties": {},
+     "title": "list_remindersArguments",
+     "type": "object"
+    }
+   }
+  },
+  {
+   "type": "function",
+   "function": {
+    "name": "cancel_reminder",
+    "parameters": {
+     "properties": {
+      "reminder_id": {
+       "title": "Reminder Id",
+       "type": "integer"
+      }
+     },
+     "required": [
+      "reminder_id"
+     ],
+     "title": "cancel_reminderArguments",
+     "type": "object"
+    }
+   }
+  }
+ ],
+ "nlu": {
+  "aliases": "свет в зале, большой свет, верхний свет, люстра = bright_room_light\nтусклый свет, приглушённый свет, нижний свет = low_room_light\nнастольная лампа, лампа на столе, настольный свет = table_light\nсвет на кухне, кухня, кухонный свет = kitchen_light\nсвет в туалете, туалет = toilet_light\nсвет в ванной, ванная = bathroom_light\nсвет в коридоре, коридор, прихожая = corridor_light\nночник = night_light\nкондиционер, кондей, климат = room_ac\nмониторы, монитор, экраны = monitors\nзамок, дверь = main_lock\nночь, спокойной ночи, ночной режим = night\nутро, доброе утро, утренний режим = morning\n# свет (set_light)\n# ночник (set_dimmer)\n# кондиционер (set_climate)\n# мониторы (set_switch)\n# замок (set_lock)\n# сцены (set_scene)",
+  "actions": "on = включи, включай, зажги, зажги свет, вруби, врубай, запусти\noff = выключи, выключай, погаси, выруби, отключи, останови\nlock = закрой, заблокируй\nunlock = открой, разблокируй",
+  "min_confidence": 0.5,
+  "fuzzy_threshold": 82,
+  "level_on": 100,
+  "off_token": "off"
+ }
+}

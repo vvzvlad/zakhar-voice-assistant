@@ -52,7 +52,7 @@ class LlmStage:
         self._hub = hub
         self._cfg = cfg
 
-    async def respond(self, req: LlmRequest, *, on_filler=None) -> LlmResult:
+    async def respond(self, req: LlmRequest, *, on_filler=None, has_next: bool = False) -> LlmResult:
         """Drive the LLM backend with the request and return an LlmResult.
 
         Runs an agentic loop: model -> tool_calls -> execute via the hub -> feed
@@ -66,11 +66,16 @@ class LlmStage:
         the (slow) tool + final round run. Best-effort: it never affects the result
         or control flow, and its failures are swallowed with a warning.
 
+        `has_next` is passed to every backend round: True when a later recognition
+        chain would take the utterance if this handler declines. A backend's
+        stage_errors.Declined propagates unchanged.
+
         On failure raises StageError("llm", ...) (kind="rate_limit" for HTTP 429);
         the orchestrator maps it to a configured spoken phrase. The observability
-        data accumulated before the failure (model/tokens/rounds/request) is
-        attached to the exception as `err.partial`, so the orchestrator can still
-        record what happened up to the failure point.
+        data accumulated before the failure (model/tokens/rounds/request, and
+        tool_used — whether a tool already ran) is attached to the exception as
+        `err.partial`, so the orchestrator can still record what happened up to the
+        failure point.
         """
         hub = self._hub
         cfg = self._cfg
@@ -108,6 +113,7 @@ class LlmStage:
                 "tokens": tokens,
                 "rounds": rounds,
                 "request": request_debug,
+                "tool_used": tool_executed,
             }
             return err
 
@@ -125,7 +131,7 @@ class LlmStage:
         for _ in range(cfg.max_tool_rounds):
             round_no += 1
             try:
-                data = await self._backend.complete(messages, hub.tools or None)
+                data = await self._backend.complete(messages, hub.tools or None, has_next=has_next)
             except httpx.HTTPStatusError as e:
                 # Log full status + body for diagnostics; the orchestrator decides
                 # what (if anything) is spoken to the user.

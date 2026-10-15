@@ -1,16 +1,18 @@
 // @vitest-environment jsdom
-// Integration tests (jsdom) for the provider stage pages (LLM). Pins the
-// key={selected} on <SchemaForm> in ProviderStage: dynamic selects fetch their
-// option list once on mount, and providers often share an identical field set
-// (openrouter / groq both expose `model`), so WITHOUT the key a provider switch
-// is reconciled in place and the dropdown keeps showing the PREVIOUS provider's
-// options. The key forces a remount, so every DynamicSelect refetches for the
-// newly selected provider.
+// Integration tests (jsdom) for the provider-tab pages (STT / LLM). Pins:
+//   - switching a tab only changes the view: it sends NO patch,
+//   - the tab's form remounts, so a dynamic select refetches for the NEW provider
+//     (openrouter / groq both expose `model`; without the remount the dropdown
+//     would keep the previous provider's options),
+//   - saving patches only that provider's instance, never routing,
+//   - the "used in chains" line, the offline command engine kept off the LLM tabs,
+//   - a "configure" link from another page opens its provider's tab.
 import React from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
-import { LLM } from "../pages/stages.jsx";
+import { LLM, STT } from "../pages/stages.jsx";
 import { useAppData } from "../appData.jsx";
+import { navTab, setNavigate } from "../navStore.js";
 import * as api from "../api.js";
 
 vi.mock("../appData.jsx", () => ({ useAppData: vi.fn() }));
@@ -27,64 +29,103 @@ vi.mock("../api.js", () => ({
 
 afterEach(cleanup);
 
-// Minimal-but-realistic catalog mirroring /api/catalog: an llm category with two
-// providers whose schemas have the SAME field set (a dynamic `model` select).
-function makeCatalog(selected = "openrouter") {
-  const schema = {
-    type: "object",
-    properties: { model: { type: "string", options: "dynamic" } },
-  };
+// Catalog mirroring /api/catalog: llm and stt categories WITHOUT `selected`; the
+// two llm providers share the same field set (a dynamic `model` select).
+function makeCatalog() {
+  const schema = { type: "object", properties: { model: { type: "string", options: "dynamic" } } };
   return {
-    categories: [{
-      id: "llm",
-      selected,
-      providers: [
-        { id: "openrouter", label: "OpenRouter", schema, values: { model: "openrouter/auto" } },
-        { id: "groq", label: "Groq", schema, values: { model: "llama-3-70b" } },
-      ],
-    }],
+    categories: [
+      {
+        id: "llm",
+        providers: [
+          { id: "openrouter", label: "OpenRouter", schema, values: { model: "openrouter/auto" } },
+          { id: "groq", label: "Groq", schema, values: { model: "llama-3-70b" } },
+          { id: "simple-nlu", label: "Commands", schema: { type: "object", properties: {} }, values: {}, has_vocabulary: true },
+        ],
+      },
+      {
+        id: "stt",
+        providers: [
+          { id: "vosk", label: "Vosk", schema: { type: "object", properties: {} }, values: {}, supports_vocabulary: true },
+          { id: "groq", label: "Groq Whisper", schema: { type: "object", properties: {} }, values: {} },
+        ],
+      },
+    ],
     core: { schema: {}, values: {} },
   };
 }
+
+const config = {
+  core: {
+    chains: [
+      { name: "fast", enabled: true, stt: "vosk", handler: "simple-nlu", narrow: true, parallel: false },
+      { name: "smart", enabled: true, stt: "groq", handler: "openrouter", narrow: false, parallel: true },
+    ],
+  },
+};
 
 let patch;
 beforeEach(() => {
   vi.clearAllMocks();
   patch = vi.fn(async () => ({}));
+  useAppData.mockReturnValue({ catalog: makeCatalog(), config, patch });
 });
 
-function mockData(catalog) {
-  useAppData.mockReturnValue({ catalog, config: {}, patch });
-}
-
-describe("LLM page — dynamic options refetch on provider switch", () => {
-  it("refetches the model options for the NEW plugin and shows its catalog in the dropdown", async () => {
-    mockData(makeCatalog("openrouter"));
-    const { rerender } = render(<LLM />);
-
-    // Initial mount fetches the options for the currently selected provider.
+describe("LLM page — provider tabs", () => {
+  it("switching a tab sends no patch and refetches the model options for the new provider", async () => {
+    render(<LLM />);
+    // The first enabled chain uses simple-nlu, which is not an LLM tab, so the
+    // page opens on the first LLM provider.
     await waitFor(() => expect(api.getOptions).toHaveBeenCalledWith("llm", "openrouter", "model"));
 
-    // Switch the provider: the Selector patches {llm:{selected:"groq"}} …
     fireEvent.click(screen.getByText("groq"));
-    await waitFor(() => expect(patch).toHaveBeenCalledTimes(1));
-    expect(patch.mock.calls[0][0]).toEqual({ llm: { selected: "groq" } });
-
-    // … and the app context delivers the updated catalog (patch → refetch in
-    // the real appData provider); mirror that by updating the mocked context.
-    mockData(makeCatalog("groq"));
-    rerender(<LLM />);
-
-    // The remounted DynamicSelect must refetch with the NEW plugin id.
     await waitFor(() => expect(api.getOptions).toHaveBeenCalledWith("llm", "groq", "model"));
+    await Promise.resolve();
+    expect(patch).not.toHaveBeenCalled();
 
-    // Open the model dropdown: it must list groq's catalog, not openrouter's.
-    // (DynamicSelect deliberately keeps the mount-time current value selectable
-    // even when the fetched list omits it, so we only assert that the OLD
-    // provider's fetched catalog entries are gone — not the carried-over value.)
+    // The remounted dropdown lists groq's catalog, not openrouter's.
     fireEvent.click(screen.getByRole("button", { name: /llama-3-70b/ }));
     const listbox = await screen.findByRole("listbox");
     await waitFor(() => expect(screen.getByText("mixtral-8x7b")).toBeInTheDocument());
     expect(listbox.textContent).not.toContain("anthropic/claude");
+  });
+
+  it("keeps the offline command engine off the tabs and shows which chains use the provider", async () => {
+    render(<LLM />);
+    expect(screen.queryByText("simple-nlu")).toBeNull();
+    expect(screen.getByText("Used in chains: smart")).toBeInTheDocument();
+    fireEvent.click(screen.getByText("groq"));
+    expect(screen.getByText("Not used in any chain")).toBeInTheDocument();
+    await waitFor(() => expect(api.getOptions).toHaveBeenCalledWith("llm", "groq", "model"));
+  });
+
+  it("saving patches only the shown provider's instance", async () => {
+    render(<LLM />);
+    fireEvent.click(screen.getByText("groq"));
+    fireEvent.click(screen.getByRole("button", { name: /llama-3-70b/ }));
+    fireEvent.click(await screen.findByText("mixtral-8x7b"));
+    fireEvent.click(screen.getByText("Save changes"));
+    await waitFor(() => expect(patch).toHaveBeenCalledTimes(1));
+    expect(patch.mock.calls[0][0]).toEqual({ llm: { instances: { groq: { model: "mixtral-8x7b" } } } });
+  });
+});
+
+describe("STT page — provider tabs", () => {
+  it("opens on the first enabled chain's STT", () => {
+    render(<STT />);
+    expect(screen.getByText("Used in chains: fast")).toBeInTheDocument();
+    expect(screen.getByText("vosk")).toHaveClass("on");
+  });
+
+  it("opens the tab a configure link asked for", () => {
+    setNavigate(() => {});
+    navTab("stt", "groq");
+    render(<STT />);
+    expect(screen.getByText("groq")).toHaveClass("on");
+    expect(screen.getByText("Used in chains: smart")).toBeInTheDocument();
+    // The request is consumed: a later plain visit opens the default tab.
+    cleanup();
+    render(<STT />);
+    expect(screen.getByText("vosk")).toHaveClass("on");
   });
 });

@@ -1,8 +1,8 @@
 // Client-side mirror of the backend /api/runs filters, kept separate from
 // pages/log.jsx so it can be unit-tested.
 // Used to decide whether a live-pushed run matches the current UI filters.
-// device: exact; result: all|errors|ok; search: case-insensitive substring
-// over recognized/response text.
+// device and chain: exact; result: all|errors|ok; search: case-insensitive
+// substring over recognized/response text.
 //
 // Two known, intentional points to keep in sync with the backend (src/runs_store.py list()):
 // 1. The UI's `result` filter domain is only "all" | "errors" | "ok" | "rejected" (the chip
@@ -13,8 +13,9 @@
 //    case-sensitive). For an uppercase-Cyrillic search term a live-pushed row may therefore
 //    appear that a fresh server fetch would not return; the next manual reload/filter-change
 //    re-runs the server query and reconciles. This is a known, accepted minor divergence.
-export function matchesFilters(row, { result, search, device }) {
+export function matchesFilters(row, { result, search, device, chain = "" }) {
   if (device.trim() && row.device !== device.trim()) return false;
+  if (chain.trim() && row.chain !== chain.trim()) return false;
   if (result === "errors" && row.result !== "error") return false;
   if (result === "ok" && !(row.result === "ok" || row.result === "tool")) return false;
   // "rejected" surfaces only runs the wake-word verifier blocked.

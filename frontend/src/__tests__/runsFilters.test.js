@@ -33,6 +33,14 @@ describe("matchesFilters", () => {
     expect(matchesFilters({ device: "d", result: "rejected" }, { ...NO_FILTERS, result: "ok" })).toBe(false);
   });
 
+  it("chain filter is exact-match, trimmed, and keeps rows when empty", () => {
+    const row = { device: "d", result: "ok", chain: "smart" };
+    expect(matchesFilters(row, { ...NO_FILTERS, chain: " smart " })).toBe(true);
+    expect(matchesFilters(row, { ...NO_FILTERS, chain: "sm" })).toBe(false);
+    expect(matchesFilters({ device: "d", result: "ok", chain: null }, { ...NO_FILTERS, chain: "smart" })).toBe(false);
+    expect(matchesFilters(row, { ...NO_FILTERS, chain: "" })).toBe(true);
+  });
+
   it("result 'rejected' accepts only wake-word-rejected rows", () => {
     expect(matchesFilters({ device: "d", result: "rejected" }, { ...NO_FILTERS, result: "rejected" })).toBe(true);
     expect(matchesFilters({ device: "d", result: "ok" }, { ...NO_FILTERS, result: "rejected" })).toBe(false);

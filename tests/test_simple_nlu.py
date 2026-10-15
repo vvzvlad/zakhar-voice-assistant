@@ -4,12 +4,16 @@ The provider uses NO LLM and NO network. These tests exercise primarily the
 DETERMINISTIC path with an INJECTED identity lemmatizer (`lambda w: w.lower()`),
 so they do not depend on pymorphy3/sklearn being installed or on classifier
 quality. They cover registration, the pure helpers, the OpenAI-shaped envelope
-across both rounds, and one end-to-end pass through the real LlmStage loop.
+across both rounds, one end-to-end pass through the real LlmStage loop, and strict
+mode (a later chain exists). The production-catalog regression at the end runs
+with real pymorphy3 and is skipped without it.
 """
 
 import json
+from pathlib import Path
 
 import httpx
+import pytest
 
 import src.plugins  # noqa: F401  triggers @register on all providers
 from src.llm import LlmRequest, LlmStage
@@ -23,6 +27,7 @@ from src.plugins.llm.simple_nlu import (
     parse_actions,
     parse_aliases,
 )
+from src.stage_errors import Declined
 
 
 def _deps():
@@ -108,10 +113,14 @@ _ALIASES = (
 )
 
 
-def _backend():
+def _backend(*, lemmas=None, filler_text=None):
+    """Backend over FAKE_TOOLS. The lemmatizer is the identity, except for the words
+    `lemmas` maps (to stand in for pymorphy3 equating word forms)."""
+    lemmas = lemmas or {}
     return SimpleNluBackend(
         aliases_text=_ALIASES,
         actions_text=SimpleNluConfig().actions,
+        filler_text=SimpleNluConfig().filler_words if filler_text is None else filler_text,
         min_confidence=SimpleNluConfig().min_confidence,
         fuzzy_threshold=SimpleNluConfig().fuzzy_threshold,
         level_on=SimpleNluConfig().level_on,
@@ -119,7 +128,7 @@ def _backend():
         reply_unmatched=SimpleNluConfig().reply_unmatched,
         reply_done=SimpleNluConfig().reply_done,
         reply_error=SimpleNluConfig().reply_error,
-        lemmatizer=lambda w: w.lower(),
+        lemmatizer=lambda w: lemmas.get(w.lower(), w.lower()),
     )
 
 
@@ -375,5 +384,143 @@ def test_nlu_vocabulary_empty_inputs_still_have_number_words():
 def test_simple_nlu_provider_vocabulary_matches_pure_function():
     aliases = "свет в зале, люстра = bright_room_light"
     actions = "on = включи\noff = выключи"
-    cfg = SimpleNluConfig(aliases=aliases, actions=actions)
-    assert SimpleNluProvider().vocabulary(cfg) == nlu_vocabulary(aliases, actions)
+    fillers = "захар, ну-ка"
+    cfg = SimpleNluConfig(aliases=aliases, actions=actions, filler_words=fillers)
+    vocab = SimpleNluProvider().vocabulary(cfg)
+    assert vocab == nlu_vocabulary(aliases, actions, fillers)
+    # Filler words are in the grammar, split into words like phrases are, so a
+    # narrowed STT emits them rather than "[unk]".
+    assert {"захар", "ну", "ка"} <= set(vocab)
+
+
+# --- strict mode (a later chain takes what this handler declines) ------------ #
+
+async def _strict(backend, text, tools=FAKE_TOOLS):
+    """(tool name, args) the backend calls for `text` with a later chain behind it.
+    Declined propagates."""
+    data = await backend.complete([{"role": "user", "content": text}], tools, has_next=True)
+    call = data["choices"][0]["message"]["tool_calls"][0]["function"]
+    return call["name"], json.loads(call["arguments"])
+
+
+@pytest.mark.parametrize("text, name, args", [
+    # Filler words, the verb and the alias phrase explain every word.
+    ("Захар, включи-ка свет в зале, пожалуйста", "set_light",
+     {"entity": "bright_room_light", "state": "on"}),
+    # The off-verb is explained by the level slot it filled.
+    ("выключи ночник", "set_dimmer", {"device_id": "night_light", "brightness": 0}),
+    # Number words and digits are explained by the number they filled.
+    ("ночник двадцать пять", "set_dimmer", {"device_id": "night_light", "brightness": 25}),
+    ("ночник 30", "set_dimmer", {"device_id": "night_light", "brightness": 30}),
+    # A scene alias alone needs no verb.
+    ("ночь", "set_scene", {"scene": "night"}),
+])
+async def test_strict_runs_a_command_whose_every_word_is_explained(text, name, args):
+    assert await _strict(_backend(), text) == (name, args)
+
+
+@pytest.mark.parametrize("text", [
+    "включи свет в зале и расскажи анекдот",  # words outside the command
+    "включи свет в зале и выключи ночник",    # two verbs, two devices
+    "включи ночь",                             # the verb fills no slot of set_scene
+    "включи свет в зале 30",                   # a number that fills no slot
+    "включи [unk] свет в зале",                # a word the narrowed STT did not know
+    "расскажи анекдот",                        # no command at all
+])
+async def test_strict_declines_an_unexplained_word(text):
+    with pytest.raises(Declined) as ei:
+        await _strict(_backend(), text)
+    assert ei.value.reply == SimpleNluConfig().reply_unmatched
+
+
+async def test_last_chain_ignores_extra_words_as_before():
+    # Without a later chain there is no coverage gate: the same utterances still run.
+    backend = _backend()
+    on = ("set_light", {"entity": "bright_room_light", "state": "on"})
+    assert await _call_args(backend, "включи свет в зале и расскажи анекдот") == on
+    assert await _call_args(backend, "включи [unk] свет в зале") == on
+    assert await _call_args(backend, "включи ночь") == ("set_scene", {"scene": "night"})
+
+
+async def test_strict_matches_verbs_by_word_form_not_by_lemma():
+    # pymorphy3 gives «закрыл» and «закрой» one lemma, so a question about the past
+    # reads as a command; strict mode needs the verb's exact word form.
+    backend = _backend(lemmas={"включил": "включи"})
+    on = ("set_light", {"entity": "bright_room_light", "state": "on"})
+    assert await _call_args(backend, "включил свет в зале") == on
+    with pytest.raises(Declined):
+        await _strict(backend, "включил свет в зале")
+
+
+async def test_strict_matches_filler_words_by_word_form():
+    # pymorphy3 lemmatizes the filler «мне» to «я»: fillers match by word form, so
+    # «мне» is explained by itself and not by a filler «я».
+    lemmas = {"мне": "я"}
+    assert await _strict(_backend(lemmas=lemmas), "включи мне свет в зале") == (
+        "set_light", {"entity": "bright_room_light", "state": "on"})
+    with pytest.raises(Declined):
+        await _strict(_backend(lemmas=lemmas, filler_text="я"), "включи мне свет в зале")
+
+
+async def test_strict_ignores_fuzzy_matches(monkeypatch):
+    # A fuzzy phrase hit (forced here) runs a command only without a later chain.
+    backend = _backend()
+    monkeypatch.setattr(backend, "_fuzzy_ratio", lambda a, b: 100.0)
+    assert await _call_args(backend, "включи свет в зало") == (
+        "set_light", {"entity": "bright_room_light", "state": "on"})
+    with pytest.raises(Declined):
+        await _strict(backend, "включи свет в зало")
+
+
+async def test_strict_round2_still_confirms():
+    # A tool already ran: round 2 confirms it and never declines.
+    messages = [
+        {"role": "user", "content": "включи свет в зале"},
+        {"role": "tool", "tool_call_id": "call_0", "name": "set_light", "content": "ok"},
+    ]
+    data = await _backend().complete(messages, FAKE_TOOLS, has_next=True)
+    assert data["choices"][0]["message"]["content"] == SimpleNluConfig().reply_done
+
+
+# --- production catalog regression (real pymorphy3) -------------------------- #
+
+# The production tool catalog (every MCP source, as the panel's /api/tools lists it)
+# and the Simple NLU settings it runs with.
+_PROD = json.loads(
+    (Path(__file__).parent / "fixtures" / "simple_nlu_prod_catalog.json").read_text(encoding="utf-8")
+)
+
+
+@pytest.fixture(scope="module")
+def prod_backend():
+    pytest.importorskip("pymorphy3")
+    return get_provider("llm", "simple-nlu").create(SimpleNluConfig(**_PROD["nlu"]), _deps())
+
+
+@pytest.mark.parametrize("text", [
+    "Захар, какая погода будет утром?",
+    "Захар, кто-то открыл дверь?",
+    "Захар, я закрыл дверь?",
+    "Захар, почему свет в зале мигает, когда я его включаю?",
+    "Захар, включи свет в зале и расскажи анекдот",
+    "Захар, включи свет на кухне и выключи в коридоре",
+    "Захар, напомни через десять минут выключить ночник",
+    "Захар, доброе утро, какие у меня встречи сегодня?",
+    "Захар, сколько стоит новый монитор?",
+    "Захар, что лучше: кондиционер или вентилятор?",
+    "Захар, какая погода в Москве?",
+    "Захар, выключи всё",
+    "Захар выключен ночник",
+])
+async def test_prod_catalog_strict_declines(prod_backend, text):
+    with pytest.raises(Declined):
+        await _strict(prod_backend, text, _PROD["tools"])
+
+
+@pytest.mark.parametrize("text, name, args", [
+    ("Захар, спокойной ночи", "set_scene", {"scene": "night"}),
+    ("Захар, включи настольный свет", "set_light", {"device_id": "table_light", "state": "on"}),
+    ("Захар  Ночник 50.", "set_dimmer", {"device_id": "night_light", "brightness": 50}),
+])
+async def test_prod_catalog_strict_runs_plain_commands(prod_backend, text, name, args):
+    assert await _strict(prod_backend, text, _PROD["tools"]) == (name, args)
