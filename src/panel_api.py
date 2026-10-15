@@ -32,7 +32,7 @@ from loguru import logger
 from multidict import CIMultiDict
 from pydantic import ValidationError
 
-from src import config_store
+from src import config_store, dataset_jobs
 from src.audio_prep import pcm_to_wav_bytes
 from src.capture_jobs import CaptureJobManager
 from src.device_server import CAPTURE_MAX_SECONDS, CaptureBusyError
@@ -236,6 +236,12 @@ class PanelServer:
         # Background capture jobs: the recording runs as a server-side task so a
         # browser disconnect cannot cancel it.
         self._capture_jobs = CaptureJobManager(device_capture) if device_capture is not None else None
+        # Wake-word dataset sessions (a beep, then a capture, per take) run server-side too;
+        # they need both device callables, else every /api/datasets* endpoint returns 503.
+        self._dataset_jobs = (
+            dataset_jobs.DatasetJobManager(device_capture, device_play)
+            if device_capture is not None and device_play is not None else None
+        )
         self.static_dir = static_dir
         self.runs_store = runs_store
         self.tool_sources = tool_sources
@@ -838,6 +844,116 @@ class PanelServer:
             headers={"Content-Disposition": f'attachment; filename="{filename}"'},
         )
 
+    # --- wake-word dataset recording -------------------------------------------
+    def _dataset_refusal(self, name: str) -> web.Response | None:
+        """503 when dataset recording is not wired, 400 for an invalid set name, else None."""
+        if self._dataset_jobs is None:
+            return web.json_response({"error": "dataset recording not available"}, status=503)
+        if not dataset_jobs.valid_name(name):
+            return web.json_response(
+                {"error": 'set name must be 1..64 letters, digits, "_" or "-"'}, status=400
+            )
+        return None
+
+    async def _post_dataset(self, request: web.Request) -> web.Response:
+        """Start a wake-word dataset recording session on a device (non-blocking).
+
+        Path: the set name (1..64 letters, digits, "_" or "-"; Cyrillic is fine). Body:
+        {"device": "<name>", "takes": <int 1..1000>, "seconds": <int 1..10, default 3>}.
+        Each take: the device beeps (the synthesized chime; a device without a speaker
+        records without it), then records `seconds` of mic audio, saved as the set's next
+        <DATA_DIR>/datasets/<name>/<NNNN>.wav — numbering continues after the highest
+        existing clip, so a later session extends the set. Takes run back to back as a
+        SERVER-SIDE background task (a 200-take session runs ~15 minutes), so the request
+        returns at once; progress shows in GET /api/datasets.
+
+        Status codes:
+          - 202 started (returns the job snapshot, state "recording")
+          - 400 bad input or set name
+          - 409 a dataset session is already running on that device
+          - 503 dataset recording not wired (no DeviceManager)
+        A failing take (offline or unknown device, empty recording, timeout) does not fail
+        this request: it ends the session as state "error" with the message, and the clips
+        already written stay. There are no retries.
+        """
+        name = request.match_info["name"]
+        refusal = self._dataset_refusal(name)
+        if refusal is not None:
+            return refusal
+        body = await _read_json(request)
+        if not isinstance(body, dict):
+            return web.json_response({"error": "body must be a JSON object"}, status=400)
+        device = body.get("device")
+        if not isinstance(device, str) or not device:
+            return web.json_response(
+                {"error": 'field "device" (string) is required'}, status=400
+            )
+        takes = body.get("takes")
+        # Reject non-integers (bools are ints in Python, so exclude them explicitly).
+        if (not isinstance(takes, int) or isinstance(takes, bool)
+                or not 1 <= takes <= dataset_jobs.MAX_TAKES):
+            return web.json_response(
+                {"error": f'field "takes" (integer 1..{dataset_jobs.MAX_TAKES}) is required'},
+                status=400,
+            )
+        seconds = body.get("seconds", dataset_jobs.DEFAULT_SECONDS)
+        if (not isinstance(seconds, int) or isinstance(seconds, bool)
+                or not 1 <= seconds <= dataset_jobs.MAX_SECONDS):
+            return web.json_response(
+                {"error": f'field "seconds" must be an integer 1..{dataset_jobs.MAX_SECONDS}'},
+                status=400,
+            )
+        try:
+            snap = self._dataset_jobs.start(name, device, takes, seconds)
+        except CaptureBusyError as e:
+            return web.json_response({"error": str(e)}, status=409)
+        return web.json_response(snap, status=202)
+
+    async def _get_datasets(self, request: web.Request) -> web.Response:
+        """List the dataset sets: {"sets": [{"name", "clips", "job"}]}.
+
+        Every set directory on disk with its WAV count, plus the set's latest session
+        snapshot (running or finished; kept until the next session of that set starts), or
+        null when no session of it ran since the server started.
+        """
+        if self._dataset_jobs is None:
+            return web.json_response({"error": "dataset recording not available"}, status=503)
+        return web.json_response({"sets": self._dataset_jobs.sets()})
+
+    async def _post_dataset_stop(self, request: web.Request) -> web.Response:
+        """Stop the set's running session after the current take (it ends as "stopped").
+
+        Returns the session snapshot (still "recording" until that take is written);
+        404 when no session of the set is running.
+        """
+        name = request.match_info["name"]
+        refusal = self._dataset_refusal(name)
+        if refusal is not None:
+            return refusal
+        try:
+            snap = self._dataset_jobs.stop(name)
+        except LookupError as e:
+            return web.json_response({"error": str(e)}, status=404)
+        return web.json_response(snap)
+
+    async def _get_dataset_zip(self, request: web.Request) -> web.Response:
+        """Download the set's WAVs as one zip archive; 404 when the set does not exist."""
+        name = request.match_info["name"]
+        refusal = self._dataset_refusal(name)
+        if refusal is not None:
+            return refusal
+        # A large set is tens of megabytes: read and pack it off the event loop.
+        data = await asyncio.to_thread(dataset_jobs.zip_set, name)
+        if data is None:
+            return web.json_response({"error": f"no dataset {name!r}"}, status=404)
+        # Sanitize the set name for the download filename (ascii alnum/._- only).
+        safe_name = "".join(c if c.isascii() and (c.isalnum() or c in "._-") else "_" for c in name)
+        return web.Response(
+            body=data,
+            content_type="application/zip",
+            headers={"Content-Disposition": f'attachment; filename="{safe_name}.zip"'},
+        )
+
     async def _get_tools(self, request: web.Request) -> web.Response:
         # Live tool sources from the ToolHub (external MCP + built-ins). describe()
         # is in-memory/sync, so no to_thread is needed. None -> empty list.
@@ -1103,6 +1219,10 @@ class PanelServer:
             web.post("/api/capture", self._post_capture),
             web.get("/api/capture", self._get_capture_status),
             web.get("/api/capture/result", self._get_capture_result),
+            web.get("/api/datasets", self._get_datasets),
+            web.post("/api/datasets/{name}", self._post_dataset),
+            web.post("/api/datasets/{name}/stop", self._post_dataset_stop),
+            web.get("/api/datasets/{name}.zip", self._get_dataset_zip),
             web.get("/api/tools", self._get_tools),
             web.get("/api/runs", self._get_runs),
             web.get("/api/runs/stream", self._runs_stream),  # before {id}: literal wins
@@ -1152,10 +1272,12 @@ class PanelServer:
         app.on_shutdown.append(_close_ws_clients)
 
         async def _close_capture_jobs(_app: web.Application) -> None:
-            # Cancel any in-flight background capture tasks on shutdown so cleanup()
+            # Cancel any in-flight background capture and dataset tasks on shutdown so cleanup()
             # doesn't wait on them (and so they don't outlive the server).
             if self._capture_jobs is not None:
                 await self._capture_jobs.close()
+            if self._dataset_jobs is not None:
+                await self._dataset_jobs.close()
         app.on_shutdown.append(_close_capture_jobs)
         return app
 
