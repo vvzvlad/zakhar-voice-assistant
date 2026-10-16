@@ -2,12 +2,14 @@
 // Integration tests (jsdom) for the chain parts of the Request Log: the Chain
 // column, the chain filter forwarded to /api/runs, and the run detail listing
 // the chain and TTS attempts in the order they ran, with why a handler declined.
+// Also the device column, which shows a device's label and filters by it.
 import React from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
 import Log from "../pages/log.jsx";
 import { getRuns, getRun } from "../api.js";
 
+vi.mock("../appData.jsx", () => ({ useDeviceList: () => [{ name: "kitchen", label: "Кухня" }] }));
 vi.mock("../api.js", () => ({
   getRuns: vi.fn(),
   getRun: vi.fn(),
@@ -34,6 +36,13 @@ describe("Request log — chains", () => {
 
     fireEvent.change(screen.getByPlaceholderText("Chain…"), { target: { value: " fast " } });
     await waitFor(() => expect(getRuns).toHaveBeenLastCalledWith({ limit: 100, offset: 0, chain: "fast" }));
+  });
+
+  it("shows the device's label and filters by it as the device id", async () => {
+    render(<Log />);
+    expect(await screen.findAllByText("Кухня")).toHaveLength(2);
+    fireEvent.change(screen.getByPlaceholderText("Device…"), { target: { value: "Кухня" } });
+    await waitFor(() => expect(getRuns).toHaveBeenLastCalledWith({ limit: 100, offset: 0, device: "kitchen" }));
   });
 
   it("lists the run's attempts in order with text, outcome, error and timings", async () => {

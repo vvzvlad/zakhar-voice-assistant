@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { useAppData } from "../appData.jsx";
+import { deviceLabel } from "../format.js";
 import { nav } from "../navStore.js";
 import { fmtSec } from "../runsModel.js";
 import { shouldNotify, toastFromRun, pushToast } from "../toastModel.js";
@@ -12,7 +13,7 @@ const TOAST_TTL_MS = 6000; // auto-dismiss delay per toast
 // (Dashboard / Request Log). Clicking a toast deep-links to that run in the
 // Log page (finalized runs only — live ones have no id yet).
 export function Toasts({ active }) {
-  const { subscribeRuns } = useAppData();
+  const { subscribeRuns, catalog } = useAppData();
   const [toasts, setToasts] = useState([]);
   // The subscription is opened once; read the current page through a ref so
   // the listener never holds a stale `active`.
@@ -69,7 +70,7 @@ export function Toasts({ active }) {
         <span className={"z-dot " + (t.tone === "good" ? "ok" : t.tone === "bad" ? "error" : "off")} />
         <div className="z-toast-body">
           <div className="z-toast-head">
-            <b>{t.device}</b>
+            <b>{deviceLabel(catalog?.core?.values?.devices, t.device)}</b>
             <span className={"z-st " + t.tone}>{t.label}</span>
             {t.totalMs != null && <span className="z-toast-time">{fmtSec(t.totalMs)}</span>}
           </div>

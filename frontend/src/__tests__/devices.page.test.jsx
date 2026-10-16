@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
 // Devices page: every write of the device list starts from the server's current
 // list (a cutoff set from a slider, a device that connected while the page was
-// open), the Edit dialog shows the name read-only and why its controls cannot
-// load, and a slider write or a newly connected device refreshes the app's config
-// snapshot.
+// open), the Edit dialog shows the id read-only, saves a display label, and shows
+// why its controls cannot load, and a slider write or a newly connected device
+// refreshes the app's config snapshot.
 import React from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
@@ -57,7 +57,7 @@ describe("Devices page", () => {
   it("adds to the server's current list", async () => {
     render(<Devices />);
     fireEvent.click(screen.getByText("Add speaker"));
-    fireEvent.change(screen.getByPlaceholderText("e.g. hallway"), { target: { value: "porch" } });
+    fireEvent.change(screen.getByPlaceholderText("e.g. fc012cd1e5ec"), { target: { value: "porch" } });
     fireEvent.click(screen.getByText("Save"));
     await waitFor(() => expect(data.patch).toHaveBeenCalledTimes(1));
     expect(data.patch).toHaveBeenCalledWith({ core: { devices: [
@@ -82,7 +82,25 @@ describe("Devices page", () => {
     await waitFor(() => expect(data.refreshConfig).toHaveBeenCalledTimes(1));
   });
 
-  it("edit shows the name read-only and a slider write refreshes the config", async () => {
+  it("edit saves a label onto the server's current list and the table shows it", async () => {
+    api.getDeviceControls.mockResolvedValue({ device: "kitchen", online: true, versions: [], controls: [] });
+    const { rerender } = render(<Devices />);
+    fireEvent.click(screen.getByText("Edit"));
+    expect(screen.getByDisplayValue("kitchen")).toHaveAttribute("readonly");
+    fireEvent.change(screen.getByPlaceholderText("kitchen"), { target: { value: " Кухня " } });
+    fireEvent.click(screen.getByText("Save"));
+    await waitFor(() => expect(data.patch).toHaveBeenCalledTimes(1));
+    expect(data.patch).toHaveBeenCalledWith({ core: { devices: [
+      { ...FRESH[0], label: "Кухня" },
+      FRESH[1],
+    ] } });
+
+    data.catalog.core.values.devices = [{ ...STALE[0], label: "Кухня" }];
+    rerender(<Devices />);
+    expect(screen.getByText("Кухня")).toBeInTheDocument();
+  });
+
+  it("edit shows the id read-only and a slider write refreshes the config", async () => {
     const snap = {
       device: "kitchen", online: true, versions: [],
       controls: [{ id: "wake_probability_cutoff", name: "Wake word cutoff", value: 80, min: 0, max: 100, step: 1, unit: "%" }],
@@ -92,9 +110,7 @@ describe("Devices page", () => {
     render(<Devices />);
     fireEvent.click(screen.getByText("Edit"));
 
-    const name = screen.getByDisplayValue("kitchen");
-    expect(name).toHaveAttribute("readonly");
-    expect(screen.queryByText("Save")).toBeNull();
+    expect(screen.getByDisplayValue("kitchen")).toHaveAttribute("readonly");
 
     await screen.findByText("Wake word cutoff");
     const track = document.querySelector(".z-trk");
