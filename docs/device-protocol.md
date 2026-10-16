@@ -85,21 +85,21 @@ The owner's words:
 ## Models
 
 The device stores no model. The server sends the wake-word model and the VAD model that gates it
-at every connection, again when the file configured for the device changes, and on the direct
+at every connection, again when the model configured for the device changes, and on the direct
 reload command (panel API `POST /api/device/model {device}`). Which file goes out is the server's
 choice: `core.devices[].wake_model` / `vad_model`, empty for the models the release ships.
 
 1. Server → `model`, then the bytes:
    ```json
-   {"type": "model", "kind": "wake", "name": "microWakeWord/v31/model/zakhar.tflite", "size": 77848}
+   {"type": "model", "kind": "wake", "name": "zakhar/zakhar_v31", "size": 77848}
    ```
-   `kind` is `wake` or `vad`, `name` names the file (the server sends its path), and `size` (> 0)
+   `kind` is `wake` or `vad`, `name` is the model's name, opaque to the device, and `size` (> 0)
    is the length of the .tflite that follows in `0x03` frames of at most 4096 payload bytes.
    `model` carries no `session`, so the session filter lets it through. A new `model` while an
    earlier one is still arriving discards the earlier one; bytes past `size` are discarded.
 2. Device → `model_loaded`, once all the bytes are in and the load was tried:
    ```json
-   {"type": "model_loaded", "kind": "wake", "name": "microWakeWord/v31/model/zakhar.tflite", "ok": true}
+   {"type": "model_loaded", "kind": "wake", "name": "zakhar/zakhar_v31", "ok": true}
    ```
    `ok` is false when the device could not allocate the buffer, the model did not load, or the
    device takes no models. A model that did not load leaves its kind with no model; when the buffer

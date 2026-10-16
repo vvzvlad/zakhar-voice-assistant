@@ -322,8 +322,8 @@ class PanelServer:
         return web.json_response({"options": list_chimes()})
 
     async def _get_wake_models(self, request: web.Request) -> web.Response:
-        """List the wake-word models the release carries for a device's wake_model selector,
-        plus the one an empty wake_model falls back to."""
+        """List the names of the wake-word models the release carries for a device's
+        wake_model selector, plus the one an empty wake_model falls back to."""
         return web.json_response({"options": list_wake_models(), "release": RELEASE_WAKE_MODEL})
 
     async def _post_play_chime(self, request: web.Request) -> web.Response:

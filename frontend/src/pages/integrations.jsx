@@ -559,9 +559,6 @@ export function Prompt() {
 }
 
 // ── Devices ───────────────────────────────────────────────────────────────
-// A wake-word model path as the selector shows it: without the shared directory.
-const modelName = (path) => path.replace(/^microWakeWord\//, "");
-
 // Add mode (`onSave({name, enabled})`) asks for a device id. Edit mode (`device`, the
 // saved id) edits the display label and the wake-word model (`onSave` gets only the
 // changed ones of {label, wake_model}; wake_model "" = the release default), shows the
@@ -593,8 +590,8 @@ function DeviceModal({ onSave, onClose, title, device, label: savedLabel = "", w
       <Field label="Device id" hint="Sent by the firmware when it connects — keys the device's settings and dialog context."><div className="z-inp"><input value={device} readOnly /></div></Field>
       {wakeModels && <Field label="Wake-word model" hint="Sent to the device on save and at every connection.">
         <Select value={wakeModel} onChange={setWakeModel} options={[
-          { value: "", label: `Release default (${modelName(wakeModels.release)})` },
-          ...wakeModels.options.map((p) => ({ value: p, label: modelName(p) })),
+          { value: "", label: `Release default (${wakeModels.release})` },
+          ...wakeModels.options.map((n) => ({ value: n, label: n })),
         ]} />
       </Field>}
       <CaptureControl device={device} online={online} />

@@ -19,8 +19,8 @@ vi.mock("../api.js", () => ({
   getWakeProbability: vi.fn(async () => ({ online: true, value: null })),
   setWakeProbabilityStream: vi.fn(async () => ({})),
   getWakeModels: vi.fn(async () => ({
-    options: ["microWakeWord/v8/model/zakhar.tflite", "microWakeWord/v31/model/zakhar.tflite"],
-    release: "microWakeWord/v31/model/zakhar.tflite",
+    options: ["zakhar/zakhar_v8", "zakhar/zakhar_v31"],
+    release: "zakhar/zakhar_v31",
   })),
 }));
 
@@ -89,7 +89,7 @@ describe("Devices page", () => {
   it("edit saves a label onto the server's current list and the table shows it", async () => {
     api.getDeviceControls.mockResolvedValue({ device: "kitchen", online: true, versions: [], controls: [] });
     // A model set elsewhere (an agent) since the page loaded survives a label edit.
-    const fresh = [{ ...FRESH[0], wake_model: "microWakeWord/v32/model/zakhar.tflite" }, FRESH[1]];
+    const fresh = [{ ...FRESH[0], wake_model: "zakhar/zakhar_v32" }, FRESH[1]];
     api.getConfig.mockResolvedValue({ core: { devices: fresh } });
     const { rerender } = render(<Devices />);
     fireEvent.click(screen.getByText("Edit"));
@@ -107,23 +107,23 @@ describe("Devices page", () => {
     expect(screen.getByText("Кухня")).toBeInTheDocument();
   });
 
-  it("edit picks a wake-word model from the release's and saves its path", async () => {
+  it("edit picks a wake-word model from the release's and saves its name", async () => {
     api.getDeviceControls.mockResolvedValue({ device: "kitchen", online: true, versions: [], controls: [] });
-    data.catalog.core.values.devices = [{ ...STALE[0], wake_model: "microWakeWord/v31/model/zakhar.tflite" }];
+    data.catalog.core.values.devices = [{ ...STALE[0], wake_model: "zakhar/zakhar_v31" }];
     // A label set elsewhere since the page loaded survives a model edit.
     const fresh = [{ ...FRESH[0], label: "Кухня" }, FRESH[1]];
     api.getConfig.mockResolvedValue({ core: { devices: fresh } });
     render(<Devices />);
     fireEvent.click(screen.getByText("Edit"));
-    fireEvent.click(await screen.findByText("v31/model/zakhar.tflite"));
+    fireEvent.click(await screen.findByText("zakhar/zakhar_v31"));
     expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual([
-      "Release default (v31/model/zakhar.tflite)", "v8/model/zakhar.tflite", "v31/model/zakhar.tflite",
+      "Release default (zakhar/zakhar_v31)", "zakhar/zakhar_v8", "zakhar/zakhar_v31",
     ]);
-    fireEvent.click(screen.getByRole("option", { name: "v8/model/zakhar.tflite" }));
+    fireEvent.click(screen.getByRole("option", { name: "zakhar/zakhar_v8" }));
     fireEvent.click(screen.getByText("Save"));
     await waitFor(() => expect(data.patch).toHaveBeenCalledTimes(1));
     expect(data.patch).toHaveBeenCalledWith({ core: { devices: [
-      { ...fresh[0], wake_model: "microWakeWord/v8/model/zakhar.tflite" },
+      { ...fresh[0], wake_model: "zakhar/zakhar_v8" },
       FRESH[1],
     ] } });
   });
@@ -132,12 +132,12 @@ describe("Devices page", () => {
     api.getDeviceControls.mockResolvedValue({ device: "kitchen", online: true, versions: [], controls: [] });
     data.refreshConfig.mockImplementation(async () => {
       await Promise.resolve(); // the network read: the catalog changes a tick later
-      data.catalog.core.values.devices = [{ ...STALE[0], label: "Кухня", wake_model: "microWakeWord/v8/model/zakhar.tflite" }];
+      data.catalog.core.values.devices = [{ ...STALE[0], label: "Кухня", wake_model: "zakhar/zakhar_v8" }];
     });
     render(<Devices />);
     fireEvent.click(screen.getByText("Edit"));
     expect(await screen.findByDisplayValue("Кухня")).toBeInTheDocument();
-    expect(await screen.findByText("v8/model/zakhar.tflite")).toBeInTheDocument();
+    expect(await screen.findByText("zakhar/zakhar_v8")).toBeInTheDocument();
   });
 
   it("edit shows the id read-only and a slider write refreshes the config", async () => {
