@@ -29,7 +29,6 @@ typedef enum {
 } zl_model_t;
 
 typedef struct {
-    const char *url;    // ws://<server>:8200/device
     const char *id;     // hello.id: the device name in the server config
     const char *fw;     // hello.fw
     bool screen;        // hello.caps.screen
@@ -76,8 +75,10 @@ typedef struct {
     bool (*on_model)(zl_model_t kind, uint8_t *data, size_t size);
 } zl_callbacks_t;
 
-// Copies cfg (its strings too) and cb, allocates the playback buffer and starts the component
-// task, which connects to cfg->url and reconnects with a backoff. Call once, with the network up.
+// Copies cfg (its strings too) and cb, allocates the playback buffer, starts mDNS and the component
+// task. Before every connect the task finds the server by mDNS (`_zakhar._tcp`, the first answer
+// with an IPv4 address) and connects to ws://<address>:<port>/device; while none answers, and
+// after a lost link, it keeps trying with the backoff. Call once, with the network up.
 void zl_start(const zl_config_t *cfg, const zl_callbacks_t *cb);
 
 // A wake word detection. Only stores `word` (a string that outlives the call) and the microphone

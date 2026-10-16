@@ -650,11 +650,30 @@ class _StubDeviceServer:
         self.rebinds.append((host, port))
         if self._fail:
             raise RuntimeError("bind: address already in use")
+        self.port = port
+
+
+class _StubAdvert:
+    """Records the mDNS advert's stop/start calls; never touches the network. Can be
+    told to fail on start."""
+
+    def __init__(self, *, fail=False):
+        self._fail = fail
+        self.calls = []
+
+    async def stop(self):
+        self.calls.append(("stop",))
+
+    async def start(self, host, port):
+        self.calls.append(("start", host, port))
+        if self._fail:
+            raise OSError("Network is unreachable")
 
 
 def _audio_runtime(manager, *, host="0.0.0.0", port=8081):
     return types.SimpleNamespace(
         manager=manager,
+        advert=_StubAdvert(),
         core=types.SimpleNamespace(audio=types.SimpleNamespace(host=host, port=port)),
     )
 
@@ -666,6 +685,7 @@ async def test_apply_job_audio_rebinds_to_configured_host_port():
     reconf = Reconfigurator(rt, types.SimpleNamespace(tts_timeout=30), asyncio.Queue())
     await reconf.apply_job({"core.audio.host"})
     assert audio.rebinds == [("127.0.0.1", 9000)]
+    assert rt.advert.calls == [("stop",), ("start", "127.0.0.1", 9000)]
 
 
 @pytest.mark.asyncio
@@ -675,6 +695,18 @@ async def test_apply_job_audio_rebind_failure_is_attempted():
     reconf = Reconfigurator(rt, types.SimpleNamespace(tts_timeout=30), asyncio.Queue())
     await reconf.apply_job({"core.audio.port"})
     assert audio.rebinds == [("127.0.0.1", 9000)]   # attempted
+    assert rt.advert.calls == []
+
+
+@pytest.mark.asyncio
+async def test_apply_job_audio_advert_failure_does_not_stop_the_job():
+    audio = _StubDeviceServer()
+    rt = _audio_runtime(audio, host="127.0.0.1", port=9000)
+    rt.advert = _StubAdvert(fail=True)
+    reconf = Reconfigurator(rt, types.SimpleNamespace(tts_timeout=30), asyncio.Queue())
+    await reconf.apply_job({"core.audio.port"})     # logged, not raised
+    assert audio.rebinds == [("127.0.0.1", 9000)]
+    assert rt.advert.calls == [("stop",), ("start", "127.0.0.1", 9000)]
 
 
 # --- apply_job (Tier 3a: runs store toggle / retention) ----------------------

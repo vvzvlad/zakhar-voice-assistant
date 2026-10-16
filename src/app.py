@@ -15,6 +15,7 @@ from src.agent_mcp import AgentMcpEndpoint
 from src.chains import referenced_instances
 from src.config_service import ConfigDoc, ConfigService
 from src.device_server import DeviceManager
+from src.mdns_advert import MdnsAdvert
 from src.panel_api import PanelServer
 from src.plugins.base import Deps
 from src.prompt_store import PromptStore
@@ -220,6 +221,10 @@ async def main() -> None:
         # hot-swapped store. Set before the reconfig loop can run.
         rt.panel = panel
         await manager.start()
+        # Devices find the device server by mDNS; a rebind restarts the advert (Reconfigurator).
+        advert = MdnsAdvert()
+        await advert.start(rt.core.audio.host, manager.port)
+        rt.advert = advert
         # panel.start()/stop() own the agent MCP endpoint's lifecycle too.
         await panel.start()
         if scheduler is not None:
@@ -250,6 +255,8 @@ async def main() -> None:
         # rt.scheduler/rt.reminders_store away from the boot-time locals (or to None).
         if rt.scheduler is not None:
             await rt.scheduler.stop()
+        if rt.advert is not None:
+            await rt.advert.stop()
         await manager.stop()
         await hub.stop()
         # Close the CURRENT clients from deps: _rebuild_http may have swapped (and

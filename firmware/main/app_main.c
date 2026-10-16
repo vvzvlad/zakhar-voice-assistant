@@ -309,7 +309,6 @@ void app_main(void)
     char fw[64];
     snprintf(fw, sizeof fw, "voicepe %s", esp_app_get_description()->version);
     const zl_config_t cfg = {
-        .url = CONFIG_ZAKHAR_SERVER_URL,
         .id = id,
         .fw = fw,
         .screen = false,

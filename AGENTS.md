@@ -108,7 +108,8 @@ only setting is `core.agent_mcp.enabled`, panel-editable and read live per reque
 - Python always runs inside a local `.venv`, created automatically by `make` on
   first use (`make test` / `make run` bootstrap it) — never the system Python.
 - Tests are required for new code; in CI `build` depends on `test`.
-- No `EXPOSE` in the Dockerfile — the device port is published to the LAN via compose `ports`.
+- No `EXPOSE` in the Dockerfile — the container runs with `network_mode: host`: the devices find
+  the server by its mDNS advertisement, which does not leave a Docker bridge network.
 
 ## Limits for agents
 - Tests: at most three times the code (`wc -l` of `tests/` against the code). Over the limit,

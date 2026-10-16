@@ -334,7 +334,8 @@ class Reconfigurator:
             )
 
     async def _rebuild_audio(self) -> None:
-        """Re-bind the device server to the configured host/port without a restart."""
+        """Re-bind the device server to the configured host/port without a restart and
+        re-announce it by mDNS at the new address."""
         core = self.rt.core
         try:
             await self.rt.manager.rebind(core.audio.host, core.audio.port)
@@ -345,6 +346,15 @@ class Reconfigurator:
             logger.error(
                 f"device server re-bind to {core.audio.host}:{core.audio.port} failed: {e}; "
                 f"device server is now DOWN until a restart"
+            )
+            return
+        try:
+            await self.rt.advert.stop()
+            await self.rt.advert.start(core.audio.host, self.rt.manager.port)
+        except Exception as e:
+            logger.error(
+                f"device server re-bound, but its mDNS advert failed: {e}; "
+                f"devices cannot find it until a restart"
             )
 
     async def _rebuild_runs(self) -> None:

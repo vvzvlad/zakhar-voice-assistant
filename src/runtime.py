@@ -38,6 +38,7 @@ class Runtime:
         self.prompt_store = prompt_store  # PromptStore (system-prompt profiles)
         # Set post-construction in app.py; mutated by the Reconfigurator on hot-reload.
         self.manager = None         # DeviceManager (device server; device rebuild + rebind)
+        self.advert = None          # MdnsAdvert (the device server's mDNS record; restarted on a rebind)
         self.scheduler = None       # ReminderScheduler | None (Tier 3c reminders toggle)
         self.reminders_store = None  # RemindersStore | None (swapped by a reminders toggle)
         self.panel = None           # PanelServer (so a runs-store swap reaches its endpoints)

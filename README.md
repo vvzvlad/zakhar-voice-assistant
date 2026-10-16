@@ -103,7 +103,9 @@ don't build).
    devices (or edit `data/config.json` directly inside the volume). All JSON
    settings apply live — no restart needed. See [Configuration](#configuration).
 
-**Ports** (published straight to the LAN, no reverse proxy):
+**Ports** (the container runs with `network_mode: host`, so they open straight on the
+host, no reverse proxy; host networking is what lets the server's mDNS advertisement reach
+the devices — multicast does not leave a Docker bridge network):
 
 - `8201` — admin panel UI + API, and the agent MCP endpoint at `/mcp` (matches
   `PANEL_PORT`).
@@ -226,7 +228,8 @@ like the admin panel). Tools:
 
 ## Devices and firmware
 
-The devices are the WebSocket clients: each one connects to
+The devices are the WebSocket clients: each one finds the server by mDNS (service
+`_zakhar._tcp`, advertised by the server on its own network segment), connects to
 `ws://<server>:8200/device` (the port is `core.audio.port`) and keeps the connection
 up, reconnecting on its own. The contract is
 [docs/device-protocol.md](docs/device-protocol.md). A device whose id is not in
@@ -252,8 +255,8 @@ Debug and dataset calls of the panel API (`http://<host>:8201`), meant for an ag
 
 The Voice PE speaker firmware lives in `firmware/` — plain ESP-IDF C. Its
 `components/zakhar_link` is the device side of the protocol and is shared with the
-espanel wall panel. The server URL is the `CONFIG_ZAKHAR_SERVER_URL` default in
-`firmware/main/Kconfig.projbuild`; the device id is the speaker's Wi-Fi MAC (12 lowercase
+espanel wall panel. The firmware carries no server address — it finds the server by
+mDNS, so one image serves any site; the device id is the speaker's Wi-Fi MAC (12 lowercase
 hex), as with the panel, so one image gives every speaker its own id, and the name the
 admin panel shows is the label set on the Devices page. The speaker gets its wake-word and VAD
 models from the server at every connection: the release image carries every wake-word
@@ -294,7 +297,7 @@ make fw-host-test fw-voicepe-host-test  # host tests of the pure C cores
 | `models/` | Offline model files (Vosk / Piper / Silero), fetched by `make models`. Gitignored; not bundled in the Docker image. |
 | `templates/` | Committed reference assets (`default_prompt.md`, `default_config.json`) seeded into `data/` on first boot. |
 | `Dockerfile` | Two-stage build: a node stage builds the panel, the python stage carries only its `dist`; deps cached before code; no `EXPOSE`. |
-| `docker-compose.yml` | Deploy template — image from the Gitea registry, `data` + `models` volumes, device port published to LAN, auto-update label. |
+| `docker-compose.yml` | Deploy template — image from the Gitea registry, `data` + `models` volumes, host networking (ports open on the host, the mDNS advertisement reaches the LAN), auto-update label. |
 | `.gitea/workflows/` | CI: tests → build → smoke gate → push to `gitea.vvzvlad.xyz` (`<sha>` then `latest`). Pull requests run the same checks without publishing. |
 | `ci/smoke.py` | The gate between build and push: image contract, version stamp, native VAD libs, frontend bundle, boot and `/health`. |
 | `AGENTS.md` | Conventions / onboarding for agents. |
@@ -305,5 +308,5 @@ All mutable state in `data/`; all config in `data/config.json` (providers self-d
 their settings; the config core never hardcodes provider fields); tests are mandatory and
 gate the Docker build, and a smoke gate stands between the build and the registry; deploy a
 prebuilt image from the Gitea registry via docker-compose. Unlike a public
-web service, the device port is published straight to the LAN (no Traefik) so the devices
-can connect.
+web service, the container runs on the host network (no Traefik) so the devices can find the
+server by mDNS and connect.

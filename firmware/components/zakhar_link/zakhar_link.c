@@ -22,6 +22,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
+#include "mdns.h"
 #include "zl_core.h"
 
 static const char *TAG = "zakhar_link";
@@ -85,6 +86,9 @@ static uint32_t s_mic_pos;
 static int16_t s_tx[1 + ZL_FRAME_FRAMES * 2];
 // The component task only: the running capture's first frame and length (set by capture_start()).
 static uint32_t s_capture_start, s_capture_frames;
+// The server's URL found by mDNS: written by the component task before it creates a client, read
+// while that client lives.
+static char s_url[sizeof "ws://255.255.255.255:65535/device"];
 
 static void lock(void)
 {
@@ -171,7 +175,7 @@ static void on_connected(esp_websocket_client_handle_t ws)
     lock();
     const int volume = s_volume;
     unlock();
-    ESP_LOGI(TAG, "connected to %s", s_cfg.url);
+    ESP_LOGI(TAG, "connected to %s", s_url);
     send_json(ws, zl_encode_hello(&s_cfg, volume));
     lock();
     s_online = true;
@@ -374,12 +378,46 @@ static uint32_t link_lost(void)
     return delay;
 }
 
-// Starts a client; false when it could not even be created (the caller waits the backoff). A
-// client that fails later ends in WEBSOCKET_EVENT_FINISH.
+// Finds the server by mDNS into s_url: the first `_zakhar._tcp` answer with a host and port. The
+// queries block this task for up to 3 + 1 s, but only while there is no client: offline, nothing
+// is being streamed.
+static bool server_find(void)
+{
+    mdns_result_t *results = NULL;
+    // One result is enough: the query ends with the first answering server, not at the timeout.
+    const esp_err_t err = mdns_query_ptr("_zakhar", "_tcp", 3000, 1, &results);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "mDNS query for the server failed: %s", esp_err_to_name(err));
+        return false;
+    }
+    bool found = false;
+    for (const mdns_result_t *r = results; r != NULL && !found; r = r->next) {
+        if (r->hostname == NULL) continue;  // no SRV record: no host and no port
+        esp_ip4_addr_t ip = {0};
+        for (const mdns_ip_addr_t *a = r->addr; a != NULL; a = a->next) {
+            if (a->addr.type == ESP_IPADDR_TYPE_V4) {
+                ip = a->addr.u_addr.ip4;
+                break;
+            }
+        }
+        // The parser keeps an A record only when the SRV record came before it in the packet, and
+        // python-zeroconf orders those records at random: then the address is asked for by name.
+        if (ip.addr == 0 && mdns_query_a(r->hostname, 1000, &ip) != ESP_OK) continue;
+        snprintf(s_url, sizeof s_url, "ws://" IPSTR ":%u/device", IP2STR(&ip), (unsigned)r->port);
+        found = true;
+    }
+    mdns_query_results_free(results);
+    if (!found) ESP_LOGW(TAG, "no server answers _zakhar._tcp");
+    return found;
+}
+
+// Starts a client; false when no server was found or the client could not even be created (the
+// caller waits the backoff). A client that fails later ends in WEBSOCKET_EVENT_FINISH.
 static bool link_connect(void)
 {
+    if (!server_find()) return false;
     const esp_websocket_client_config_t wc = {
-        .uri = s_cfg.url,
+        .uri = s_url,
         .disable_auto_reconnect = true,   // the backoff is ours
         .disable_pingpong_discon = true,  // the silence rule is ours
         .buffer_size = 1 + ZL_FRAME_FRAMES * s_cfg.mic_channels * (int)sizeof(int16_t),  // a microphone frame in one piece
@@ -574,7 +612,6 @@ void zl_start(const zl_config_t *cfg, const zl_callbacks_t *cb)
         return;
     }
     s_cfg = *cfg;
-    s_cfg.url = strdup(cfg->url);
     s_cfg.id = strdup(cfg->id);
     s_cfg.fw = strdup(cfg->fw);
     if (cb != NULL) s_cb = *cb;
@@ -589,6 +626,8 @@ void zl_start(const zl_config_t *cfg, const zl_callbacks_t *cb)
         }
         zl_playq_init(&s_playq, buf, cap);
     }
+    const esp_err_t err = mdns_init();
+    if (err != ESP_OK) ESP_LOGE(TAG, "mDNS init failed: %s", esp_err_to_name(err));
     s_lock = xSemaphoreCreateMutex();
     if (s_lock == NULL ||
         xTaskCreatePinnedToCore(link_task, "zakhar_link", TASK_STACK, NULL, TASK_PRIO, &s_task, TASK_CORE) != pdPASS) {

@@ -30,8 +30,9 @@ So check (e) uses two containers:
 
   * (e1) `-bareboot`: the image's own command, no volumes, no config, `--network none`. Proves the
     startup marker, the template copy, data/config.json on disk (fetched with `docker cp`), and no
-    unexpected traceback. The boot must end either alive and serving /health (the TTS load became
-    lazy) or in exactly the missing-model failure, judged on the last traceback of the settled log
+    unexpected traceback. The boot must end either alive and serving /health (unreachable now: a boot
+    that survives the TTS load dies on the mDNS advertisement, see below) or in exactly the
+    missing-model failure, judged on the last traceback of the settled log
     and a non-zero exit code. Any other death fails. A survivor that does not answer /health is
     re-inspected, since a slow ordinary death looks the same at the deadline.
 
@@ -42,7 +43,8 @@ So check (e) uses two containers:
     up fully and /health and the panel are checked. Both switches are confirmed from the log: the
     TTS backend line and the `ruaccent/off` line.
 
-If the Piper load becomes lazy, (e1) reports a serving container and (e2)'s TTS switch becomes
+If the Piper load becomes lazy, (e1) gets as far as the mDNS advertisement, which fails under
+`--network none` (no route to pick the advertised address from), and (e2)'s TTS switch becomes
 removable; the stress switch stays (it is about the network).
 
 Checks:
@@ -1448,8 +1450,8 @@ def check_bare_boot(image, name):
     # `--network none`, only for this container: it boots on the image's own template, which enables
     # RuAccent (a ~360 MB HuggingFace download requested once the panel is up). Today the Piper crash
     # comes first, but if the boot ever survives, the empty namespace still keeps the gate offline.
-    # Nothing here needs the network: the boot path opens no socket, `logs`/`inspect`/`cp`/`exec`
-    # talk to the daemon, and `lo` still exists for the /health probe.
+    # Nothing here needs the network: the boot path opens no socket before the Piper load (the mDNS
+    # advertisement comes after it), and `logs`/`inspect`/`cp`/`exec` talk to the daemon.
     status, output = docker(
         ["run", "-d", "--name", name, "--network", "none"]
         + environment_flags(CONTAINER_ENV) + [image], START_TIMEOUT)

@@ -38,11 +38,22 @@ The owner's words:
 - «еще модели из esphome же можно притащить, джарвис, набу», option chosen: «Просто добавить в
   список» — the ESPHome models (Okay Nabu, Hey Jarvis, Hey Mycroft, Alexa) are in the list; the
   server's second wake-word check stays as it is, so wakes on them pass only with that check off.
+- «надо как-то сделать так, чтобы прошивка колонки была универсальной. настройка вафай там уже
+  есть, надо что-то сделать с сервером», option chosen: «делаем первый, ок» — the firmware carries
+  no server address: the device finds the server by mDNS, the server advertises itself, and its
+  container runs with `network_mode: host` so the advertisement reaches the LAN.
 
 ## Transport
 
-- The device is the client. It connects to `ws://<server>:8200/device` — the device port
-  (`core.audio.port`, which also serves `/health`); the server URL is set in the firmware build.
+- The device is the client. Before every connection it browses mDNS for the service
+  `_zakhar._tcp` and connects to `ws://<address>:<port>/device` of the first answer; when that
+  answer came without the address, it asks for the A record of the answer's host by name. While
+  nothing answers it retries with its reconnect backoff. The server advertises the instance and
+  host `zakhar-<short host name>` (`zakhar-<short host name>.local`) with the device port
+  (`core.audio.port`, which also serves `/health`) and one IPv4 address: `core.audio.host` when
+  it is a concrete address, otherwise the address the host reaches the gateway of its main
+  routing table from (a full-tunnel VPN keeps its default route elsewhere). mDNS does not
+  cross subnets, so a device finds the server of its own network segment.
 - Text frames carry one JSON object each, with a `type` field. Unknown types and unknown fields
   are ignored by both sides.
 - Binary frames carry audio and models. The first byte is the kind, the rest is the payload:

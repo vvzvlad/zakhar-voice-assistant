@@ -3,9 +3,10 @@
 #
 # Deviation from the canonical web template: this is a LAN device<->server service,
 # NOT a public web service behind Traefik. So there are no Traefik labels and no
-# external `docker_main_net`. Instead the device port is published straight to the
-# LAN (`ports`) so the devices can connect to ws://<server>:8200/device. Outbound
-# connections to Node-RED / TTS work from the default bridge network.
+# external `docker_main_net`. Instead the container runs on the host network: the
+# devices find the server by its mDNS advertisement (_zakhar._tcp), and multicast does
+# not leave a Docker bridge network. The device port (core.audio.port, default 8200)
+# and the panel port (PANEL_PORT, default 8201) open straight on the host.
 #
 # Config lives in data/config.json INSIDE the named volume (created from
 # templates/default_config.json on first boot). Edit it there to set providers,
@@ -40,12 +41,7 @@ services:
       # Model files, read-only to the app in practice but mounted rw so they can be
       # updated in place. Required for boot — see the note on the volume above.
       - zakhar-voice-assistant-models:/app/models
-    ports:
-      # Must match core.audio.port in data/config.json (default 8200).
-      - "8200:8200"                          # publish the device server to the LAN
-      # Admin panel API + UI (also serves the agent MCP endpoint at /mcp);
-      # must match PANEL_PORT (default 8201).
-      - "8201:8201"
+    network_mode: host
     environment:
       # All app config is in data/config.json (in the volume). The only env-tunable
       # values are the admin panel's bind host/port (applied at process start).
