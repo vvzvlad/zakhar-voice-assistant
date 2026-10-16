@@ -915,7 +915,10 @@ export function Devices() {
                 <td>{enabled ? <StatusPill status={statusOf(d.name)} /> : <Pill tone="muted">disabled</Pill>}</td>
                 <td style={{ textAlign: "right" }}><div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
                   <button className="z-mini" onClick={() => onToggle(d.name)}>{enabled ? "Disable" : "Enable"}</button>
-                  <button className="z-mini" onClick={() => setModal({ mode: "edit", name: d.name })}>Edit</button>
+                  {/* Re-read the config first: the dialog starts from the device's saved label and
+                      model, which may have changed elsewhere since this page loaded. */}
+                  <button className="z-mini" onClick={() => refreshConfig().catch(() => {})
+                    .finally(() => setModal({ mode: "edit", name: d.name }))}>Edit</button>
                   <button className="z-mini" onClick={() => onDelete(d.name)}>Delete</button>
                 </div></td>
               </tr>;
@@ -924,7 +927,7 @@ export function Devices() {
       </table>
     </Card>
     {modal?.mode === "add" && <DeviceModal title="Add speaker" onSave={onAdd} onClose={() => setModal(null)} />}
-    {modal?.mode === "edit" && <DeviceModal title="Edit speaker" onClose={() => setModal(null)}
+    {modal?.mode === "edit" && <DeviceModal key={modal.name} title="Edit speaker" onClose={() => setModal(null)}
       device={modal.name} label={devices.find((d) => d.name === modal.name)?.label || ""}
       wakeModel={devices.find((d) => d.name === modal.name)?.wake_model || ""}
       onSave={(edit) => onEdit(modal.name, edit)} online={statusOf(modal.name) === "online"} />}

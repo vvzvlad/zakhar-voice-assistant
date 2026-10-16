@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 // Devices page: every write of the device list starts from the server's current
 // list (a cutoff set from a slider, a device that connected while the page was
-// open), the Edit dialog shows the id read-only, saves a display label and a
-// wake-word model, and shows why its controls cannot load, and a slider write or a
+// open), the Edit dialog opens from the re-read config, shows the id read-only, saves a
+// display label and a wake-word model, and shows why its controls cannot load, and a slider write or a
 // newly connected device refreshes the app's config snapshot.
 import React from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
@@ -93,7 +93,7 @@ describe("Devices page", () => {
     api.getConfig.mockResolvedValue({ core: { devices: fresh } });
     const { rerender } = render(<Devices />);
     fireEvent.click(screen.getByText("Edit"));
-    expect(screen.getByDisplayValue("kitchen")).toHaveAttribute("readonly");
+    expect(await screen.findByDisplayValue("kitchen")).toHaveAttribute("readonly");
     fireEvent.change(screen.getByPlaceholderText("kitchen"), { target: { value: " Кухня " } });
     fireEvent.click(screen.getByText("Save"));
     await waitFor(() => expect(data.patch).toHaveBeenCalledTimes(1));
@@ -128,6 +128,18 @@ describe("Devices page", () => {
     ] } });
   });
 
+  it("edit opens with the label and model saved since the page loaded", async () => {
+    api.getDeviceControls.mockResolvedValue({ device: "kitchen", online: true, versions: [], controls: [] });
+    data.refreshConfig.mockImplementation(async () => {
+      await Promise.resolve(); // the network read: the catalog changes a tick later
+      data.catalog.core.values.devices = [{ ...STALE[0], label: "Кухня", wake_model: "microWakeWord/v8/model/zakhar.tflite" }];
+    });
+    render(<Devices />);
+    fireEvent.click(screen.getByText("Edit"));
+    expect(await screen.findByDisplayValue("Кухня")).toBeInTheDocument();
+    expect(await screen.findByText("v8/model/zakhar.tflite")).toBeInTheDocument();
+  });
+
   it("edit shows the id read-only and a slider write refreshes the config", async () => {
     const snap = {
       device: "kitchen", online: true, versions: [],
@@ -138,7 +150,8 @@ describe("Devices page", () => {
     render(<Devices />);
     fireEvent.click(screen.getByText("Edit"));
 
-    expect(screen.getByDisplayValue("kitchen")).toHaveAttribute("readonly");
+    expect(await screen.findByDisplayValue("kitchen")).toHaveAttribute("readonly");
+    data.refreshConfig.mockClear(); // the re-read on opening the dialog
 
     await screen.findByText("Wake word cutoff");
     const track = document.querySelector(".z-trk");
