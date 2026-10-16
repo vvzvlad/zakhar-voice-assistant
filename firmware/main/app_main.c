@@ -13,6 +13,7 @@
 #include "esp_app_desc.h"
 #include "esp_event.h"
 #include "esp_log.h"
+#include "esp_mac.h"
 #include "esp_netif.h"
 #include "esp_ota_ops.h"
 #include "esp_system.h"
@@ -98,6 +99,10 @@ static void on_prov_event(void *arg, esp_event_base_t base, int32_t id, void *da
 static void wifi_start(void)
 {
     s_net = xEventGroupCreate();
+    // The Voice PE carries Nabu Casa's MAC in the custom eFuse field and ESPHome joins with it, so
+    // the speaker keeps the MAC, and the address, the network has bound to it.
+    uint8_t custom[6];
+    if (esp_efuse_mac_get_custom(custom) == ESP_OK) ESP_ERROR_CHECK(esp_base_mac_addr_set(custom));
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
     esp_netif_create_default_wifi_sta();
