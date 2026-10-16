@@ -13,22 +13,34 @@ from pydantic import BaseModel, Field
 # Imported from src.plugins.base (no circular import — base imports nothing from here).
 from src.plugins.base import SECRET_FIELD_EXTRA
 
+# Panel descriptions shared by the built-in tool sources.
+SOURCE_ENABLED_DESCRIPTION = "Off removes this source's tools and its prompt block."
+SOURCE_PROMPT_DESCRIPTION = "Appended to the system prompt to describe this source's tools to the model."
+
 
 class ContextConfig(BaseModel):
-    max_turns: int = Field(5, ge=1)
-    ttl_seconds: int = Field(300, ge=0)
+    max_turns: int = Field(
+        5, ge=1,
+        title="Context depth",
+        description="How many recent question-answer pairs are sent to the model.",
+    )
+    ttl_seconds: int = Field(
+        300, ge=0,
+        title="Dialog timeout (s)",
+        description="Idle time after which the next request starts a new dialog; 0 = every request starts fresh.",
+    )
 
 
 class AudioConfig(BaseModel):
-    host: str = "0.0.0.0"
-    port: int = 8200
-    ttl: int = 300
-    public_base_url: str = ""
+    host: str = Field("0.0.0.0", title="Bind host")
+    port: int = Field(8200, title="Port")
+    ttl: int = Field(300, title="Cache TTL (s)", description="How long a generated clip stays available to the speaker.")
+    public_base_url: str = Field("", title="Public base URL", description="Where speakers download generated audio.")
     # Serve TTS as a chunked stream while synthesis is still running, so the
     # speaker starts playing before the clip is complete. Kill-switch: disable
     # to restore the buffer-then-serve path (some speaker firmwares may
     # mishandle chunked audio). Read live per run.
-    stream_tts: bool = True
+    stream_tts: bool = Field(True, title="Stream TTS", description="Start playback while the reply is still being synthesized. Turn off for speakers that mishandle chunked audio.")
 
 
 class AgentMcpConfig(BaseModel):
@@ -38,7 +50,7 @@ class AgentMcpConfig(BaseModel):
     `enabled` is the only knob (read live per /mcp request). Old docs may still
     carry host/port keys: pydantic ignores extras on parse and the stale keys
     drop on the next save — no migration needed."""
-    enabled: bool = True
+    enabled: bool = Field(True, title="Enabled")
 
 
 class VadConfig(BaseModel):
@@ -105,16 +117,21 @@ class VadConfig(BaseModel):
 
 
 class NetworkConfig(BaseModel):
-    external_proxy: str = ""
+    external_proxy: str = Field(
+        "",
+        title="External proxy",
+        description="Proxy URL for cloud API requests, e.g. socks5://host:1080; empty = direct.",
+    )
 
 
 class OpenWeatherMapConfig(BaseModel):
     # Master switch: a disabled source is removed from the ToolHub and its prompt block is dropped.
-    enabled: bool = True
-    api_key: str = Field("", json_schema_extra=SECRET_FIELD_EXTRA)
-    city: str = "Moscow"
+    enabled: bool = Field(True, title="Enabled", description=SOURCE_ENABLED_DESCRIPTION)
+    api_key: str = Field("", title="API key", json_schema_extra=SECRET_FIELD_EXTRA)
+    city: str = Field("Moscow", title="City", description="City the weather is reported for.")
     # Appended to the system prompt to describe this built-in MCP's tools to the model.
-    prompt: str = Field("", json_schema_extra={"widget": "textarea"})
+    prompt: str = Field("", title="Tools prompt", description=SOURCE_PROMPT_DESCRIPTION,
+                        json_schema_extra={"widget": "textarea"})
 
 
 class McpServerConfig(BaseModel):
@@ -139,13 +156,14 @@ class CalendarConfig(BaseModel):
     # CalDAV account for the built-in calendar MCP. `calendar` selects which calendar
     # to use by name; empty means the first calendar on the account.
     # Master switch: a disabled source is removed from the ToolHub and its prompt block is dropped.
-    enabled: bool = True
-    url: str = ""
-    username: str = ""
-    password: str = Field("", json_schema_extra=SECRET_FIELD_EXTRA)
-    calendar: str = ""
+    enabled: bool = Field(True, title="Enabled", description=SOURCE_ENABLED_DESCRIPTION)
+    url: str = Field("", title="CalDAV URL")
+    username: str = Field("", title="Username")
+    password: str = Field("", title="Password", json_schema_extra=SECRET_FIELD_EXTRA)
+    calendar: str = Field("", title="Calendar", description="Calendar name on the account; empty = the first one.")
     # Appended to the system prompt to describe this built-in MCP's tools to the model.
-    prompt: str = Field("", json_schema_extra={"widget": "textarea"})
+    prompt: str = Field("", title="Tools prompt", description=SOURCE_PROMPT_DESCRIPTION,
+                        json_schema_extra={"widget": "textarea"})
 
 
 class DeviceConfig(BaseModel):
@@ -168,13 +186,13 @@ class PromptConfig(BaseModel):
 class RunsConfig(BaseModel):
     # Observability: persist every pipeline run to SQLite (data/runs.db). Disable
     # to skip recording entirely; retention_days=0 keeps rows forever.
-    enabled: bool = True
-    retention_days: int = Field(30, ge=0)
+    enabled: bool = Field(True, title="Record runs")
+    retention_days: int = Field(30, ge=0, title="Retention (days)", description="0 keeps runs forever.")
     # Rolling window of recent utterance audio, kept in runs.db so operators can
     # download/play it from the log to diagnose mis-triggers. Stereo when the device
     # streams both mic channels: left = the pipeline/STT channel exactly as STT
     # received it, right = the other raw mic channel; mono when only one stream is sent.
-    store_audio: bool = True
+    store_audio: bool = Field(True, title="Record audio")
     audio_keep: int = Field(
         100, ge=1,
         title="Stored recordings",
@@ -187,7 +205,7 @@ class RunsConfig(BaseModel):
 
 class RemindersConfig(BaseModel):
     # One-shot voice reminders (data/reminders.db). Disable to drop the subsystem.
-    enabled: bool = True
+    enabled: bool = Field(True, title="Enabled", description="Off removes the reminder tools and pauses announcing reminders.")
 
 
 class CaptureConfig(BaseModel):
@@ -206,6 +224,7 @@ class AckConfig(BaseModel):
     # feedback, BEFORE STT/LLM/TTS run. The full spoken reply still plays later.
     enabled: bool = Field(
         True,
+        title="End-of-phrase chime",
         description="Play a short confirmation chime to the speaker the instant your phrase is end-pointed — immediate \"got it\" feedback before STT/LLM/TTS run. The full spoken reply still plays afterwards.",
     )
     # The dropdown is fed by GET /api/chimes (bundled assets/chimes clips); an empty

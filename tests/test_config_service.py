@@ -370,6 +370,30 @@ def test_chain_referenced_instance_config_is_validated(tmp_path):
         svc.apply({"stt": {"instances": {"groq": {"temperature": "hot"}}}})
 
 
+def test_catalog_flags_handler_limits_and_fallback_phrases_advanced(tmp_path):
+    # The panel folds `advanced` fields under the form's "Advanced" section.
+    advanced = {"max_tokens", "max_tool_rounds", "timeout", "reply_rate_limit",
+                "reply_empty_after_tools", "reply_empty", "reply_error", "reply_error_after_tools"}
+    llm = next(c for c in _service(tmp_path).catalog()["categories"] if c["id"] == "llm")
+    for p in llm["providers"]:
+        props = p["schema"]["properties"]
+        assert {f for f, n in props.items() if n.get("advanced")} == advanced & props.keys(), p["id"]
+        if "timeout" in props:
+            assert props["timeout"]["unit"] == "s"   # merged with the field's other extra
+
+
+def test_every_panel_form_field_has_a_title():
+    # Without one pydantic titles the field from its name ("Tiny Mode", "Api Key").
+    from src.plugins.base import REGISTRY
+    models = [p.ConfigModel for provs in REGISTRY.values() for p in provs.values()]
+    models += [CoreConfig.model_fields[s].annotation for s in (
+        "context", "audio", "vad", "ack", "network", "openweathermap", "calendar",
+        "reminders", "agent_mcp", "runs")]
+    untitled = [f"{m.__name__}.{name}" for m in models for name, f in m.model_fields.items()
+                if f.title is None and not (f.json_schema_extra or {}).get("hidden")]
+    assert untitled == []
+
+
 def test_catalog_pool_categories_have_no_selected_and_vocabulary_flags(tmp_path):
     cat = {c["id"]: c for c in _service(tmp_path).catalog()["categories"]}
     assert "selected" not in cat["stt"] and "selected" not in cat["llm"]

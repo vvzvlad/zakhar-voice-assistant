@@ -29,7 +29,7 @@ import re
 from loguru import logger
 from pydantic import BaseModel, Field
 
-from src.plugins.base import Deps, Provider, register
+from src.plugins.base import ADVANCED_FIELD_EXTRA, Deps, Provider, register
 from src.plugins.llm.base import LlmBackend
 from src.stage_errors import Declined
 
@@ -130,12 +130,34 @@ class SimpleNluConfig(BaseModel):
     # --- Fields the LLM stage / orchestrator read live (mirror LlmConfig; see
     # reconfig._LLM_LIVE_LEAVES). Kept here so this provider is a complete drop-in.
     # max_tool_rounds minimum is 2: the tool round + the final reply round both run. ---
-    max_tool_rounds: int = Field(2, ge=2)
-    reply_empty: str = "Я тебя не расслышал, повтори."
-    reply_empty_after_tools: str = "Готово."
-    reply_rate_limit: str = "Лимит запросов исчерпан. Попробуй ещё раз чуть позже."
-    reply_error: str = "Что-то сломалось, попробуй ещё раз попозже."
-    reply_error_after_tools: str = "Сделал, но ответить не смог."
+    max_tool_rounds: int = Field(
+        2, ge=2,
+        title="Max rounds",
+        description="Rounds per request: the tool call and the confirmation.",
+        json_schema_extra=ADVANCED_FIELD_EXTRA,
+    )
+    reply_empty: str = Field(
+        "Я тебя не расслышал, повтори.",
+        title="Reply when empty", json_schema_extra=ADVANCED_FIELD_EXTRA,
+    )
+    reply_empty_after_tools: str = Field(
+        "Готово.",
+        title="Reply when empty after a tool", json_schema_extra=ADVANCED_FIELD_EXTRA,
+    )
+    reply_rate_limit: str = Field(
+        "Лимит запросов исчерпан. Попробуй ещё раз чуть позже.",
+        title="Reply on rate limit", json_schema_extra=ADVANCED_FIELD_EXTRA,
+    )
+    reply_error: str = Field(
+        "Что-то сломалось, попробуй ещё раз попозже.",
+        title="Reply on error",
+        description="Spoken after a tool returned an error, and when the handler fails.",
+        json_schema_extra=ADVANCED_FIELD_EXTRA,
+    )
+    reply_error_after_tools: str = Field(
+        "Сделал, но ответить не смог.",
+        title="Reply on error after a tool", json_schema_extra=ADVANCED_FIELD_EXTRA,
+    )
 
     # --- Panel UI state (no runtime effect): ids of MCP sources the operator hid in
     # the NLU catalog editor's Sources bar. Persisted so the selection survives a

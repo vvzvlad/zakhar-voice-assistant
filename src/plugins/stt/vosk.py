@@ -191,7 +191,8 @@ class VoskSttBackend(SttBackend):
 
 
 class VoskSttConfig(BaseModel):
-    model_path: str = Field("models/vosk-model-small-ru-0.22", json_schema_extra=LOCAL_MODEL_FIELD_EXTRA)
+    model_path: str = Field("models/vosk-model-small-ru-0.22", title="Model directory",
+                            json_schema_extra=LOCAL_MODEL_FIELD_EXTRA)
 
 
 def _list_vosk_models(base_dir: str) -> list[dict]:

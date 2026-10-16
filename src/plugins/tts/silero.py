@@ -125,14 +125,14 @@ class SileroTtsBackend(TtsBackend):
 
 
 class SileroTtsConfig(BaseModel):
-    model_path: str = Field("models/silero_tts_v4_ru.pt", json_schema_extra=LOCAL_MODEL_FIELD_EXTRA)
-    speaker: str = Field("xenia", json_schema_extra={"widget": "select", "options": "dynamic", "freeform": True})
-    sample_rate: int = Field(48000, json_schema_extra={"widget": "select", "options": "dynamic", "freeform": False})
+    model_path: str = Field("models/silero_tts_v4_ru.pt", title="Model", json_schema_extra=LOCAL_MODEL_FIELD_EXTRA)
+    speaker: str = Field("xenia", title="Voice", json_schema_extra={"widget": "select", "options": "dynamic", "freeform": True})
+    sample_rate: int = Field(48000, title="Sample rate (Hz)", json_schema_extra={"widget": "select", "options": "dynamic", "freeform": False})
     # Auto-place stress on words without a manual "+" mark; Silero honors existing "+".
-    put_accent: bool = True
+    put_accent: bool = Field(True, title="Place stress", description="Stress words that carry no manual '+' mark.")
     # Restore е->ё where appropriate.
-    put_yo: bool = True
-    sentence_silence: float = 0.4
+    put_yo: bool = Field(True, title="Restore ё", description="Turn е into ё where the word needs it.")
+    sentence_silence: float = Field(0.4, title="Pause between sentences (s)")
 
 
 def _list_silero_models(base_dir: str) -> list[dict]:

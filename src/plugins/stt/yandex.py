@@ -286,15 +286,15 @@ class YandexSttBackend(SttBackend):
 
 
 class YandexSttConfig(BaseModel):
-    api_key: str = Field("", json_schema_extra=SECRET_FIELD_EXTRA)
-    model: str = Field("general", json_schema_extra={"widget": "select", "options": "dynamic"})
-    language: str = Field("ru-RU", json_schema_extra={"widget": "select", "options": "dynamic"})
+    api_key: str = Field("", title="API key", json_schema_extra=SECRET_FIELD_EXTRA)
+    model: str = Field("general", title="Model", json_schema_extra={"widget": "select", "options": "dynamic"})
+    language: str = Field("ru-RU", title="Language", json_schema_extra={"widget": "select", "options": "dynamic"})
     normalize: bool = Field(
         True,
         title="Text normalization",
         description="Convert spoken numbers, dates and similar to their numeric form.",
     )
-    timeout: int = 30
+    timeout: int = Field(30, title="Request timeout (s)")
 
 
 @register

@@ -42,6 +42,10 @@ LABEL_FIELD_EXTRA: dict = {"hidden": True}
 # never by guessing from the field name — so attach it to every secret config field.
 SECRET_FIELD_EXTRA: dict = {"secret": True}
 
+# Marks a rarely changed field (limits, timeouts, fallback phrases): the panel folds
+# it under the form's "Advanced" section. Merge it with any other extra of the field.
+ADVANCED_FIELD_EXTRA: dict = {"advanced": True}
+
 # Shared annotation for a local-filesystem path field (Piper voice file, Vosk
 # model directory): rendered as a dynamic select whose options the provider
 # scans from disk, while still accepting an arbitrary typed path (freeform) for
