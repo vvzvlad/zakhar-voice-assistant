@@ -98,20 +98,3 @@ describe("System page — one Save", () => {
     expect(data.patch.mock.calls[0][0]).toEqual({ core: { network: { external_proxy: "socks5://p:1080" }, log_level: "DEBUG" } });
   });
 });
-
-describe("System page — Audio server card", () => {
-  it("leaves the speakers' public base URL to the Devices page", () => {
-    const data = appData({ enabled: true });
-    data.catalog.core.schema.$defs.AudioConfig = {
-      type: "object",
-      properties: {
-        ttl: { type: "integer", title: "Cache TTL (s)" },
-        public_base_url: { type: "string", title: "Public Base Url" },
-      },
-    };
-    useAppData.mockReturnValue(data);
-    render(<SystemPage />);
-    expect(screen.getByText("Cache TTL (s)")).toBeInTheDocument();
-    expect(screen.queryByText("Public Base Url")).not.toBeInTheDocument();
-  });
-});

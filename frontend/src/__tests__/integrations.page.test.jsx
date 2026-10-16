@@ -17,6 +17,7 @@ vi.mock("../api.js", () => ({
   updatePromptProfile: vi.fn(async () => ({})),
   getOptions: vi.fn(async () => ({ options: [{ value: "bbbb", label: "Boris" }] })),
   getTools: vi.fn(async () => ({ sources: [] })),
+  getConfig: vi.fn(async () => ({ core: { devices: [{ name: "kitchen" }] } })),
 }));
 
 afterEach(cleanup);
@@ -113,7 +114,7 @@ describe("delete asks first", () => {
   });
 
   it("deletes a speaker only after confirmation", async () => {
-    const data = appData({ devices: [{ name: "kitchen", host: "10.0.0.2" }] });
+    const data = appData({ devices: [{ name: "kitchen" }] });
     useAppData.mockReturnValue(data);
     const confirm = vi.spyOn(window, "confirm").mockReturnValueOnce(false).mockReturnValueOnce(true);
     render(<Devices />);

@@ -93,9 +93,17 @@ export function AppDataProvider({ children }) {
     return updated;
   }, []);
 
+  // Re-read catalog + config after a write that bypasses patch() (a device control
+  // slider stores its cutoff in the config server-side).
+  const refreshConfig = useCallback(async () => {
+    const [cat, cfg] = await Promise.all([api.getCatalog(), api.getConfig()]);
+    setCatalog(cat);
+    setConfig(cfg);
+  }, []);
+
   const value = {
     catalog, config, system, loading, error, connected,
-    patch, reload: loadAll, subscribeRuns,
+    patch, refreshConfig, reload: loadAll, subscribeRuns,
   };
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

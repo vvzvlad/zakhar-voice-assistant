@@ -1,7 +1,7 @@
 import React, { useEffect, useLayoutEffect, useState, useCallback, useRef } from "react";
 import { Ic } from "../components/icons.jsx";
 import {
-  Field, KeyInput, PageHeader, FormPage, FormSaveBar, StatusPill, Pill, Modal, Stepper, Loading, Select, Slider, Toggle,
+  Field, KeyInput, PageHeader, FormPage, StatusPill, Pill, Modal, Stepper, Loading, Select, Slider, Toggle,
 } from "../components/primitives.jsx";
 import { parseVoiceMarker, voiceField, voiceName, differsFromVoice } from "../voiceMarker.js";
 import SchemaForm from "../components/SchemaForm.jsx";
@@ -14,7 +14,7 @@ import {
   getPromptProfiles, getPromptProfile, createPromptProfile, updatePromptProfile,
   deletePromptProfile, activatePromptProfile,
   getTools, getOptions, startCapture, getCaptureStatus, downloadCaptureResult, getDeviceControls, setDeviceControl,
-  getWakeProbability, setWakeProbabilityStream,
+  getWakeProbability, setWakeProbabilityStream, getConfig,
 } from "../api.js";
 import { deviceVersion } from "../format.js";
 
@@ -559,23 +559,24 @@ export function Prompt() {
 }
 
 // ── Devices ───────────────────────────────────────────────────────────────
-// The Edit modal also hosts the capture control, but only for an EXISTING device
-// (not in Add mode): `device` is the saved name to capture from, `online` whether
-// it is reachable. Add mode passes neither, so the control is hidden.
-function DeviceModal({ initial, onSave, onClose, title, device, online }) {
-  const [name, setName] = useState(initial?.name || "");
-  const [host, setHost] = useState(initial?.host || "");
-  const [psk, setPsk] = useState(initial?.psk || "");
+// Add mode (`onSave`) asks for a name. Edit mode (`device`, the saved name) shows the
+// name read-only — it is the id the firmware sends in hello — and hosts the live
+// controls; `online` says whether the device is reachable.
+function DeviceModal({ onSave, onClose, title, device, online }) {
+  const [name, setName] = useState("");
+  if (device) {
+    return <Modal title={title} onClose={onClose}
+      footer={<button className="z-btn g" onClick={onClose}>Close</button>}>
+      <Field label="Name" hint="The device's id from its firmware — also keys the dialog context."><div className="z-inp"><input value={device} readOnly /></div></Field>
+      <CaptureControl device={device} online={online} />
+      <DeviceControls device={device} />
+      <WakeProbabilityMeter device={device} online={online} />
+    </Modal>;
+  }
   return <Modal title={title} onClose={onClose}
     footer={<><button className="z-btn g" onClick={onClose}>Cancel</button>
-      {/* Preserve the enabled flag across edits; Add mode defaults to enabled. */}
-      <button className="z-btn p" disabled={!name || !host} onClick={() => onSave({ name, host, psk, enabled: initial?.enabled ?? true })}>Save</button></>}>
-    <Field label="Name" hint="Unique — also keys the dialog context."><div className="z-inp"><input value={name} placeholder="e.g. hallway" onChange={(e) => setName(e.target.value)} /></div></Field>
-    <Field label="Host / IP"><div className="z-inp mono"><input value={host} placeholder="10.0.0.25" onChange={(e) => setHost(e.target.value)} /></div></Field>
-    <Field label="PSK" hint="ESPHome API encryption key."><KeyInput value={psk} placeholder="base64 key…" onChange={setPsk} /></Field>
-    {device && <CaptureControl device={device} online={online} />}
-    {device && <DeviceControls device={device} online={online} />}
-    {device && <WakeProbabilityMeter device={device} online={online} />}
+      <button className="z-btn p" disabled={!name} onClick={() => onSave({ name, enabled: true })}>Save</button></>}>
+    <Field label="Name" hint="The device's id from its firmware — also keys the dialog context."><div className="z-inp"><input value={name} placeholder="e.g. hallway" onChange={(e) => setName(e.target.value)} /></div></Field>
   </Modal>;
 }
 
@@ -658,21 +659,21 @@ function CaptureControl({ device, online }) {
   </Field>;
 }
 
-// Short per-control hint shown under the slider label, keyed by firmware object_id.
+// Short per-control hint shown under the slider label, keyed by control id.
 const CONTROL_HINTS = {
   wake_probability_cutoff: "Higher = fewer false-fires, may miss wake word",
   vad_cutoff: "Lower = fewer dropped wakes, slightly more non-speech leak",
 };
 
-// Live per-device controls (wake-word probability cutoff + VAD cutoff + speaker volume) shown
-// inside the Edit-speaker modal, next to CaptureControl. Each is a 0..100 Slider:
-// the value is read live from the device and written back debounced; a background
-// poll keeps the slider in sync with external changes (e.g. the physical volume
-// dial) without stomping a control the user is actively dragging. `online` seeds the
-// initial reachability and is refreshed from each snapshot. The server returns an
-// empty control list when the speaker is offline or its firmware lacks the entities.
-function DeviceControls({ device, online: onlineProp }) {
-  const [online, setOnline] = useState(onlineProp);
+// Per-device controls (wake-word probability cutoff + VAD cutoff + speaker volume) shown
+// inside the Edit-speaker modal, next to CaptureControl. Each is a 0..100 Slider written
+// back debounced. The cutoffs come from the server config (the server sends them to the
+// device); the volume is read from the connected device and is listed only while a
+// device with a speaker is connected. A background poll keeps the sliders in sync with
+// external changes (e.g. the physical volume dial) without stomping a control the user
+// is actively dragging.
+function DeviceControls({ device }) {
+  const { refreshConfig } = useAppData();
   const [controls, setControls] = useState([]); // [{id,name,value,min,max,step,unit}]
   const [versions, setVersions] = useState([]); // [{id,name,value}] read-only firmware versions
   const [err, setErr] = useState(null);
@@ -682,7 +683,6 @@ function DeviceControls({ device, online: onlineProp }) {
 
   // Apply a fresh snapshot, skipping controls the user is actively writing.
   const applySnapshot = (snap) => {
-    setOnline(snap.online);
     setControls(snap.controls || []);
     setVersions(snap.versions || []);
     setLocal((prev) => {
@@ -715,8 +715,10 @@ function DeviceControls({ device, online: onlineProp }) {
     if (timers.current[c.id]) clearTimeout(timers.current[c.id]);
     timers.current[c.id] = setTimeout(() => {
       // `device` is a stable prop for the modal's lifetime, so no stale-closure risk.
+      // A cutoff is stored in the server config: refresh the config snapshot so a
+      // later save of the device list carries the new value.
       setDeviceControl(device, c.id, v)
-        .then((snap) => { applySnapshot(snap); setErr(null); })
+        .then((snap) => { applySnapshot(snap); setErr(null); return refreshConfig(); })
         .catch((e) => setErr(e))
         .finally(() => { pending.current[c.id] = false; });
     }, 250);
@@ -724,7 +726,9 @@ function DeviceControls({ device, online: onlineProp }) {
 
   if (controls.length === 0) {
     return <Field label="Device controls" hint="Wake-word cutoff, VAD cutoff & speaker volume">
-      <div className="z-fh">{online ? "Re-flash the firmware to enable device controls." : "Speaker offline."}</div>
+      {err
+        ? <div className="z-fh" style={{ color: "#b91c1c" }}>{err.message || String(err)}</div>
+        : <div className="z-fh">Loading…</div>}
     </Field>;
   }
 
@@ -756,11 +760,11 @@ function DeviceControls({ device, online: onlineProp }) {
 // streams while the panel is open. While open we poll once a second and render the
 // on-device PEAK wake-word probability over the last second as a percent + a thin bar.
 // The enable/disable are idempotent and tolerate React StrictMode's double-invoke (the
-// device-side switch_command is idempotent; failures are swallowed since the speaker may
-// be offline). `online` seeds reachability and is refreshed from each snapshot.
+// server forwards `wake_peak_stream {on}` to the device; failures are swallowed since
+// the device may be offline). `online` seeds reachability and is refreshed from each
+// snapshot.
 function WakeProbabilityMeter({ device, online: onlineProp }) {
   const [online, setOnline] = useState(onlineProp);
-  const [available, setAvailable] = useState(true); // assume present until told otherwise
   const [value, setValue] = useState(null);         // latest percent (number) or null
   const [err, setErr] = useState(null);
 
@@ -770,13 +774,12 @@ function WakeProbabilityMeter({ device, online: onlineProp }) {
   useEffect(() => {
     if (!device) return undefined;
     let alive = true;
-    // Best-effort enable; ignore errors (offline / firmware lacks the entity).
+    // Best-effort enable; ignore errors (the device may be offline).
     setWakeProbabilityStream(device, true).catch(() => {});
     const poll = () => getWakeProbability(device)
       .then((snap) => {
         if (!alive) return;
         setOnline(snap.online);
-        setAvailable(snap.available !== false);
         setValue(snap.value ?? null);
         setErr(null);
       })
@@ -793,9 +796,7 @@ function WakeProbabilityMeter({ device, online: onlineProp }) {
 
   let body;
   if (!online) {
-    body = <div className="z-fh">Speaker offline.</div>;
-  } else if (!available) {
-    body = <div className="z-fh">Re-flash the firmware to enable the wake-probability stream.</div>;
+    body = <div className="z-fh">Device offline.</div>;
   } else {
     const pct = value == null ? null : Math.max(0, Math.min(100, value));
     body = <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
@@ -817,9 +818,9 @@ function WakeProbabilityMeter({ device, online: onlineProp }) {
 }
 
 export function Devices() {
-  const { catalog, patch, system } = useAppData();
+  const { catalog, patch, system, refreshConfig } = useAppData();
   const devices = catalog.core.values.devices || [];
-  const esphomePort = catalog.core.values.esphome?.port ?? 6053;
+  const devicePort = catalog.core.values.audio?.port ?? 8200;
 
   // Statuses arrive live over the panel WS heartbeat (system.devices is refreshed
   // every second), so no one-shot fetch / polling is needed here.
@@ -830,73 +831,68 @@ export function Devices() {
     if (!m) return "off";
     return m.online ? "online" : "offline";
   };
+  // A device connecting for the first time is added to the config on the server; the
+  // heartbeat lists it before this page's config snapshot does, so re-read the config.
+  const unlisted = live.filter((m) => !devices.some((d) => d.name === m.name)).map((m) => m.name).join(",");
+  useEffect(() => {
+    if (unlisted) refreshConfig().catch(() => {});
+  }, [unlisted]);
 
   const [modal, setModal] = useState(null); // { mode:'add'|'edit', index }
   const [busyErr, setBusyErr] = useState(null);
 
-  const saveList = async (list) => {
+  // Apply `change` to the server's CURRENT device list, fetched right before the
+  // write, so a cutoff set from a slider or a device that connected (and was added)
+  // while the page was open is not rolled back. Devices are matched by name.
+  const saveList = async (change) => {
     setBusyErr(null);
-    try { await patch({ core: { devices: list } }); setModal(null); }
-    catch (e) { setBusyErr(e); }
+    try {
+      const fresh = await getConfig();
+      await patch({ core: { devices: change(fresh.core?.devices || []) } });
+      setModal(null);
+    } catch (e) { setBusyErr(e); }
   };
-  const onAdd = (d) => saveList([...devices, d]);
-  const onEdit = (i, d) => saveList(devices.map((x, idx) => (idx === i ? d : x)));
-  const onDelete = (i) => {
-    if (!window.confirm(`Delete speaker "${devices[i].name}"?`)) return;
-    saveList(devices.filter((_, idx) => idx !== i));
+  const onAdd = (d) => saveList((list) => [...list, d]);
+  const onDelete = (name) => {
+    if (!window.confirm(`Delete speaker "${name}"?`)) return;
+    saveList((list) => list.filter((x) => x.name !== name));
   };
-  // Flip the persisted enabled flag (missing = true on old configs). Disabling stops
-  // the server's client for that speaker; re-enabling recreates it — both hot.
-  const onToggle = (i) => saveList(devices.map((x, idx) => (
-    idx === i ? { ...x, enabled: !(x.enabled ?? true) } : x
+  // Flip the persisted enabled flag (missing = true on old configs). Disabling closes
+  // the device's connection and refuses it from then on; re-enabling admits it — both hot.
+  const onToggle = (name) => saveList((list) => list.map((x) => (
+    x.name === name ? { ...x, enabled: !(x.enabled ?? true) } : x
   )));
 
-  // Common params (esphome.port + audio.public_base_url) as their own save form.
-  const commonValues = {
-    port: esphomePort,
-    public_base_url: catalog.core.values.audio?.public_base_url ?? "",
-  };
-  const buildCommon = (d) => ({ core: { esphome: { port: d.port }, audio: { public_base_url: d.public_base_url } } });
-  const { draft, onChange, dirty, saving, err, save } = useStageForm(commonValues, buildCommon, patch);
-
   return <div className="z-page narrow">
-    <PageHeader title="Devices" desc="ESPHome speakers the server connects to. Each name also keys its own dialog context."
+    <PageHeader title="Devices" desc={`Devices connect to ws://<server>:${devicePort}/device; an unknown device is added on its first connection. Each name also keys its own dialog context.`}
       actions={<button className="z-btn p" onClick={() => setModal({ mode: "add" })}><Ic n="add" w={14} />Add speaker</button>} />
     {busyErr && <div className="z-banner warn" style={{ margin: "0 0 12px" }}><Ic n="restart" w={15} /><span>{errorLines(busyErr).join(" · ")}</span></div>}
     <Card>
       <table className="z-tbl">
-        <thead><tr><th>Name</th><th>Host / IP</th><th>Firmware</th><th>Model</th><th>Status</th><th></th></tr></thead>
+        <thead><tr><th>Name</th><th>Firmware</th><th>Model</th><th>Status</th><th></th></tr></thead>
         <tbody>
           {devices.length === 0
-            ? <tr><td colSpan={6} style={{ color: "var(--mut)", padding: "14px 0" }}>No speakers configured.</td></tr>
+            ? <tr><td colSpan={5} style={{ color: "var(--mut)", padding: "14px 0" }}>No speakers configured.</td></tr>
             : devices.map((d, i) => {
               const enabled = d.enabled ?? true;
               return <tr key={i} style={{ cursor: "default", opacity: enabled ? 1 : 0.55 }}>
                 <td style={{ fontWeight: 600 }}>{d.name}</td>
-                <td className="mono" style={{ fontSize: 11.5 }}>{d.host}<span style={{ color: "var(--mut2)" }}>:{esphomePort}</span></td>
                 {/* Firmware/model versions come from the live WS snapshot; "—" while offline/disabled. */}
                 <td className="mono" style={{ fontSize: 11.5 }}>{deviceVersion(liveOf(d.name), "config_version") ?? "—"}</td>
                 <td className="mono" style={{ fontSize: 11.5 }}>{deviceVersion(liveOf(d.name), "model_version") ?? "—"}</td>
                 <td>{enabled ? <StatusPill status={statusOf(d.name)} /> : <Pill tone="muted">disabled</Pill>}</td>
                 <td style={{ textAlign: "right" }}><div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
-                  <button className="z-mini" onClick={() => onToggle(i)}>{enabled ? "Disable" : "Enable"}</button>
-                  <button className="z-mini" onClick={() => setModal({ mode: "edit", index: i })}>Edit</button>
-                  <button className="z-mini" onClick={() => onDelete(i)}>Delete</button>
+                  <button className="z-mini" onClick={() => onToggle(d.name)}>{enabled ? "Disable" : "Enable"}</button>
+                  <button className="z-mini" onClick={() => setModal({ mode: "edit", name: d.name })}>Edit</button>
+                  <button className="z-mini" onClick={() => onDelete(d.name)}>Delete</button>
                 </div></td>
               </tr>;
             })}
         </tbody>
       </table>
     </Card>
-    <div className="z-sl">Common parameters<div className="ln" /></div>
-    <Card foot={<FormSaveBar dirty={dirty} saving={saving} onSave={save} errors={errorLines(err)} />}>
-      <Field label="ESPHome API port" hint="Default 6053." row><Stepper value={draft.port ?? 6053} onChange={(v) => onChange("port", v)} /></Field>
-      <Field label="Public base URL" hint="Where speakers download generated audio. If wrong — the speaker won't play the reply.">
-        <div className="z-inp mono"><input value={draft.public_base_url ?? ""} placeholder="http://10.0.0.10:8200" onChange={(e) => onChange("public_base_url", e.target.value)} /></div>
-      </Field>
-    </Card>
     {modal?.mode === "add" && <DeviceModal title="Add speaker" onSave={onAdd} onClose={() => setModal(null)} />}
-    {modal?.mode === "edit" && <DeviceModal title="Edit speaker" initial={devices[modal.index]} onSave={(d) => onEdit(modal.index, d)} onClose={() => setModal(null)}
-      device={devices[modal.index]?.name} online={statusOf(devices[modal.index]?.name) === "online"} />}
+    {modal?.mode === "edit" && <DeviceModal title="Edit speaker" onClose={() => setModal(null)}
+      device={modal.name} online={statusOf(modal.name) === "online"} />}
   </div>;
 }

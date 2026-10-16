@@ -11,7 +11,8 @@ from src.llm import LlmResult
 from src.pipeline_events import StageEvent
 from src.plugins.llm.base import LlmConfig
 from src.stage_errors import Declined, StageError
-from tests.test_pipeline import make_pipeline, types_of
+from tests.test_pipeline import (install_fake_vad, make_pipeline, set_small_vad_thresholds,
+                                 types_of)
 
 
 class Stt:
@@ -295,7 +296,7 @@ async def test_pipeline_runs_chains_and_records_them(tmp_path, monkeypatch):
         (Stt("включи свет"), Handler("Готово", tool_used=True)),
         runs_store=store,
     )
-    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_start("cid", None)
     await pipeline.on_audio(b"\x01\x02" * 100)
     await pipeline.on_stop(False)
 
@@ -303,7 +304,7 @@ async def test_pipeline_runs_chains_and_records_them(tmp_path, monkeypatch):
     assert types_of(events) == [
         StageEvent.RUN_START, StageEvent.STT_START, StageEvent.STT_VAD_START,
         StageEvent.STT_VAD_END, StageEvent.STT_END, StageEvent.INTENT_START,
-        StageEvent.INTENT_END, StageEvent.TTS_START, StageEvent.TTS_END, StageEvent.RUN_END,
+        StageEvent.INTENT_END, StageEvent.TTS_START, StageEvent.RUN_END,
     ]
     assert dict(events)[StageEvent.STT_END] == {"text": "свет"}
     rec = store.records[0]
@@ -327,7 +328,7 @@ async def test_pipeline_all_declined_speaks_decline_and_keeps_context_clean(
         (Stt("свет"), Handler(Declined("Не понял команду"))),
         runs_store=store,
     )
-    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_start("cid", None)
     await pipeline.on_audio(b"\x01\x02" * 100)
     await pipeline.on_stop(False)
 
@@ -369,7 +370,7 @@ async def test_pipeline_opens_streams_for_first_and_parallel_chains_only(tmp_pat
     pipeline.rt.stt_backends = {"a": a, "b": b, "c": c}
     pipeline.rt.llm_backends = {"a": Handler("ok"), "b": Handler("x"), "c": Handler("y")}
 
-    await pipeline.on_start("cid", 0, None, None)
+    await pipeline.on_start("cid", None)
     assert set(pipeline._stt_streams) == {"a", "b"}
     await pipeline.on_audio(b"\x01\x02" * 100)
     assert a.fed == b.fed == [b"\x01\x02" * 100] and c.fed == []
@@ -378,3 +379,81 @@ async def test_pipeline_opens_streams_for_first_and_parallel_chains_only(tmp_pat
     assert a.finished and not c.finished and c.calls == []
     assert b.closed                    # the unused parallel session is released
     assert pipeline._stt_streams == {}
+
+
+class GatedStreamingStt(StreamingStt):
+    """StreamingStt whose session finish() waits on `gate`, so a run can be caught mid-STT."""
+
+    def __init__(self, text):
+        super().__init__(text)
+        self.finish_started, self.gate = asyncio.Event(), asyncio.Event()
+
+    def open_stream(self, **kw):
+        outer = self
+
+        class Session:
+            def feed(self, pcm):
+                outer.fed.append(pcm)
+
+            async def finish(self):
+                outer.finish_started.set()
+                await outer.gate.wait()
+                return outer.text
+
+            async def aclose(self):
+                outer.closed = True
+
+        return Session()
+
+
+async def _end_utterance(pipeline):
+    # Speech, then silence: the VAD end-points the utterance and the run task starts.
+    for _ in range(12):
+        await pipeline.on_audio(b"\x01\x02" * 320)
+        if pipeline._run_task is not None:
+            return pipeline._run_task
+    raise AssertionError("the utterance was never end-pointed")
+
+
+async def test_new_wake_mid_stt_closes_every_chain_session(tmp_path, monkeypatch):
+    monkeypatch.setattr("src.llm.LlmStage", FakeStage)
+    pipeline, _events = make_pipeline(tmp_path, monkeypatch)
+    set_small_vad_thresholds(pipeline)
+    a, b = GatedStreamingStt("a"), GatedStreamingStt("b")
+    pipeline.rt.core.chains = [chain("a"), chain("b", parallel=True)]
+    pipeline.rt.stt_backends = {"a": a, "b": b}
+    pipeline.rt.llm_backends = {"a": Handler("ok"), "b": Handler("ok")}
+    install_fake_vad(pipeline, [True, True, True] + [False] * 20)
+
+    await pipeline.on_start("c1", None)
+    run1 = await _end_utterance(pipeline)
+    await asyncio.wait_for(a.finish_started.wait(), 2)
+    await pipeline.on_start("c2", None)
+    await asyncio.gather(run1, return_exceptions=True)
+
+    assert run1.cancelled()
+    assert a.closed and b.closed
+
+
+async def test_new_wake_while_the_run_waits_for_the_lock_closes_its_sessions(tmp_path, monkeypatch):
+    monkeypatch.setattr("src.llm.LlmStage", FakeStage)
+    pipeline, _events = make_pipeline(tmp_path, monkeypatch)
+    set_small_vad_thresholds(pipeline)
+    a = GatedStreamingStt("a")
+    pipeline.rt.core.chains = [chain("a")]
+    pipeline.rt.stt_backends = {"a": a}
+    pipeline.rt.llm_backends = {"a": Handler("ok")}
+    install_fake_vad(pipeline, [True, True, True] + [False] * 20)
+
+    await pipeline._lock.acquire()  # another run on this speaker, e.g. an agent's `ask`
+    try:
+        await pipeline.on_start("c1", None)
+        run1 = await _end_utterance(pipeline)
+        await asyncio.sleep(0.05)  # the run took its sessions and now waits for the lock
+        await pipeline.on_start("c2", None)
+        await asyncio.gather(run1, return_exceptions=True)
+    finally:
+        pipeline._lock.release()
+
+    assert run1.cancelled()
+    assert a.closed

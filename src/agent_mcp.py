@@ -27,13 +27,14 @@ from pydantic import ValidationError
 
 
 def _find_client(manager, name: str):
-    """Live DeviceClient by configured name, or None when unknown."""
+    """Device by configured name, or None when unknown."""
     return next((c for c in manager.clients if c.cfg.name == name), None)
 
 
 def _first_online(manager):
-    """First currently-online DeviceClient, or None."""
-    return next((c for c in manager.clients if c.online), None)
+    """First online Device with a speaker, else the first online one, or None."""
+    online = [c for c in manager.clients if c.online]
+    return next((c for c in online if c.pipeline.has_speaker), online[0] if online else None)
 
 
 def build_agent_mcp(rt) -> FastMCP:
@@ -136,7 +137,7 @@ def build_agent_mcp(rt) -> FastMCP:
         name="list_devices",
         description=(
             "List the configured speakers with their live status "
-            "(name, host, enabled, online)."
+            "(name, enabled, online)."
         ),
     )
     async def list_devices() -> dict:
@@ -148,8 +149,8 @@ def build_agent_mcp(rt) -> FastMCP:
     @mcp.tool(
         name="say",
         description=(
-            "Speak arbitrary text out loud on a speaker (TTS + announce channel; "
-            "ducks any current audio). device: speaker name from list_devices; "
+            "Speak arbitrary text out loud on a speaker (the text also goes to its "
+            "screen, if any). device: speaker name from list_devices; "
             "omitted = the first online speaker."
         ),
     )
@@ -175,7 +176,7 @@ def build_agent_mcp(rt) -> FastMCP:
             "Send a text request to the assistant as if the user spoke it: a "
             "full LLM turn with the smart-home tools and the device's "
             "conversation context. The reply is spoken on the speaker when "
-            "speak=true and the device is online, and is always returned as "
+            "speak=true and the device is online with a speaker, and is always returned as "
             "text. device: speaker name from list_devices; omitted = the first "
             "online (else first configured) speaker."
         ),
@@ -195,7 +196,7 @@ def build_agent_mcp(rt) -> FastMCP:
                     client = manager.clients[0]
                 if client is None:
                     return {"error": "no devices configured"}
-            do_speak = speak and client.online
+            do_speak = speak and client.online and client.pipeline.has_speaker
             result = await client.pipeline.run_text(text, speak=do_speak)
             # "Actually spoken": speaking was requested AND there was a reply AND
             # the TTS/announce step did not fail. (When an earlier stage already

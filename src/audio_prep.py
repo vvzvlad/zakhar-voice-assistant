@@ -127,11 +127,13 @@ def write_wav(path: str, pcm: bytes) -> None:
         w.writeframes(pcm)
 
 
-def pcm_to_wav_bytes(pcm: bytes, pcm2: bytes = b"") -> bytes:
-    """Build a 16 kHz / 16-bit WAV container from PCM, fully in memory.
+def pcm_to_wav_bytes(pcm: bytes, pcm2: bytes = b"", rate: int = SAMPLE_RATE) -> bytes:
+    """Build a 16-bit WAV container (16 kHz unless `rate` says otherwise) from PCM,
+    fully in memory.
 
     With only `pcm`, builds a mono WAV — used by the manual (ephemeral) capture
-    path, where the bytes are handed straight back to the API caller. With a
+    path, where the bytes are handed straight back to the API caller, and for a
+    raw-PCM TTS reply stored with the run (at the backend's rate). With a
     non-empty `pcm2`, builds a STEREO WAV for the stored per-run diagnostic
     audio: LEFT = `pcm` (the pipeline/STT channel, exactly what STT received),
     RIGHT = `pcm2` (the other raw mic channel, for channel comparison). The
@@ -141,7 +143,7 @@ def pcm_to_wav_bytes(pcm: bytes, pcm2: bytes = b"") -> bytes:
     buf = io.BytesIO()
     with wave.open(buf, "wb") as w:
         w.setsampwidth(2)
-        w.setframerate(SAMPLE_RATE)
+        w.setframerate(rate)
         if not pcm2:
             w.setnchannels(1)
             w.writeframes(pcm)

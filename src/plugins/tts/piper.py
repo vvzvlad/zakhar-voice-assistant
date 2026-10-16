@@ -8,13 +8,12 @@ import wave
 from loguru import logger
 from pydantic import BaseModel, Field
 
-from src.audio_codec import make_mp3_stream_encoder
 from src.plugins.base import LOCAL_MODEL_FIELD_EXTRA, Deps, Provider, register
 # The canonical LLM->TTS text is the model's own notation: plain text with "+"
 # before the stressed vowel (e.g. "прив+ет"). The backend adapts that canon to
 # its engine via the shared opt-in helpers.
 from src.plugins.tts._ru_text import expand_units, phonetic_ru, stress_to_acute
-from src.tts import TtsBackend, split_sentences
+from src.tts import TtsBackend, pcm_mime, split_sentences
 
 
 class PiperTtsBackend(TtsBackend):
@@ -23,8 +22,8 @@ class PiperTtsBackend(TtsBackend):
     The voice is loaded once and shared (espeak-ng-data is bundled in the Piper
     package, so no system espeak is needed). Synthesis is blocking, so it runs in
     a worker thread. Returns the engine's NATIVE format — WAV 22050 Hz mono
-    16-bit (audio/wav); adapting it to what the consumer can play is the
-    delivery boundary's job (see audio_codec.to_playable), not synthesis'.
+    16-bit (audio/wav), or raw PCM from synthesize_stream; adapting it to what
+    the device plays is the delivery boundary's job, not synthesis'.
     """
 
     def __init__(self, voice_path: str | None = None, *, sentence_silence: float = 0.4, voice=None):
@@ -108,42 +107,28 @@ class PiperTtsBackend(TtsBackend):
         return (bytes(pcm), sr, ch, sw)
 
     async def synthesize_stream(self, text: str, lang: str = "ru"):
-        """Native streaming synthesis: synthesize sentence-by-sentence and emit
-        incremental MP3 (audio/mpeg) so the delivery boundary streams it live (WAV
-        would be buffered+transcoded whole — zero latency win). The device already
-        always gets MP3 for Piper (to_playable transcodes the buffered WAV), so this
-        produces the SAME final format, just earlier and per-sentence. The buffered
-        synthesize() stays native WAV. Inter-sentence silence matches _synth."""
+        """Native streaming synthesis: synthesize sentence-by-sentence and emit raw
+        PCM (pcm_mime at the voice's sample rate) as each sentence is ready. The
+        buffered synthesize() stays native WAV. Inter-sentence silence matches _synth."""
         # Same canonical "+vowel" -> engine adaptation as the buffered _synth.
         text = phonetic_ru(expand_units(stress_to_acute(text)))
         sentences = split_sentences(text)
 
         async def _gen():
-            enc = None
             silence = b""
             emitted = False
             for sentence in sentences:
                 pcm, sr, ch, sw = await asyncio.to_thread(self._synth_sentence_pcm, sentence)
                 if not pcm:
                     continue
-                if enc is None:
-                    # First real audio fixes the stream format and the silence block.
-                    enc = make_mp3_stream_encoder(sr, ch, sw)
-                    if self._sentence_silence > 0:
-                        frame = sw * ch  # bytes per audio frame, so silence stays aligned
-                        silence = b"\x00" * (int(sr * self._sentence_silence) * frame)
+                if not silence and self._sentence_silence > 0:
+                    frame = sw * ch  # bytes per audio frame, so silence stays aligned
+                    silence = b"\x00" * (int(sr * self._sentence_silence) * frame)
                 # Prepend the inter-sentence gap only BETWEEN emitted sentences.
-                prefix = silence if (emitted and self._sentence_silence > 0) else b""
-                mp3 = await asyncio.to_thread(enc.encode, prefix + pcm)
+                yield (silence if emitted else b"") + pcm
                 emitted = True
-                if mp3:
-                    yield mp3
-            if enc is not None:
-                tail = await asyncio.to_thread(enc.flush)
-                if tail:
-                    yield tail
 
-        return ("audio/mpeg", _gen())
+        return (pcm_mime(self._voice.config.sample_rate), _gen())
 
 
 class PiperConfig(BaseModel):

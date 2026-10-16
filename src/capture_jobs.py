@@ -2,12 +2,10 @@
 
 The recording runs as a server-side background asyncio task. The browser only starts it (202),
 polls its status (for the live countdown) and downloads the result, so closing the browser
-cannot cancel it. Cancelling DeviceClient.capture() mid-stream breaks the device's
-voice_assistant run and makes the speaker reboot.
+cannot cancel it.
 
-The device self-times the recording in firmware (button press -> stop wake word ->
-voice_assistant.start -> delay(seconds) -> voice_assistant.stop -> start wake word); the server
-cannot interrupt it. The pipeline drains and emits RUN_END when the device finishes.
+The device self-times the recording (`capture {seconds}` -> mic frames -> `audio_end`, see
+docs/device-protocol.md); the server cannot interrupt it.
 """
 
 import asyncio
@@ -15,7 +13,7 @@ import time
 
 from loguru import logger
 
-from src.pipeline import CaptureBusyError
+from src.device_server import CaptureBusyError
 
 # How long a terminal job (done/error/cancelled) is retained after it finishes so
 # the browser can still read its final status / download the WAV before it is

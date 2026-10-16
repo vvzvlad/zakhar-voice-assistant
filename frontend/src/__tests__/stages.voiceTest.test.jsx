@@ -29,7 +29,7 @@ vi.mock("../api.js", () => ({
   // straight to playAudioResponse (mocked), so no body/blob plumbing is needed.
   streamTtsVoice: vi.fn(async () => ({
     ok: true,
-    headers: { get: () => "audio/mpeg" },
+    headers: { get: () => "audio/wav" },
     body: {},
   })),
 }));
@@ -206,7 +206,7 @@ describe("voice test action", () => {
     expect(button).toHaveTextContent("Synthesizing…");
     // Resolve the request, then the player reports playback started: the SAME
     // button becomes an enabled Stop button.
-    resolveCall({ ok: true, headers: { get: () => "audio/mpeg" }, body: {} });
+    resolveCall({ ok: true, headers: { get: () => "audio/wav" }, body: {} });
     await waitFor(() => expect(controllers).toHaveLength(1));
     act(() => controllers[0].cbs.onPlaying());
     await waitFor(() => expect(button).toHaveTextContent("Stop"));

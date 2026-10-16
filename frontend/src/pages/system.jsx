@@ -32,7 +32,7 @@ function SystemPage() {
 
   return <FormPage form={form}>
     <PageHeader title="System"
-      desc="Outbound routing for cloud APIs, the audio server that feeds speakers, the MCP server for other agents, and recorded-utterance storage." />
+      desc="Outbound routing for cloud APIs, the device server that voice devices connect to, the MCP server for other agents, and recorded-utterance storage." />
     {/* Two equal columns: routing/audio on the left, system status + recordings + logging on the right */}
     <div className="z-cols even">
       <div className="z-grid">
@@ -41,14 +41,12 @@ function SystemPage() {
             ? <SchemaForm schema={netSchema} values={net.draft} onChange={net.onChange} />
             : <Field label="Proxy" hint="SOCKS/HTTP for cloud APIs. Empty = direct."><div className="z-inp mono"><input value={net.draft.external_proxy ?? ""} onChange={(e) => net.onChange("external_proxy", e.target.value)} /></div></Field>}
         </Card>
-        <Card title="Audio server" sub="serves generated audio to speakers">
+        <Card title="Device server" sub="voice devices connect to /device over WebSocket">
           {audioSchema
-            // The speakers' download address is set with them, on the Devices page.
-            ? <SchemaForm schema={audioSchema} values={audio.draft} onChange={audio.onChange} skip={["public_base_url"]} />
+            ? <SchemaForm schema={audioSchema} values={audio.draft} onChange={audio.onChange} />
             : <>
               <Field label="Bind host"><div className="z-inp mono"><input value={audio.draft.host ?? ""} onChange={(e) => audio.onChange("host", e.target.value)} /></div></Field>
               <Field label="Port" row><Stepper value={audio.draft.port ?? 8200} onChange={(v) => audio.onChange("port", v)} /></Field>
-              <Field label="Cache TTL" hint="Seconds." row><Stepper value={audio.draft.ttl ?? 300} step={30} onChange={(v) => audio.onChange("ttl", v)} unit="s" /></Field>
             </>}
         </Card>
         <Card title="MCP Server for other agents" sub="streamable-HTTP MCP endpoint on this panel's port">

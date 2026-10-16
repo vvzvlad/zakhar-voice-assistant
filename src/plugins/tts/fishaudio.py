@@ -12,13 +12,16 @@ from src.plugins.base import Deps, LABEL_FIELD_EXTRA, SECRET_FIELD_EXTRA, Provid
 # not understand Yandex "+" markup, and a literal '+' could be voiced — so the
 # stress markup is stripped entirely (plain vowel remains) after unit expansion.
 from src.plugins.tts._ru_text import drop_plus_stress, expand_units
-from src.tts import TtsBackend
+from src.tts import OwnedChunks, TtsBackend, pcm_mime
 
 # TTS synthesis endpoint; the same for every deployment, so it is hardcoded
 # rather than configurable (default cloud address of a public third-party API).
 FISH_TTS_URL = "https://api.fish.audio/v1/tts"
 # Voice-model catalog endpoint (same Bearer auth as TTS).
 FISH_MODELS_URL = "https://api.fish.audio/model"
+# Output: format "pcm" (16-bit mono raw samples, no container). 44.1 kHz is the
+# highest rate the API offers for pcm.
+FISH_PCM_RATE = 44100
 
 # Module-level TTL cache for the voice catalog, keyed by api_key: half of the
 # merged list (`self=true`) differs per account, so a list fetched with one key
@@ -47,7 +50,7 @@ def _to_options(items: list[dict]) -> list[dict]:
 class FishAudioTtsBackend(TtsBackend):
     """Fish Audio cloud TTS (api.fish.audio). One JSON POST per synthesize call:
     the server chunks long text internally, so no client-side splitting is
-    needed; the 200 response body is the raw MP3 audio. The TTS model
+    needed; the 200 response body is raw PCM (pcm_mime at FISH_PCM_RATE). The TTS model
     generation ("s1" / "s2-pro") is selected via the `model` HTTP header; the
     voice is a `reference_id` voice-model id (omitted -> provider default)."""
 
@@ -74,7 +77,8 @@ class FishAudioTtsBackend(TtsBackend):
             return None
         payload: dict = {
             "text": adapted,
-            "format": "mp3",
+            "format": "pcm",
+            "sample_rate": FISH_PCM_RATE,
             "prosody": {"speed": self.speed},
         }
         # Omit reference_id entirely when not configured: fish.audio then uses
@@ -87,7 +91,7 @@ class FishAudioTtsBackend(TtsBackend):
     async def synthesize(self, text: str, lang: str = "ru") -> tuple[str, bytes]:
         prepared = self._build_payload(text)
         if prepared is None:
-            return ("audio/mpeg", b"")
+            return (pcm_mime(FISH_PCM_RATE), b"")
         headers, payload = prepared
         resp = await self.client.post(FISH_TTS_URL, headers=headers, json=payload, timeout=self.timeout)
         try:
@@ -99,10 +103,10 @@ class FishAudioTtsBackend(TtsBackend):
             raise RuntimeError(
                 f"Fish Audio TTS {resp.status_code}: {resp.text[:500]}"
             ) from e
-        return ("audio/mpeg", resp.content)
+        return (pcm_mime(FISH_PCM_RATE), resp.content)
 
     async def synthesize_stream(self, text: str, lang: str = "ru"):
-        """Native chunked synthesis: fish.audio streams the MP3 body progressively,
+        """Native chunked synthesis: fish.audio streams the PCM body progressively,
         so chunks are yielded as they arrive. HTTP/auth errors raise HERE (before
         the iterator is returned), per the TtsBackend streaming contract."""
         prepared = self._build_payload(text)
@@ -112,7 +116,7 @@ class FishAudioTtsBackend(TtsBackend):
                 return
                 yield  # pragma: no cover - marks this as an async generator
 
-            return ("audio/mpeg", _empty())
+            return (pcm_mime(FISH_PCM_RATE), _empty())
         headers, payload = prepared
         req = self.client.build_request(
             "POST", FISH_TTS_URL, headers=headers, json=payload, timeout=self.timeout
@@ -130,10 +134,9 @@ class FishAudioTtsBackend(TtsBackend):
                 f"Fish Audio TTS {resp.status_code}: {resp.text[:500]}"
             ) from e
 
-        # The open streamed response is released by the generator's finally,
-        # which only runs if the generator is iterated or aclose()d. The caller
-        # (Pipeline.serve_audio_stream) owns the returned iterator and
-        # guarantees exactly that — fully consumed or explicitly closed.
+        # The open streamed response is released when the stream is consumed or
+        # aclose()d — also before the first chunk (OwnedChunks). The caller owns the
+        # returned iterator and guarantees one of the two.
         async def _gen():
             try:
                 async for chunk in resp.aiter_bytes():
@@ -141,7 +144,7 @@ class FishAudioTtsBackend(TtsBackend):
             finally:
                 await resp.aclose()
 
-        return ("audio/mpeg", _gen())
+        return (pcm_mime(FISH_PCM_RATE), OwnedChunks(_gen(), resp.aclose))
 
 
 class FishAudioTtsConfig(BaseModel):

@@ -334,18 +334,6 @@ export function FormPage({ form, narrow, errors = errorLines(form.err), children
   </div>;
 }
 
-// Live save bar wired to real state: dirty flag, async save, and inline 422 errors.
-export function FormSaveBar({ dirty, saving, onSave, errors = [] }) {
-  return <>
-    <SaveErrors errors={errors} style={{ margin: "0 17px 14px", borderRadius: 8 }} />
-    <div className="z-foot">
-      <button className="z-btn p" disabled={!dirty || saving} onClick={onSave}>{saving ? "Saving…" : "Save changes"}</button>
-      <span style={{ flex: 1 }} />
-      {dirty && <span className="z-dirty"><s />Unsaved</span>}
-    </div>
-  </>;
-}
-
 export function Loading({ label = "Loading…" }) {
   return <div className="z-empty"><b>{label}</b>Fetching data from the server.</div>;
 }
