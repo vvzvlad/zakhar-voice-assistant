@@ -104,13 +104,14 @@ class OpenRouterSttBackend(SttBackend):
 
 
 class OpenRouterSttConfig(BaseModel):
-    api_key: str = Field("", json_schema_extra=SECRET_FIELD_EXTRA)
+    api_key: str = Field("", title="API key", json_schema_extra=SECRET_FIELD_EXTRA)
     # Dynamic select: the option list is fetched from OpenRouter's model catalog
     # (see MODEL_FIELD_EXTRA in src/plugins/base.py).
-    model: str = Field("openai/whisper-large-v3-turbo", json_schema_extra=MODEL_FIELD_EXTRA)
-    language: str = "ru"
-    temperature: float = Field(0.0, ge=0.0, le=1.0)
-    timeout: int = 60
+    model: str = Field("openai/whisper-large-v3-turbo", title="Model", json_schema_extra=MODEL_FIELD_EXTRA)
+    language: str = Field("ru", title="Language", description="Language code of the speech, e.g. ru.")
+    temperature: float = Field(0.0, ge=0.0, le=1.0, title="Temperature",
+                               description="Whisper sampling temperature; 0 = most deterministic.")
+    timeout: int = Field(60, title="Request timeout (s)")
 
 
 @register

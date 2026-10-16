@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
-// Integration tests (jsdom) for the Chains page. Every edit (add / reorder /
+// Integration tests (jsdom) for the Logic page (chains). Every edit (add / reorder /
 // delete / field change) changes one draft, and Save sends ONE patch carrying
 // the whole core.chains array (PATCH replaces lists). Also pins which per-chain
-// controls appear (narrow checkbox, parallel toggle, strict-mode line, the
-// last-chain warning), the server error banner and the "configure" links.
+// controls appear (narrow checkbox, parallel toggle, the last-chain warning),
+// the server error banner and the "configure" links.
 import React from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, cleanup, waitFor, within } from "@testing-library/react";
@@ -121,13 +121,11 @@ describe("Chains page — per-chain controls", () => {
     expect(within(cards()[1]).queryByText("Recognize in parallel")).toBeNull();
   });
 
-  it("shows strict mode while an enabled chain follows, and warns when the vocabulary handler is last", () => {
+  it("warns when the vocabulary handler is the last enabled chain", () => {
     render(<Chains />);
-    expect(within(cards()[0]).getByText("strict mode: on — another chain follows")).toBeInTheDocument();
     expect(screen.queryByText(/phrases outside its vocabulary get «не понял»/)).toBeNull();
 
     fireEvent.click(within(cards()[1]).getAllByRole("switch")[0]); // disable "smart"
-    expect(within(cards()[0]).queryByText("strict mode: on — another chain follows")).toBeNull();
     expect(within(cards()[0]).getByText(/phrases outside its vocabulary get «не понял»/)).toBeInTheDocument();
   });
 });

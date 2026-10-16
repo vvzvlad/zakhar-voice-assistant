@@ -14,8 +14,10 @@ class StageError(Exception):
 
 class Declined(Exception):
     """A handler refuses an utterance it cannot take (it ran no tool), so the next
-    recognition chain gets it. `reply` is what is spoken when no later chain answers."""
+    recognition chain gets it. `reply` is what is spoken when no later chain answers;
+    `reason` says why it declined, for the run log ("" when the handler gives none)."""
 
-    def __init__(self, reply: str):
+    def __init__(self, reply: str, reason: str = ""):
         super().__init__(reply)
         self.reply = reply
+        self.reason = reason

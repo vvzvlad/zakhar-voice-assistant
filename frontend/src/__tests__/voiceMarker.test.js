@@ -1,7 +1,7 @@
 // Unit tests for the JS mirror of the preferred-voice marker parser
 // (src/voiceMarker.js). Must stay consistent with tests/test_voice_marker.py.
 import { describe, it, expect } from "vitest";
-import { parseVoiceMarker, voiceLabel, buildVoiceMarker } from "../voiceMarker.js";
+import { parseVoiceMarker, voiceName, differsFromVoice, buildVoiceMarker } from "../voiceMarker.js";
 
 describe("parseVoiceMarker", () => {
   it("parses a single field", () => {
@@ -40,16 +40,42 @@ describe("parseVoiceMarker", () => {
   });
 });
 
-describe("voiceLabel", () => {
-  it("joins provider and field values with '/'", () => {
-    expect(voiceLabel({ provider: "yandex", fields: { voice: "zahar" } })).toBe("yandex/zahar");
-    expect(voiceLabel({ provider: "fishaudio", fields: { model: "s2-pro", reference_id: "3b5c9f" } }))
-      .toBe("fishaudio/s2-pro/3b5c9f");
-    expect(voiceLabel({ provider: "piper", fields: {} })).toBe("piper");
+describe("voiceName", () => {
+  const fish = { provider: "fishaudio", fields: { reference_id: "9b64e", model: "s2-pro", speed: "0.9" } };
+
+  it("takes the name the TTS form keeps for the same voice id", () => {
+    expect(voiceName(fish, { reference_id: "9b64e", reference_id_label: "Anna" }, "Other")).toBe("Anna");
   });
 
-  it("returns an empty string for null", () => {
-    expect(voiceLabel(null)).toBe("");
+  it("names another voice by the options lookup, else by its id", () => {
+    expect(voiceName(fish, { reference_id: "aaaa", reference_id_label: "Anna" }, "Boris")).toBe("Boris");
+    expect(voiceName(fish, { reference_id: "aaaa", reference_id_label: "Anna" })).toBe("9b64e");
+  });
+
+  it("names a plain voice field by its value, a voice file by its basename, none by the provider", () => {
+    expect(voiceName({ provider: "yandex", fields: { voice: "zahar" } })).toBe("zahar");
+    expect(voiceName({ provider: "piper", fields: { voice_path: "models/ru_RU-ruslan-medium.onnx" } }))
+      .toBe("ru_RU-ruslan-medium.onnx");
+    expect(voiceName({ provider: "piper", fields: {} })).toBe("piper");
+    expect(voiceName(null)).toBe("");
+  });
+});
+
+describe("differsFromVoice", () => {
+  const marker = { provider: "yandex", fields: { voice: "zahar", speed: "1.2" } };
+
+  it("is false when the current provider holds every marker field", () => {
+    expect(differsFromVoice(marker, "yandex", { voice: "zahar", speed: 1.2, role: "neutral" })).toBe(false);
+  });
+
+  it("is true for another provider or a differing field", () => {
+    expect(differsFromVoice(marker, "piper", { voice: "zahar", speed: 1.2 })).toBe(true);
+    expect(differsFromVoice(marker, "yandex", { voice: "alena", speed: 1.2 })).toBe(true);
+    expect(differsFromVoice(marker, "yandex", { voice: "zahar" })).toBe(true);
+  });
+
+  it("is false without a marker", () => {
+    expect(differsFromVoice(null, "yandex", {})).toBe(false);
   });
 });
 

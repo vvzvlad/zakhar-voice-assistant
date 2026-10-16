@@ -268,30 +268,39 @@ export default function SchemaForm({ schema, values, onChange, optionsFor, root,
   const doc = root || schema;
   const props = (schema && schema.properties) || {};
   const skipSet = new Set(skip);
+  // Fields flagged `advanced: true` go into a collapsed "Advanced" disclosure
+  // after the regular ones.
+  const fields = [];
+  const advanced = [];
+  for (const [name, node] of Object.entries(props)) {
+    if (skipSet.has(name)) continue;
+    const r = resolve(node, doc);
+    if (node.hidden || (r && r.hidden)) continue; // hidden companion fields (e.g. *_label)
+    const labelField = name + "_label";
+    const hasLabel = Object.prototype.hasOwnProperty.call(props, labelField);
+    (node.advanced || r.advanced ? advanced : fields).push(
+      <SchemaField
+        key={name}
+        name={name}
+        node={node}
+        root={doc}
+        value={values ? values[name] : undefined}
+        labelValue={hasLabel && values ? values[labelField] : undefined}
+        onLabelChange={hasLabel ? (lbl) => onChange(labelField, lbl) : undefined}
+        onChange={onChange}
+        optionsFor={optionsFor}
+        itemActionFor={itemActionFor}
+        itemActionBusy={itemActionBusy}
+      />
+    );
+  }
   return (
     <>
-      {Object.entries(props).map(([name, node]) => {
-        if (skipSet.has(name)) return null;
-        const r = resolve(node, doc);
-        if (node.hidden || (r && r.hidden)) return null; // hidden companion fields (e.g. *_label)
-        const labelField = name + "_label";
-        const hasLabel = Object.prototype.hasOwnProperty.call(props, labelField);
-        return (
-          <SchemaField
-            key={name}
-            name={name}
-            node={node}
-            root={doc}
-            value={values ? values[name] : undefined}
-            labelValue={hasLabel && values ? values[labelField] : undefined}
-            onLabelChange={hasLabel ? (lbl) => onChange(labelField, lbl) : undefined}
-            onChange={onChange}
-            optionsFor={optionsFor}
-            itemActionFor={itemActionFor}
-            itemActionBusy={itemActionBusy}
-          />
-        );
-      })}
+      {fields}
+      {advanced.length > 0 && <details>
+        <summary style={{ padding: "13px 0", fontSize: 12.5, fontWeight: 600, color: "var(--ink2)", cursor: "pointer" }}>Advanced</summary>
+        {advanced}
+      </details>}
     </>
   );
 }

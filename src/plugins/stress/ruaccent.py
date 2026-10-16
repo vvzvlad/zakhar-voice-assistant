@@ -108,6 +108,7 @@ class RuAccentBackend(Accentizer):
 class RuAccentConfig(BaseModel):
     enabled: bool = Field(
         True,
+        title="Stress placement",
         description="Place Russian stress marks on the assistant's reply before TTS "
         "so words are pronounced correctly. Loads a model on first enable.",
     )
@@ -130,16 +131,19 @@ class RuAccentConfig(BaseModel):
     )
     use_dictionary: bool = Field(
         True,
+        title="Stress dictionary",
         description="Load the full stress dictionary (more RAM, better accuracy). "
         "Ignored in tiny mode.",
     )
     tiny_mode: bool = Field(
         False,
+        title="Tiny mode",
         description="Minimal mode (~512MB RAM): disables the rule pipeline and the "
         "dictionary. Lower quality on homographs.",
     )
     device: Literal["CPU", "CUDA"] = Field(
         "CPU",
+        title="Inference device",
         description="Inference device. CUDA requires onnxruntime-gpu + CUDA.",
     )
 

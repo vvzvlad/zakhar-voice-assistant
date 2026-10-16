@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useRef } from "react";
 import { STAGE_COLOR, STAGE_ORDER, FILLER_COLOR } from "../stageMeta.js";
 import { Ic } from "./icons.jsx";
+import { errorLines } from "../useStageForm.js";
+import { useLeaveGuard } from "../navStore.js";
 
 // ── Sparkline ──────────────────────────────────────────
 export function Spark({ pts, color, w = 56, h = 22 }) {
@@ -38,9 +40,14 @@ export function KeyInput({ value, onChange, placeholder }) {
     </div>
   );
 }
-export function Seg({ options, value, onChange, full }) {
+// `marked` (optional) lists options that get a dot after their label, e.g.
+// provider tabs holding unsaved edits.
+export function Seg({ options, value, onChange, full, marked = [] }) {
   return <div className={"z-seg" + (full ? " full" : "")}>
-    {options.map((o) => <button key={o} className={o === value ? "on" : ""} onClick={() => onChange && onChange(o)}>{o}</button>)}
+    {options.map((o) => <button key={o} className={o === value ? "on" : ""} onClick={() => onChange && onChange(o)}>
+      {o}
+      {marked.includes(o) && <span data-testid="unsaved-dot" style={{ display: "inline-block", width: 6, height: 6, borderRadius: "50%", background: "var(--warn)", marginLeft: 6, verticalAlign: "middle" }} />}
+    </button>)}
   </div>;
 }
 // Segmented control for a small integer scale. Options may carry custom labels
@@ -60,13 +67,13 @@ export function ScaleSeg({ options, value, onChange, poles, readout }) {
     {readout && cur && <div style={{ marginTop: 5, fontSize: 11, color: "var(--mut)", fontFamily: "var(--mono)" }}>{cur.label} · {String(value)}</div>}
   </div>;
 }
-export function Selector({ label, caption, options, value, onChange }) {
+export function Selector({ label, caption, options, value, onChange, marked }) {
   return <div style={{ marginBottom: 18 }}>
     <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 8, gap: 12 }}>
       <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: ".05em", textTransform: "uppercase", color: "var(--ink2)" }}>{label}</span>
       {caption && <span style={{ fontSize: 11.5, color: "var(--mut2)", textAlign: "right" }}>{caption}</span>}
     </div>
-    <Seg full options={options} value={value} onChange={onChange} />
+    <Seg full options={options} value={value} onChange={onChange} marked={marked} />
   </div>;
 }
 export function Toggle({ on, onChange, sm }) {
@@ -267,10 +274,9 @@ export function Waterfall({ r }) {
 }
 
 // ── Page chrome ────────────────────────────────────────
-export function PageHeader({ title, desc, actions, crumb }) {
+export function PageHeader({ title, desc, actions }) {
   return <div className="z-ph">
     <div>
-      {crumb && <div style={{ fontSize: 12, color: "var(--mut2)", marginBottom: 3 }}>{crumb}</div>}
       <h1>{title}</h1>
       {desc && <div className="desc">{desc}</div>}
     </div>
@@ -286,19 +292,46 @@ export function SaveBar({ noTest }) {
   </div>;
 }
 
-// Live save bar wired to real state: dirty flag, async save, and inline 422 errors.
-export function FormSaveBar({ dirty, saving, onSave, errors = [] }) {
-  return <>
-    {errors.length > 0 && <div className="z-banner" style={{ background: "var(--bad-bg)", border: "1px solid #f3c8c8", color: "#b91c1c", margin: "0 17px 14px", borderRadius: 8 }}>
-      <Ic n="restart" w={15} />
-      <span><b>Not saved.</b> {errors.join(" · ")}</span>
+export function Card({ title, sub, children, foot }) {
+  return <div className="z-card">
+    {title && <div className="z-card-h"><b>{title}</b>{sub && <span className="sub">{sub}</span>}</div>}
+    <div className="z-card-b">{children}</div>
+    {foot}
+  </div>;
+}
+
+// "Not saved" banner with the server's validation errors; renders nothing without errors.
+export function SaveErrors({ errors = [], style }) {
+  if (!errors.length) return null;
+  return <div className="z-banner" style={{ background: "var(--bad-bg)", border: "1px solid #f3c8c8", color: "#b91c1c", ...style }}>
+    <Ic n="restart" w={15} />
+    <span><b>Not saved.</b> {errors.join(" · ")}</span>
+  </div>;
+}
+
+// A page whose edits save together. `form` is { dirty, saving, err, save }
+// (usePageForm, useStageForm or a page's own composition); `errors` overrides
+// the lines shown for form.err. While it saves, the page's inputs are disabled.
+// Its ONE Save sits in a bar pinned to the bottom of the viewport, shown only
+// while there is something to save or a save in flight; the bar
+// is the page's last child, so at the end of the page it sits below the last
+// card instead of covering it. Leaving the page with unsaved changes asks first.
+// Errors show only while there are edits: an edit reverted after a failed save
+// leaves nothing unsaved, so its error no longer applies.
+export function FormPage({ form, narrow, errors = errorLines(form.err), children }) {
+  useLeaveGuard(form.dirty);
+  const shown = form.dirty ? errors : [];
+  return <div className={"z-page" + (narrow ? " narrow" : "")}>
+    <fieldset className="z-formpage" disabled={form.saving}>{children}</fieldset>
+    {(form.dirty || form.saving) && <div className="z-savebar" data-testid="save-bar">
+      <SaveErrors errors={shown} style={{ marginBottom: 8 }} />
+      <div className="z-savebar-in">
+        {form.dirty && <span className="z-dirty"><s />Unsaved changes</span>}
+        <span style={{ flex: 1 }} />
+        <button className="z-btn p" disabled={!form.dirty || form.saving} onClick={form.save}>{form.saving ? "Saving…" : "Save changes"}</button>
+      </div>
     </div>}
-    <div className="z-foot">
-      <button className="z-btn p" disabled={!dirty || saving} onClick={onSave}>{saving ? "Saving…" : "Save changes"}</button>
-      <span style={{ flex: 1 }} />
-      {dirty && <span className="z-dirty"><s />Unsaved</span>}
-    </div>
-  </>;
+  </div>;
 }
 
 export function Loading({ label = "Loading…" }) {

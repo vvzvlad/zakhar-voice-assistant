@@ -1,11 +1,10 @@
 // @vitest-environment jsdom
-// Integration tests (jsdom) for the VAD page. Pins:
-//   - the `vadCat &&` guard: ProviderCard renders WITH a vad category and the
-//     End-pointing card renders either way (new + old backend),
-//   - an old backend (no vad category) must not throw inside ProviderCard,
-//   - the three forms on the page patch DISJOINT subsets of core.vad,
-//   - the Provider selector patches {vad:{selected}} only (no `instances`), and
-//     re-selecting the current provider does not patch at all.
+// Integration tests (jsdom) for the Providers → VAD page. Pins:
+//   - the engine settings render WITH a vad category and the core cards either way,
+//   - the wake-word and chime cards leave `enabled` out (the Capture page switches them),
+//   - the page's one Save sends every dirty card and engine tab as ONE patch, the two
+//     core.vad cards staying disjoint,
+//   - an engine tab switch sends no patch and keeps the other tab's unsaved edits.
 import React from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, cleanup, waitFor, within } from "@testing-library/react";
@@ -22,21 +21,34 @@ vi.mock("../api.js", () => ({
 
 afterEach(cleanup);
 
-// Minimal-but-realistic catalog mirroring /api/catalog: a vad category with
-// provider schema/values plus core.schema $defs (VadConfig / AckConfig) and
-// core.values for the vad and ack sub-sections.
-function makeCatalog({ withVadCategory = true, providers } = {}) {
-  const providerSchema = {
-    type: "object",
-    properties: { aggressiveness: { type: "integer", minimum: 0, maximum: 3 } },
+const ENGINES = [
+  {
+    id: "webrtc", label: "WebRTC VAD",
+    schema: { type: "object", properties: { aggressiveness: { type: "integer", minimum: 0, maximum: 3 } } },
+    values: { aggressiveness: 2 },
+  },
+  {
+    id: "silero", label: "Silero VAD",
+    schema: { type: "object", properties: { threshold: { type: "number", minimum: 0, maximum: 1 } } },
+    values: { threshold: 0.5 },
+  },
+];
+
+// Minimal-but-realistic catalog mirroring /api/catalog: vad and wakeword
+// categories plus core.schema $defs (VadConfig / AckConfig) and their values.
+function makeCatalog({ withVadCategory = true } = {}) {
+  const wakeword = {
+    id: "wakeword", selected: "vosk",
+    providers: [{
+      id: "vosk", label: "Vosk wake-word",
+      schema: { type: "object", properties: { enabled: { type: "boolean" }, keywords: { type: "array", items: { type: "string" } } } },
+      values: { enabled: true, keywords: ["захар"] },
+    }],
   };
-  const vadProviders = providers || [
-    { id: "webrtc", label: "WebRTC VAD", schema: providerSchema, values: { aggressiveness: 2 } },
-  ];
   return {
     categories: withVadCategory
-      ? [{ id: "vad", selected: "webrtc", providers: vadProviders }]
-      : [],
+      ? [{ id: "vad", selected: "webrtc", providers: ENGINES }, wakeword]
+      : [wakeword],
     core: {
       schema: {
         $defs: {
@@ -72,8 +84,9 @@ beforeEach(() => {
   patch = vi.fn(async () => ({}));
 });
 
-function mockData(catalog) {
-  useAppData.mockReturnValue({ catalog, config: {}, patch });
+function renderPage(opts) {
+  useAppData.mockReturnValue({ catalog: makeCatalog(opts), config: {}, patch });
+  return render(<VAD />);
 }
 
 // Flush the async DynamicSelect option load (getChimes) so no state update
@@ -82,111 +95,86 @@ async function settle() {
   await waitFor(() => expect(api.getChimes).toHaveBeenCalled());
 }
 
-// Locate the .z-card wrapper of a card by its title text.
-function cardByTitle(title) {
-  const card = screen.getByText(title).closest(".z-card");
-  expect(card).toBeTruthy();
-  return card;
+const cardByTitle = (title) => screen.getByText(title, { selector: "b" }).closest(".z-card");
+
+function setStepper(card, value) {
+  const input = card.querySelector(".z-stepper input");
+  fireEvent.change(input, { target: { value } });
+  fireEvent.blur(input);
 }
 
-describe("VAD page — backend catalog shapes", () => {
-  it("renders BOTH the ProviderCard and the End-pointing card with a new backend (vad category present)", async () => {
-    mockData(makeCatalog());
-    render(<VAD />);
-    // ProviderCard: card title carries the provider label, plus the Provider selector.
-    expect(screen.getAllByText("WebRTC VAD").length).toBeGreaterThan(0);
-    expect(screen.getByText("Provider")).toBeInTheDocument();
-    // End-pointing card renders alongside (guard must not be inverted).
+async function saved() {
+  fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+  await waitFor(() => expect(patch).toHaveBeenCalledTimes(1));
+  return patch.mock.calls[0][0];
+}
+
+describe("VAD page — layout", () => {
+  it("shows the selected engine's settings next to the core cards", async () => {
+    renderPage();
+    expect(screen.getByText("silero")).toBeInTheDocument(); // engine tabs
+    expect(cardByTitle("WebRTC VAD")).toBeTruthy();
     expect(screen.getByText("End-pointing thresholds")).toBeInTheDocument();
     await settle();
   });
 
-  it("renders without throwing on an old backend (no vad category): End-pointing card present, no ProviderCard", async () => {
-    mockData(makeCatalog({ withVadCategory: false }));
-    expect(() => render(<VAD />)).not.toThrow();
+  it("says which engine the Capture page selected", async () => {
+    renderPage();
+    expect(screen.getByText("Selected on Capture")).toBeInTheDocument();
+    fireEvent.click(screen.getByText("silero"));
+    expect(screen.getByText("Not selected")).toBeInTheDocument();
+    await settle();
+  });
+
+  it("renders the core cards on an old backend without the vad category", async () => {
+    renderPage({ withVadCategory: false });
     expect(screen.getByText("End-pointing thresholds")).toBeInTheDocument();
-    // No ProviderCard at all: no Provider selector, no provider label anywhere.
-    expect(screen.queryByText("Provider")).toBeNull();
     expect(screen.queryByText("WebRTC VAD")).toBeNull();
     await settle();
   });
-});
 
-describe("VAD page — disjoint core.vad saves", () => {
-  it("saving the End-pointing card patches core.vad WITHOUT any mic_* keys", async () => {
-    mockData(makeCatalog());
-    render(<VAD />);
+  it("leaves `enabled` out of the wake-word and chime cards", async () => {
+    renderPage();
+    expect(within(cardByTitle("Wake-word verify")).queryByRole("switch")).toBeNull();
+    expect(within(cardByTitle("End-of-phrase chime")).queryByRole("switch")).toBeNull();
     await settle();
-
-    const card = cardByTitle("End-pointing thresholds");
-    // silence_ms renders as a Stepper; commit a new value via change + blur.
-    const input = card.querySelector(".z-stepper input");
-    expect(input).toBeTruthy();
-    fireEvent.change(input, { target: { value: "900" } });
-    fireEvent.blur(input);
-
-    fireEvent.click(within(card).getByText("Save changes"));
-    await waitFor(() => expect(patch).toHaveBeenCalledTimes(1));
-    const payload = patch.mock.calls[0][0];
-    expect(payload).toEqual({ core: { vad: { silence_ms: 900 } } });
-    expect(Object.keys(payload.core.vad).some((k) => k.startsWith("mic_"))).toBe(false);
-  });
-
-  it("saving the Microphone card patches core.vad with ONLY the mic_* draft (no silence_ms)", async () => {
-    mockData(makeCatalog());
-    render(<VAD />);
-    await settle();
-
-    const card = cardByTitle("Microphone input & conditioning");
-    // The mic card's toggles are mic_normalize then mic_highpass; flip the first.
-    const switches = within(card).getAllByRole("switch");
-    expect(switches.length).toBeGreaterThan(0);
-    fireEvent.click(switches[0]);
-
-    fireEvent.click(within(card).getByText("Save changes"));
-    await waitFor(() => expect(patch).toHaveBeenCalledTimes(1));
-    const payload = patch.mock.calls[0][0];
-    expect(payload).toEqual({
-      core: { vad: { mic_channel: 0, mic_normalize: false, mic_highpass: false } },
-    });
-    expect(payload.core.vad).not.toHaveProperty("silence_ms");
   });
 });
 
-describe("VAD page — ProviderCard provider switch", () => {
-  const twoProviders = [
-    {
-      id: "webrtc", label: "WebRTC VAD",
-      schema: { type: "object", properties: { aggressiveness: { type: "integer", minimum: 0, maximum: 3 } } },
-      values: { aggressiveness: 2 },
-    },
-    {
-      id: "silero", label: "Silero VAD",
-      schema: { type: "object", properties: { threshold: { type: "number", minimum: 0, maximum: 1 } } },
-      values: { threshold: 0.5 },
-    },
-  ];
-
-  it("selecting another provider patches exactly {vad:{selected:newId}} with no `instances`", async () => {
-    mockData(makeCatalog({ providers: twoProviders }));
-    render(<VAD />);
+describe("VAD page — one Save", () => {
+  it("saving only the thresholds patches core.vad without any mic_* keys", async () => {
+    renderPage();
     await settle();
+    setStepper(cardByTitle("End-pointing thresholds"), "900");
+    expect(await saved()).toEqual({ core: { vad: { silence_ms: 900 } } });
+  });
 
+  it("sends every dirty card and engine tab in one patch", async () => {
+    renderPage();
+    await settle();
+    setStepper(cardByTitle("End-pointing thresholds"), "900");
+    fireEvent.click(within(cardByTitle("Microphone input & conditioning")).getAllByRole("switch")[0]);
+    fireEvent.change(within(cardByTitle("Wake-word verify")).getByDisplayValue("захар"), { target: { value: "алиса" } });
+    setStepper(cardByTitle("WebRTC VAD"), "3");
     fireEvent.click(screen.getByText("silero"));
-    await waitFor(() => expect(patch).toHaveBeenCalledTimes(1));
-    const payload = patch.mock.calls[0][0];
-    expect(payload).toEqual({ vad: { selected: "silero" } });
-    expect(payload.vad).not.toHaveProperty("instances");
+    setStepper(cardByTitle("Silero VAD"), "0.7");
+    expect(patch).not.toHaveBeenCalled();
+
+    expect(await saved()).toEqual({
+      core: { vad: { silence_ms: 900, mic_channel: 0, mic_normalize: false, mic_highpass: false } },
+      vad: { instances: { webrtc: { aggressiveness: 3 }, silero: { threshold: 0.7 } } },
+      wakeword: { instances: { vosk: { keywords: ["алиса"] } } },
+    });
   });
 
-  it("re-selecting the CURRENT provider does not call patch", async () => {
-    mockData(makeCatalog({ providers: twoProviders }));
-    render(<VAD />);
+  it("an engine tab switch keeps the other tab's unsaved edit and marks that tab", async () => {
+    renderPage();
     await settle();
-
+    setStepper(cardByTitle("WebRTC VAD"), "3");
+    fireEvent.click(screen.getByText("silero"));
+    expect(within(screen.getByText("webrtc")).getByTestId("unsaved-dot")).toBeInTheDocument();
     fireEvent.click(screen.getByText("webrtc"));
-    // Give a microtask tick so an accidental async patch would surface.
-    await Promise.resolve();
+    expect(cardByTitle("WebRTC VAD").querySelector(".z-stepper input")).toHaveValue("3");
     expect(patch).not.toHaveBeenCalled();
   });
 });

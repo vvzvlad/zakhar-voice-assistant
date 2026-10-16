@@ -6,7 +6,7 @@
 // it is always same-origin — no host/port math).
 import React from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, cleanup } from "@testing-library/react";
+import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/react";
 import SystemPage from "../pages/system.jsx";
 import { useAppData } from "../appData.jsx";
 
@@ -78,5 +78,23 @@ describe("System page — MCP Server for other agents card", () => {
     useAppData.mockReturnValue(appData({}));
     render(<SystemPage />);
     expect(screen.getByText(`${window.location.origin}/mcp`)).toBeInTheDocument();
+  });
+});
+
+describe("System page — one Save", () => {
+  it("sends a card edit and the log level in one patch", async () => {
+    const data = appData({ enabled: true });
+    data.catalog.core.schema.$defs.NetworkConfig = {
+      type: "object", properties: { external_proxy: { type: "string", title: "External proxy URL" } },
+    };
+    useAppData.mockReturnValue(data);
+    render(<SystemPage />);
+    expect(screen.queryByTestId("save-bar")).toBeNull();
+    fireEvent.change(screen.getByText("External proxy URL").closest(".z-f").querySelector("input"), { target: { value: "socks5://p:1080" } });
+    fireEvent.click(screen.getByRole("button", { name: "INFO" }));
+    fireEvent.click(screen.getByRole("option", { name: "DEBUG" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(data.patch).toHaveBeenCalledTimes(1));
+    expect(data.patch.mock.calls[0][0]).toEqual({ core: { network: { external_proxy: "socks5://p:1080" }, log_level: "DEBUG" } });
   });
 });

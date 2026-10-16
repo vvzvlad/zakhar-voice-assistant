@@ -1,17 +1,19 @@
 import React, { useEffect, useLayoutEffect, useState, useCallback, useRef } from "react";
 import { Ic } from "../components/icons.jsx";
 import {
-  Field, KeyInput, PageHeader, FormSaveBar, StatusPill, Pill, Modal, Stepper, Loading, Select, Slider, Toggle,
+  Field, KeyInput, PageHeader, FormPage, StatusPill, Pill, Modal, Stepper, Loading, Select, Slider, Toggle,
 } from "../components/primitives.jsx";
-import { parseVoiceMarker, voiceLabel } from "../voiceMarker.js";
+import { parseVoiceMarker, voiceField, voiceName, differsFromVoice } from "../voiceMarker.js";
 import SchemaForm from "../components/SchemaForm.jsx";
 import { useAppData } from "../appData.jsx";
 import { useStageForm, errorLines } from "../useStageForm.js";
+import { usePageForm } from "../usePageForm.js";
+import { confirmDiscard } from "../navStore.js";
 import { deref } from "../schema.js";
 import {
   getPromptProfiles, getPromptProfile, createPromptProfile, updatePromptProfile,
   deletePromptProfile, activatePromptProfile,
-  getTools, startCapture, getCaptureStatus, downloadCaptureResult, getDeviceControls, setDeviceControl,
+  getTools, getOptions, startCapture, getCaptureStatus, downloadCaptureResult, getDeviceControls, setDeviceControl,
   getWakeProbability, setWakeProbabilityStream, getConfig,
 } from "../api.js";
 import { deviceVersion } from "../format.js";
@@ -45,15 +47,14 @@ function ToolChips({ tools }) {
 
 // One integration source card: header (name + kind badge + status pill), an
 // editable SchemaForm bound to its core.* sub-section, and the live tool chips.
-//   id        — source id matched against /api/tools ("home"/"openweathermap"/"calendar"/"reminders")
+// The card's draft belongs to the page form, saved with the page's one Save.
 //   name      — human title; sub — short caption under it
 //   schema    — resolved JSON sub-schema (from core.schema, $defs available on root)
 //   root      — full core schema (holds $defs for the SchemaForm)
-//   values    — current core.<section> values
-//   buildPatch(draft) -> patch object; configured(values) -> bool ("configured")
+//   draft, onChange — the card's draft core.<section> values and its setter
+//   configured(values) -> bool ("configured")
 //   live      — matching /api/tools entry, or null when absent
-function SourceCard({ id, name, sub, schema, root, values, buildPatch, configured, live, patch }) {
-  const { draft, onChange, dirty, saving, err, save } = useStageForm(values, buildPatch, patch);
+function SourceCard({ name, sub, schema, root, draft, onChange, configured, live }) {
   const isConfigured = configured(draft);
   const kind = live?.kind || "builtin";
 
@@ -87,10 +88,19 @@ function SourceCard({ id, name, sub, schema, root, values, buildPatch, configure
         : <div className="z-fh">Schema unavailable.</div>}
       <ToolChips tools={live?.tools} />
     </div>
-    {/* Sources are hot-reloaded — rebuilt live on save (rebuild_tools). */}
-    <FormSaveBar dirty={dirty} saving={saving} onSave={save} errors={errorLines(err)} />
   </div>;
 }
+
+// The built-in tool sources; `id` is both the core.* section and the source id
+// in /api/tools, `fallback` the values shown before the section exists.
+const BUILTIN_SOURCES = [
+  { id: "openweathermap", name: "OpenWeatherMap (built-in)", sub: "core.openweathermap · built-in MCP",
+    fallback: { enabled: true, api_key: "", city: "Moscow" }, configured: (v) => !!(v && v.api_key) },
+  { id: "calendar", name: "Calendar (built-in)", sub: "core.calendar · built-in MCP (CalDAV)",
+    fallback: { enabled: true, url: "", username: "", password: "", calendar: "" }, configured: (v) => !!(v && v.url && v.username) },
+  { id: "reminders", name: "Reminders (built-in)", sub: "core.reminders · built-in MCP",
+    fallback: { enabled: true }, configured: (v) => !!(v && v.enabled) },
+];
 
 // ── External MCP server modal (add / edit) ────────────────────────────────
 // Fields mirror McpServerConfig: name (unique source id), url, token (masked),
@@ -134,7 +144,7 @@ function McpServerModal({ initial, onSave, onClose, title, takenNames }) {
   </Modal>;
 }
 
-// One external MCP server card: header (name + external tag + status pill), the
+// One external MCP server card: header (name + status pill), the
 // url in mono, and the live tool chips matched from /api/tools by source id ===
 // server name. Enable/Disable / Edit / Delete buttons drive the CRUD flow above;
 // a disabled server is dimmed and shows a "disabled" pill (missing flag = enabled).
@@ -154,7 +164,6 @@ function McpServerCard({ server, live, onToggle, onEdit, onDelete }) {
         </div>
       </div>
       <div style={{ display: "flex", alignItems: "center", gap: 12, marginLeft: "auto" }}>
-        <Pill tone="warn">external</Pill>
         {pill}
         <div style={{ display: "flex", gap: 6 }}>
           <button className="z-mini" onClick={onToggle}>{enabled ? "Disable" : "Enable"}</button>
@@ -209,13 +218,22 @@ export function MCP() {
   };
   const onAdd = (s) => saveList([...servers, s]);
   const onEdit = (i, s) => saveList(servers.map((x, idx) => (idx === i ? s : x)));
-  const onDelete = (i) => saveList(servers.filter((_, idx) => idx !== i));
+  const onDelete = (i) => {
+    if (!window.confirm(`Delete MCP server "${servers[i].name}"?`)) return;
+    saveList(servers.filter((_, idx) => idx !== i));
+  };
   // Flip the persisted enabled flag (missing = true on old configs). A disabled
   // server is dropped from the ToolHub and its prompt block — both hot-applied.
   const onToggle = (i) => saveList(servers.map((x, idx) => (idx === i ? { ...x, enabled: !(x.enabled ?? true) } : x)));
 
-  return <div className="z-page narrow">
-    <PageHeader title="Tool sources" desc="Tool sources the model calls: external smart-home MCP servers and built-in weather/calendar/reminders. Sources are applied live — rebuilt on save, no restart needed."
+  // The built-in source cards are one page form; sources are hot-reloaded —
+  // rebuilt live on save (rebuild_tools).
+  const form = usePageForm(BUILTIN_SOURCES.map((s) => ({
+    key: s.id, values: coreValues[s.id] || s.fallback, toPatch: (d) => ({ core: { [s.id]: d } }),
+  })), patchAndRefresh);
+
+  return <FormPage form={form} narrow>
+    <PageHeader title="Tools" desc="Tool sources the model calls: external smart-home MCP servers and built-in weather/calendar/reminders. Sources are applied live — rebuilt on save, no restart needed."
       actions={<button className="z-btn p" onClick={() => setModal({ mode: "add" })}><Ic n="add" w={14} />Add server</button>} />
     {toolsErr && <div className="z-banner warn" style={{ margin: "0 0 14px" }}>
       <Ic n="restart" w={15} />
@@ -234,30 +252,15 @@ export function MCP() {
               onToggle={() => onToggle(i)}
               onEdit={() => setModal({ mode: "edit", index: i })} onDelete={() => onDelete(i)} />)}
         <div className="z-sl">Built-in sources<div className="ln" /></div>
-        <SourceCard
-          id="openweathermap" name="OpenWeatherMap (built-in)" sub="core.openweathermap · built-in MCP"
-          schema={sub("openweathermap")} root={coreSchema} values={coreValues.openweathermap || { enabled: true, api_key: "", city: "Moscow" }}
-          buildPatch={(d) => ({ core: { openweathermap: d } })}
-          configured={(v) => !!(v && v.api_key)} live={liveOf("openweathermap")} patch={patchAndRefresh} />
-        <SourceCard
-          id="calendar" name="Calendar (built-in)" sub="core.calendar · built-in MCP (CalDAV)"
-          schema={sub("calendar")} root={coreSchema}
-          values={coreValues.calendar || { enabled: true, url: "", username: "", password: "", calendar: "" }}
-          buildPatch={(d) => ({ core: { calendar: d } })}
-          configured={(v) => !!(v && v.url && v.username)} live={liveOf("calendar")} patch={patchAndRefresh} />
-        <SourceCard
-          id="reminders" name="Reminders (built-in)" sub="core.reminders · built-in MCP"
-          schema={sub("reminders")} root={coreSchema}
-          values={coreValues.reminders || { enabled: true }}
-          buildPatch={(d) => ({ core: { reminders: d } })}
-          configured={(v) => !!(v && v.enabled)} live={liveOf("reminders")} patch={patchAndRefresh} />
+        {BUILTIN_SOURCES.map((s) => <SourceCard key={s.id} name={s.name} sub={s.sub} schema={sub(s.id)} root={coreSchema}
+          draft={form.draftOf(s.id)} onChange={form.onChangeOf(s.id)} configured={s.configured} live={liveOf(s.id)} />)}
       </>}
     {modal?.mode === "add" && <McpServerModal title="Add MCP server" onSave={onAdd} onClose={() => setModal(null)}
       takenNames={servers.map((s) => s.name)} />}
     {modal?.mode === "edit" && <McpServerModal title="Edit MCP server" initial={servers[modal.index]}
       onSave={(s) => onEdit(modal.index, s)} onClose={() => setModal(null)}
       takenNames={servers.filter((_, idx) => idx !== modal.index).map((s) => s.name)} />}
-  </div>;
+  </FormPage>;
 }
 
 // ── System prompt ─────────────────────────────────────────────────────────
@@ -288,7 +291,8 @@ export function Prompt() {
   const [text, setText] = useState(null);
   const [loaded, setLoaded] = useState("");
   const [saving, setSaving] = useState(false);
-  const [err, setErr] = useState(null);
+  const [err, setErr] = useState(null);            // load and profile-action errors
+  const [saveErr, setSaveErr] = useState(null);    // the text save's error, shown in the save bar
   const [modal, setModal] = useState(null);        // {mode:'new'|'rename'} | null
   const [modalErr, setModalErr] = useState(null);
   const [profileBusy, setProfileBusy] = useState(false);
@@ -305,7 +309,7 @@ export function Prompt() {
 
   const openProfile = useCallback(async (id) => {
     const p = await getPromptProfile(id);
-    setSelected(p); setText(p.text); setLoaded(p.text);
+    setSelected(p); setText(p.text); setLoaded(p.text); setSaveErr(null);
   }, []);
 
   // Initial load + Reload: refresh the list, then open `preferId` when it still
@@ -347,22 +351,19 @@ export function Prompt() {
   // then refreshes the list so the char counts stay current.
   const save = async () => {
     if (!selected) return;
-    setSaving(true); setErr(null);
+    setSaving(true); setSaveErr(null);
     try {
       await updatePromptProfile(selected.id, { text });
       setLoaded(text);
       await refreshProfiles();
-    } catch (e) { setErr(e); }
+    } catch (e) { setSaveErr(e); }
     finally { setSaving(false); }
   };
 
   // --- profile bar actions ---------------------------------------------------
-  const confirmDiscard = () =>
-    !dirty || window.confirm("Discard unsaved changes to the current profile?");
-
   const selectProfile = async (id) => {
     if (!selected || id === selected.id) return;
-    if (!confirmDiscard()) return;
+    if (!confirmDiscard(dirty)) return;
     try { await openProfile(id); setErr(null); }
     catch (e) { setErr(e); }
   };
@@ -380,8 +381,8 @@ export function Prompt() {
         setErr(new Error(resp.voice_error));
       } else {
         setErr(null);
-        // When a voice was applied, refresh the global catalog so the Stages page
-        // reflects the new TTS selection without a manual reload.
+        // When a voice was applied, refresh the global catalog so Providers → TTS
+        // and Speech show the new voice without a manual reload.
         if (resp && resp.voice_applied) await reload();
       }
     } catch (e) { setErr(e); }
@@ -395,7 +396,7 @@ export function Prompt() {
     try {
       const p = await createPromptProfile({ name });
       setModal(null);
-      setSelected(p); setText(p.text); setLoaded(p.text);
+      setSelected(p); setText(p.text); setLoaded(p.text); setSaveErr(null);
       await refreshProfiles();
       setErr(null);
     } catch (e) { setModalErr(e); }
@@ -423,7 +424,8 @@ export function Prompt() {
     finally { setProfileBusy(false); }
   };
 
-  // Dialog context (core.context) — an independent save form rendered in the aside.
+  // Dialog context (core.context) — its own draft in the aside, saved by the
+  // page's one Save together with the text.
   // All hooks must run before the early-return below to satisfy the rules of hooks.
   const { catalog, patch, reload } = useAppData();
   const ctxSchema = catalog.core.schema.$defs?.ContextConfig;
@@ -431,13 +433,43 @@ export function Prompt() {
   const ctxBuildPatch = (d) => ({ core: { context: d } });
   const { draft: ctxDraft, onChange: ctxOnChange, dirty: ctxDirty, saving: ctxSaving, err: ctxErr, save: ctxSave } = useStageForm(ctxValues, ctxBuildPatch, patch);
 
-  // A single header Save persists both the prompt text and the dialog-context
+  // Preferred voice parsed from the SELECTED profile's last-saved text (`loaded`),
+  // the TTS provider it names and the one speaking now (first enabled variant).
+  const voice = parseVoiceMarker(loaded);
+  const ttsCat = catalog.categories?.find((c) => c.id === "tts");
+  const ttsProv = (id) => ttsCat?.providers.find((p) => p.id === id);
+  const markerProv = voice && ttsProv(voice.provider);
+  const current = ttsCat?.variants?.find((v) => v.enabled)?.provider;
+  // An opaque voice id (one whose name the TTS form keeps in "<field>_label") that
+  // is not the provider's current voice is named by the options the form picks it from.
+  const vField = voiceField(voice);
+  const vId = vField ? voice.fields[vField] : "";
+  const vValues = markerProv?.values || {};
+  const lookup = !!(vField && markerProv?.schema?.properties?.[`${vField}_label`])
+    && !(vValues[vField] === vId && vValues[`${vField}_label`]);
+  const vProvider = voice?.provider;
+  const [found, setFound] = useState(null);   // {id, name} from the options endpoint
+  useEffect(() => {
+    if (!lookup) return undefined;
+    let alive = true;
+    getOptions("tts", vProvider, vField)
+      .then((r) => {
+        const hit = (r.options || []).find((o) => o && o.value === vId);
+        if (alive && hit) setFound({ id: vId, name: hit.label });
+      })
+      .catch(() => { /* named by its id */ });
+    return () => { alive = false; };
+  }, [lookup, vProvider, vField, vId]);
+
+  // The page's one Save persists both the prompt text and the dialog-context
   // settings. Each underlying save handles its own error/saving state, so this
   // never rejects; we just await whichever forms are dirty.
-  const anyDirty = dirty || ctxDirty;
-  const busy = saving || ctxSaving;
-  const saveAll = async () => {
-    await Promise.all([dirty ? save() : null, ctxDirty ? ctxSave() : null].filter(Boolean));
+  const form = {
+    dirty: dirty || ctxDirty,
+    saving: saving || ctxSaving,
+    save: async () => {
+      await Promise.all([dirty ? save() : null, ctxDirty ? ctxSave() : null].filter(Boolean));
+    },
   };
 
   if (text == null || profiles == null) {
@@ -457,16 +489,14 @@ export function Prompt() {
     value: p.id,
     label: p.id === activeId ? `● ${p.name} (active)` : p.name,
   }));
-  // Preferred voice parsed from the SELECTED profile's last-saved text (`loaded`).
-  const voice = parseVoiceMarker(loaded);
+  const voiceText = voice && [markerProv?.label || voice.provider,
+    voiceName(voice, vValues, found?.id === vId ? found.name : undefined)].join(" · ");
+  const voiceDiffers = differsFromVoice(voice, current, ttsProv(current)?.values);
 
-  return <div className="z-page">
-    <PageHeader title="System prompt" crumb="Pipeline"
+  return <FormPage form={form} errors={[...errorLines(saveErr), ...errorLines(ctxErr)]}>
+    <PageHeader title="System prompt"
       desc="Zahar's character, rules and answer format. Keep several named profiles and activate the one the assistant should use. The placeholder is replaced with live date/time at request time."
-      actions={<>
-        <button className="z-btn g" onClick={() => { if (confirmDiscard()) load(selected?.id); }}>Reload</button>
-        <button className="z-btn p" disabled={!anyDirty || busy} onClick={saveAll}>{busy ? "Saving…" : "Save"}</button>
-      </>} />
+      actions={<button className="z-btn g" onClick={() => { if (confirmDiscard(dirty)) load(selected?.id); }}>Reload</button>} />
     {/* Profile bar: pick a profile to edit; Activate switches what the pipeline uses. */}
     <div className="z-card" style={{ marginBottom: 14 }}>
       <div className="z-card-b" style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", padding: "10px 14px" }}>
@@ -476,10 +506,11 @@ export function Prompt() {
         {voice && <span style={{ display: "flex", alignItems: "center", gap: 6 }}
           title="Apply this profile's preferred TTS voice when activating">
           <Toggle on={applyVoice} onChange={setApplyVoice} sm />
-          <span className="sub">Apply voice: {voiceLabel(voice)}</span>
+          <span className="sub" data-testid="marker-voice">Apply voice: {voiceText}</span>
+          {voiceDiffers && <Pill tone="warn">differs from current TTS voice</Pill>}
         </span>}
         <div style={{ display: "flex", gap: 6, marginLeft: "auto" }}>
-          <button className="z-btn g" onClick={() => { if (confirmDiscard()) { setModalErr(null); setModal({ mode: "new" }); } }}><Ic n="add" w={14} />New</button>
+          <button className="z-btn g" onClick={() => { if (confirmDiscard(dirty)) { setModalErr(null); setModal({ mode: "new" }); } }}><Ic n="add" w={14} />New</button>
           <button className="z-btn g" onClick={() => { setModalErr(null); setModal({ mode: "rename" }); }}>Rename</button>
           <button className="z-btn d" disabled={isActive || profileBusy} onClick={doDelete}
             title={isActive ? "The active profile cannot be deleted" : ""}>Delete</button>
@@ -495,8 +526,7 @@ export function Prompt() {
         </div>
       </Card>
       <div className="z-aside">
-        <Card title="Dialog context"
-          foot={ctxErr ? <div className="z-foot"><span className="z-dirty" style={{ color: "#b91c1c" }}>{errorLines(ctxErr).join(" · ")}</span></div> : undefined}>
+        <Card title="Dialog context">
           {ctxSchema
             ? <SchemaForm schema={ctxSchema} values={ctxDraft} onChange={ctxOnChange} skip={["dir"]} />
             : <>
@@ -525,7 +555,7 @@ export function Prompt() {
       onSave={doCreate} onClose={() => setModal(null)} busyErr={modalErr} />}
     {modal?.mode === "rename" && <ProfileNameModal title="Rename profile" initial={selected?.name}
       onSave={doRename} onClose={() => setModal(null)} busyErr={modalErr} />}
-  </div>;
+  </FormPage>;
 }
 
 // ── Devices ───────────────────────────────────────────────────────────────
@@ -823,7 +853,10 @@ export function Devices() {
     } catch (e) { setBusyErr(e); }
   };
   const onAdd = (d) => saveList((list) => [...list, d]);
-  const onDelete = (name) => saveList((list) => list.filter((x) => x.name !== name));
+  const onDelete = (name) => {
+    if (!window.confirm(`Delete speaker "${name}"?`)) return;
+    saveList((list) => list.filter((x) => x.name !== name));
+  };
   // Flip the persisted enabled flag (missing = true on old configs). Disabling closes
   // the device's connection and refuses it from then on; re-enabling admits it — both hot.
   const onToggle = (name) => saveList((list) => list.map((x) => (

@@ -148,22 +148,22 @@ class FishAudioTtsBackend(TtsBackend):
 
 
 class FishAudioTtsConfig(BaseModel):
-    api_key: str = Field("", json_schema_extra=SECRET_FIELD_EXTRA)
+    api_key: str = Field("", title="API key", json_schema_extra=SECRET_FIELD_EXTRA)
     # Voice model id. The option list is fetched from the fish.audio catalog
     # and is server-searchable ("search": "remote"): the panel re-queries the
     # catalog with the typed text instead of filtering the preloaded list.
     # Freeform: any model id copied from the site may be pasted. Empty
     # string = provider default voice.
-    reference_id: str = Field("", json_schema_extra={"widget": "select", "options": "dynamic", "freeform": True, "search": "remote"})
+    reference_id: str = Field("", title="Voice", description="fish.audio voice model; empty = the provider's default voice.", json_schema_extra={"widget": "select", "options": "dynamic", "freeform": True, "search": "remote"})
     # Human label of the selected reference_id (catalog title), persisted so the panel
     # shows the voice name immediately on load instead of the bare id. Hidden companion
     # field (see LABEL_FIELD_EXTRA). Not sent to the TTS API.
     reference_id_label: str = Field("", json_schema_extra=LABEL_FIELD_EXTRA)
     # TTS model generation, sent as the `model` HTTP header. Freeform so future
     # model ids work without a code change.
-    model: str = Field("s2-pro", json_schema_extra={"widget": "select", "options": "dynamic", "freeform": True})
+    model: str = Field("s2-pro", title="Model", description="fish.audio speech model generation.", json_schema_extra={"widget": "select", "options": "dynamic", "freeform": True})
     # Maps to prosody.speed; fish.audio's documented range is 0.5–2.0.
-    speed: float = Field(1.0, ge=0.5, le=2.0, json_schema_extra={"widget": "slider"})
+    speed: float = Field(1.0, ge=0.5, le=2.0, title="Speed", json_schema_extra={"widget": "slider"})
 
 
 @register

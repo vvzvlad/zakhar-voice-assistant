@@ -25,7 +25,7 @@ Node-RED через node-red-contrib-mcp-server), настроенному в `c
 
 ### Дашборд — обзор конвейера
 
-Карта сервисов по стадиям (VAD → STT → LLM → Accents → TTS) с живыми метриками и
+Карта трёх шагов конвейера (Capture → Logic → Speech) с живыми метриками и
 последними запросами.
 
 ![Dashboard](docs/screenshots/dashboard.png)

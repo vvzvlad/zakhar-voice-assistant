@@ -132,8 +132,8 @@ class PiperTtsBackend(TtsBackend):
 
 
 class PiperConfig(BaseModel):
-    voice_path: str = Field("models/ru_RU-ruslan-medium.onnx", json_schema_extra=LOCAL_MODEL_FIELD_EXTRA)
-    sentence_silence: float = 0.4
+    voice_path: str = Field("models/ru_RU-ruslan-medium.onnx", title="Voice", json_schema_extra=LOCAL_MODEL_FIELD_EXTRA)
+    sentence_silence: float = Field(0.4, title="Pause between sentences (s)")
 
 
 def _list_piper_voices(base_dir: str) -> list[dict]:

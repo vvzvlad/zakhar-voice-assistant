@@ -727,7 +727,8 @@ def test_insert_and_get_chain_and_attempts_round_trip(tmp_path):
     store = _store(tmp_path)
     attempts = [
         {"kind": "chain", "chain": "fast", "stt": "vosk", "handler": "simple-nlu",
-         "text": "свет", "outcome": "declined", "error": None, "t_stt": 90, "t_handler": 3},
+         "text": "свет", "outcome": "declined", "error": None,
+         "detail": "no applicable verb for set_light", "t_stt": 90, "t_handler": 3},
         {"kind": "tts", "provider": "yandex", "outcome": "error", "error": "503", "t": 40},
         {"kind": "tts", "provider": "piper", "outcome": "spoke", "error": None, "t": 120},
     ]

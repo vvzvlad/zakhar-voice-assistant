@@ -426,3 +426,21 @@ describe("SchemaField ScaleSeg (segment scale) selection", () => {
     expect(c.textContent).not.toContain("·");
   });
 });
+
+describe("SchemaForm advanced fields", () => {
+  it("puts `advanced: true` fields into a closed Advanced disclosure after the others", () => {
+    const schema = { properties: { timeout_s: { type: "integer", advanced: true }, model: { type: "string" } } };
+    const { container } = render(<SchemaForm schema={schema} values={{ timeout_s: 5, model: "m" }} onChange={() => {}} />);
+    const details = container.querySelector("details");
+    expect(details.open).toBe(false);
+    expect(details.querySelector("summary").textContent).toBe("Advanced");
+    expect(details.textContent).toContain("Timeout S");
+    expect(details.textContent).not.toContain("Model");
+    expect(container.lastElementChild).toBe(details);
+  });
+
+  it("renders no disclosure when no field is advanced", () => {
+    const c = renderField("model", { type: "string" }, "m");
+    expect(c.querySelector("details")).toBeNull();
+  });
+});

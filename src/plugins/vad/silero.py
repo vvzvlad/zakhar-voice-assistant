@@ -146,7 +146,7 @@ class SileroVadBackend(VadBackend):
 
 
 class SileroVadConfig(BaseModel):
-    model_path: str = "models/silero_vad.onnx"
+    model_path: str = Field("models/silero_vad.onnx", title="Model file")
     threshold: float = Field(
         0.5, ge=0.05, le=0.95,
         title="Speech threshold",

@@ -16,11 +16,32 @@ export function parseVoiceMarker(text) {
   const provider = fields.provider; delete fields.provider;
   return provider ? { provider, fields } : null;
 }
-// Short human label, e.g. "yandex/zahar" or "fishaudio/s2-pro/3b5c9f" or "piper".
-export function voiceLabel(parsed) {
+// The marker field that names the voice: fishaudio's opaque reference_id, yandex's
+// voice, silero's speaker or piper's voice file. null when the marker names none.
+const VOICE_FIELDS = ["reference_id", "voice", "speaker", "voice_path"];
+export const voiceField = (parsed) => VOICE_FIELDS.find((f) => parsed?.fields[f]) || null;
+
+// Human name of the marker's voice. `values` are the current settings of the
+// marker's TTS provider: when they hold the same voice, the name the TTS form keeps
+// in "<field>_label" wins; next `found`, the name the field's options give the id;
+// else the id itself (a voice file by its basename). No voice field: the provider id.
+export function voiceName(parsed, values = {}, found) {
   if (!parsed) return "";
-  const vals = Object.values(parsed.fields);
-  return [parsed.provider, ...vals].join("/");
+  const f = voiceField(parsed);
+  if (!f) return parsed.provider;
+  const id = parsed.fields[f];
+  if (values[f] === id && values[`${f}_label`]) return values[`${f}_label`];
+  if (found) return found;
+  return f === "voice_path" ? id.split("/").pop() : id;
+}
+
+// Whether the marker names another voice than the one speaking now: a provider
+// other than `provider` (the first enabled TTS variant) or a field that differs
+// from that provider's current settings `values`.
+export function differsFromVoice(parsed, provider, values = {}) {
+  if (!parsed) return false;
+  return parsed.provider !== provider
+    || Object.entries(parsed.fields).some(([k, v]) => String(values[k] ?? "") !== v);
 }
 
 // Mirror of src/voice_marker.py SECRET_FIELDS: credentials are never written

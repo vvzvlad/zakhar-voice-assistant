@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 // Integration tests (jsdom) for the chain parts of the Request Log: the Chain
 // column, the chain filter forwarded to /api/runs, and the run detail listing
-// the chain and TTS attempts in the order they ran.
+// the chain and TTS attempts in the order they ran, with why a handler declined.
 import React from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
@@ -40,8 +40,8 @@ describe("Request log — chains", () => {
     getRun.mockResolvedValue({
       ...ROW,
       attempts: [
-        { kind: "chain", chain: "fast", stt: "vosk", handler: "simple-nlu", text: "какая погода", outcome: "declined", error: null, t_stt: 310, t_handler: 12 },
-        { kind: "chain", chain: "smart", stt: "groq", handler: "openrouter", text: "какая погода", outcome: "answered", error: null, t_stt: 800, t_handler: 4100 },
+        { kind: "chain", chain: "fast", stt: "vosk", handler: "simple-nlu", text: "какая погода", outcome: "declined", error: null, detail: "no alias phrase matched", t_stt: 310, t_handler: 12 },
+        { kind: "chain", chain: "smart", stt: "groq", handler: "openrouter", text: "какая погода", outcome: "answered", error: null, detail: null, t_stt: 800, t_handler: 4100 },
         { kind: "tts", provider: "yandex", outcome: "error", error: "timeout", t: 6000 },
         { kind: "tts", provider: "piper", outcome: "spoke", error: null, t: 900 },
       ],
@@ -56,6 +56,8 @@ describe("Request log — chains", () => {
     expect(items[0].textContent).toContain("STT 0.31s · handler 0.01s");
     expect(items[0].textContent).toContain("declined");
     expect(items[0].textContent).toContain("какая погода");
+    // Why the handler declined shows under its attempt; an answer has no detail.
+    expect(screen.getAllByTestId("attempt-detail").map((d) => d.textContent)).toEqual(["no alias phrase matched"]);
     expect(items[1].textContent).toContain("answered");
     expect(items[2].textContent).toContain("TTS · yandex");
     expect(items[2].textContent).toContain("timeout");

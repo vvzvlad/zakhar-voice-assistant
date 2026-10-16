@@ -20,7 +20,7 @@ const DEFAULT_PAGE_SIZE = 100;
 // > 0 (see `present` below), so it shows up only on runs where it actually ran.
 const GSTAGES = [
   { k: "vad", label: "VAD capture" }, { k: "wakeword", label: "Wakeword verify" },
-  { k: "stt", label: "STT" }, { k: "llm", label: "LLM + tools" },
+  { k: "stt", label: "STT" }, { k: "llm", label: "Handler + tools" },
   { k: "stress", label: "Accents" }, { k: "tts", label: "TTS synth" },
 ];
 
@@ -87,7 +87,8 @@ const ATTEMPT_TONE = {
 };
 
 // The run's chain and TTS attempts in the order they ran. A chain attempt is
-// {kind:"chain", chain, stt, handler, text, outcome, error, t_stt, t_handler};
+// {kind:"chain", chain, stt, handler, text, outcome, error, detail, t_stt, t_handler}
+// (`detail`: why the handler declined, null when it gave no reason);
 // a TTS attempt is {kind:"tts", provider, outcome, error, t} (times in ms).
 function Attempts({ attempts }) {
   return <div className="z-card"><div style={{ padding: "4px 17px" }}>
@@ -111,6 +112,7 @@ function Attempts({ attempts }) {
           </span>
         </div>
         {!tts && a.text && <div style={{ fontSize: 13, color: "var(--ink)" }}>{a.text}</div>}
+        {a.detail && <div className="z-fh" style={{ marginTop: 0 }} data-testid="attempt-detail">{a.detail}</div>}
         {a.error && <div className="z-fh" style={{ marginTop: 0, color: "#b91c1c" }}>{a.error}</div>}
       </div>;
     })}
@@ -185,7 +187,7 @@ function Drawer({ r, loading, error, onClose }) {
                 <div style={{ fontSize: 14, color: "var(--ink)" }}>{r.filler_text}</div>
               </div>
             )}
-            <div className="z-f"><div className="z-fl"><b style={{ color: "var(--mut)", fontWeight: 600, fontSize: 11, textTransform: "uppercase", letterSpacing: ".04em" }}>Response (LLM)</b></div>
+            <div className="z-f"><div className="z-fl"><b style={{ color: "var(--mut)", fontWeight: 600, fontSize: 11, textTransform: "uppercase", letterSpacing: ".04em" }}>Reply</b></div>
               <div style={{ fontSize: 14, color: r.llm ? "var(--ink)" : "var(--mut2)", fontStyle: r.llm ? "normal" : "italic" }}>{r.llm || "— no response produced —"}</div></div>
           </div></div>
 
@@ -216,7 +218,7 @@ function Drawer({ r, loading, error, onClose }) {
           </> : null}
 
           {((r.rounds && r.rounds.length > 0) || r.request) && <>
-            <div className="z-sl">LLM rounds & tool calls<div className="ln" /><span style={{ fontFamily: "var(--mono)", fontSize: 10.5, color: "var(--mut2)", textTransform: "none", letterSpacing: 0 }}>{r.model || "—"} · {r.tokens || 0} tok</span></div>
+            <div className="z-sl">Rounds & tool calls<div className="ln" /><span style={{ fontFamily: "var(--mono)", fontSize: 10.5, color: "var(--mut2)", textTransform: "none", letterSpacing: 0 }}>{r.model || "—"} · {r.tokens || 0} tok</span></div>
             {r.request && <div className="z-round">
               <div className="z-round-h"><span className="rn">IN</span><span style={{ color: "var(--ink2)" }}>Model input — full debug</span></div>
               <div className="z-tool">

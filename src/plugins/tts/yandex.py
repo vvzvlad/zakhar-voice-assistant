@@ -349,13 +349,13 @@ def _default_role(voice: str) -> str:
 
 class YandexTtsConfig(BaseModel):
     # apply class is computed centrally (reconfig.action_for) and injected by catalog().
-    api_key: str = Field("", json_schema_extra=SECRET_FIELD_EXTRA)
-    voice: str = Field("zahar", json_schema_extra={"widget": "select", "options": "dynamic"})
+    api_key: str = Field("", title="API key", json_schema_extra=SECRET_FIELD_EXTRA)
+    voice: str = Field("zahar", title="Voice", json_schema_extra={"widget": "select", "options": "dynamic"})
     # Role (amplua) is voice-dependent, so its option list is computed from the
     # selected voice (see options()); it is stored as a free string and coerced to
     # the voice's default by the validator below.
-    role: str = Field("neutral", json_schema_extra={"widget": "select", "options": "dynamic"})
-    speed: float = Field(1.0, ge=0.1, le=3.0, json_schema_extra={"widget": "slider"})
+    role: str = Field("neutral", title="Role", description="Delivery style; the choice depends on the voice.", json_schema_extra={"widget": "select", "options": "dynamic"})
+    speed: float = Field(1.0, ge=0.1, le=3.0, title="Speed", json_schema_extra={"widget": "slider"})
 
     @model_validator(mode="after")
     def _coerce_role(self):

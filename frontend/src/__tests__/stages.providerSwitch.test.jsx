@@ -4,7 +4,8 @@
 //   - the tab's form remounts, so a dynamic select refetches for the NEW provider
 //     (openrouter / groq both expose `model`; without the remount the dropdown
 //     would keep the previous provider's options),
-//   - saving patches only that provider's instance, never routing,
+//   - saving patches only that provider's instance, never routing; edits on
+//     several tabs survive the switch and go out in one patch,
 //   - the "used in chains" line, the offline command engine kept off the LLM tabs,
 //   - a "configure" link from another page opens its provider's tab.
 import React from "react";
@@ -107,6 +108,21 @@ describe("LLM page — provider tabs", () => {
     fireEvent.click(screen.getByText("Save changes"));
     await waitFor(() => expect(patch).toHaveBeenCalledTimes(1));
     expect(patch.mock.calls[0][0]).toEqual({ llm: { instances: { groq: { model: "mixtral-8x7b" } } } });
+  });
+
+  it("keeps an edit on another tab and saves both tabs in one patch", async () => {
+    render(<LLM />);
+    fireEvent.click(screen.getByRole("button", { name: /openrouter\/auto/ }));
+    fireEvent.click(await screen.findByText("anthropic/claude"));
+    fireEvent.click(screen.getByText("groq"));
+    expect(screen.getByText("openrouter").querySelector("[data-testid=unsaved-dot]")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /llama-3-70b/ }));
+    fireEvent.click(await screen.findByText("mixtral-8x7b"));
+    fireEvent.click(screen.getByText("Save changes"));
+    await waitFor(() => expect(patch).toHaveBeenCalledTimes(1));
+    expect(patch.mock.calls[0][0]).toEqual({ llm: { instances: {
+      openrouter: { model: "anthropic/claude" }, groq: { model: "mixtral-8x7b" },
+    } } });
   });
 });
 
