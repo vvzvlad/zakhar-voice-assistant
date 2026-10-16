@@ -47,10 +47,11 @@ struct Model {
   bool fresh = false;  // a probability arrived since the last detection check
 };
 
-// Zakhar v28 manifest: tensor_arena_size 45000. VAD (esphome/micro-wake-word-models
+// Zakhar v31 manifest: tensor_arena_size 48000 (v31 is v28 fine-tuned: the same graph plus one
+// int32 bias constant; v28 ran in 45000). VAD (esphome/micro-wake-word-models
 // models/v2/vad.json): 16772. The cutoffs are the device defaults until the server's `config`:
 // wake 80 % and VAD 30 %, as trunc(percent / 100 * 255).
-static Model s_wake(wake_word_zakhar_model, 45000, 204);
+static Model s_wake(wake_word_zakhar_model, 48000, 204);
 static Model s_vad(wake_word_vad_model, 16772, 76);
 
 static FrontendState s_fs;

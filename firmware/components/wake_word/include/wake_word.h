@@ -1,4 +1,4 @@
-// The micro_wake_word engine: "Zakhar" v28 and the stock VAD model over 16 kHz mono audio.
+// The micro_wake_word engine: "Zakhar" v31 and the stock VAD model over 16 kHz mono audio.
 #pragma once
 
 #include <stdbool.h>
@@ -9,9 +9,9 @@
 extern "C" {
 #endif
 
-// The embedded wake model (microWakeWord/v28/model/zakhar.tflite) and its word (the manifest's
+// The embedded wake model (microWakeWord/v31/model/zakhar.tflite) and its word (the manifest's
 // wake_word).
-#define WAKE_WORD_MODEL_VERSION "zakhar_v28"
+#define WAKE_WORD_MODEL_VERSION "zakhar_v31"
 #define WAKE_WORD_NAME "Захар"
 
 // Sets up the frontend and loads both models (tensor arenas in PSRAM). Call once, on the task that
