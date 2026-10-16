@@ -1,7 +1,7 @@
 // Unit tests for the display formatters (src/format.js).
 // TZ is pinned to UTC in src/test/setup.js so fmtStarted is deterministic.
 import { describe, it, expect } from "vitest";
-import { fmtUptime, fmtStarted, fmtBytes, deviceVersion } from "../format.js";
+import { fmtUptime, fmtStarted, fmtBytes, deviceVersion, deviceLabel } from "../format.js";
 
 describe("fmtUptime", () => {
   it("renders an em dash for null / NaN input", () => {
@@ -101,5 +101,17 @@ describe("deviceVersion", () => {
   it("returns null when the version value has not arrived yet", () => {
     // The backend reports value: null until the first state push.
     expect(deviceVersion({ versions: [{ id: "config_version", value: null }] }, "config_version")).toBeNull();
+  });
+});
+
+describe("deviceLabel", () => {
+  const devices = [{ name: "fc012cd1e5ec", label: "Прихожая" }, { name: "kitchen", label: "" }];
+
+  it("shows the label, else the id; a missing id passes through", () => {
+    expect(deviceLabel(devices, "fc012cd1e5ec")).toBe("Прихожая");
+    expect(deviceLabel(devices, "kitchen")).toBe("kitchen");
+    expect(deviceLabel(devices, "unknown")).toBe("unknown");
+    expect(deviceLabel(undefined, "kitchen")).toBe("kitchen");
+    expect(deviceLabel(devices, null)).toBe(null);
   });
 });

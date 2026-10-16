@@ -28,6 +28,12 @@ export function deviceVersion(liveEntry, id) {
   return v?.value ?? null;
 }
 
+// The name a device is shown under in the panel: the label set on the Devices page,
+// else its id. `devices` is core.devices; `id` is a hello id (null passes through).
+export function deviceLabel(devices, id) {
+  return (devices || []).find((d) => d.name === id)?.label || id;
+}
+
 // Human-readable byte size (binary units): "—" for null/NaN, then B / KB / MB / GB / TB.
 export function fmtBytes(n) {
   if (n == null || isNaN(n)) return "—";

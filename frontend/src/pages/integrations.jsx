@@ -16,7 +16,7 @@ import {
   getTools, getOptions, startCapture, getCaptureStatus, downloadCaptureResult, getDeviceControls, setDeviceControl,
   getWakeProbability, setWakeProbabilityStream, getConfig,
 } from "../api.js";
-import { deviceVersion } from "../format.js";
+import { deviceLabel, deviceVersion } from "../format.js";
 
 function Card({ title, sub, children, foot, right }) {
   return <div className="z-card">
@@ -559,15 +559,19 @@ export function Prompt() {
 }
 
 // ── Devices ───────────────────────────────────────────────────────────────
-// Add mode (`onSave`) asks for a name. Edit mode (`device`, the saved name) shows the
-// name read-only — it is the id the firmware sends in hello — and hosts the live
-// controls; `online` says whether the device is reachable.
-function DeviceModal({ onSave, onClose, title, device, online }) {
+// Add mode (`onSave({name, enabled})`) asks for a device id. Edit mode (`device`, the
+// saved id) edits the display label (`onSave(label)`), shows the id read-only — it is
+// what the firmware sends in hello — and hosts the live controls; `online` says
+// whether the device is reachable.
+function DeviceModal({ onSave, onClose, title, device, label: savedLabel = "", online }) {
   const [name, setName] = useState("");
+  const [label, setLabel] = useState(savedLabel);
   if (device) {
     return <Modal title={title} onClose={onClose}
-      footer={<button className="z-btn g" onClick={onClose}>Close</button>}>
-      <Field label="Name" hint="The device's id from its firmware — also keys the dialog context."><div className="z-inp"><input value={device} readOnly /></div></Field>
+      footer={<><button className="z-btn g" onClick={onClose}>Close</button>
+        <button className="z-btn p" disabled={label.trim() === savedLabel} onClick={() => onSave(label.trim())}>Save</button></>}>
+      <Field label="Name" hint="Shown in the panel instead of the device id; empty shows the id."><div className="z-inp"><input value={label} placeholder={device} onChange={(e) => setLabel(e.target.value)} /></div></Field>
+      <Field label="Device id" hint="Sent by the firmware when it connects — keys the device's settings and dialog context."><div className="z-inp"><input value={device} readOnly /></div></Field>
       <CaptureControl device={device} online={online} />
       <DeviceControls device={device} />
       <WakeProbabilityMeter device={device} online={online} />
@@ -576,7 +580,7 @@ function DeviceModal({ onSave, onClose, title, device, online }) {
   return <Modal title={title} onClose={onClose}
     footer={<><button className="z-btn g" onClick={onClose}>Cancel</button>
       <button className="z-btn p" disabled={!name} onClick={() => onSave({ name, enabled: true })}>Save</button></>}>
-    <Field label="Name" hint="The device's id from its firmware — also keys the dialog context."><div className="z-inp"><input value={name} placeholder="e.g. hallway" onChange={(e) => setName(e.target.value)} /></div></Field>
+    <Field label="Device id" hint="The id its firmware sends when it connects (its Wi-Fi MAC) — also keys the dialog context."><div className="z-inp"><input value={name} placeholder="e.g. fc012cd1e5ec" onChange={(e) => setName(e.target.value)} /></div></Field>
   </Modal>;
 }
 
@@ -853,8 +857,11 @@ export function Devices() {
     } catch (e) { setBusyErr(e); }
   };
   const onAdd = (d) => saveList((list) => [...list, d]);
+  const onLabel = (name, label) => saveList((list) => list.map((x) => (
+    x.name === name ? { ...x, label } : x
+  )));
   const onDelete = (name) => {
-    if (!window.confirm(`Delete speaker "${name}"?`)) return;
+    if (!window.confirm(`Delete speaker "${deviceLabel(devices, name)}"?`)) return;
     saveList((list) => list.filter((x) => x.name !== name));
   };
   // Flip the persisted enabled flag (missing = true on old configs). Disabling closes
@@ -864,7 +871,7 @@ export function Devices() {
   )));
 
   return <div className="z-page narrow">
-    <PageHeader title="Devices" desc={`Devices connect to ws://<server>:${devicePort}/device; an unknown device is added on its first connection. Each name also keys its own dialog context.`}
+    <PageHeader title="Devices" desc={`Devices connect to ws://<server>:${devicePort}/device; an unknown device is added on its first connection. Each device id also keys its own dialog context.`}
       actions={<button className="z-btn p" onClick={() => setModal({ mode: "add" })}><Ic n="add" w={14} />Add speaker</button>} />
     {busyErr && <div className="z-banner warn" style={{ margin: "0 0 12px" }}><Ic n="restart" w={15} /><span>{errorLines(busyErr).join(" · ")}</span></div>}
     <Card>
@@ -876,7 +883,7 @@ export function Devices() {
             : devices.map((d, i) => {
               const enabled = d.enabled ?? true;
               return <tr key={i} style={{ cursor: "default", opacity: enabled ? 1 : 0.55 }}>
-                <td style={{ fontWeight: 600 }}>{d.name}</td>
+                <td style={{ fontWeight: 600 }}>{d.label || d.name}</td>
                 {/* Firmware/model versions come from the live WS snapshot; "—" while offline/disabled. */}
                 <td className="mono" style={{ fontSize: 11.5 }}>{deviceVersion(liveOf(d.name), "config_version") ?? "—"}</td>
                 <td className="mono" style={{ fontSize: 11.5 }}>{deviceVersion(liveOf(d.name), "model_version") ?? "—"}</td>
@@ -893,6 +900,7 @@ export function Devices() {
     </Card>
     {modal?.mode === "add" && <DeviceModal title="Add speaker" onSave={onAdd} onClose={() => setModal(null)} />}
     {modal?.mode === "edit" && <DeviceModal title="Edit speaker" onClose={() => setModal(null)}
-      device={modal.name} online={statusOf(modal.name) === "online"} />}
+      device={modal.name} label={devices.find((d) => d.name === modal.name)?.label || ""}
+      onSave={(label) => onLabel(modal.name, label)} online={statusOf(modal.name) === "online"} />}
   </div>;
 }

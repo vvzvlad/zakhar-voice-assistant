@@ -55,14 +55,16 @@ The owner's words:
 
 1. Device → `hello`:
    ```json
-   {"type": "hello", "id": "main_room", "fw": "voicepe 0.1.0 (a1b2c3d)",
+   {"type": "hello", "id": "fc012cd1e5ec", "fw": "voicepe 0.1.0 (a1b2c3d)",
     "caps": {"speaker": true, "screen": false},
     "mic": {"channels": 2},
     "play": {"rate": 48000, "buffer_ms": 4000},
     "volume": 60}
    ```
-   - `id` names the device in the server config (`core.devices[].name`) and keys its dialog
-     context. An unknown `id` is added to the config as an enabled device.
+   - `id` is the device's Wi-Fi MAC as 12 lowercase hex. It names the device in the server
+     config (`core.devices[].name`) and keys its dialog context; the admin panel shows
+     `core.devices[].label` instead when one is set. An unknown `id` is added to the config as
+     an enabled device.
    - `play` and `volume` are present only when `caps.speaker` is true.
 2. The server closes the connection with code 4000 when the device is disabled in the config, and
    closes an older connection of the same `id` with code 4001 when a new one says `hello`.

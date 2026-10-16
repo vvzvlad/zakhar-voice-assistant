@@ -163,6 +163,9 @@ class CalendarConfig(BaseModel):
 class DeviceConfig(BaseModel):
     # The device's hello id.
     name: str
+    # Shown in the admin panel instead of the id; empty shows the id. Display only:
+    # everything server-side (context, reminders, run log, agent MCP) keys on `name`.
+    label: str = ""
     # When False the server refuses the device's connection; flipping it is
     # hot-applied via DeviceManager.reconfigure().
     enabled: bool = True

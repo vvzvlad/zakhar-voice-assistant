@@ -9,6 +9,8 @@ import { getRuns, getRun, openRunsStream, runAudioUrl, downloadRunAudio, runTtsA
 import { RESULT_META, STAGE_COLOR, fmtSec, mapRun, totalMs, statusMeta, applyStreamedRun, pageWindow } from "../runsModel.js";
 import { FILLER_COLOR } from "../stageMeta.js";
 import { matchesFilters } from "../runsFilters.js";
+import { useDeviceList } from "../appData.jsx";
+import { deviceLabel } from "../format.js";
 
 const SC = STAGE_COLOR;
 
@@ -135,12 +137,13 @@ function Collapsible({ summary, children }) {
 // Right-side drawer with the full run detail. `r` is the mapped detail row.
 function Drawer({ r, loading, error, onClose }) {
   const m = RESULT_META[r && r.result] || { label: r && r.result, tone: "muted" };
+  const device = deviceLabel(useDeviceList(), r && r.device);
   return <>
     <div className="z-scrim" onClick={onClose} />
     <div className="z-drawer" role="dialog">
       <div className="z-drawer-h">
         <div>
-          <h2>{(r && r.device) || "Run"} {r && <span style={{ color: "var(--mut2)", fontWeight: 500, fontFamily: "var(--mono)", fontSize: 13 }}>· {r.time}</span>}</h2>
+          <h2>{device || "Run"} {r && <span style={{ color: "var(--mut2)", fontWeight: 500, fontFamily: "var(--mono)", fontSize: 13 }}>· {r.time}</span>}</h2>
           {r && <div style={{ fontSize: 11.5, color: "var(--mut)", marginTop: 2, fontFamily: "var(--mono)" }}>id {r.id} · end: {r.reason || "—"}</div>}
         </div>
         {r && <span className={"z-pill " + m.tone} style={{ marginLeft: 12 }}><span className={"z-dot " + (m.tone === "good" ? "ok" : m.tone === "bad" ? "error" : "off")} />{m.label}</span>}
@@ -285,7 +288,7 @@ function Drawer({ r, loading, error, onClose }) {
 
           <div className="z-sl">Metadata</div>
           <div className="z-card"><div style={{ padding: "6px 17px" }}>
-            <KV k="Device" v={r.device || "—"} />
+            <KV k="Device" v={device || "—"} />
             <KV k="Chain" v={r.chain || "—"} />
             <KV k="End reason" v={r.reason || "—"} />
             <KV k="Model" v={r.model || "—"} />
@@ -301,12 +304,15 @@ function Drawer({ r, loading, error, onClose }) {
 }
 
 function Log() {
+  const devices = useDeviceList();
   const [runs, setRuns] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [result, setResult] = useState("all");       // all → errors → ok → rejected
   const [search, setSearch] = useState("");
   const [device, setDevice] = useState("");
+  // The table shows labels, so a typed label filters by its device's id.
+  const deviceFilter = devices.find((d) => d.label && d.label === device.trim())?.name ?? device.trim();
   const [chain, setChain] = useState("");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
@@ -332,7 +338,7 @@ function Log() {
     const params = { limit: pageSize, offset: (page - 1) * pageSize };
     if (result !== "all") params.result = result;
     if (search.trim()) params.search = search.trim();
-    if (device.trim()) params.device = device.trim();
+    if (deviceFilter) params.device = deviceFilter;
     if (chain.trim()) params.chain = chain.trim();
     getRuns(params)
       .then((data) => {
@@ -341,14 +347,14 @@ function Log() {
       })
       .catch((e) => { if (gen === genRef.current) setError(e); })
       .finally(() => { if (gen === genRef.current) setLoading(false); }); // a newer load owns the spinner otherwise
-  }, [result, search, device, chain, page, pageSize]);
+  }, [result, search, deviceFilter, chain, page, pageSize]);
 
   useEffect(() => { load(); }, [load]);
 
   // Keep the latest filter values in a ref so the single live subscription below
   // always matches against current filters without re-subscribing per keystroke.
-  const filtersRef = useRef({ result, search, device, chain });
-  useEffect(() => { filtersRef.current = { result, search, device, chain }; }, [result, search, device, chain]);
+  const filtersRef = useRef({ result, search, device: deviceFilter, chain });
+  useEffect(() => { filtersRef.current = { result, search, device: deviceFilter, chain }; }, [result, search, deviceFilter, chain]);
   // Mirror page/pageSize so the single live subscription can read them without
   // resubscribing (same pattern as filtersRef).
   const pageRef = useRef(page);
@@ -434,7 +440,7 @@ function Log() {
                       const m = statusMeta(r);
                       return <tr key={r.key} className={openId === r.id ? "sel" : ""} onClick={() => { if (r.id != null) openRow(r.id); }}>
                         <td className="tm">{r.time}</td>
-                        <td style={{ fontWeight: 600 }}>{r.device}</td>
+                        <td style={{ fontWeight: 600 }}>{deviceLabel(devices, r.device)}</td>
                         <td className="mono" data-testid="run-chain" style={{ fontSize: 11.5, color: r.chain ? "var(--ink2)" : "var(--mut2)" }}>{r.chain || "—"}</td>
                         <td><div className={"z-tx" + (r.stt ? "" : " mut")}>{r.stt || (r.live ? "…" : "(silence)")}</div></td>
                         <td><div className={"z-tx" + (r.llm ? "" : " mut")}>{r.llm || (r.live ? "…" : "—")}</div></td>

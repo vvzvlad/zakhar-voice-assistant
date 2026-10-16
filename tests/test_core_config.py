@@ -54,6 +54,12 @@ def test_device_config_enabled_defaults_true_and_round_trips_false():
     assert DeviceConfig.model_validate(off.model_dump()).enabled is False
 
 
+def test_device_config_label_defaults_empty_and_round_trips():
+    assert DeviceConfig(name="a").label == ""
+    d = DeviceConfig(name="a", label="Прихожая")
+    assert DeviceConfig.model_validate(d.model_dump()).label == "Прихожая"
+
+
 def test_device_config_cutoffs_default_and_are_percent():
     d = DeviceConfig(name="a")
     assert (d.wake_cutoff, d.vad_cutoff) == (80, 30)

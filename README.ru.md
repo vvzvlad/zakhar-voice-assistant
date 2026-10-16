@@ -258,8 +258,10 @@ wake-word и VAD.
 
 Прошивка колонки Voice PE лежит в `firmware/` — чистый ESP-IDF на C. Её компонент
 `components/zakhar_link` — сторона протокола на устройстве, общая с настенной
-панелью espanel. Id устройства и адрес сервера — значения `CONFIG_ZAKHAR_*` по
-умолчанию в `firmware/main/Kconfig.projbuild`. Модели wake-word и VAD колонка
+панелью espanel. Адрес сервера — значение `CONFIG_ZAKHAR_SERVER_URL` по умолчанию
+в `firmware/main/Kconfig.projbuild`; id устройства — Wi-Fi MAC колонки (12 строчных
+шестнадцатеричных цифр), как у панели, поэтому одна сборка даёт каждой колонке свой id, а
+имя, которое показывает админка, — подпись со страницы Devices. Модели wake-word и VAD колонка
 получает от сервера при каждом подключении: образ релиза везёт рабочую модель
 wake-word и модель VAD, а `core.devices[].wake_model` / `vad_model` направляют
 устройство на другой файл. Пароля от Wi-Fi в прошивке нет:

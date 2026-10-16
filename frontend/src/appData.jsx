@@ -108,6 +108,11 @@ export function AppDataProvider({ children }) {
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
 
+// The configured device list, or [] outside the provider (a page rendered on its own).
+export function useDeviceList() {
+  return useContext(Ctx)?.catalog?.core?.values?.devices || [];
+}
+
 export function useAppData() {
   const v = useContext(Ctx);
   if (!v) throw new Error("useAppData must be used within AppDataProvider");
