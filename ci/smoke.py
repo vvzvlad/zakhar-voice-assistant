@@ -18,7 +18,8 @@ image `python`. The outer side uses only the standard library.
 
 Models and check (e)
 --------------------
-The image carries no models (production mounts `/app/models`). First boot copies
+The image carries no models under `/app/models` (production mounts that volume; the speaker's
+wake-word and VAD .tflite under `/app/microWakeWord` are the only models inside). First boot copies
 templates/default_config.json, whose only TTS variant is `piper` with
 `voice_path: models/ru_RU-ruslan-medium.onnx`. `PiperTtsBackend.__init__` loads it eagerly
 (src/plugins/tts/piper.py) and src/app.py builds the TTS backend before `DeviceManager.start()`, so a

@@ -3,7 +3,8 @@
 // wake_word component: the same frontend settings (preprocessor_settings.h), feature scaling,
 // streaming inference and detection rule (StreamingModel / WakeWordModel / VADModel in
 // streaming_model.cpp, MicroWakeWord::process_probabilities_ in micro_wake_word.cpp). The audio
-// comes from the caller (wake_word_feed); the microphone is the board's business.
+// comes from the caller (wake_word_feed), and so do the models (wake_word_load); the microphone
+// and the model source are the board's business.
 #include "wake_word.h"
 
 #include <algorithm>
@@ -13,6 +14,8 @@
 
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "frontend.h"
 #include "frontend_util.h"
 #include "tensorflow/lite/micro/micro_allocator.h"
@@ -23,56 +26,84 @@
 
 static const char *TAG = "wake_word";
 
-// models.S
-extern "C" const uint8_t wake_word_zakhar_model[];
-extern "C" const uint8_t wake_word_vad_model[];
-
 static const int SAMPLE_RATE = 16000;
 static const int FEATURES = 40;  // PREPROCESSOR_FEATURE_SIZE
 static const int WINDOW = 5;     // sliding_window_size, both manifests
 static const int MIN_SLICES_BEFORE_DETECTION = 100;
 static const size_t VAR_ARENA_SIZE = 1024;  // STREAMING_MODEL_VARIABLE_ARENA_SIZE
+// Each model's tensor arena, allocated once and reused by every model loaded into it: well above
+// the manifests' tensor_arena_size (Zakhar v31 48000, the stock VAD 16772), so a retrained model
+// fits without a firmware change.
+static const size_t TENSOR_ARENA_SIZE = 128 * 1024;
 
 struct Model {
-  Model(const uint8_t *d, size_t a, uint8_t c) : data(d), arena_size(a), cutoff(c) {}
-  const uint8_t *data;
-  size_t arena_size;  // tensor_arena_size from the manifest
+  explicit Model(uint8_t c) : cutoff(c) {}
+  uint8_t *data = nullptr;   // the loaded model's flatbuffer, owned
+  uint8_t *var = nullptr;    // VAR_ARENA_SIZE, for the resource variables
+  uint8_t *arena = nullptr;  // TENSOR_ARENA_SIZE
   // int(probability_cutoff * 255), as the fork's __init__.py quantizes it; wake_word_set_cutoffs
   // writes it from another task.
   std::atomic<uint8_t> cutoff;
   tflite::MicroMutableOpResolver<20> resolver;
-  tflite::MicroInterpreter *interp = nullptr;
+  tflite::MicroInterpreter *interp = nullptr;  // nullptr: no model loaded
   int stride = 0, step = 0, idx = 0, ignore = -MIN_SLICES_BEFORE_DETECTION;
   uint8_t probs[WINDOW] = {0};
   bool fresh = false;  // a probability arrived since the last detection check
 };
 
-// Zakhar v31 manifest: tensor_arena_size 48000 (v31 is v28 fine-tuned: the same graph plus one
-// int32 bias constant; v28 ran in 45000). VAD (esphome/micro-wake-word-models
-// models/v2/vad.json): 16772. The cutoffs are the device defaults until the server's `config`:
-// wake 80 % and VAD 30 %, as trunc(percent / 100 * 255).
-static Model s_wake(wake_word_zakhar_model, 48000, 204);
-static Model s_vad(wake_word_vad_model, 16772, 76);
+// The cutoffs are the device defaults until the server's `config`: wake 80 % and VAD 30 %, as
+// trunc(percent / 100 * 255).
+static Model s_wake(204);
+static Model s_vad(76);
 
 static FrontendState s_fs;
+// Held by wake_word_feed() while it runs the models and by wake_word_load() while it swaps one.
+static SemaphoreHandle_t s_lock;
 static std::atomic<uint8_t> s_peak{0};  // the highest wake probability since wake_word_take_peak()
 static std::atomic<void (*)(void)> s_detect_cb{nullptr};
 
-static bool model_load(Model &m) {
+struct Lock {
+  Lock() { xSemaphoreTake(s_lock, portMAX_DELAY); }
+  ~Lock() { xSemaphoreGive(s_lock); }
+};
+
+// The op resolver and both arenas, once.
+static bool model_init(Model &m) {
   auto &r = m.resolver;
   r.AddCallOnce(); r.AddVarHandle(); r.AddReshape(); r.AddReadVariable(); r.AddStridedSlice();
   r.AddConcatenation(); r.AddAssignVariable(); r.AddConv2D(); r.AddMul(); r.AddAdd(); r.AddMean();
   r.AddFullyConnected(); r.AddLogistic(); r.AddQuantize(); r.AddDepthwiseConv2D();
   r.AddAveragePool2D(); r.AddMaxPool2D(); r.AddPad(); r.AddPack(); r.AddSplitV();
   const uint32_t caps = MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT;
-  const size_t size = (m.arena_size + 15) & ~size_t(15);
-  auto *var = (uint8_t *) heap_caps_aligned_alloc(16, VAR_ARENA_SIZE, caps);
-  auto *arena = (uint8_t *) heap_caps_aligned_alloc(16, size, caps);
-  if (var == nullptr || arena == nullptr) return false;
-  auto *mrv = tflite::MicroResourceVariables::Create(tflite::MicroAllocator::Create(var, VAR_ARENA_SIZE), 20);
-  m.interp = new tflite::MicroInterpreter(tflite::GetModel(m.data), m.resolver, arena, size, mrv);
-  if (m.interp->AllocateTensors() != kTfLiteOk) return false;
+  m.var = (uint8_t *) heap_caps_aligned_alloc(16, VAR_ARENA_SIZE, caps);
+  m.arena = (uint8_t *) heap_caps_aligned_alloc(16, TENSOR_ARENA_SIZE, caps);
+  return m.var != nullptr && m.arena != nullptr;
+}
+
+static void model_unload(Model &m) {
+  delete m.interp;
+  m.interp = nullptr;
+  heap_caps_free(m.data);
+  m.data = nullptr;
+}
+
+// Under s_lock. The model in `data` (owned from here on) replaces the current one, on the same
+// arenas; false, with no model loaded, when it does not load.
+static bool model_load(Model &m, uint8_t *data) {
+  model_unload(m);
+  m.data = data;
+  auto *mrv = tflite::MicroResourceVariables::Create(tflite::MicroAllocator::Create(m.var, VAR_ARENA_SIZE), 20);
+  m.interp = new tflite::MicroInterpreter(tflite::GetModel(m.data), m.resolver, m.arena, TENSOR_ARENA_SIZE, mrv);
+  if (m.interp->AllocateTensors() != kTfLiteOk) {
+    model_unload(m);
+    return false;
+  }
   m.stride = m.interp->input(0)->dims->data[1];
+  m.step = 0;
+  m.idx = 0;
+  memset(m.probs, 0, sizeof(m.probs));
+  m.fresh = false;
+  m.ignore = -MIN_SLICES_BEFORE_DETECTION;
   return true;
 }
 
@@ -120,12 +151,30 @@ extern "C" bool wake_word_init(void) {
   fc.pcan_gain_control.gain_bits = 21;
   fc.log_scale.enable_log = 1;
   fc.log_scale.scale_shift = 6;
-  if (!FrontendPopulateState(&fc, &s_fs, SAMPLE_RATE) || !model_load(s_wake) || !model_load(s_vad)) {
-    ESP_LOGE(TAG, "frontend/model init failed");
+  s_lock = xSemaphoreCreateMutex();
+  if (s_lock == nullptr || !FrontendPopulateState(&fc, &s_fs, SAMPLE_RATE) || !model_init(s_wake) ||
+      !model_init(s_vad)) {
+    ESP_LOGE(TAG, "frontend/arena init failed");
     return false;
   }
-  ESP_LOGI(TAG, "listening");
+  ESP_LOGI(TAG, "ready, no model loaded");
   return true;
+}
+
+extern "C" bool wake_word_load(wake_word_model_t kind, uint8_t *data, size_t size) {
+  Model &m = kind == WAKE_WORD_MODEL_WAKE ? s_wake : s_vad;
+  bool ok;
+  size_t used = 0;
+  {
+    Lock lock;
+    ok = model_load(m, data);
+    if (ok) used = m.interp->arena_used_bytes();
+  }
+  if (ok) {
+    ESP_LOGI(TAG, "%s model of %u B loaded, tensor arena %u of %u B used", kind == WAKE_WORD_MODEL_WAKE ? "wake" : "VAD",
+             (unsigned) size, (unsigned) used, (unsigned) TENSOR_ARENA_SIZE);
+  }
+  return ok;
 }
 
 extern "C" void wake_word_feed(const int16_t *samples, size_t n) {
@@ -140,10 +189,13 @@ extern "C" void wake_word_feed(const int16_t *samples, size_t n) {
       int32_t v = ((out.values[i] * 256) + 333) / 666 - 128;  // 666 = 25.6 * 26.0, rounded
       features[i] = (int8_t) std::clamp<int32_t>(v, INT8_MIN, INT8_MAX);
     }
-    if (!model_feed(s_wake, features) || !model_feed(s_vad, features)) {
+    Lock lock;
+    const bool wake = s_wake.interp != nullptr, vad = s_vad.interp != nullptr;
+    if ((wake && !model_feed(s_wake, features)) || (vad && !model_feed(s_vad, features))) {
       ESP_LOGW(TAG, "invoke failed");
       continue;
     }
+    if (!wake || !vad) continue;
     // As WakeWordModel::determine_detected: during the cool-off the probability stays unprocessed,
     // so the window is checked on the very slice the cool-off ends.
     if (!s_wake.fresh || s_wake.ignore < 0) continue;

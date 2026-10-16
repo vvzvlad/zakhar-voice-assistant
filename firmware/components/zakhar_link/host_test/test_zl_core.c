@@ -1,6 +1,7 @@
 // Host test of the zakhar_link pure core (zl_core.c) against docs/device-protocol.md: message
-// decode and encode, the cutoff and peak numbers, the backoff, the session filter and the playback
-// queue. `make fw-host-test` builds it with cJSON at the version ESP-IDF 5.5.4 ships.
+// decode and encode, the cutoff and peak numbers, the backoff, the session filter, the playback
+// queue and the model receiver. `make fw-host-test` builds it with cJSON at the version ESP-IDF
+// 5.5.4 ships.
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
@@ -71,6 +72,16 @@ static void test_decode(void)
     assert(decode("{\"type\": \"capture\", \"seconds\": 5}", &m) && m.capture_ms == 5000);
     zl_msg_free(&m);
     assert(!decode("{\"type\": \"capture\", \"seconds\": 0}", &m));
+    assert(decode("{\"type\": \"model\", \"kind\": \"wake\", \"name\": \"zakhar.tflite\", \"size\": 61000}", &m));
+    assert(m.type == ZL_MSG_MODEL && m.model == ZL_MODEL_WAKE && strcmp(m.name, "zakhar.tflite") == 0 &&
+           m.size == 61000 && !m.has_session);
+    zl_msg_free(&m);
+    assert(decode("{\"type\": \"model\", \"kind\": \"vad\", \"name\": \"vad.tflite\", \"size\": 1}", &m));
+    assert(m.model == ZL_MODEL_VAD);
+    zl_msg_free(&m);
+    assert(!decode("{\"type\": \"model\", \"kind\": \"vad\", \"name\": \"vad.tflite\", \"size\": 0}", &m));
+    assert(!decode("{\"type\": \"model\", \"kind\": \"stt\", \"name\": \"x\", \"size\": 5}", &m));
+    assert(!decode("{\"type\": \"model\", \"kind\": \"wake\", \"size\": 5}", &m));
 
     assert(!decode("{\"type\": \"something_new\"}", &m));
     assert(!decode("[1, 2]", &m));
@@ -80,16 +91,15 @@ static void test_decode(void)
 
 static void test_encode(void)
 {
-    zl_config_t speaker = {.id = "main_room", .fw = "voicepe 0.1.0 (a1b2c3d)", .model = "zakhar_v28",
-                           .mic_channels = 2, .play_rate = 48000, .play_buffer_ms = 4000};
+    zl_config_t speaker = {.id = "main_room", .fw = "voicepe 0.1.0 (a1b2c3d)", .mic_channels = 2,
+                           .play_rate = 48000, .play_buffer_ms = 4000};
     encoded_is(zl_encode_hello(&speaker, 60),
-               "{\"type\":\"hello\",\"id\":\"main_room\",\"fw\":\"voicepe 0.1.0 (a1b2c3d)\",\"model\":\"zakhar_v28\","
+               "{\"type\":\"hello\",\"id\":\"main_room\",\"fw\":\"voicepe 0.1.0 (a1b2c3d)\","
                "\"caps\":{\"speaker\":true,\"screen\":false},\"mic\":{\"channels\":2},"
                "\"play\":{\"rate\":48000,\"buffer_ms\":4000},\"volume\":60}");
-    zl_config_t panel = {.id = "a0b1c2d3e4f5", .fw = "espanel 0.2.0", .model = "zakhar_v28", .screen = true,
-                         .mic_channels = 1};
+    zl_config_t panel = {.id = "a0b1c2d3e4f5", .fw = "espanel 0.2.0", .screen = true, .mic_channels = 1};
     encoded_is(zl_encode_hello(&panel, 50),
-               "{\"type\":\"hello\",\"id\":\"a0b1c2d3e4f5\",\"fw\":\"espanel 0.2.0\",\"model\":\"zakhar_v28\","
+               "{\"type\":\"hello\",\"id\":\"a0b1c2d3e4f5\",\"fw\":\"espanel 0.2.0\","
                "\"caps\":{\"speaker\":false,\"screen\":true},\"mic\":{\"channels\":1}}");
     encoded_is(zl_encode_wake(17, "Захар"), "{\"type\":\"wake\",\"session\":17,\"word\":\"Захар\"}");
     encoded_is(zl_encode_wake(4294967295u, "x"), "{\"type\":\"wake\",\"session\":4294967295,\"word\":\"x\"}");
@@ -98,6 +108,10 @@ static void test_encode(void)
     encoded_is(zl_encode_volume(60), "{\"type\":\"volume\",\"value\":60}");
     encoded_is(zl_encode_wake_peak(42), "{\"type\":\"wake_peak\",\"value\":42}");
     encoded_is(zl_encode_audio_end("busy"), "{\"type\":\"audio_end\",\"reason\":\"busy\"}");
+    encoded_is(zl_encode_model_loaded(ZL_MODEL_WAKE, "zakhar.tflite", true),
+               "{\"type\":\"model_loaded\",\"kind\":\"wake\",\"name\":\"zakhar.tflite\",\"ok\":true}");
+    encoded_is(zl_encode_model_loaded(ZL_MODEL_VAD, "vad.tflite", false),
+               "{\"type\":\"model_loaded\",\"kind\":\"vad\",\"name\":\"vad.tflite\",\"ok\":false}");
     printf("ok: encode\n");
 }
 
@@ -240,6 +254,29 @@ static void test_playq(void)
     printf("ok: playback queue\n");
 }
 
+static void test_modelrx(void)
+{
+    zl_modelrx_t r = {0};
+    size_t at;
+    bool done;
+    assert(zl_modelrx_write(&r, 5, &at, &done) == 0 && !done);  // no model announced: takes nothing
+
+    // Uneven writes assemble the model in order; the bytes past `size` are dropped; done fires once.
+    zl_modelrx_start(&r, 10);
+    assert(zl_modelrx_write(&r, 3, &at, &done) == 3 && at == 0 && !done);
+    assert(zl_modelrx_write(&r, 0, &at, &done) == 0 && at == 3 && !done);
+    assert(zl_modelrx_write(&r, 4, &at, &done) == 4 && at == 3 && !done);
+    assert(zl_modelrx_write(&r, 7, &at, &done) == 3 && at == 7 && done && !r.active);
+    assert(zl_modelrx_write(&r, 2, &at, &done) == 0 && !done);
+
+    // A second start drops the model still receiving and counts from 0.
+    zl_modelrx_start(&r, 8);
+    assert(zl_modelrx_write(&r, 5, &at, &done) == 5 && !done);
+    zl_modelrx_start(&r, 4);
+    assert(zl_modelrx_write(&r, 6, &at, &done) == 4 && at == 0 && done);
+    printf("ok: model receiver\n");
+}
+
 int main(void)
 {
     test_decode();
@@ -247,6 +284,7 @@ int main(void)
     test_numbers();
     test_session();
     test_playq();
+    test_modelrx();
     printf("all zl_core tests passed\n");
     return 0;
 }

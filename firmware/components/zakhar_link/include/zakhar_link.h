@@ -22,11 +22,16 @@ typedef enum {
     ZL_STATE_ERROR,
 } zl_state_t;
 
+// The `kind` of a model the server sends.
+typedef enum {
+    ZL_MODEL_WAKE,
+    ZL_MODEL_VAD,
+} zl_model_t;
+
 typedef struct {
     const char *url;    // ws://<server>:8200/device
     const char *id;     // hello.id: the device name in the server config
     const char *fw;     // hello.fw
-    const char *model;  // hello.model
     bool screen;        // hello.caps.screen
     int mic_channels;   // 1 or 2, interleaved in the tap
     int preroll_ms;     // audio before the detection sent after a wake
@@ -64,6 +69,11 @@ typedef struct {
     // Asked on a wake word that would start a session (online, detection on, no capture); false
     // ignores it.
     bool (*can_start)(void);
+    // A model the server sent (`model` and its 0x03 frames), all `size` bytes in. The callee owns
+    // `data` (16-byte aligned, in PSRAM, released with heap_caps_free) and returns whether the
+    // model loaded; the answer goes to the server as `model_loaded`. Runs on the client's task
+    // and, unlike the others, may take a few milliseconds there.
+    bool (*on_model)(zl_model_t kind, uint8_t *data, size_t size);
 } zl_callbacks_t;
 
 // Copies cfg (its strings too) and cb, allocates the playback buffer and starts the component

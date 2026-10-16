@@ -26,6 +26,13 @@ The owner's words:
   the «ESP BLE Provisioning» app; «Разовый образ с Wi-Fi» — only the image for the switch from
   ESPHome carries the Wi-Fi from the gitignored file and stores it on first boot, every later
   image has no password.
+- «в прошивке вообще ничего не хранится, каждый старт грузим с сервера, все равно без сервера не
+  имеет смысла колонка. что грузить — решает сервер. сервер может в любой момент взять и
+  перезагрузить модель прямой командой без перезагрузки прошивки.» — the firmware carries no
+  wake-word or VAD model; the server sends both at every connection and whenever it decides to,
+  and the device swaps them without a restart.
+- «файлы моделей должны приходить с релизом, внутри него», «всм просто с релизом» — the model
+  files ship inside the server's release image, not on the models volume.
 
 ## Transport
 
@@ -33,9 +40,10 @@ The owner's words:
   (`core.audio.port`, which also serves `/health`); the server URL is set in the firmware build.
 - Text frames carry one JSON object each, with a `type` field. Unknown types and unknown fields
   are ignored by both sides.
-- Binary frames carry audio. The first byte is the kind, the rest is the payload:
+- Binary frames carry audio and models. The first byte is the kind, the rest is the payload:
   - `0x01` — microphone audio, device → server;
-  - `0x02` — playback audio, server → device.
+  - `0x02` — playback audio, server → device;
+  - `0x03` — model bytes, server → device (see [Models](#models)).
 - All audio is signed 16-bit little-endian PCM. No codec on either side. The microphone runs at
   16 kHz.
 - Liveness: the server sends a WebSocket ping every 10 s and drops the connection when the pong
@@ -47,7 +55,7 @@ The owner's words:
 
 1. Device → `hello`:
    ```json
-   {"type": "hello", "id": "main_room", "fw": "voicepe 0.1.0 (a1b2c3d)", "model": "zakhar_v28",
+   {"type": "hello", "id": "main_room", "fw": "voicepe 0.1.0 (a1b2c3d)",
     "caps": {"speaker": true, "screen": false},
     "mic": {"channels": 2},
     "play": {"rate": 48000, "buffer_ms": 4000},
@@ -65,6 +73,34 @@ The owner's words:
    Both are percent, 0..100. The device applies them as `uint8 = trunc(percent / 100 * 255)` to the
    wake-word model and to the on-device VAD gate. They live in the server config, not on the
    device; until the first `config` the device uses its compiled-in defaults.
+4. Server → both models, right after `config`: see [Models](#models).
+
+## Models
+
+The device stores no model. The server sends the wake-word model and the VAD model that gates it
+at every connection, again when the file configured for the device changes, and on the direct
+reload command (panel API `POST /api/device/model {device}`). Which file goes out is the server's
+choice: `core.devices[].wake_model` / `vad_model`, empty for the models the release ships.
+
+1. Server → `model`, then the bytes:
+   ```json
+   {"type": "model", "kind": "wake", "name": "microWakeWord/v31/model/zakhar.tflite", "size": 77848}
+   ```
+   `kind` is `wake` or `vad`, `name` names the file (the server sends its path), and `size` (> 0)
+   is the length of the .tflite that follows in `0x03` frames of at most 4096 payload bytes.
+   `model` carries no `session`, so the session filter lets it through. A new `model` while an
+   earlier one is still arriving discards the earlier one; bytes past `size` are discarded.
+2. Device → `model_loaded`, once all the bytes are in and the load was tried:
+   ```json
+   {"type": "model_loaded", "kind": "wake", "name": "microWakeWord/v31/model/zakhar.tflite", "ok": true}
+   ```
+   `ok` is false when the device could not allocate the buffer, the model did not load, or the
+   device takes no models. A model that did not load leaves its kind with no model; when the buffer
+   could not be allocated, the previous model stays. The server
+   shows the `name` of the last wake model loaded as the device's model.
+
+- The device swaps a model live, without a restart, and detects nothing until both are loaded.
+- A device that does not know `model` (an older firmware) ignores it and its `0x03` frames.
 
 ## Voice session
 

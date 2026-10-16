@@ -6,7 +6,8 @@
 // the wake and the microphone frames, the capture and its audio_end, wake_peak once a second,
 // `played` of finished streams and `volume`. The client's own task runs the event handler: the
 // hello on connect and every received frame in arrival order, so a play_start, its 0x02 frames
-// and its play_end reach the playback queue in the order sent. One mutex guards the shared state.
+// and its play_end reach the playback queue in the order sent; a model is assembled from its 0x03
+// frames and handed to on_model there too. One mutex guards the shared state.
 // Nothing sends or calls back while holding it: the client's task holds the client lock around
 // the handler, and a send from the component task takes that lock.
 #include "zakhar_link.h"
@@ -66,6 +67,12 @@ static zl_playq_t s_playq;
 static char s_rx[RX_CAP];
 static bool s_rx_skip;   // the text frame being received does not fit s_rx
 static uint8_t s_kind;   // the kind byte of the binary frame being received
+// The model being received, its bytes counted by s_modelrx. s_model is NULL without on_model or
+// when its allocation failed; the bytes are then counted and dropped.
+static zl_modelrx_t s_modelrx;
+static zl_model_t s_model_kind;
+static char *s_model_name;
+static uint8_t *s_model;
 
 // The component task only: the next microphone frame to send (set by wake() and capture_start(),
 // advanced by mic_poll(), all three on that task), and a microphone frame, the kind byte at byte 1
@@ -108,8 +115,53 @@ static void send_dropped(esp_websocket_client_handle_t ws, const uint32_t *ids, 
 
 // ---------------------------------------------------------------- the client's task
 
+// Drops the model being received, if any.
+static void model_discard(void)
+{
+    heap_caps_free(s_model);
+    free(s_model_name);
+    s_model = NULL;
+    s_model_name = NULL;
+    s_modelrx.active = false;
+}
+
+// A `model`: its bytes follow in 0x03 frames; one still being received is dropped.
+static void model_start(const zl_msg_t *m)
+{
+    model_discard();
+    zl_modelrx_start(&s_modelrx, m->size);
+    s_model_kind = m->model;
+    s_model_name = strdup(m->name);
+    if (s_cb.on_model == NULL) return;
+    s_model = heap_caps_aligned_alloc(16, m->size, MALLOC_CAP_SPIRAM);
+    if (s_model == NULL) ESP_LOGE(TAG, "%s model %s of %u B: out of PSRAM", zl_model_name(m->model), m->name, (unsigned)m->size);
+}
+
+// 0x03 payload bytes; bytes past the announced size are dropped. The complete model goes to
+// on_model (s_model exists only with it), and its `model_loaded` to the server.
+static void model_write(esp_websocket_client_handle_t ws, const uint8_t *p, size_t n)
+{
+    size_t at;
+    bool done;
+    const size_t take = zl_modelrx_write(&s_modelrx, n, &at, &done);
+    if (s_model != NULL) memcpy(s_model + at, p, take);
+    if (!done) return;
+    const size_t size = s_modelrx.size;
+    uint8_t *data = s_model;
+    s_model = NULL;
+    const bool ok = data != NULL && s_cb.on_model(s_model_kind, data, size);
+    if (ok) {
+        ESP_LOGI(TAG, "%s model %s loaded (%u B)", zl_model_name(s_model_kind), s_model_name, (unsigned)size);
+    } else {
+        ESP_LOGW(TAG, "%s model %s (%u B) not loaded", zl_model_name(s_model_kind), s_model_name, (unsigned)size);
+    }
+    send_json(ws, zl_encode_model_loaded(s_model_kind, s_model_name, ok));
+    model_discard();
+}
+
 static void on_connected(esp_websocket_client_handle_t ws)
 {
+    model_discard();
     lock();
     const int volume = s_volume;
     unlock();
@@ -209,6 +261,9 @@ static void on_text(esp_websocket_client_handle_t ws, const char *json, size_t l
     case ZL_MSG_DETECT:
         ESP_LOGI(TAG, "wake word detection %s", m.on ? "on" : "off");
         break;
+    case ZL_MSG_MODEL:
+        model_start(&m);
+        break;
     default:
         break;
     }
@@ -234,6 +289,10 @@ static void on_data(const esp_websocket_event_data_t *d)
             s_kind = p[0];
             p++;
             n--;
+        }
+        if (s_kind == ZL_KIND_MODEL) {
+            model_write(d->client, p, n);
+            return;
         }
         if (s_kind != ZL_KIND_PLAY || s_cfg.play_rate <= 0) return;
         lock();
@@ -508,7 +567,6 @@ void zl_start(const zl_config_t *cfg, const zl_callbacks_t *cb)
     s_cfg.url = strdup(cfg->url);
     s_cfg.id = strdup(cfg->id);
     s_cfg.fw = strdup(cfg->fw);
-    s_cfg.model = strdup(cfg->model);
     if (cb != NULL) s_cb = *cb;
     s_volume = cfg->volume;
     ((uint8_t *)s_tx)[1] = ZL_KIND_MIC;

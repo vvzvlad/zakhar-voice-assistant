@@ -28,11 +28,16 @@ from src.tts import pcm_rate
 # Binary frame kinds (first byte).
 MIC = 0x01
 PLAY = 0x02
+MODEL = 0x03
 CLOSE_DISABLED = 4000
 CLOSE_REPLACED = 4001
 HEARTBEAT_S = 10.0
-# Largest playback payload per binary frame.
+# Largest payload per binary frame, playback and model alike.
 PLAY_FRAME_BYTES = 4096
+# The models the release ships (the Dockerfile copies them into the image), sent to a device
+# whose core.devices[].wake_model / vad_model is empty.
+RELEASE_WAKE_MODEL = "microWakeWord/v31/model/zakhar.tflite"
+RELEASE_VAD_MODEL = "microWakeWord/vad/vad.tflite"  # stock: esphome/micro-wake-word-models models/v2/vad.tflite
 # The server keeps at most buffer_ms minus this much audio ahead of the device's playback.
 PACING_MARGIN_MS = 500
 # The wait for `played` gives up after the stream's duration + buffer_ms + this much.
@@ -70,6 +75,11 @@ def _spawn(coro) -> None:
     task = asyncio.create_task(coro)
     _background.add(task)
     task.add_done_callback(_background.discard)
+
+
+def _model_paths(cfg) -> dict[str, str]:
+    """The model file sent to a device per `model` kind: the configured one, else the release's."""
+    return {"wake": cfg.wake_model or RELEASE_WAKE_MODEL, "vad": cfg.vad_model or RELEASE_VAD_MODEL}
 
 
 class CaptureBusyError(Exception):
@@ -165,6 +175,7 @@ class Connection:
         self.ws = ws
         self.name = hello["id"]
         self.fw = hello.get("fw")
+        # The wake model the device reported loaded; an older firmware names its own in hello.
         self.model = hello.get("model")
         self.speaker = bool(hello.get("caps", {}).get("speaker"))
         self.mic_channels = hello.get("mic", {}).get("channels", 1)
@@ -178,6 +189,7 @@ class Connection:
         self.session = None
         self.session_open = False
         self.cutoffs = None  # (wake, vad) last sent in `config`
+        self.models: dict[str, str] = {}  # kind -> the path last sent in `model`
         self.closed = False
         self.capture_buf: bytearray | None = None  # mic audio while a capture runs
         self._capture_fut: asyncio.Future | None = None
@@ -221,6 +233,22 @@ class Connection:
     def send_config(self, cfg) -> None:
         self.cutoffs = (cfg.wake_cutoff, cfg.vad_cutoff)
         self.send({"type": "config", "wake_cutoff": cfg.wake_cutoff, "vad_cutoff": cfg.vad_cutoff})
+
+    def send_model(self, kind: str, path: str) -> bool:
+        """Send the .tflite file at `path` as the device's `kind` model: `model`, then its
+        bytes in 0x03 frames. Queued as no play stream, so a wake does not purge them. A file
+        that cannot be read is logged and nothing goes out (False)."""
+        try:
+            with open(path, "rb") as f:
+                data = f.read()
+        except OSError as e:
+            logger.error(f"{self.name}: {kind} model not sent: {e}")
+            return False
+        self.models[kind] = path
+        self.send({"type": "model", "kind": kind, "name": path, "size": len(data)})
+        for i in range(0, len(data), PLAY_FRAME_BYTES):
+            self._enqueue(bytes([MODEL]) + data[i:i + PLAY_FRAME_BYTES])
+        return True
 
     def start_session(self, session) -> None:
         """A wake: the device flushed its playback, so every stream in flight and
@@ -424,6 +452,16 @@ class Device:
             conn.wake_peak = msg["value"]
         elif kind == "audio_end":
             conn.on_audio_end(msg.get("reason"))
+        elif kind == "model_loaded":
+            ok = bool(msg.get("ok"))
+            if ok:
+                logger.info(f"{self.name}: {msg.get('kind')} model {msg.get('name')} loaded")
+            else:
+                logger.error(f"{self.name}: {msg.get('kind')} model {msg.get('name')} did not load")
+            if msg.get("kind") == "wake":
+                # A failed load: the panel shows no model (the device keeps the previous one
+                # only when it could not allocate the buffer).
+                conn.model = msg.get("name") if ok else None
 
     async def on_binary(self, conn: Connection, data: bytes) -> None:
         if conn is not self.conn or data[0] != MIC:
@@ -598,6 +636,18 @@ class DeviceManager:
         logger.info(f"{device_name}: wake-word detection {'on' if enabled else 'off'}")
         return {"device": device_name, "detect": bool(enabled)}
 
+    def reload_model(self, device_name: str) -> dict:
+        """The direct reload command: re-read both model files and send them; the device
+        swaps them without a restart. Returns {device, models: {kind: path sent}}.
+        Raises LookupError (unknown device) or RuntimeError (offline)."""
+        target = self._find(device_name)
+        conn = target.conn
+        if conn is None:
+            raise RuntimeError(f"{device_name} is offline")
+        logger.info(f"{device_name}: reloading the models")
+        sent = {kind: path for kind, path in _model_paths(target.cfg).items() if conn.send_model(kind, path)}
+        return {"device": device_name, "models": sent}
+
     def wake_prob(self, device_name: str) -> dict:
         target = self._find(device_name)
         conn = target.conn
@@ -654,7 +704,7 @@ class DeviceManager:
 
     async def _hello(self, ws, hello: dict):
         """Admit a device: add an unknown id to the config, refuse a disabled one,
-        replace an older connection of the same id, then send `config`."""
+        replace an older connection of the same id, then send `config` and both models."""
         name = hello["id"]
         cfg = next((d for d in self.rt.core.devices if d.name == name), None)
         if cfg is None:
@@ -673,15 +723,18 @@ class DeviceManager:
             old.close(CLOSE_REPLACED)
             await device.pipeline.on_disconnect()
         conn.send_config(cfg)
+        for kind, path in _model_paths(cfg).items():
+            conn.send_model(kind, path)
         logger.info(
-            f"{name}: connected ({conn.fw}, model {conn.model}, "
-            f"speaker={conn.speaker}{', replaced the older connection' if old else ''})"
+            f"{name}: connected ({conn.fw}, speaker={conn.speaker}"
+            f"{', replaced the older connection' if old else ''})"
         )
         return device, conn
 
     async def reconfigure(self) -> None:
         """Apply the device config to live connections: close a device that left the
-        config or got disabled, and send `config` to one whose cutoffs changed."""
+        config or got disabled, send `config` to one whose cutoffs changed and a model
+        whose path changed."""
         names = {cfg.name for cfg in self.rt.core.devices}
         for name, device in self._devices.items():
             if name not in names and device.conn is not None:
@@ -695,8 +748,12 @@ class DeviceManager:
             if not cfg.enabled:
                 logger.info(f"{cfg.name}: disabled; closing its connection")
                 conn.close(CLOSE_DISABLED)
-            elif conn.cutoffs != (cfg.wake_cutoff, cfg.vad_cutoff):
+                continue
+            if conn.cutoffs != (cfg.wake_cutoff, cfg.vad_cutoff):
                 conn.send_config(cfg)
+            for kind, path in _model_paths(cfg).items():
+                if conn.models.get(kind) != path:
+                    conn.send_model(kind, path)
 
     async def start(self) -> None:
         app = web.Application()

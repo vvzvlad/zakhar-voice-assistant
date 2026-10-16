@@ -157,8 +157,9 @@ fw-host-test: $(CJSON_D)/cJSON.c $(CJSON_D)/cJSON.h ## Host-test the firmware za
 
 # The Voice PE firmware (firmware/, plain ESP-IDF). idf.py runs in espressif/idf:v5.5.4, the IDF
 # ESPHome built the speaker's bootloader with, on the cirunner docker host, which cannot see this
-# laptop's paths: the sources (and the v31 wake-word model) go in as a tar on stdin, the flashable
-# artefacts come back as a tar on stdout into firmware/build/, the build log goes to stderr.
+# laptop's paths: the sources go in as a tar on stdin (no wake-word model: the speaker gets its
+# models from the server), the flashable artefacts come back as a tar on stdout into
+# firmware/build/, the build log goes to stderr.
 # fw-build-seed is the one-time image for the switch from ESPHome: only it takes
 # firmware/sdkconfig.secrets (gitignored: a Wi-Fi network) and stores that network on a speaker
 # that has none. fw-build leaves the file on the laptop; its image joins over BLE provisioning.
@@ -175,7 +176,7 @@ fw-build fw-build-seed:
 	set -o pipefail; COPYFILE_DISABLE=1 tar -cf - --exclude firmware/build --exclude firmware/build-host \
 		--exclude firmware/managed_components --exclude firmware/sdkconfig --exclude firmware/sdkconfig.old \
 		$(if $(filter 1,$(FW_SEED)),,--exclude firmware/sdkconfig.secrets) \
-		firmware microWakeWord/v31/model/zakhar.tflite \
+		firmware \
 	| $(FW_DOCKER) run --rm -i --entrypoint bash $(FW_IDF) -c 'set -e; mkdir /w; cd /w; tar -xf -; \
 		cd firmware; . $$IDF_PATH/export.sh >&2; \
 		idf.py -DZAKHAR_GIT_VERSION=$(shell git describe --always --dirty) -DZAKHAR_WIFI_SEED=$(FW_SEED) \
