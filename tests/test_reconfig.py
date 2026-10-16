@@ -57,14 +57,14 @@ def test_changed_paths_scalar_to_dict_yields_specific_leaf():
 
 def test_changed_paths_added_subtree_yields_specific_leaves():
     # A wholly new subtree reports its leaf paths, not the parent.
-    old = {"core": {"audio": {"ttl": 300}}}
-    new = {"core": {"audio": {"ttl": 300}, "vad": {"aggressiveness": 2}}}
+    old = {"core": {"audio": {"port": 8200}}}
+    new = {"core": {"audio": {"port": 8200}, "vad": {"aggressiveness": 2}}}
     assert changed_paths(old, new) == {"core.vad.aggressiveness"}
 
 
 def test_changed_paths_removed_subtree_yields_specific_leaves():
-    old = {"core": {"audio": {"ttl": 300}, "vad": {"aggressiveness": 2}}}
-    new = {"core": {"audio": {"ttl": 300}}}
+    old = {"core": {"audio": {"port": 8200}, "vad": {"aggressiveness": 2}}}
+    new = {"core": {"audio": {"port": 8200}}}
     assert changed_paths(old, new) == {"core.vad.aggressiveness"}
 
 
@@ -79,8 +79,6 @@ def test_action_for_representative_paths():
         "core.ack.enabled": "live",          # read per-run via the Runtime read-through
         "core.ack.sound_path": "live",       # ditto; read per-run via the Runtime read-through
         "core.vad.aggressiveness": "live",
-        "core.audio.public_base_url": "live",
-        "core.audio.ttl": "live",
         "core.audio.host": "rebuild_audio",
         "core.audio.port": "rebuild_audio",
         "core.prompt.system_prompt_path": "live",
@@ -96,8 +94,7 @@ def test_action_for_representative_paths():
         "core.runs.enabled": "rebuild_runs",
         "core.runs.retention_days": "rebuild_runs",
         "core.devices": "rebuild_devices",
-        "core.devices.0.host": "rebuild_devices",
-        "core.esphome.port": "rebuild_devices",
+        "core.devices.0.wake_cutoff": "rebuild_devices",
         "core.chains": "rebuild_backends",
         "llm.instances.openrouter.temperature": "rebuild_backends",
         "llm.instances.openrouter.reply_empty": "live",
@@ -125,12 +122,6 @@ def test_action_for_llm_hidden_sources_is_live():
     # hidden_sources is panel-only UI state (simple-nlu catalog editor's Sources bar)
     # that no backend reads, so toggling it must apply live — never rebuild the NLU.
     assert action_for("llm.instances.simple-nlu.hidden_sources") == "live"
-
-
-def test_action_for_audio_stream_tts_is_live():
-    # stream_tts (the streaming-TTS kill-switch) is read live per run via the
-    # Runtime read-through, so flipping it must NOT re-bind the audio server.
-    assert action_for("core.audio.stream_tts") == "live"
 
 
 def test_action_for_label_companion_fields_are_live():
@@ -194,15 +185,9 @@ def test_request_initial_load_warmup_path_routes_to_stress_rebuild():
 
 # --- Reconfigurator ----------------------------------------------------------
 
-def _stub_runtime(log_level="INFO", audio_ttl=300):
-    """A minimal runtime exposing `.core.log_level`, `.core.audio.ttl` and a live
-    `.audio_server` whose `ttl` is writable (mirrors the real AudioServer cache)."""
-    core = types.SimpleNamespace(
-        log_level=log_level,
-        audio=types.SimpleNamespace(ttl=audio_ttl),
-    )
-    audio_server = types.SimpleNamespace(ttl=audio_ttl)
-    return types.SimpleNamespace(core=core, audio_server=audio_server)
+def _stub_runtime(log_level="INFO"):
+    """A minimal runtime exposing `.core.log_level`."""
+    return types.SimpleNamespace(core=types.SimpleNamespace(log_level=log_level))
 
 
 def _make_reconf(rt, *, deps=None):
@@ -255,8 +240,8 @@ def test_reconfigurator_ack_is_live_no_job():
         ({"core.audio.host"}, "rebuild_audio"),
         # core.runs.enabled -> rebuild_runs.
         ({"core.runs.enabled"}, "rebuild_runs"),
-        # core.devices/core.esphome.port -> rebuild_devices (Tier 3c).
-        ({"core.esphome.port"}, "rebuild_devices"),
+        # core.devices -> rebuild_devices (Tier 3c).
+        ({"core.devices"}, "rebuild_devices"),
         # core.reminders.* -> rebuild_reminders (Tier 3c).
         ({"core.reminders.enabled"}, "rebuild_reminders"),
     ],
@@ -278,16 +263,6 @@ def test_request_initial_load_enqueues_warmup_job():
     reconf = _make_reconf(_stub_runtime())
     reconf.request_initial_load({"stress"})
     assert reconf.queue.get_nowait() == {"stress.__warmup__"}
-
-
-def test_reconfigurator_audio_ttl_applied_live():
-    # core.audio.ttl is live: the Reconfigurator pushes the new value onto the
-    # running server (which caches ttl).
-    rt = _stub_runtime(audio_ttl=300)
-    rt.core.audio.ttl = 900            # simulate the already-applied document
-    reconf = _make_reconf(rt)
-    reconf.on_config_change({"core.audio.ttl"})
-    assert rt.audio_server.ttl == 900
 
 
 def test_reconfigurator_log_level_reinits_logging(monkeypatch):
@@ -663,7 +638,7 @@ async def test_run_loop_coalesces_bursted_jobs():
 
 # --- apply_job (Tier 3a: audio re-bind) --------------------------------------
 
-class _StubAudioServer:
+class _StubDeviceServer:
     """Records rebind(host, port) calls; can be told to raise to exercise the
     failure path that is logged and continues."""
 
@@ -677,16 +652,16 @@ class _StubAudioServer:
             raise RuntimeError("bind: address already in use")
 
 
-def _audio_runtime(audio_server, *, host="0.0.0.0", port=8081):
+def _audio_runtime(manager, *, host="0.0.0.0", port=8081):
     return types.SimpleNamespace(
-        audio_server=audio_server,
+        manager=manager,
         core=types.SimpleNamespace(audio=types.SimpleNamespace(host=host, port=port)),
     )
 
 
 @pytest.mark.asyncio
 async def test_apply_job_audio_rebinds_to_configured_host_port():
-    audio = _StubAudioServer()
+    audio = _StubDeviceServer()
     rt = _audio_runtime(audio, host="127.0.0.1", port=9000)
     reconf = Reconfigurator(rt, types.SimpleNamespace(tts_timeout=30), asyncio.Queue())
     await reconf.apply_job({"core.audio.host"})
@@ -695,7 +670,7 @@ async def test_apply_job_audio_rebinds_to_configured_host_port():
 
 @pytest.mark.asyncio
 async def test_apply_job_audio_rebind_failure_is_attempted():
-    audio = _StubAudioServer(fail=True)
+    audio = _StubDeviceServer(fail=True)
     rt = _audio_runtime(audio, host="127.0.0.1", port=9000)
     reconf = Reconfigurator(rt, types.SimpleNamespace(tts_timeout=30), asyncio.Queue())
     await reconf.apply_job({"core.audio.port"})
@@ -1137,7 +1112,7 @@ async def test_apply_job_rebuild_devices_failure_is_attempted():
     mgr = _FakeManager(fail=True)
     rt = types.SimpleNamespace(manager=mgr)
     reconf = Reconfigurator(rt, types.SimpleNamespace(tts_timeout=30), asyncio.Queue())
-    await reconf.apply_job({"core.esphome.port"})
+    await reconf.apply_job({"core.devices"})
     assert mgr.reconfigures == 1
 
 

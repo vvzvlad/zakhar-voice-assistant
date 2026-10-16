@@ -3,9 +3,9 @@
 #
 # Deviation from the canonical web template: this is a LAN device<->server service,
 # NOT a public web service behind Traefik. So there are no Traefik labels and no
-# external `docker_main_net`. Instead the audio port is published straight to the
-# LAN (`ports`) so the speaker can fetch generated audio. Outbound connections to
-# the speaker (:6053) and to Node-RED / TTS work from the default bridge network.
+# external `docker_main_net`. Instead the device port is published straight to the
+# LAN (`ports`) so the devices can connect to ws://<server>:8200/device. Outbound
+# connections to Node-RED / TTS work from the default bridge network.
 #
 # Config lives in data/config.json INSIDE the named volume (created from
 # templates/default_config.json on first boot). Edit it there to set providers,
@@ -19,7 +19,7 @@ volumes:
   # the image — the Dockerfile copies only src/, templates/, main.py and the built
   # frontend — so this volume is what makes the image runnable at all: the config
   # template selects the Piper TTS voice at models/ru_RU-ruslan-medium.onnx and
-  # src/plugins/tts/piper.py loads it EAGERLY during boot, before the audio server
+  # src/plugins/tts/piper.py loads it EAGERLY during boot, before the device server
   # is started. Without this mount the container writes its first-boot config and
   # then dies with FileNotFoundError on that path, so /health never answers and the
   # healthcheck below never passes.
@@ -42,7 +42,7 @@ services:
       - zakhar-voice-assistant-models:/app/models
     ports:
       # Must match core.audio.port in data/config.json (default 8200).
-      - "8200:8200"                          # publish the audio server to the LAN
+      - "8200:8200"                          # publish the device server to the LAN
       # Admin panel API + UI (also serves the agent MCP endpoint at /mcp);
       # must match PANEL_PORT (default 8201).
       - "8201:8201"

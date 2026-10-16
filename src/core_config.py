@@ -20,15 +20,9 @@ class ContextConfig(BaseModel):
 
 
 class AudioConfig(BaseModel):
+    # Bind address of the device server (devices connect to ws://<server>:<port>/device).
     host: str = "0.0.0.0"
     port: int = 8200
-    ttl: int = 300
-    public_base_url: str = ""
-    # Serve TTS as a chunked stream while synthesis is still running, so the
-    # speaker starts playing before the clip is complete. Kill-switch: disable
-    # to restore the buffer-then-serve path (some speaker firmwares may
-    # mishandle chunked audio). Read live per run.
-    stream_tts: bool = True
 
 
 class AgentMcpConfig(BaseModel):
@@ -149,16 +143,15 @@ class CalendarConfig(BaseModel):
 
 
 class DeviceConfig(BaseModel):
+    # The device's hello id.
     name: str
-    host: str
-    psk: str = Field(json_schema_extra=SECRET_FIELD_EXTRA)
-    # When False the server does NOT build a client for this speaker (no connection
-    # attempts); flipping it is hot-applied via DeviceManager.reconfigure().
+    # When False the server refuses the device's connection; flipping it is
+    # hot-applied via DeviceManager.reconfigure().
     enabled: bool = True
-
-
-class EsphomeConfig(BaseModel):
-    port: int = 6053
+    # Sent to the device in `config`, percent: its wake-word probability cutoff and
+    # its on-device VAD gate.
+    wake_cutoff: int = Field(80, ge=0, le=100)
+    vad_cutoff: int = Field(30, ge=0, le=100)
 
 
 class PromptConfig(BaseModel):
@@ -192,7 +185,7 @@ class RemindersConfig(BaseModel):
 
 class CaptureConfig(BaseModel):
     # Raw audio capture: when enabled, every finalized utterance's post-frontend PCM
-    # (what the Voice PE streams over the Native API) is saved as a 16 kHz / mono /
+    # (what the device streams) is saved as a 16 kHz / mono /
     # 16-bit WAV under `dir`. Off by default; toggle it on for a capture session.
     enabled: bool = False
     dir: str = "data/captures"
@@ -214,7 +207,7 @@ class AckConfig(BaseModel):
         "",
         title="Chime sound",
         json_schema_extra={"options": "dynamic"},
-        description="Chime audio file (mp3 or wav) played on end-of-phrase. Pick a bundled clip to use that exact «блям»; the synthesized default (empty value) plays a short two-tone sine chime. Applies per run.",
+        description="Chime audio file (WAV) played on end-of-phrase. Pick a bundled clip to use that exact «блям»; the synthesized default (empty value) plays a short two-tone sine chime. Applies per run.",
     )
 
 
@@ -241,7 +234,6 @@ class CoreConfig(BaseModel):
     openweathermap: OpenWeatherMapConfig = OpenWeatherMapConfig()
     mcp_servers: list[McpServerConfig] = []
     calendar: CalendarConfig = CalendarConfig()
-    esphome: EsphomeConfig = EsphomeConfig()
     agent_mcp: AgentMcpConfig = AgentMcpConfig()
     prompt: PromptConfig = PromptConfig()
     runs: RunsConfig = RunsConfig()

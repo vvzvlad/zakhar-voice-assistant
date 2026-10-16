@@ -8,7 +8,7 @@ serves the agent-facing MCP endpoint at /mcp (an aiohttp→ASGI bridge into the
 FastMCP streamable-HTTP session manager, see src/agent_mcp.AgentMcpEndpoint);
 the `core.agent_mcp.enabled` toggle is read live per request.
 
-Start/stop mirror AudioServer (AppRunner + TCPSite). CORS is restricted to the
+Start/stop mirror the device server (AppRunner + TCPSite). CORS is restricted to the
 hardcoded `_ALLOWED_ORIGINS` allowlist (empty — see below); it never reflects a
 wildcard, so an arbitrary web page can't read the unauthenticated config (which
 carries plaintext secrets) via the operator's browser. The prod frontend is
@@ -32,12 +32,13 @@ from loguru import logger
 from multidict import CIMultiDict
 from pydantic import ValidationError
 
-from src import config_store
-from src.audio_server import ext_for_mime
+from src import config_store, dataset_jobs
+from src.audio_prep import pcm_to_wav_bytes
 from src.capture_jobs import CaptureJobManager
+from src.device_server import CAPTURE_MAX_SECONDS, CaptureBusyError
 from src.plugins.base import get_provider
-from src.pipeline import CAPTURE_MAX_SECONDS, CaptureBusyError
 from src.runs_store import db_file_size
+from src.tts import pcm_rate
 
 # HTTP methods the API exposes (used by the CORS preflight headers).
 _ALLOW_METHODS = "GET, POST, PATCH, PUT, DELETE, OPTIONS"
@@ -62,13 +63,21 @@ _ALLOWED_ORIGINS: frozenset[str] = frozenset()
 # (e.g. "assets/chimes/Chime_SFX_001.wav") so they match how the pipeline opens
 # core.ack.sound_path (the app runs from the repo root).
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-_CHIME_EXTS = (".wav", ".mp3", ".flac")
+_CHIME_EXTS = (".wav",)
+
+# Stored TTS audio mime -> download file extension.
+_EXT_FOR_MIME = {"audio/wav": "wav", "audio/mpeg": "mp3", "audio/flac": "flac"}
+
+
+def ext_for_mime(mime: str) -> str:
+    """File extension for a stored TTS audio mime; defaults to mp3 for unknown types."""
+    return _EXT_FOR_MIME.get(mime, "mp3")
 
 
 def list_chimes(root: str = _REPO_ROOT) -> list[str]:
     """Return sorted repo-root-relative paths of the bundled chime audio files.
 
-    Scans <root>/assets/chimes for audio files (wav/mp3/flac). Returns an empty list
+    Scans <root>/assets/chimes for WAV files. Returns an empty list
     when the directory is missing or unreadable."""
     abs_dir = os.path.join(root, "assets", "chimes")
     try:
@@ -177,6 +186,7 @@ class PanelServer:
                  device_status=None, device_capture=None, device_play=None,
                  device_controls_get=None, device_controls_set=None,
                  device_wake_prob_get=None, device_wake_prob_set=None,
+                 device_detect_set=None,
                  static_dir=None, runs_store=None, tool_sources=None,
                  run_events=None, prompt_store=None, agent_mcp=None,
                  heartbeat_interval: float = 1.0, reload_status=None):
@@ -184,8 +194,8 @@ class PanelServer:
         # device_status: optional callable -> list[dict]; static_dir: optional path to built frontend
         # device_capture: optional async callable (device_name, seconds) -> bytes that records a
         #   manual sample and returns it as WAV bytes (DeviceManager.capture). It is run by a
-        #   CaptureJobManager as a background task (so a browser disconnect can't cancel it and
-        #   reboot the device); the capture endpoints poll/download that job. None -> the
+        #   CaptureJobManager as a background task (so a browser disconnect can't cancel it);
+        #   the capture endpoints poll/download that job. None -> the
         #   manager is not built and every /api/capture* endpoint returns 503.
         # runs_store: optional RunsStore for the observability endpoints (None -> empty/zeros)
         # tool_sources: optional zero-arg callable -> list[dict] (ToolHub.describe()), None -> []
@@ -224,9 +234,20 @@ class PanelServer:
         #   /api/device/wake-probability endpoints return 503.
         self.device_wake_prob_get = device_wake_prob_get
         self.device_wake_prob_set = device_wake_prob_set
+        # device_detect_set: optional SYNC callable (device_name, enabled: bool) -> dict that
+        #   turns the device's wake-word detection off/on for debugging and returns
+        #   {device, detect} (DeviceManager.set_detect). None -> POST /api/device/detect
+        #   returns 503.
+        self.device_detect_set = device_detect_set
         # Background capture jobs: the recording runs as a server-side task so a
-        # browser disconnect cannot cancel it (and reboot the device).
+        # browser disconnect cannot cancel it.
         self._capture_jobs = CaptureJobManager(device_capture) if device_capture is not None else None
+        # Wake-word dataset sessions (a beep, then a capture, per take) run server-side too;
+        # they need both device callables, else every /api/datasets* endpoint returns 503.
+        self._dataset_jobs = (
+            dataset_jobs.DatasetJobManager(device_capture, device_play)
+            if device_capture is not None and device_play is not None else None
+        )
         self.static_dir = static_dir
         self.runs_store = runs_store
         self.tool_sources = tool_sources
@@ -341,7 +362,7 @@ class PanelServer:
         the provider's own ConfigModel, so any TTS plugin works with zero per-provider
         code here.
 
-        Status codes: 200 audio (the provider's native format), 400 bad input,
+        Status codes: 200 audio (WAV), 400 bad input,
         404 unknown provider, 422 invalid settings / empty or too-long text /
         nothing to synthesize, 502 upstream synthesis failure.
         """
@@ -408,9 +429,17 @@ class PanelServer:
             # Close the iterator so a streaming backend releases its HTTP response.
             await _aclose_quietly(aiter)
             return web.json_response({"error": "nothing to synthesize"}, status=422)
-        # Serve the backend's NATIVE format (audio/mpeg or audio/wav); browsers
-        # decode both, so no transcoding here. No Content-Length -> aiohttp uses
-        # chunked transfer encoding.
+        rate = pcm_rate(mime)
+        if rate is not None:
+            # Browsers cannot play headerless PCM: wrap the whole clip as WAV.
+            try:
+                pcm = first + b"".join([c async for c in aiter])
+            except (RuntimeError, httpx.HTTPError) as e:
+                await _aclose_quietly(aiter)
+                return web.json_response({"error": str(e)}, status=502)
+            return web.Response(body=pcm_to_wav_bytes(pcm, rate=rate), content_type="audio/wav")
+        # A WAV backend is served as is. No Content-Length -> aiohttp uses chunked
+        # transfer encoding.
         resp = web.StreamResponse(status=200)
         resp.content_type = mime
         await resp.prepare(request)
@@ -736,13 +765,38 @@ class PanelServer:
         except RuntimeError as e:  # offline
             return web.json_response({"error": str(e)}, status=409)
 
+    async def _post_detect(self, request: web.Request) -> web.Response:
+        """Debug switch: turn a device's wake-word detection off/on. Body: {device, enabled(bool)}.
+
+        Returns {device, detect}. The server keeps no state: the device turns detection back
+        on at every new connection. Status codes: 200 ok, 400 bad input, 404 unknown device,
+        409 offline, 503 not wired."""
+        if self.device_detect_set is None:
+            return web.json_response({"error": "detect switch not available"}, status=503)
+        body = await _read_json(request)
+        if not isinstance(body, dict):
+            return web.json_response({"error": "body must be a JSON object"}, status=400)
+        device = body.get("device")
+        if not isinstance(device, str) or not device:
+            return web.json_response({"error": 'field "device" (string) is required'}, status=400)
+        enabled = body.get("enabled")
+        # Strict bool: reject ints/strings/None (avoid an ambiguous truthiness toggle).
+        if not isinstance(enabled, bool):
+            return web.json_response({"error": 'field "enabled" (bool) is required'}, status=400)
+        try:
+            return web.json_response(self.device_detect_set(device, enabled))
+        except LookupError as e:
+            return web.json_response({"error": str(e)}, status=404)
+        except RuntimeError as e:  # offline
+            return web.json_response({"error": str(e)}, status=409)
+
     async def _post_capture(self, request: web.Request) -> web.Response:
         """Start a background capture of a manual sample on a speaker (non-blocking).
 
         Body: {"device": "<name>", "seconds": <int 1..300>}. The device records that
         many seconds of mic audio (no STT/LLM/TTS). The recording runs as a
         SERVER-SIDE background task and is NOT tied to this HTTP request, so closing
-        the browser does not cancel it (cancelling reboots the device). The browser
+        the browser does not cancel it. The browser
         then polls GET /api/capture for the live countdown and downloads the result
         via GET /api/capture/result.
 
@@ -820,6 +874,119 @@ class PanelServer:
             body=wav,
             content_type="audio/wav",
             headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
+    # --- wake-word dataset recording -------------------------------------------
+    def _dataset_refusal(self, name: str) -> web.Response | None:
+        """503 when dataset recording is not wired, 400 for an invalid set name, else None."""
+        if self._dataset_jobs is None:
+            return web.json_response({"error": "dataset recording not available"}, status=503)
+        if not dataset_jobs.valid_name(name):
+            return web.json_response(
+                {"error": 'set name must be 1..64 letters, digits, "_" or "-"'}, status=400
+            )
+        return None
+
+    async def _post_dataset(self, request: web.Request) -> web.Response:
+        """Start a wake-word dataset recording session on a device (non-blocking).
+
+        Path: the set name (1..64 letters, digits, "_" or "-"; Cyrillic is fine). Body:
+        {"device": "<name>", "takes": <int 1..1000>, "seconds": <int 1..10, default 3>}.
+        Each take: the device beeps (the synthesized chime; a device without a speaker
+        records without it), then records `seconds` of mic audio, saved as the set's next
+        <DATA_DIR>/datasets/<name>/<NNNN>.wav — numbering continues after the highest
+        existing clip, so a later session extends the set. Takes run back to back as a
+        SERVER-SIDE background task (a 200-take session runs ~15 minutes), so the request
+        returns at once; progress shows in GET /api/datasets.
+
+        Status codes:
+          - 202 started (returns the job snapshot, state "recording")
+          - 400 bad input or set name
+          - 409 a dataset session is already running on that device
+          - 503 dataset recording not wired (no DeviceManager)
+        A failing take (offline or unknown device, empty recording, timeout) does not fail
+        this request: it ends the session as state "error" with the message, and the clips
+        already written stay. There are no retries. Wake-word detection stays on between
+        takes, so a word said after the take's window can start a voice session and the
+        next take then fails as busy; POST /api/device/detect {"enabled": false} before the
+        session (and true after) keeps that from happening.
+        """
+        name = request.match_info["name"]
+        refusal = self._dataset_refusal(name)
+        if refusal is not None:
+            return refusal
+        body = await _read_json(request)
+        if not isinstance(body, dict):
+            return web.json_response({"error": "body must be a JSON object"}, status=400)
+        device = body.get("device")
+        if not isinstance(device, str) or not device:
+            return web.json_response(
+                {"error": 'field "device" (string) is required'}, status=400
+            )
+        takes = body.get("takes")
+        # Reject non-integers (bools are ints in Python, so exclude them explicitly).
+        if (not isinstance(takes, int) or isinstance(takes, bool)
+                or not 1 <= takes <= dataset_jobs.MAX_TAKES):
+            return web.json_response(
+                {"error": f'field "takes" (integer 1..{dataset_jobs.MAX_TAKES}) is required'},
+                status=400,
+            )
+        seconds = body.get("seconds", dataset_jobs.DEFAULT_SECONDS)
+        if (not isinstance(seconds, int) or isinstance(seconds, bool)
+                or not 1 <= seconds <= dataset_jobs.MAX_SECONDS):
+            return web.json_response(
+                {"error": f'field "seconds" must be an integer 1..{dataset_jobs.MAX_SECONDS}'},
+                status=400,
+            )
+        try:
+            snap = self._dataset_jobs.start(name, device, takes, seconds)
+        except CaptureBusyError as e:
+            return web.json_response({"error": str(e)}, status=409)
+        return web.json_response(snap, status=202)
+
+    async def _get_datasets(self, request: web.Request) -> web.Response:
+        """List the dataset sets: {"sets": [{"name", "clips", "job"}]}.
+
+        Every set directory on disk with its WAV count, plus the set's latest session
+        snapshot (running or finished; kept until the next session of that set starts), or
+        null when no session of it ran since the server started.
+        """
+        if self._dataset_jobs is None:
+            return web.json_response({"error": "dataset recording not available"}, status=503)
+        return web.json_response({"sets": self._dataset_jobs.sets()})
+
+    async def _post_dataset_stop(self, request: web.Request) -> web.Response:
+        """Stop the set's running session after the current take (it ends as "stopped").
+
+        Returns the session snapshot (still "recording" until that take is written);
+        404 when no session of the set is running.
+        """
+        name = request.match_info["name"]
+        refusal = self._dataset_refusal(name)
+        if refusal is not None:
+            return refusal
+        try:
+            snap = self._dataset_jobs.stop(name)
+        except LookupError as e:
+            return web.json_response({"error": str(e)}, status=404)
+        return web.json_response(snap)
+
+    async def _get_dataset_zip(self, request: web.Request) -> web.Response:
+        """Download the set's WAVs as one zip archive; 404 when the set does not exist."""
+        name = request.match_info["name"]
+        refusal = self._dataset_refusal(name)
+        if refusal is not None:
+            return refusal
+        # A large set is tens of megabytes: read and pack it off the event loop.
+        data = await asyncio.to_thread(dataset_jobs.zip_set, name)
+        if data is None:
+            return web.json_response({"error": f"no dataset {name!r}"}, status=404)
+        # Sanitize the set name for the download filename (ascii alnum/._- only).
+        safe_name = "".join(c if c.isascii() and (c.isalnum() or c in "._-") else "_" for c in name)
+        return web.Response(
+            body=data,
+            content_type="application/zip",
+            headers={"Content-Disposition": f'attachment; filename="{safe_name}.zip"'},
         )
 
     async def _get_tools(self, request: web.Request) -> web.Response:
@@ -909,8 +1076,9 @@ class PanelServer:
 
     async def _get_run_tts_audio(self, request: web.Request) -> web.Response:
         """Serve the stored generated TTS reply audio for one run (inline, playable/
-        downloadable). The blob is the TTS backend's native format; the stored mime is
-        used as the Content-Type and to pick the download extension."""
+        downloadable). The blob is the TTS backend's native clip (raw PCM is stored as
+        WAV); the stored mime is used as the Content-Type and to pick the download
+        extension."""
         if self.runs_store is None:
             return web.json_response({"error": "not found"}, status=404)
         try:
@@ -1086,9 +1254,14 @@ class PanelServer:
             web.post("/api/device/controls", self._post_device_controls),
             web.get("/api/device/wake-probability", self._get_wake_probability),
             web.post("/api/device/wake-probability", self._post_wake_probability),
+            web.post("/api/device/detect", self._post_detect),
             web.post("/api/capture", self._post_capture),
             web.get("/api/capture", self._get_capture_status),
             web.get("/api/capture/result", self._get_capture_result),
+            web.get("/api/datasets", self._get_datasets),
+            web.post("/api/datasets/{name}", self._post_dataset),
+            web.post("/api/datasets/{name}/stop", self._post_dataset_stop),
+            web.get("/api/datasets/{name}.zip", self._get_dataset_zip),
             web.get("/api/tools", self._get_tools),
             web.get("/api/runs", self._get_runs),
             web.get("/api/runs/stream", self._runs_stream),  # before {id}: literal wins
@@ -1138,10 +1311,12 @@ class PanelServer:
         app.on_shutdown.append(_close_ws_clients)
 
         async def _close_capture_jobs(_app: web.Application) -> None:
-            # Cancel any in-flight background capture tasks on shutdown so cleanup()
+            # Cancel any in-flight background capture and dataset tasks on shutdown so cleanup()
             # doesn't wait on them (and so they don't outlive the server).
             if self._capture_jobs is not None:
                 await self._capture_jobs.close()
+            if self._dataset_jobs is not None:
+                await self._dataset_jobs.close()
         app.on_shutdown.append(_close_capture_jobs)
         return app
 

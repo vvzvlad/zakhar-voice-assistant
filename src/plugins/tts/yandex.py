@@ -12,7 +12,7 @@ from src.plugins.base import SECRET_FIELD_EXTRA, Deps, Provider, register
 # before the stressed vowel (e.g. "прив+ет") — Yandex's native stress markup, so
 # only unit expansion and stray-'+' cleanup are needed.
 from src.plugins.tts._ru_text import expand_units, sanitize_plus_stress
-from src.tts import TtsBackend, split_sentences
+from src.tts import OwnedChunks, TtsBackend, pcm_mime, split_sentences
 
 # Yandex SpeechKit v3 utteranceSynthesis rejects requests whose text exceeds 250
 # characters (and ~24 s of audio, but 250 chars is the binding limit). Long replies
@@ -23,6 +23,10 @@ YANDEX_V3_TEXT_LIMIT = 250
 # v3 utteranceSynthesis REST endpoint; it is the same for every deployment,
 # so it is hardcoded rather than configurable.
 YANDEX_V3_URL = "https://tts.api.cloud.yandex.net/tts/v3/utteranceSynthesis"
+
+# Output: raw LINEAR16_PCM (16-bit signed little-endian, no header). v3 accepts any
+# rate from 8 to 48 kHz; 48 kHz is the top quality.
+YANDEX_PCM_RATE = 48000
 
 
 def _split_oversized(fragment: str, limit: int) -> list[str]:
@@ -109,7 +113,7 @@ def _decode_v3_audio(body: str) -> bytes:
 async def _aiter_v3_audio(resp) -> AsyncIterator[bytes]:
     """Incrementally decode a SpeechKit v3 utteranceSynthesis streaming response:
     parse complete JSON objects from the body as text arrives over the wire and
-    yield each audioChunk's decoded MP3 bytes, so playback can start before the
+    yield each audioChunk's decoded PCM bytes, so playback can start before the
     request finishes. Same object shapes and {"error": ...} -> RuntimeError
     handling as _decode_v3_audio, but single-pass and safe across chunk
     boundaries (a JSON object split between two network reads is buffered until
@@ -120,7 +124,7 @@ async def _aiter_v3_audio(resp) -> AsyncIterator[bytes]:
     def _emit(message):
         # Decode every audioChunk in one parsed message (a single object, or each
         # element of a JSON array), raising on an embedded error object. Returns a
-        # list of MP3 byte blocks to yield; an async generator can't itself yield
+        # list of PCM byte blocks to yield; an async generator can't itself yield
         # from a nested helper, so the caller does the actual `yield`.
         out: list[bytes] = []
         for obj in (message if isinstance(message, list) else [message]):
@@ -177,8 +181,8 @@ async def _aiter_v3_audio(resp) -> AsyncIterator[bytes]:
 class YandexTtsBackend(TtsBackend):
     """Yandex SpeechKit v3 cloud TTS (utteranceSynthesis). The v3 REST endpoint is
     server-streaming: the response is a stream of JSON objects, each carrying a
-    base64-encoded MP3 chunk; the chunks are decoded and concatenated into a valid
-    MP3 (audio/mpeg), so no transcoding is needed. Auth uses an API key bound to a
+    base64-encoded chunk of raw PCM (pcm_mime at YANDEX_PCM_RATE); the decoded
+    chunks concatenate into the clip. Auth uses an API key bound to a
     service account (`Authorization: Api-Key <key>`). The input text already
     arrives in Yandex's native "+vowel" stress notation (the canonical LLM->TTS
     contract), so no stress conversion is needed — only unit expansion and
@@ -199,20 +203,20 @@ class YandexTtsBackend(TtsBackend):
     async def synthesize(self, text: str, lang: str = "ru") -> tuple[str, bytes]:
         # v3 caps each request at YANDEX_V3_TEXT_LIMIT chars; adapt the canonical
         # "+vowel" text once (expand units, drop stray '+'), then split into
-        # bounded chunks, synthesize each, and concatenate the MP3 audio.
+        # bounded chunks, synthesize each, and concatenate the PCM audio.
         marked = sanitize_plus_stress(expand_units(text))
         chunks = _chunk_for_v3(marked, YANDEX_V3_TEXT_LIMIT)
         # Nothing pronounceable (empty / punctuation-only) -> serve no audio, don't POST.
         audio = bytearray()
         for chunk in chunks:
             audio.extend(await self._synthesize_chunk(chunk))
-        return ("audio/mpeg", bytes(audio))
+        return (pcm_mime(YANDEX_PCM_RATE), bytes(audio))
 
     async def synthesize_stream(self, text: str, lang: str = "ru"):
         """Streaming synthesis over the same <=250-char request chunking, but each
         request is consumed as a LIVE server stream (see _aiter_v3_audio): v3
-        utteranceSynthesis is itself server-streaming, so the per-request MP3
-        frames flow to the caller as Yandex produces them, instead of buffering a
+        utteranceSynthesis is itself server-streaming, so the per-request PCM
+        blocks flow to the caller as Yandex produces them, instead of buffering a
         whole request body first. Per the TtsBackend streaming contract the FIRST
         request is opened+validated eagerly so connect/auth/4xx errors raise
         BEFORE the iterator is returned; the rest are opened lazily as the stream
@@ -226,14 +230,14 @@ class YandexTtsBackend(TtsBackend):
                 return
                 yield  # pragma: no cover - marks this as an async generator
 
-            return ("audio/mpeg", _empty())
+            return (pcm_mime(YANDEX_PCM_RATE), _empty())
         # Open (and validate) the first request eagerly: the connect/auth/4xx gate.
         first_resp = await self._open_chunk(chunks[0])
 
-        # Each opened streamed response is released by the generator's finally,
-        # which only runs if the generator is iterated or aclose()d. The caller
-        # (Pipeline.serve_audio_stream) owns the returned iterator and guarantees
-        # exactly that — fully consumed or explicitly closed.
+        # Each opened streamed response is released when the stream is consumed or
+        # aclose()d — the eagerly opened first one also before the first chunk
+        # (OwnedChunks). The caller owns the returned iterator and guarantees one of
+        # the two.
         async def _gen():
             try:
                 async for audio in _aiter_v3_audio(first_resp):
@@ -248,11 +252,11 @@ class YandexTtsBackend(TtsBackend):
                 finally:
                     await resp.aclose()
 
-        return ("audio/mpeg", _gen())
+        return (pcm_mime(YANDEX_PCM_RATE), OwnedChunks(_gen(), first_resp.aclose))
 
     def _chunk_payload(self, text: str) -> dict:
         """Build the v3 utteranceSynthesis request body for one <=250-char chunk
-        (voice/role/speed hints + MP3 output spec). Shared by the buffered and
+        (voice/role/speed hints + raw PCM output spec). Shared by the buffered and
         streaming paths."""
         # `text` is already adapted (units expanded, stray '+' dropped) and within
         # the length limit; it carries Yandex-native "+vowel" stress markup as-is.
@@ -264,7 +268,9 @@ class YandexTtsBackend(TtsBackend):
         return {
             "text": text,
             "hints": hints,
-            "outputAudioSpec": {"containerAudio": {"containerAudioType": "MP3"}},
+            "outputAudioSpec": {
+                "rawAudio": {"audioEncoding": "LINEAR16_PCM", "sampleRateHertz": YANDEX_PCM_RATE},
+            },
             "loudnessNormalizationType": "LUFS",
         }
 

@@ -7,10 +7,8 @@ import wave
 
 from loguru import logger
 
-from src.audio_codec import wav_to_mp3
 
-
-def make_ack_chime_mp3(
+def make_ack_chime_wav(
     *,
     sample_rate: int = 22050,
     tones_hz: tuple[float, float] = (880.0, 1320.0),
@@ -18,11 +16,10 @@ def make_ack_chime_mp3(
     gap_ms: int = 20,
     amplitude: float = 0.5,
 ) -> bytes:
-    """Synthesize a short two-tone confirmation chime ("блям") and return it as MP3.
+    """Synthesize a short two-tone confirmation chime ("блям") and return it as WAV.
 
     A pleasant ~300 ms rising two-tone beep with a per-tone attack/decay envelope (so
-    there are no clicks), built with numpy and transcoded to MP3 via wav_to_mp3 so the
-    speaker firmware can decode it. Pure/deterministic — the pipeline builds it ONCE and
+    there are no clicks), built with numpy. Pure/deterministic — the pipeline builds it ONCE and
     caches the bytes (see Pipeline._ack_clip / Pipeline._ack_clip_bytes). numpy is
     already a dependency.
     """
@@ -55,40 +52,30 @@ def make_ack_chime_mp3(
         wf.setnchannels(1)
         wf.setsampwidth(2)
         wf.writeframes(pcm16.tobytes())
-    return wav_to_mp3(buf.getvalue())
+    return buf.getvalue()
 
 
 def build_ack_clip(sound_path: str, *, name: str = "") -> tuple[str, bytes]:
     """Build the end-of-phrase ack clip (mime, audio) from a sound_path.
 
-    If sound_path points to an existing file, load it — transcoding a WAV to MP3 (the
-    speaker firmware can't decode WAV; a bad/unreadable WAV falls back to the
-    synthesized chime so playback never goes silent). An empty or missing path yields
-    the synthesized two-tone chime. `name` is only used for log context. Does file IO
-    and (for WAV) a blocking transcode, so callers on the event loop should run it via
+    Chimes are WAV only: a sound_path naming an existing 16-bit .wav file is loaded
+    as is; an empty or missing path, any other file, or a bad/unreadable WAV yields
+    the synthesized two-tone chime, so playback never goes silent. `name` is only
+    used for log context. Does file IO, so callers on the event loop should run it via
     asyncio.to_thread. No caching here — callers cache as needed.
     """
-    # Deliberate exception to the "transcode at the delivery boundary" rule
-    # (audio_codec.to_playable): the ack clip is a CACHED asset played on every
-    # utterance, so a WAV source is transcoded ONCE here at build time instead
-    # of per play via to_playable in serve_audio.
     path = (sound_path or "").strip()
-    use_file = bool(path) and os.path.isfile(path)
-    if use_file:
-        with open(path, "rb") as f:
-            raw = f.read()
-        ext = os.path.splitext(path)[1].lstrip(".").lower()
-        if ext == "wav":
+    if path and os.path.isfile(path):
+        if path.lower().endswith(".wav"):
+            with open(path, "rb") as f:
+                raw = f.read()
             try:
-                return "audio/mpeg", wav_to_mp3(raw)
-            except Exception as e:
-                logger.warning(
-                    f"{name}: ack chime transcode failed for {path}: {e}; "
-                    f"using synthesized chime"
-                )
-                return "audio/mpeg", make_ack_chime_mp3()
-        if ext == "flac":
-            return "audio/flac", raw
-        # mp3 (and any other) served verbatim as audio/mpeg
-        return "audio/mpeg", raw
-    return "audio/mpeg", make_ack_chime_mp3()
+                with wave.open(io.BytesIO(raw), "rb") as w:
+                    if w.getsampwidth() != 2:
+                        raise ValueError(f"{w.getsampwidth() * 8}-bit, expected 16-bit")
+                return "audio/wav", raw
+            except (wave.Error, EOFError, ValueError) as e:
+                logger.warning(f"{name}: ack chime {path} is unusable: {e}; using synthesized chime")
+        else:
+            logger.warning(f"{name}: ack chime {path} is not a WAV file; using synthesized chime")
+    return "audio/wav", make_ack_chime_wav()

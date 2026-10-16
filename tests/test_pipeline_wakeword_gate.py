@@ -92,7 +92,7 @@ async def test_gate_accept_proceeds_to_stt_and_records(tmp_path, monkeypatch):
         stt_text="включи свет", runs_store=store,
     )
 
-    assert await pipeline.on_start("cid", 0, None, WAKE) == 0
+    await pipeline.on_start("cid", WAKE)
     # Before the verdict: gate pending, STT_VAD_START NOT emitted, stream not opened.
     assert pipeline._wakeword_pending is True
     assert pipeline._wakeword_confirmed is False
@@ -123,7 +123,6 @@ async def test_gate_accept_proceeds_to_stt_and_records(tmp_path, monkeypatch):
         StageEvent.INTENT_START,
         StageEvent.INTENT_END,
         StageEvent.TTS_START,
-        StageEvent.TTS_END,
         StageEvent.RUN_END,
     ]
     rec = store.records[-1]
@@ -150,7 +149,7 @@ async def test_gate_accept_short_utterance_ends_during_verify(tmp_path, monkeypa
         pipeline, [True, True, True, False, False, False, False, False, False]
     )
 
-    await pipeline.on_start("cid", 0, None, WAKE)
+    await pipeline.on_start("cid", WAKE)
     # One short chunk of several frames triggers the VAD endpoint while gating.
     await pipeline.on_audio(FRAME * 9)
     # The endpoint was deferred, not finalized, and verify was scheduled on the
@@ -200,9 +199,8 @@ async def test_gate_reject_aborts_silently_and_records(tmp_path, monkeypatch):
     # Spy on the ack scheduler so we can prove a reject never beeps.
     ack_calls = []
     pipeline._schedule_ack = lambda: ack_calls.append(1)
-    pipeline.send_announcement = lambda **kw: None
 
-    await pipeline.on_start("cid", 0, None, WAKE)
+    await pipeline.on_start("cid", WAKE)
     await pipeline.on_audio(b"\x01\x02" * 30000)  # > window -> verify scheduled
     await _drain_verify(pipeline)
 
@@ -247,7 +245,7 @@ async def test_gate_reject_records_audio_even_when_utterance_ended(tmp_path, mon
         pipeline, [True, True, True, False, False, False, False, False, False]
     )
 
-    await pipeline.on_start("cid", 0, None, WAKE)
+    await pipeline.on_start("cid", WAKE)
     await pipeline.on_audio(FRAME * 9)
     await _drain_verify(pipeline)
 
@@ -271,7 +269,7 @@ async def test_gate_timeout_fail_open_proceeds(tmp_path, monkeypatch):
         stt_text="включи свет", runs_store=store,
     )
 
-    await pipeline.on_start("cid", 0, None, WAKE)
+    await pipeline.on_start("cid", WAKE)
     await pipeline.on_audio(b"\x01\x02" * 30000)
     await _drain_verify(pipeline)
 
@@ -294,7 +292,7 @@ async def test_gate_timeout_fail_closed_rejects_with_error(tmp_path, monkeypatch
         tmp_path, monkeypatch, verifier=verifier, runs_store=store,
     )
 
-    await pipeline.on_start("cid", 0, None, WAKE)
+    await pipeline.on_start("cid", WAKE)
     await pipeline.on_audio(b"\x01\x02" * 30000)
     await _drain_verify(pipeline)
 
@@ -321,7 +319,7 @@ async def test_no_gate_when_backend_none(tmp_path, monkeypatch):
     pipeline, events = make_pipeline(tmp_path, monkeypatch, stt_text="включи свет")
     assert pipeline.rt.wakeword_backend is None
 
-    await pipeline.on_start("cid", 0, None, WAKE)
+    await pipeline.on_start("cid", WAKE)
     assert pipeline._wakeword_confirmed is True
     assert pipeline._wakeword_pending is False
     # STT_VAD_START emitted immediately (no gate), no verify task scheduled.
@@ -346,7 +344,7 @@ async def test_no_gate_when_passthrough(tmp_path, monkeypatch):
         stt_text="включи свет", runs_store=store,
     )
 
-    await pipeline.on_start("cid", 0, None, WAKE)
+    await pipeline.on_start("cid", WAKE)
     assert pipeline._wakeword_confirmed is True
     assert types_of(events) == [
         StageEvent.RUN_START,
@@ -371,7 +369,7 @@ async def test_no_gate_for_phraseless_start_with_real_verifier(tmp_path, monkeyp
         tmp_path, monkeypatch, verifier=verifier, stt_text="включи свет",
     )
 
-    await pipeline.on_start("cid", 0, None, None)  # no wake phrase
+    await pipeline.on_start("cid", None)  # no wake phrase
     assert pipeline._wakeword_confirmed is True
     assert pipeline._wakeword_pending is False
     assert StageEvent.STT_VAD_START in types_of(events)
@@ -424,7 +422,7 @@ async def test_gate_accept_streaming_feeds_backlog_once(tmp_path, monkeypatch):
         tmp_path, monkeypatch, verifier=verifier, stt_backend=stt,
     )
 
-    await pipeline.on_start("cid", 0, None, WAKE)
+    await pipeline.on_start("cid", WAKE)
     # No stream opened while gating.
     assert pipeline._stt_streams == {}
     assert stt.session.fed == []
@@ -472,7 +470,7 @@ async def test_on_stop_while_pending_rejects_not_full_pipeline(tmp_path, monkeyp
         tmp_path, monkeypatch, verifier=verifier, stt_backend=stt, runs_store=store,
     )
 
-    await pipeline.on_start("cid", 0, None, WAKE)
+    await pipeline.on_start("cid", WAKE)
     await pipeline.on_audio(b"\x01\x02" * 30000)  # schedules verify
     task = pipeline._wakeword_task
     assert task is not None and not task.done()
@@ -513,7 +511,7 @@ async def test_on_disconnect_cancels_pending_verify(tmp_path, monkeypatch):
     verifier = FakeWakewordVerifier(hang=True, timeout_ms=5000)  # long-running
     pipeline, _events = _make_gated(tmp_path, monkeypatch, verifier=verifier)
 
-    await pipeline.on_start("cid", 0, None, WAKE)
+    await pipeline.on_start("cid", WAKE)
     await pipeline.on_audio(b"\x01\x02" * 30000)  # schedules verify
     task = pipeline._wakeword_task
     assert task is not None and not task.done()

@@ -1,9 +1,5 @@
 // @vitest-environment jsdom
-// Unit tests for playAudioResponse — BLOB FALLBACK path only. jsdom has no
-// MediaSource, so the MSE branch is unreachable here (canStreamMse is false) and
-// every Response routes through resp.blob() + new Audio(objectURL), exactly the
-// pre-streaming behaviour. The MSE path is browser-integration code and is left
-// out of unit tests by design.
+// Unit tests for playAudioResponse: resp.blob() + new Audio(objectURL).
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { playAudioResponse } from "../streamAudio.js";
 
@@ -19,9 +15,7 @@ class FakeAudio {
   play() { return FakeAudio.playImpl(); }
 }
 
-// A Response whose Content-Type is audio/wav (piper) so MSE is never even probed,
-// and whose blob() resolves with a stub. No `body` is provided, which also forces
-// the fallback (canStreamMse needs resp.body).
+// A Response whose blob() resolves with a stub.
 function wavResponse(blob = { wav: true }) {
   return {
     headers: { get: () => "audio/wav" },
@@ -42,7 +36,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("playAudioResponse — blob fallback", () => {
+describe("playAudioResponse", () => {
   it("buffers the body, plays it and fires onPlaying", async () => {
     const onPlaying = vi.fn();
     const resp = wavResponse();

@@ -128,9 +128,6 @@ def test_catalog_exposes_values_plainly(tmp_path):
     # Secrets are plain config values now: catalog() emits them verbatim (no masking).
     doc = _doc()
     doc["core"]["openweathermap"]["api_key"] = "wkey"
-    doc["core"]["devices"] = [
-        {"name": "kitchen", "host": "10.0.0.5", "psk": "psk-plaintext-1"},
-    ]
     cat = ConfigService(doc, _deps(), path=str(tmp_path / "config.json")).catalog()
 
     # Provider api_key comes through as plaintext.
@@ -139,9 +136,8 @@ def test_catalog_exposes_values_plainly(tmp_path):
     assert yandex["values"]["api_key"] == "AQVN-secret"
     assert yandex["values"]["voice"] == "jane"
 
-    # Core openweathermap api_key and device psk are plaintext too.
+    # Core openweathermap api_key is plaintext too.
     assert cat["core"]["values"]["openweathermap"]["api_key"] == "wkey"
-    assert cat["core"]["values"]["devices"][0]["psk"] == "psk-plaintext-1"
 
     # JSON Schema is still emitted per provider and for core.
     assert "properties" in yandex["schema"]
@@ -181,7 +177,6 @@ def test_catalog_injects_apply_class_per_field(tmp_path):
     # Core (nested $defs) schemas carry per-field apply on each sub-model's properties.
     core_defs = cat["core"]["schema"]["$defs"]
     assert core_defs["ContextConfig"]["properties"]["max_turns"]["apply"] == "live"
-    assert core_defs["AudioConfig"]["properties"]["public_base_url"]["apply"] == "live"
     assert core_defs["AudioConfig"]["properties"]["host"]["apply"] == "rebuild_audio"
     # Scalar / list core properties are annotated on the property itself.
     core_props = cat["core"]["schema"]["properties"]
