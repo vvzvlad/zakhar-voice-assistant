@@ -5,7 +5,8 @@ CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
 CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 # A new image is kept once it has run a minute with an IP or taken an upload; one that crashes
-# first, or gets no IP in 120 s and restarts, boots the previous image again (app_main.c).
+# first, or is not up with an IP and provisioning ended in 120 s and restarts, boots the previous
+# image again (app_main.c).
 CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
 
 # 8 MB octal PSRAM in the package: the microphone tap, the playback buffer, the model arenas.
@@ -30,3 +31,12 @@ CONFIG_FREERTOS_HZ=1000
 
 # As the stock firmware: the I2S interrupts keep running while the flash is written (NVS, OTA).
 CONFIG_I2S_ISR_IRAM_SAFE=y
+
+# BLE provisioning (main/app_main.c): NimBLE with its allocations in PSRAM, protocomm security 1
+# only (the device sends no proof of possession, so the app asks for no code).
+CONFIG_BT_ENABLED=y
+CONFIG_BT_NIMBLE_ENABLED=y
+CONFIG_BT_NIMBLE_MEM_ALLOC_MODE_EXTERNAL=y
+# CONFIG_ESP_PROTOCOMM_SUPPORT_SECURITY_VERSION_0 is not set
+CONFIG_ESP_PROTOCOMM_SUPPORT_SECURITY_VERSION_1=y
+# CONFIG_ESP_PROTOCOMM_SUPPORT_SECURITY_VERSION_2 is not set

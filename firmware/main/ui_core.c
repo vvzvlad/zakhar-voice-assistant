@@ -8,6 +8,7 @@ void ind_set_phase(ind_state_t *s, led_phase_t phase, uint32_t now_ms)
 
 ind_t ind_choose(ind_state_t *s, uint32_t now_ms)
 {
+    if (s->provisioning) return IND_PROVISIONING;
     if (!s->network || !s->link) return IND_NO_SERVER;
     if (s->capture) return IND_CAPTURE;
     if (s->phase == LED_PHASE_ERROR && now_ms - s->error_at >= IND_ERROR_MS) s->phase = LED_PHASE_IDLE;
@@ -75,4 +76,20 @@ int dial_volume(int volume, int counts)
 {
     const int v = volume + (counts > 0 ? DIAL_STEP : counts < 0 ? -DIAL_STEP : 0);
     return v < 0 ? 0 : v > 100 ? 100 : v;
+}
+
+bool hold_step(hold_t *h, bool pressed, uint32_t now_ms)
+{
+    if (!pressed) {
+        h->down = false;
+        return false;
+    }
+    if (!h->down) {
+        h->down = true;
+        h->fired = false;
+        h->since = now_ms;
+    }
+    if (h->fired || now_ms - h->since < FORGET_HOLD_MS) return false;
+    h->fired = true;
+    return true;
 }

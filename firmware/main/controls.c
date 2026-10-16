@@ -1,7 +1,8 @@
 // The dial is decoded on every edge of A or B (ui_core's dial_edge, the stock decoder). The stock
 // control_volume script steps the volume per count, restarting on a count that comes within
 // 16 ms; here the counts of one 16 ms tick make one step in their direction (dial_volume). The
-// mute switch is read every tick.
+// mute switch is read every tick. The center button is polled on a task of its own (hold_step):
+// the controls task starts only once the board and zakhar_link are up, the button must work before.
 #include "controls.h"
 
 #include <stdatomic.h>
@@ -18,10 +19,12 @@
 static const char *TAG = "controls";
 
 #define TICK_MS 16
+#define BUTTON_TICK_MS 50
 
 static dial_t s_dial;               // the dial interrupt only
 static _Atomic int s_counts;        // dial counts since the last tick
 static _Atomic int s_request = -1;  // a set_volume not applied yet
+static void (*s_on_hold)(void);     // set before the button task starts
 
 static void dial_isr(void *arg)
 {
@@ -69,4 +72,33 @@ esp_err_t controls_start(void)
 void controls_request_volume(int percent)
 {
     atomic_store(&s_request, percent);
+}
+
+static void button_task(void *arg)
+{
+    (void)arg;
+    hold_t hold = {0};
+    for (;;) {
+        vTaskDelay(pdMS_TO_TICKS(BUTTON_TICK_MS));
+        if (hold_step(&hold, gpio_get_level(PIN_BUTTON) == 0, pdTICKS_TO_MS(xTaskGetTickCount()))) s_on_hold();
+    }
+}
+
+esp_err_t controls_button_start(void (*on_hold)(void))
+{
+    // The stock config reads GPIO0 with the internal pull-up off (the strapping pin is pulled up on
+    // the board); here it is on as well, harmlessly.
+    const gpio_config_t button = {
+        .pin_bit_mask = 1ULL << PIN_BUTTON,
+        .mode = GPIO_MODE_INPUT,
+        .pull_up_en = GPIO_PULLUP_ENABLE,
+    };
+    const esp_err_t err = gpio_config(&button);
+    if (err != ESP_OK) return err;
+    s_on_hold = on_hold;
+    if (xTaskCreate(button_task, "button", 3 * 1024, NULL, 1, NULL) != pdPASS) {
+        ESP_LOGE(TAG, "button task create failed");
+        return ESP_ERR_NO_MEM;
+    }
+    return ESP_OK;
 }

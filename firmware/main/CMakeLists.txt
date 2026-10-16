@@ -1,5 +1,5 @@
 # audio_core.c and ui_core.c are the pure parts (host test: make fw-voicepe-host-test); led_strip
-# comes in through idf_component.yml.
+# and network_provisioning come in through idf_component.yml.
 idf_component_register(
     SRCS "app_main.c" "aic3204.c" "audio.c" "audio_core.c" "controls.c" "leds.c" "net_log.c"
          "ota_http.c" "ui_core.c" "volume.c" "xmos.c"

@@ -1,5 +1,6 @@
-// Host test of the Voice PE firmware's pure indication and dial decisions (ui_core.c): the stock
-// control_leds priority, the error hold, and the stock dial decoder with one volume step per tick.
+// Host test of the Voice PE firmware's pure indication, dial and button decisions (ui_core.c): the
+// stock control_leds priority, the error hold, the stock dial decoder with one volume step per
+// tick, and the center button's hold that forgets the Wi-Fi network.
 // `make fw-voicepe-host-test` builds it.
 #include <assert.h>
 #include <stdint.h>
@@ -18,7 +19,13 @@ static void test_priority(void)
     s.capture = s.playing = s.muted = true;
     s.phase = LED_PHASE_LISTENING;
     s.network = false;
-    assert(ind_choose(&s, 0) == IND_NO_SERVER);  // no Wi-Fi beats everything
+    s.provisioning = true;
+    assert(ind_choose(&s, 0) == IND_PROVISIONING);  // waiting for a network beats everything
+    s.network = true;
+    assert(ind_choose(&s, 0) == IND_PROVISIONING);  // an IP alone does not end it
+    s.provisioning = false;
+    s.network = false;
+    assert(ind_choose(&s, 0) == IND_NO_SERVER);  // then no Wi-Fi
     s.network = true;
     s.link = false;
     assert(ind_choose(&s, 0) == IND_NO_SERVER);  // no server too
@@ -111,11 +118,37 @@ static void test_dial(void)
     assert(dial_volume(3, -1) == 0 && dial_volume(0, -2) == 0);
 }
 
+static void test_hold(void)
+{
+    // A press fires once, when it has lasted FORGET_HOLD_MS.
+    hold_t h = {0};
+    assert(!hold_step(&h, false, 0));
+    assert(!hold_step(&h, true, 1000));
+    assert(!hold_step(&h, true, 1000 + FORGET_HOLD_MS - 1));
+    assert(hold_step(&h, true, 1000 + FORGET_HOLD_MS));
+    assert(!hold_step(&h, true, 1000 + 2 * FORGET_HOLD_MS));
+
+    // A release starts the count again, and the next long press fires again.
+    assert(!hold_step(&h, false, 30000));
+    assert(!hold_step(&h, true, 30050));
+    assert(!hold_step(&h, false, 30050 + FORGET_HOLD_MS));
+    assert(!hold_step(&h, true, 50000));
+    assert(!hold_step(&h, true, 50000 + FORGET_HOLD_MS - 1));
+    assert(hold_step(&h, true, 50000 + FORGET_HOLD_MS));
+
+    // Across the wrap of the millisecond clock.
+    h = (hold_t){0};
+    assert(!hold_step(&h, true, UINT32_MAX - 100));
+    assert(!hold_step(&h, true, FORGET_HOLD_MS - 102));
+    assert(hold_step(&h, true, FORGET_HOLD_MS - 101));
+}
+
 int main(void)
 {
     test_priority();
     test_error_hold();
     test_dial();
+    test_hold();
     printf("ui_core: all tests passed\n");
     return 0;
 }

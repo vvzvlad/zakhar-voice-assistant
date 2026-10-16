@@ -159,20 +159,27 @@ fw-host-test: $(CJSON_D)/cJSON.c $(CJSON_D)/cJSON.h ## Host-test the firmware za
 # ESPHome built the speaker's bootloader with, on the cirunner docker host, which cannot see this
 # laptop's paths: the sources (and the v28 wake-word model) go in as a tar on stdin, the flashable
 # artefacts come back as a tar on stdout into firmware/build/, the build log goes to stderr.
-# firmware/sdkconfig.secrets (gitignored: Wi-Fi, device id, server URL) rides along when present.
+# fw-build-seed is the one-time image for the switch from ESPHome: only it takes
+# firmware/sdkconfig.secrets (gitignored: a Wi-Fi network) and stores that network on a speaker
+# that has none. fw-build leaves the file on the laptop; its image joins over BLE provisioning.
 FW_DOCKER := docker -c cirunner
 FW_IDF    := espressif/idf:v5.5.4
 FW_OUT    := build/voicepe.bin build/bootloader/bootloader.bin build/partition_table/partition-table.bin \
              build/ota_data_initial.bin build/flash_args dependencies.lock
+FW_SEED    = $(if $(filter fw-build-seed,$@),1,0)
 
-.PHONY: fw-build fw-flash fw-ota fw-logs fw-voicepe-host-test
+.PHONY: fw-build fw-build-seed fw-flash fw-ota fw-logs fw-voicepe-host-test
 fw-build: ## Build the Voice PE firmware on cirunner into firmware/build/
+fw-build-seed: ## Build the one-time ESPHome switch image, with the Wi-Fi of firmware/sdkconfig.secrets
+fw-build fw-build-seed:
 	set -o pipefail; COPYFILE_DISABLE=1 tar -cf - --exclude firmware/build --exclude firmware/build-host \
 		--exclude firmware/managed_components --exclude firmware/sdkconfig --exclude firmware/sdkconfig.old \
+		$(if $(filter 1,$(FW_SEED)),,--exclude firmware/sdkconfig.secrets) \
 		firmware microWakeWord/v28/model/zakhar.tflite \
 	| $(FW_DOCKER) run --rm -i --entrypoint bash $(FW_IDF) -c 'set -e; mkdir /w; cd /w; tar -xf -; \
 		cd firmware; . $$IDF_PATH/export.sh >&2; \
-		idf.py -DZAKHAR_GIT_VERSION=$(shell git describe --always --dirty) build size >&2; tar -cf - $(FW_OUT)' \
+		idf.py -DZAKHAR_GIT_VERSION=$(shell git describe --always --dirty) -DZAKHAR_WIFI_SEED=$(FW_SEED) \
+			build size >&2; tar -cf - $(FW_OUT)' \
 	| tar -C firmware -xf -
 
 fw-flash: ## Flash firmware/build/ over USB: make fw-flash PORT=/dev/cu.usbmodem...
@@ -189,7 +196,7 @@ fw-logs: ## Stream a running speaker's log over Wi-Fi: make fw-logs HOST=<addres
 	@test -n "$(HOST)" || { echo "HOST=<device address> is required" >&2; exit 1; }
 	nc $(HOST) 23
 
-fw-voicepe-host-test: ## Host-test the Voice PE firmware's pure cores (audio, indication, dial)
+fw-voicepe-host-test: ## Host-test the Voice PE firmware's pure cores (audio, indication, dial, button)
 	@mkdir -p $(FW_HOST)
 	cc -std=gnu17 -Wall -Wextra -Werror -I firmware/main firmware/main/host_test/test_audio_core.c \
 		firmware/main/audio_core.c -o $(FW_HOST)/test_audio_core

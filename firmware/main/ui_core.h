@@ -1,5 +1,6 @@
 // The pure decisions of the Voice PE's indication and controls: no ESP headers, host-tested
-// (make fw-voicepe-host-test). Which indication the LED ring shows, and the dial.
+// (make fw-voicepe-host-test). Which indication the LED ring shows, the dial and the center
+// button's hold.
 #pragma once
 
 #include <stdbool.h>
@@ -18,7 +19,8 @@ typedef enum {
 
 typedef enum {
     IND_OFF,
-    IND_NO_SERVER,  // red twinkle
+    IND_PROVISIONING,  // warm white twinkle, the stock Improv BLE indication
+    IND_NO_SERVER,     // red twinkle
     IND_CAPTURE,    // red blink
     IND_LISTENING,
     IND_THINKING,   // "Thinking White"
@@ -30,7 +32,8 @@ typedef enum {
 #define IND_ERROR_MS 1000  // stock on_end keeps the error phase a second
 
 typedef struct {
-    bool network;  // Wi-Fi has an IP
+    bool provisioning;  // waiting for a Wi-Fi network over BLE provisioning
+    bool network;       // Wi-Fi has an IP
     bool link;     // zakhar_link is connected
     bool capture;
     bool playing;  // playback audio is going out
@@ -42,9 +45,9 @@ typedef struct {
 
 void ind_set_phase(ind_state_t *s, led_phase_t phase, uint32_t now_ms);
 
-// The indication at now_ms, in the stock control_leds order: no server, the capture, the session
-// phase, an announcement playing, mute or volume 0, dark. An error phase older than IND_ERROR_MS
-// turns idle first.
+// The indication at now_ms, in the stock control_leds order: provisioning (the stock Improv BLE),
+// no server, the capture, the session phase, an announcement playing, mute or volume 0, dark. An
+// error phase older than IND_ERROR_MS turns idle first.
 ind_t ind_choose(ind_state_t *s, uint32_t now_ms);
 
 // ---------------------------------------------------------------- the dial
@@ -64,3 +67,16 @@ int dial_edge(dial_t *d, bool a, bool b);
 // The volume after one tick that collected `counts`: one DIAL_STEP in their direction, within
 // 0..100.
 int dial_volume(int volume, int counts);
+
+// ---------------------------------------------------------------- the center button
+
+#define FORGET_HOLD_MS 10000  // a hold this long forgets the stored Wi-Fi network
+
+typedef struct {
+    bool down;
+    bool fired;
+    uint32_t since;  // ms, when the press began
+} hold_t;  // zero-initialised
+
+// One look at the button at now_ms: true once per press, when it has been held FORGET_HOLD_MS.
+bool hold_step(hold_t *h, bool pressed, uint32_t now_ms);

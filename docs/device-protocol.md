@@ -21,6 +21,11 @@ The owner's words:
   only the panel HTTP API (`/api/datasets`), no panel UI.
 - «сделай команду отключения и включения, для дебага нужна» — `detect {on}` turns the device's
   wake-word detection off and on; panel API `POST /api/device/detect`.
+- «надо сделать систему джойна в сеть, чтобы не надо было хардкодить пасс в прошивке», options
+  chosen: «Приложение Espressif» — the speaker keeps its Wi-Fi in NVS and gets it over BLE from
+  the «ESP BLE Provisioning» app; «Разовый образ с Wi-Fi» — only the image for the switch from
+  ESPHome carries the Wi-Fi from the gitignored file and stores it on first boot, every later
+  image has no password.
 
 ## Transport
 

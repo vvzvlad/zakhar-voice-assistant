@@ -1,6 +1,7 @@
 // The stock indication of home-assistant-voice.yaml @26.5.0 redrawn without ESPHome: the effects
 // of its voice_assistant_leds light ("Listening For Command", "Replying", "Error", "Muted or
-// Silent", the red "Twinkle" of no connection) and the zakhar config's "Thinking White" and capture
+// Silent", the red "Twinkle" of no connection, the warm white "Twinkle" of Improv BLE, here shown
+// while BLE provisioning waits for a network) and the zakhar config's "Thinking White" and capture
 // blink, with ESPHome's light pipeline under them (light/addressable_light_effect.h,
 // light/esp_color_correction.h, core/color.h at 2026.5.3): each LED is
 // gamma_2.8(value * brightness), the ring is remapped (logical i = physical (i + 7) % 12) and the
@@ -41,8 +42,10 @@ typedef struct {
 #define BRIGHT_FULL 255
 #define BRIGHT_CAPTURE 204
 
-// The user ring's initial colour 9.4 / 73.3 / 94.9 % as the effects sample it, uint8(x * 255).
+// The user ring's initial colour 9.4 / 73.3 / 94.9 % as the effects sample it, uint8(x * 255);
+// WARM is the Improv BLE script's 100 / 89 / 71 % the same way.
 static const rgb_t RING = {23, 186, 241};
+static const rgb_t WARM = {255, 226, 181};
 static const rgb_t RED = {255, 0, 0};
 static const rgb_t WHITE = {255, 255, 255};
 static const rgb_t BLACK = {0, 0, 0};
@@ -215,6 +218,10 @@ static void draw(ind_t fx, const ind_state_t *in, uint32_t now)
     case IND_OFF:
         fill(BLACK);
         break;
+    case IND_PROVISIONING:
+        s_bright = BRIGHT_RING;
+        twinkle(WARM, now);
+        break;
     case IND_NO_SERVER:
         s_bright = BRIGHT_RING;
         twinkle(RED, now);
@@ -335,6 +342,11 @@ void leds_start(void)
         stmt;                         \
         taskEXIT_CRITICAL(&s_lock);   \
     } while (0)
+
+void leds_set_provisioning(bool on)
+{
+    LOCKED(s_ind.provisioning = on);
+}
 
 void leds_set_network(bool up)
 {
