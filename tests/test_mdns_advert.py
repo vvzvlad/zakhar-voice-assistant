@@ -19,6 +19,7 @@ def test_concrete_host_is_advertised():
     assert info.server == "zakhar-nebula.local."
     assert info.port == 8200
     assert info.parsed_addresses() == ["10.31.41.59"]
+    assert info.text == b"\x00"  # an empty TXT record is one zero byte, never none
 
 
 def test_wildcard_host_advertises_the_lan_address(monkeypatch):

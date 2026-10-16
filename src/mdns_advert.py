@@ -59,6 +59,10 @@ def build_info(host: str, port: int, hostname: str) -> ServiceInfo:
         port=port,
         parsed_addresses=[address],
         server=f"{name}.local.",
+        # An empty TXT is one zero byte (RFC 6763 6.1). Without properties python-zeroconf
+        # sends zero bytes, and the ESP mdns parser drops the rest of the packet at such a
+        # record, the SRV record with it.
+        properties=b"\x00",
     )
 
 
