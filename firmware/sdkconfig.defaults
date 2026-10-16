@@ -40,3 +40,9 @@ CONFIG_BT_NIMBLE_MEM_ALLOC_MODE_EXTERNAL=y
 # CONFIG_ESP_PROTOCOMM_SUPPORT_SECURITY_VERSION_0 is not set
 CONFIG_ESP_PROTOCOMM_SUPPORT_SECURITY_VERSION_1=y
 # CONFIG_ESP_PROTOCOMM_SUPPORT_SECURITY_VERSION_2 is not set
+
+# Both microphone channels stream at 64 KB/s over one TCP connection. The default 5760-byte send
+# buffer holds under three frames: after one lost segment too little follows it for a fast
+# retransmit, the stream waits out the retransmission timeout, and zakhar_link's 2 s send timeout
+# drops the link.
+CONFIG_LWIP_TCP_SND_BUF_DEFAULT=32768
