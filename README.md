@@ -22,8 +22,8 @@ pipeline overview, a searchable request log, and a per-run drill-down.
 
 ### Dashboard — pipeline overview
 
-Stage-by-stage service map (VAD → STT → LLM → Accents → TTS) with live metrics and the
-most recent requests.
+Service map of the three pipeline steps (Capture → Logic → Speech) with live metrics and
+the most recent requests.
 
 ![Dashboard](docs/screenshots/dashboard.png)
 
