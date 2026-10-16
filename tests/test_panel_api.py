@@ -189,13 +189,13 @@ async def test_get_chimes_lists_bundled_files(tmp_path):
 
 async def test_get_wake_models_lists_the_release_models(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    (tmp_path / RELEASE_WAKE_MODEL).parent.mkdir(parents=True)
-    (tmp_path / RELEASE_WAKE_MODEL).write_bytes(b"")
+    (tmp_path / "microWakeWord/v8/model").mkdir(parents=True)
+    (tmp_path / "microWakeWord/v8/model/zakhar.tflite").write_bytes(b"")
     client, _svc_ = await _client(tmp_path)
     try:
         resp = await client.get("/api/wake-models")
         assert resp.status == 200
-        assert await resp.json() == {"options": [RELEASE_WAKE_MODEL], "release": RELEASE_WAKE_MODEL}
+        assert await resp.json() == {"options": ["zakhar/zakhar_v8"], "release": RELEASE_WAKE_MODEL}
     finally:
         await client.close()
 

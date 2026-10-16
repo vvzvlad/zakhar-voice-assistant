@@ -37,8 +37,9 @@ HEARTBEAT_S = 10.0
 # Largest payload per binary frame, playback and model alike.
 PLAY_FRAME_BYTES = 4096
 # The release's default models (the Dockerfile copies every .tflite under microWakeWord/ into
-# the image), sent to a device whose core.devices[].wake_model / vad_model is empty.
-RELEASE_WAKE_MODEL = "microWakeWord/v31/model/zakhar.tflite"
+# the image), sent to a device whose core.devices[].wake_model / vad_model is empty: the wake
+# one by its name (wake_model_files), the VAD one by its path.
+RELEASE_WAKE_MODEL = "zakhar/zakhar_v31"
 RELEASE_VAD_MODEL = "microWakeWord/vad/vad.tflite"  # stock: esphome/micro-wake-word-models models/v2/vad.tflite
 # The server keeps at most buffer_ms minus this much audio ahead of the device's playback.
 PACING_MARGIN_MS = 500
@@ -79,18 +80,38 @@ def _spawn(coro) -> None:
     task.add_done_callback(_background.discard)
 
 
-def _model_paths(cfg) -> dict[str, str]:
-    """The model file sent to a device per `model` kind: the configured one, else the release's."""
-    return {"wake": cfg.wake_model or RELEASE_WAKE_MODEL, "vad": cfg.vad_model or RELEASE_VAD_MODEL}
+def _model_paths(cfg) -> dict[str, tuple[str, str]]:
+    """The model sent to a device per `model` kind, as (name, path): the configured one, else
+    the release's. A wake value that names a model in wake_model_files opens that model's
+    file; any other value is the path of the file and its own name."""
+    wake = cfg.wake_model or RELEASE_WAKE_MODEL
+    vad = cfg.vad_model or RELEASE_VAD_MODEL
+    return {"wake": (wake, wake_model_files().get(wake, wake)), "vad": (vad, vad)}
+
+
+def wake_model_files() -> dict[str, str]:
+    """The wake-word models a device's wake_model can name, {name: path}: every .tflite under
+    microWakeWord/ except the VAD model's directory, the path relative to the working
+    directory (where send_model opens it). microWakeWord/esphome/<stem>.tflite is
+    esphome/<stem>; microWakeWord/v<N>/…/zakhar.tflite is zakhar/zakhar_v<N> and any other
+    <stem>.tflite under v<N> is zakhar/zakhar_v<N>_<stem>."""
+    files = {}
+    for p in Path("microWakeWord").rglob("*.tflite"):
+        if p.is_relative_to("microWakeWord/vad"):
+            continue
+        top = p.parts[1]
+        if top == "esphome":
+            name = f"esphome/{p.stem}"
+        else:
+            name = f"zakhar/zakhar_{top}" + ("" if p.stem == "zakhar" else f"_{p.stem}")
+        files[name] = p.as_posix()
+    return files
 
 
 def list_wake_models() -> list[str]:
-    """The wake-word models a device's wake_model can name: every .tflite under microWakeWord/
-    except the VAD model's directory, as paths relative to the working directory (where
-    send_model opens them), in natural version order (v8 before v10)."""
-    paths = [p.as_posix() for p in Path("microWakeWord").rglob("*.tflite")
-             if not p.is_relative_to("microWakeWord/vad")]
-    return sorted(paths, key=lambda p: [int(t) if t.isdigit() else t for t in re.split(r"(\d+)", p)])
+    """The names of wake_model_files in natural version order (v8 before v10)."""
+    return sorted(wake_model_files(),
+                  key=lambda n: [int(t) if t.isdigit() else t for t in re.split(r"(\d+)", n)])
 
 
 class CaptureBusyError(Exception):
@@ -200,7 +221,7 @@ class Connection:
         self.session = None
         self.session_open = False
         self.cutoffs = None  # (wake, vad) last sent in `config`
-        self.models: dict[str, str] = {}  # kind -> the path last sent in `model`
+        self.models: dict[str, str] = {}  # kind -> the name last sent in `model`
         self.closed = False
         self.capture_buf: bytearray | None = None  # mic audio while a capture runs
         self._capture_fut: asyncio.Future | None = None
@@ -245,18 +266,18 @@ class Connection:
         self.cutoffs = (cfg.wake_cutoff, cfg.vad_cutoff)
         self.send({"type": "config", "wake_cutoff": cfg.wake_cutoff, "vad_cutoff": cfg.vad_cutoff})
 
-    def send_model(self, kind: str, path: str) -> bool:
-        """Send the .tflite file at `path` as the device's `kind` model: `model`, then its
-        bytes in 0x03 frames. Queued as no play stream, so a wake does not purge them. A file
-        that cannot be read is logged and nothing goes out (False)."""
+    def send_model(self, kind: str, name: str, path: str) -> bool:
+        """Send the .tflite file at `path` as the device's `kind` model named `name`: `model`,
+        then its bytes in 0x03 frames. Queued as no play stream, so a wake does not purge them.
+        A file that cannot be read is logged and nothing goes out (False)."""
         try:
             with open(path, "rb") as f:
                 data = f.read()
         except OSError as e:
             logger.error(f"{self.name}: {kind} model not sent: {e}")
             return False
-        self.models[kind] = path
-        self.send({"type": "model", "kind": kind, "name": path, "size": len(data)})
+        self.models[kind] = name
+        self.send({"type": "model", "kind": kind, "name": name, "size": len(data)})
         for i in range(0, len(data), PLAY_FRAME_BYTES):
             self._enqueue(bytes([MODEL]) + data[i:i + PLAY_FRAME_BYTES])
         return True
@@ -649,14 +670,15 @@ class DeviceManager:
 
     def reload_model(self, device_name: str) -> dict:
         """The direct reload command: re-read both model files and send them; the device
-        swaps them without a restart. Returns {device, models: {kind: path sent}}.
+        swaps them without a restart. Returns {device, models: {kind: name sent}}.
         Raises LookupError (unknown device) or RuntimeError (offline)."""
         target = self._find(device_name)
         conn = target.conn
         if conn is None:
             raise RuntimeError(f"{device_name} is offline")
         logger.info(f"{device_name}: reloading the models")
-        sent = {kind: path for kind, path in _model_paths(target.cfg).items() if conn.send_model(kind, path)}
+        sent = {kind: name for kind, (name, path) in _model_paths(target.cfg).items()
+                if conn.send_model(kind, name, path)}
         return {"device": device_name, "models": sent}
 
     def wake_prob(self, device_name: str) -> dict:
@@ -734,8 +756,8 @@ class DeviceManager:
             old.close(CLOSE_REPLACED)
             await device.pipeline.on_disconnect()
         conn.send_config(cfg)
-        for kind, path in _model_paths(cfg).items():
-            conn.send_model(kind, path)
+        for kind, (model, path) in _model_paths(cfg).items():
+            conn.send_model(kind, model, path)
         logger.info(
             f"{name}: connected ({conn.fw}, speaker={conn.speaker}"
             f"{', replaced the older connection' if old else ''})"
@@ -745,7 +767,7 @@ class DeviceManager:
     async def reconfigure(self) -> None:
         """Apply the device config to live connections: close a device that left the
         config or got disabled, send `config` to one whose cutoffs changed and a model
-        whose path changed."""
+        whose name changed."""
         names = {cfg.name for cfg in self.rt.core.devices}
         for name, device in self._devices.items():
             if name not in names and device.conn is not None:
@@ -762,9 +784,9 @@ class DeviceManager:
                 continue
             if conn.cutoffs != (cfg.wake_cutoff, cfg.vad_cutoff):
                 conn.send_config(cfg)
-            for kind, path in _model_paths(cfg).items():
-                if conn.models.get(kind) != path:
-                    conn.send_model(kind, path)
+            for kind, (model, path) in _model_paths(cfg).items():
+                if conn.models.get(kind) != model:
+                    conn.send_model(kind, model, path)
 
     async def start(self) -> None:
         app = web.Application()

@@ -274,21 +274,48 @@ async def test_models_follow_the_config_and_the_reload_command(srv, tmp_path):
     assert (await dev.model())[0] == {"type": "model", "kind": "vad", "name": str(other), "size": 100}
 
 
-def test_wake_models_list_in_version_order_without_vad(tmp_path, monkeypatch):
+async def test_a_wake_model_name_sends_its_file(srv, tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    for path in ("v10/candidates/angular_s10.tflite", "v10/candidates/angular_s08.tflite", "v31/model/zakhar.tflite",
-                 "v8/model/zakhar.tflite", "v19/zakhar.tflite", "v1/model/zakhar.tflite", "vad/vad.tflite",
-                 "v8/model/notes.txt"):
+    path = tmp_path / "microWakeWord/v28/model/zakhar.tflite"
+    path.parent.mkdir(parents=True)
+    path.write_bytes(b"\x05" * 100)
+    dev = await srv.connect()
+    await dev.recv()  # config
+    await dev.model()
+    await dev.model()
+
+    # `model` carries the name, the bytes come from the file it names.
+    srv.svc.apply({"core": {"devices": [{"name": "kitchen", "wake_model": "zakhar/zakhar_v28"}]}})
+    await srv.manager.reconfigure()
+    assert await dev.model() == ({"type": "model", "kind": "wake", "name": "zakhar/zakhar_v28", "size": 100},
+                                 b"\x05" * 100)
+    # The name already sent is not sent again.
+    await srv.manager.reconfigure()
+    with pytest.raises(asyncio.TimeoutError):
+        await dev.model(timeout=0.2)
+    assert srv.manager.reload_model("kitchen")["models"]["wake"] == "zakhar/zakhar_v28"
+
+
+def test_wake_models_are_named_and_listed_in_version_order_without_vad(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    for path in ("v10/candidates/angular_s10_hardneg.tflite", "v10/candidates/angular_s08_hardneg.tflite",
+                 "v31/model/zakhar.tflite", "v8/model/zakhar.tflite", "v19/zakhar.tflite", "v1/model/zakhar.tflite",
+                 "esphome/okay_nabu.tflite", "vad/vad.tflite", "v8/model/notes.txt"):
         (tmp_path / "microWakeWord" / path).parent.mkdir(parents=True, exist_ok=True)
         (tmp_path / "microWakeWord" / path).write_bytes(b"")
     assert device_server.list_wake_models() == [
-        "microWakeWord/v1/model/zakhar.tflite",
-        "microWakeWord/v8/model/zakhar.tflite",
-        "microWakeWord/v10/candidates/angular_s08.tflite",
-        "microWakeWord/v10/candidates/angular_s10.tflite",
-        "microWakeWord/v19/zakhar.tflite",
-        "microWakeWord/v31/model/zakhar.tflite",
+        "esphome/okay_nabu",
+        "zakhar/zakhar_v1",
+        "zakhar/zakhar_v8",
+        "zakhar/zakhar_v10_angular_s08_hardneg",
+        "zakhar/zakhar_v10_angular_s10_hardneg",
+        "zakhar/zakhar_v19",
+        "zakhar/zakhar_v31",
     ]
+
+
+def test_the_release_wake_model_is_a_model_of_the_repo():
+    assert device_server.RELEASE_WAKE_MODEL in device_server.wake_model_files()
 
 
 async def test_wake_session_end_to_end(srv):
