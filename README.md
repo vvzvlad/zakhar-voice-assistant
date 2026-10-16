@@ -252,8 +252,10 @@ Debug and dataset calls of the panel API (`http://<host>:8201`), meant for an ag
 
 The Voice PE speaker firmware lives in `firmware/` — plain ESP-IDF C. Its
 `components/zakhar_link` is the device side of the protocol and is shared with the
-espanel wall panel. The device id and the server URL are the `CONFIG_ZAKHAR_*`
-defaults in `firmware/main/Kconfig.projbuild`. The speaker gets its wake-word and VAD
+espanel wall panel. The server URL is the `CONFIG_ZAKHAR_SERVER_URL` default in
+`firmware/main/Kconfig.projbuild`; the device id is the speaker's Wi-Fi MAC (12 lowercase
+hex), as with the panel, so one image gives every speaker its own id, and the name the
+admin panel shows is the label set on the Devices page. The speaker gets its wake-word and VAD
 models from the server at every connection: the release image carries the deployed wake
 model and the VAD model, and `core.devices[].wake_model` / `vad_model` point a device at
 another file. The firmware carries no Wi-Fi password:

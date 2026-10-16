@@ -1,9 +1,5 @@
 menu "zakhar"
 
-config ZAKHAR_DEVICE_ID
-    string "Device id (hello.id, the device name in the server config)"
-    default "main_room"
-
 config ZAKHAR_SERVER_URL
     string "Server WebSocket URL"
     default "ws://10.31.41.59:8200/device"

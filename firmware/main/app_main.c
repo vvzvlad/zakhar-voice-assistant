@@ -297,11 +297,21 @@ void app_main(void)
     gpio_set_level(PIN_AMP_EN, 1);
     ESP_LOGI(TAG, "amplifier on");
 
+    // The hello id is the Wi-Fi MAC as 12 lowercase hex, as the wall panel sends: every speaker
+    // gets its own id from one image, and the human name lives in the server's admin panel.
+    uint8_t mac[6];
+    err = esp_read_mac(mac, ESP_MAC_WIFI_STA);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "no device id, esp_read_mac failed: %s", esp_err_to_name(err));
+        return;
+    }
+    char id[13];
+    snprintf(id, sizeof id, "%02x%02x%02x%02x%02x%02x", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
     char fw[64];
     snprintf(fw, sizeof fw, "voicepe %s", esp_app_get_description()->version);
     const zl_config_t cfg = {
         .url = CONFIG_ZAKHAR_SERVER_URL,
-        .id = CONFIG_ZAKHAR_DEVICE_ID,
+        .id = id,
         .fw = fw,
         .screen = false,
         .mic_channels = 2,
@@ -336,5 +346,5 @@ void app_main(void)
         ESP_LOGE(TAG, "bring-up failed: %s", esp_err_to_name(err));
         return;
     }
-    ESP_LOGI(TAG, "%s up as %s", fw, CONFIG_ZAKHAR_DEVICE_ID);
+    ESP_LOGI(TAG, "%s up as %s", fw, id);
 }
