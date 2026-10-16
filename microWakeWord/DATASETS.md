@@ -1,0 +1,278 @@
+# DATASETS — что где лежит и как читать имена
+
+Опись данных проекта «захар». Собрана сверкой трёх машин (репозиторий на маке, стенд на ноуте,
+обучающая нода), числа проверены `find`/`md5`, а не взяты из документации.
+
+**Главное, что надо знать перед чтением любого имени каталога.** Проектная цель менялась.
+Изначально wake word — **протяжный «захааар»**, а короткий «захар» был hard-негативом «на
+различение длины». Потом [v16/DURATION_CAUSALITY.md](v16/DURATION_CAUSALITY.md) показал, что
+модель — **онсет-детектор** («заха»), длительность она не различает в принципе, и различение
+сняли: **с v28 короткий «захар» — целевое слово и ПОЗИТИВ** (`features_fish_short` truth `true`,
+sw 12.0; см. [README.md](README.md), [v28/TRAINING_REPORT_v28.md](v28/TRAINING_REPORT_v28.md)).
+Протяжный «захааар» — цель прошлой эпохи; он не выброшен, но идёт в тот же позитивный класс.
+
+Имена каталогов и флагов от этой смены не обновлялись, поэтому часть из них **врала** — разбор в
+разделе «Ложные имена» ниже. Переименование по схеме из раздела «Схема именования» этим заходом
+прошло **на четырёх локациях сразу**, а не только в репозитории (проверено `ls -ld` / `stat`
+2026-09-05, ctime переименованных каталогов — 17:46–17:56 того же дня):
+
+| Локация | Что переименовано | Обратные симлинки со старыми именами |
+|---|---|---|
+| **M4, репозиторий** | 11 каталогов в `samples/` и `samples/fish_device_out/` | **да, все 11** — `negative_short_fish_src`, `positive_fish_src`, пять `negative_*_recorded`, `short` / `drawn` / `short_reject` / `drawn_reject` |
+| **M4, свалка `Downloads old`** | боевые каталоги + их `.manifest.tsv` / `.scan.tsv` / `.keep.list` / `.gen.log`, списки и логи, и шесть smoke-каталогов (таблица ниже) | **только у шести smoke-каталогов**; у боевых наборов и у доказательной базы симлинков нет — **старые пути дают ENOENT** |
+| **NODE** `/home/claude/zakhar-mww` | **17 каталогов**: пять `negative_*_recorded`, `fish/{short,drawn}_{train,bench}`, `v29/{neg_sahar_keep,neg_sahar_tr45,coart_pos_keep}`, `nr2/short_negs`, `v4/hardneg_raw`, `v5/mined_all`, `v8/pos_clean`, `device_captures/positive_samples_recorded` | **да, все 17** — старые имена остались симлинками (созданы 17:56, все 17 резолвятся в существующие каталоги) |
+| **LAP** `/Users/claude` | два сырых fish-пула (`pos_short_fish_raw_pool_2606` 11997, `pos_drawn_fish_raw_pool_2606` 23999) и пул близнецов `neg_confus_fish_raw_pool_2608` (3490); симлинки кампании `zakhar-recordings/fish_recap/{short,drawn}` перевешены на новые имена | **да у двух пулов** (`negative_short_fish_src`, `positive_fish_src`); **у `neg_confus_fish_raw_pool_2608` обратного симлинка НЕТ** — старого имени на LAP не осталось |
+
+⚠️ Отсюда два следствия для чтения §1 ниже. **(1)** Пути NODE и LAP, записанные там по СТАРЫМ
+именам (`negative_speech_radio_recorded`, `fish/short_train`, `v29/neg_sahar_keep`,
+`positive_fish_src` и т. п.), сегодня — симлинки, а не каталоги; они рабочие, но `ls -l` покажет
+стрелку. Единственное исключение — LAP `neg_confus_fish_raw_pool_2608`: там работает только новое
+имя. **(2)** В `Downloads old` старые имена (кроме smoke) не работают вовсе. Фактическое
+отображение по свалке (проверено `ls -1d` 2026-09-05):
+
+| Было в `Downloads old` | Стало | Симлинк со старым именем |
+|---|---|---|
+| `zakhar_short_pos_v29/` | `pos_short_fish_raw_pool_2608/` | нет |
+| `zakhar_short_pos_v29.scan.tsv` / `.labels.tsv` / `.log` | `pos_short_fish_raw_pool_2608.scan.tsv` / `.labels.tsv` / `.log` | нет |
+| `zakhar_v29_positives_exact.list` | `pos_short_fish_raw_keep_2608.list` | нет |
+| `zakhar_doubtful.order` | `pos_short_fish_raw_pool_2608.doubtful.order` | нет |
+| `zakhar_neg_fish/` + `.manifest.tsv` / `.scan.tsv` / `.keep.list` / `.gen.log` | `neg_confus_fish_raw_pool_2608/` + те же суффиксы | нет |
+| `zakhar_coart_pos_fish/` + `.manifest.tsv` / `.scan.tsv` / `.keep.list` / `.gen.log` | `pos_coart_fish_raw_pool_2608/` + те же суффиксы | нет |
+| `zakhar_hard_neg_labeled/` | `rej_short_fish_raw_badgen_2608/` | нет |
+| `device_ir_capture/` | `tool_device_ir_capture_2608/` | нет |
+| шесть `zakhar_*smoke*/` | `smoke_{audition,audition_rank,short,short_sorted,prank,rank}_2608/` | **да** |
+
+Сокращения машин: **M4** — мак с репозиторием, **LAP** — ноут-стенд (`/Users/claude`),
+**NODE** — обучающая нода (`/home/claude/zakhar-mww`).
+
+---
+
+## 1. Что где лежит
+
+| Набор (по смыслу) | Что внутри на самом деле | Копии по машинам | Файлов | Авторитетная копия |
+|---|---|---|---|---|
+| **Короткий «захар», сырой fish, июнь** — ТЕКУЩЕЕ ЦЕЛЕВОЕ СЛОВО | Синтез fish.audio, `_short_neu`, med 0.833 с, 11997 voice-id. Сырая студийная синтетика, в обучение НЕ идёт | M4: `samples/pos_short_fish_raw_pool_2606` (386M, бывш. `negative_short_fish_src`); LAP: `/Users/claude/negative_short_fish_src`; LAP: `zakhar-recordings/fish_recap/short` — симлинк, не копия | 11997 | Обе равнозначны (11997/11997 имя+размер+mtime, 45/45 sha1). Рабочая — LAP (её читает стенд), «домашняя» — репо (рядом генератор и 5 логов). **Третьей копии нет, git её не хранит** |
+| **Короткий «захар», сырой fish, август (v29)** | Независимая регенерация тем же скриптом, med 0.694 с; **661** клип, где ASR услышал «сахар» (см. определение ниже), 233 пустых по ASR. **Это НЕ выборка из июньского пула** — 11698/11698 одноимённых пар имеют разные md5, пересечение по контенту = 0 | M4: `Downloads old/pos_short_fish_raw_pool_2608` (бывш. `zakhar_short_pos_v29`) | 14615 | **Единственная копия аудио.** Доказательная база рядом: `.scan.tsv` (14615 строк ASR + шапка), `.labels.tsv` (273 good / 91 bad), `pos_short_fish_raw_keep_2608.list` (9462 чистых, бывш. `zakhar_v29_positives_exact.list`) — она же скопирована в репо, см. §3 |
+| **Протяжный «захааар», сырой fish** — цель прошлой эпохи | a2/a3/a4/a5 = число «а» в тексте; медианы 0.93 / 1.30 / 1.39 / 1.48 с | M4: `samples/pos_drawn_fish_raw_pool_2606` (1.0G, бывш. `positive_fish_src`); LAP: `/Users/claude/positive_fish_src`; LAP: `fish_recap/drawn` — симлинк | 23999 | Обе идентичны (23999/23999 имя+размер+mtime) |
+| **Хард-негативы «сахар» и близнецы** | **60 ТЕКСТОВ × 583 ГОЛОСА** (не 60 голосов): сахар / самовар / заказ / товар / закат / загар / пожар / санитар / гончар и ещё 51 | M4: `Downloads old/neg_confus_fish_raw_pool_2608` (бывш. `zakhar_neg_fish`, 3490); **LAP: `/Users/claude/neg_confus_fish_raw_pool_2608` (3490 — третья полноценная копия аудио, переименована без обратного симлинка)**; NODE: `v29/neg_sahar_keep` → `neg_confus_fish_raw_keep_2608` (3490); NODE: `v29/neg_sahar_tr45` → `neg_confus_fish_raw_keep_tr45links_2608` — 2613 **симлинков**, не копия | 3490 | **M4** — только там `manifest.tsv` (исходный текст синтеза), `scan.tsv`, `keep.list`, `gen.log`. С НОДОЙ побайтово 3490/3490 md5 совпали; с LAP в этом заходе сверена выборка (первые 20 имён, сводный md5 совпал), полная сверка не делалась |
+| **Ко-артикуляция «захар + команда»** | **41 ТЕКСТ × 583 ГОЛОСА**, med 1.72 с; сырой каталог шире keep.list на **258** клипов, из них 155 — где ASR услышал «сахар» | M4: `Downloads old/pos_coart_fish_raw_pool_2608` (бывш. `zakhar_coart_pos_fish`, 2907 сырых); NODE: `v29/coart_pos_keep` (2649 = keep.list) | 2907 / 2649 | **M4** (надмножество + манифесты). Нода = ровно keep.list, md5 2649/2649 |
+| **Брак генерации целевого слова**, помеченный человеком | 91 обрезанный/смазанный «захар» (11 пустых по ASR, «Zah.», «The hair»). Не негативы, а отбраковка | M4: `Downloads old/rej_short_fish_raw_badgen_2608` (бывш. `zakhar_hard_neg_labeled`) | 91 | Выгрузка меток `bad` из `pos_short_fish_raw_pool_2608.labels.tsv`; байты идентичны файлам августовского пула (91/91 md5) |
+| **Device-перезапись КОРОТКОГО слова** | Проиграно колонкой, записано микрофоном устройства, только громкость v1.0 | LAP: `zakhar-recordings/fish_recap/out/short` (969) + `.../out/short_reject` (827) = мастер 1796; LAP: `zakhar-recordings/fish_recap/fish_final/short` (969); M4: `samples/fish_device_out/pos_short_fish_dev_keep_2606` (949, бывш. `short`) + `rej_short_fish_dev_asr_2606` (847, бывш. `short_reject`); NODE: `fish/short_train` 648 + `fish/short_bench` 330 | 1796 захватов | Мастер — **LAP** `zakhar-recordings/fish_recap/out` (там логи кампании; каталог вложен в кампанию `zakhar-recordings/fish_recap/`, от `/Users/claude` короткое `fish_recap/…` не резолвится). Для обучения — **NODE**: 978 = 969 ∪ 949, voice-disjoint сплит |
+| **Device-перезапись ПРОТЯЖНОГО слова** | То же для a2..a5 | LAP: `zakhar-recordings/fish_recap/out/drawn` (14790) + `.../out/drawn_reject` (4659) = мастер 19449; LAP: `zakhar-recordings/fish_recap/fish_final/drawn` (15735); M4: `samples/fish_device_out/pos_drawn_fish_dev_keep_2606` (1778, бывш. `drawn`) + `rej_drawn_fish_dev_asr_2606` (1821, бывш. `drawn_reject`) — ранний срез 18.5%; NODE: `fish/drawn_train` 10170 + `drawn_bench` 5664 | 19449 захватов | Мастер — LAP; обучающий сплит — NODE (15834 = 15735 + 99) |
+| **section/yandex через устройство, 3 громкости** | ⚠️ **Форма слова СПОРНА:** на ноде в `training_parameters_v29.yaml` строка с `features_nr2_pos` комментарием зовёт производные фичи «захааар» (искать содержимым, из `~/zakhar-mww` на .226: `grep -n features_nr2_pos training_parameters_v29.yaml` — номерами строк на ноду не указываем, см. §«Номерами строк на ноду не указываем» ниже), а `.autopilot` использует подмножество clean-16 из НЕГО ЖЕ как эталон **короткого** «захар» | NODE: `positive_mix_recorded` (1285 ⊃ репо); M4: `samples/positive_mix_recorded` (1220, 192M); LAP: `asr_v03/positive_mix_recorded` (251) + `asr_loud/positives` (647); первичная запись LAP: `zakhar-recordings/positive_recorded` 1012 + heldout 337 | 1285 / 1220 / 1349 | **NODE** (надмножество, питает `features_nr2_pos`); первичная запись — LAP c `run.log` |
+| **Сырые источники позитивов (не через тракт)** | 107 реальных людей + 343 Yandex TTS, протяжное слово | M4: `samples/positive_samples_real_people` (107, 13M) и `positive_samples_yandex` (343, 15M) | 450 | Репо — **единственные аудиофайлы под git внутри `microWakeWord/samples/`** (остальное там отрезано `.gitignore:31`). Всего под git 494 wav: эти 450 плюс 44 служебных вне `samples/` — `assets/chimes` 22, `microWakeWord/v8/capture_playback/examples` 16, `microWakeWord/v7` 6 |
+| **Негативы: радио / OpenSTT через устройство** | `tv_NNNNN__v0.6` / `__v1.0`, 10.34 ч | LAP: `zakhar-recordings/negative_speech_radio_recorded` (**1231** wav + два лога кампании `run_v0.6.log` / `run_v1.0.log` = 1233 записи в каталоге); NODE: `negative_speech_radio_recorded` (1231); M4: `samples/neg_radio_openstt_dev_2606` (1231, 1.1G, бывш. `negative_speech_radio_recorded`) | 1231 | LAP (первичная запись + исходники `zakhar-recordings/_assets/openstt_v0.6.wav` / `_v1.0.wav`); рабочая — NODE |
+| **Негативы: тишина / музыка / ТВ-речь / пылесос** | Блоки по 30 с | M4: `samples/neg_silence_room_dev_2606` (382, 438M) · `neg_music_room_dev_2606` (145, 180M) · `neg_tv_piper_dev_2606` (477, 440M) · `neg_vacuum_room_dev_2606` (117, 108M) — все бывшие `negative_*_recorded`; NODE держит одноимённые старым именам каталоги (имена файлов совпадают 1:1); LAP держит доразбитые оригиналы — `tv_speech` **359** + `tv_speech_heldout` **119** и `negative_noise_vacuum` **90** + `negative_noise_vacuum_heldout` **30** (считаны именно файлы `*.wav`: в `tv_speech` и в `negative_noise_vacuum` лежит ещё по одному `run.log`, без фильтра по расширению выйдет 360 и 91), **тишины и музыки на LAP нет** | 1121 | NODE (из них строятся фичи). Для silence и music копий ровно две — NODE и репо |
+| **Ассеты аугментации (IR + шум)** | Свип 30 Гц–7.6 кГц / 6 с → `device_ir.wav` 0.30 с; `noise.wav` 31.97 с | M4: `Downloads old/tool_device_ir_capture_2608` (бывш. `device_ir_capture`, вся цепочка измерения); NODE: `device_ir/` + `device_noise/` (md5 совпал побайтово) | 8 / 2 | **M4** (там `params.json`, `sweep.wav`, три записи `sweep_rec_01..03.wav`, `test.wav` и оба готовых файла `device_ir.wav` / `noise.wav` — 8 файлов) |
+| **Модели** | v28 «angmax» — прод | M4: `v28/model/zakhar.tflite` (77728 B, md5 `7dc421ea…`); NODE: `angmax_deploy/zakhar.tflite` | 2 | Репо (на него ссылается прошивка `esphome/zakhar-voice-preroll.yaml:85`) |
+
+### Как считаны «сахар»-подобные — определение обязательно
+
+Число «сахар»-подобных клипов бессмысленно без регулярки и колонки: считать надо **колонку 3
+(`text`) в `.scan.tsv`** — это то, что услышал независимый ASR, — и только по ней.
+
+```
+cut -f3 pos_short_fish_raw_pool_2608.scan.tsv | grep -ciE 'sahar|сахар'   # → 661
+```
+
+**661** = **431** латиницей (`grep -ciE 'sahar'`: `Sahar.`, `Sahara.`) + **230** кириллицей
+(`grep -ci 'сахар'`); пересечения нет — 431 + 230 = 661 ровно.
+
+Почему кириллической регулярки мало: в колонке `text` того же скана **5375** текстов записаны
+только латиницей, **9000** только кириллицей, **7** смешанных, **233** пустых (всего 14615 строк
+тела). То есть латиница — **5375 из 14382** непустых = **37,4 %**, не половина. Чисто
+кириллическая регулярка даёт 230 вместо 661, то есть занижает счёт в **2,9 раза** (661 / 230 =
+2,87), а не вдвое.
+
+⚠️ Ходившее ранее число **925** получено регуляркой `'sahar|сахар|сахара|zahara'` и **завышено**:
+`сахара` — подмножество `сахар` и не добавляет ничего, а `zahara` добавляет **264** строки, где
+ASR услышал ровно ЦЕЛЕВОЕ слово («Zahara» = «захара» латиницей). 925 − 264 = 661. Не использовать
+925 как счёт конфузов.
+
+Для ко-артикуляционного пула та же арифметика по своим файлам и по той же колонке 3 (`text`)
+скана: каталог 2907, `.keep.list` 2649, разница **258**; из этих 258 — **155** с кириллическим
+«сахар» (`grep -ciE 'сахар'`), **158** по `'sahar|сахар'`, **255** вообще без подстроки
+«захар»/`zahar`/`zakhar` в тексте. В `.keep.list` клипов с «сахар» — **0**. (Все числа этого абзаца
+пересчитаны заново 2026-09-05 сопоставлением `.scan.tsv` с `.keep.list` по имени файла — они
+сошлись с тем, что стояло раньше.)
+
+---
+
+## 2. Схема именования
+
+```
+<role>_<form>_<source>_<tract>_<stage>[_<split>][_<epoch>]
+```
+
+| Поле | Значения | Смысл |
+|---|---|---|
+| `role` | `pos` / `neg` / `eval` / `rej` / `dead` / `tool` | Как набор входит в обучение **сегодня**. `rej` — отбраковка (не обучается вообще), `dead` — артефакт прошлой эпохи, оставлен как запись |
+| `form` | `short` / `drawn` / `coart` / `confus` / `radio` / `tv` / `silence` / `music` / `vacuum` / `mixed` | Форма целевого слова либо класс негатива. `confus` — фонетические близнецы («сахар», «загар», «товар») |
+| `source` | `fish` / `yx` / `piper` / `silero` / `real` / `openstt` / `room` / `mined` | Кто произнёс |
+| `tract` | `raw` / `dev` | `raw` — студийный синтез или прямая запись; `dev` — прошло через тракт устройства (проиграно колонкой, записано микрофоном) |
+| `stage` | `pool` / `keep` / `rej` / `feat` | `pool` — сырой выхлоп генератора (в обучение НЕ идёт), `keep` — после ASR / ручного фильтра, `feat` — собранный RaggedMmap |
+| `split` | `train` / `bench` / `heldout` | Присутствует только там, где сплит физически материализован |
+| `epoch` | `2606` / `2608` либо `v28` / `v29` | ГГММ прогона генерации либо версия кампании |
+
+Обоснования — каждое из уже случившейся в проекте ошибки, а не из вкуса:
+
+1. **`role` отдельно от `form`** — именно их слияние породило `negative_short_fish_src`. Роль
+   меняется при смене цели, форма — никогда. При следующей смене цели переименовывается один
+   префикс, а не весь смысл.
+2. **`tract` обязателен** — `positive_samples_yandex` (raw) и её device-версия внутри
+   `positive_mix_recorded` дают **противоположные** выводы в абляции #E; README прямо запрещает
+   брать сырые в обучение (`features_v8_synth` sw 2.0 — чистая синтетика почти не помогает).
+   Из имени это должно быть видно.
+3. **`stage` обязателен** — августовский пул (14615, ныне `pos_short_fish_raw_pool_2608`) и
+   «пригодные позитивы» (9462) — разные вещи, различаются только внешним `.list`. Аналогично
+   ко-артикуляционный пул (2907, ныне `pos_coart_fish_raw_pool_2608`) против keep.list 2649:
+   обучение прямо с каталога затягивает в позитивы **258** лишних клипов, из них 155 — прямые
+   «Сахар, включи свет».
+4. **`rej` вместо `reject`** — чтобы каталог отбраковки нельзя было прочитать как «негативы для
+   обучения». `*_reject` читался именно так.
+5. **`epoch` в имени, а не только в mtime** — два пула короткого слова (июнь 11997 и август 14615)
+   отличаются побайтово, но по именам файлов неразличимы (имя детерминировано voice-id). Без даты
+   в имени каталога они сливаются в одну сущность — что уже однажды произошло.
+6. **Фичи зеркалят имя источника**: `feat_<то же самое>`. Но **переименовывать существующие
+   `features_*` НЕЛЬЗЯ**: на них ссылаются **от 1 до 81** из **86** `training_parameters*.yaml`
+   **в корне** `/home/claude/zakhar-mww`. База указана явно, чтобы спор не повторялся: во всём
+   дереве ноды таких файлов 91 — 86 в корне плюс 5 архивных (`output_v3/` два, `output_v4/`,
+   `output_v5/`, `output_v8/` по одному); архивные в счёт не берутся. Каталогов `features_*` на
+   ноде 42, и ни на один не ссылается ноль конфигов: минимум — **1** (ровно 12 каталогов:
+   `features_nr2_pos_no03`, `features_v11_yandex`, `features_v3c_real`, `features_v3c_synth`,
+   `features_v4_real`, `features_v4_synth`, три `features_v9b_*`, три `features_vs_*`), максимум —
+   **81** (`features_v4_hardneg`; далее `features_v5_mined` 80 и три `features_v8_*` по 72).
+   Переименование обесценивает сопоставимость с 85 обученными моделями. Правило — только для
+   новых сборок; для старых на ноде кладётся `features_MAP.md`.
+
+Дополнительно: рядом с каждым набором обязателен `MANIFEST.tsv` (исходный текст синтеза, если
+синтез) и/или `scan.tsv` (независимый ASR). Правило: **каталог без манифеста считается
+недоказанным**, что бы ни было написано в имени.
+
+---
+
+## 3. Единственные копии — НЕ УДАЛЯТЬ
+
+Каждый пункт ниже существует в одном экземпляре либо является единственной доказательной базой.
+Проверено сверкой всех трёх машин.
+
+* **Доказательная база (манифесты, сканы, keep-списки, логи) — теперь в ДВУХ экземплярах.**
+  Оригиналы: `Downloads old/*.manifest.tsv`, `*.scan.tsv`, `*.keep.list`, `*.gen.log`,
+  `pos_short_fish_raw_pool_2608.labels.tsv` / `.log` / `.doubtful.order`,
+  `pos_short_fish_raw_keep_2608.list` (все — под новыми именами, старых на диске больше нет).
+  Копия: **`microWakeWord/datasets/manifests/`** в репозитории — 13 файлов, побайтово сверены
+  `cmp` с оригиналами (13/13 identical). Это единственная база по содержимому `neg_sahar_keep` и
+  `coart_pos_keep`: на ноде **под `fish/*` и `v29/*`** `find` по `*manifest*` / `*.scan.tsv` не
+  находит ничего. (Формулировку держать узкой: по ВСЕМУ дереву ноды `*.scan.tsv` тоже ноль, но
+  `*manifest*` даёт 9 попаданий — все посторонние: файлы внутри `venv*/`, `v10/mus_hardneg/manifest.json`
+  и два `generate_manifest.py`. Дословная команда без ограничения области опровергает верный по
+  сути тезис.)
+  ⚠️ Копия лежит в рабочем дереве и **не** отрезана `.gitignore`, но пока **не закоммичена**
+  (`git status` показывает её как `??`) — под git она попадёт только первым коммитом. Оригиналы
+  оставлены на месте, на самой заполненной машине.
+* **M4 `Downloads old/pos_short_fish_raw_pool_2608` (14615, бывш. `zakhar_short_pos_v29`)** —
+  единственная копия аудио августовского пула короткого слова. Доказано независимой генерацией:
+  это не выборка из июньского.
+* **M4 `Downloads old/tool_device_ir_capture_2608` (бывш. `device_ir_capture`, 8 файлов)** —
+  единственная полная цепочка измерения IR (`params.json`, свип, три записи). На ноде только два
+  готовых файла, на которых стоит вся гипотеза v29.
+* **M4 `Downloads old/rej_short_fish_raw_badgen_2608` (91, бывш. `zakhar_hard_neg_labeled`)** —
+  мусор по старому имени, но это материализованная ручная разметка. Переименован, не удалён.
+* **M4 репо `samples/positive_samples_real_people` (107) и `positive_samples_yandex` (343)** —
+  единственные аудиофайлы под git внутри `microWakeWord/samples/` (всего в репозитории под git
+  494 wav, остальные 44 — служебные, вне `samples/`).
+* **M4 репо `samples/neg_silence_room_dev_2606` (382) и `neg_music_room_dev_2606` (145)** — на
+  ноуте этих классов нет; копий всего две (репо + нода).
+* **M4 репо + LAP: сырые пулы `pos_short_fish_raw_pool_2606` (11997) и
+  `pos_drawn_fish_raw_pool_2606` (23999)** — ровно две копии на две машины, git их не хранит
+  (`.gitignore:31`).
+* **M4 репо `samples/fish_device_out/_stt_drawn.manifest.tsv` и `_stt_short.manifest.tsv`** —
+  вердикт ASR + расшифровка на каждый из **3599** и **1796** клипов (в файлах 3600 и 1797 строк —
+  первая строка шапка `verdict/transcription/file`). Сами каталоги `_stt_*` были дублями
+  соседних `pos_*` / `rej_*` (1:1 по именам, побайтово идентичны на выборке) и удалены;
+  манифесты — всё, что от них осталось ценного.
+* **Документы:** `v27/HONEST_EVAL_2026-06-15.md`, `v27/AUDIT_2026-06-14.md`,
+  `v27/STATE_LEAK_BUG.md`, `v16/DURATION_CAUSALITY.md`, `v10/HYPOTHESIS_REGISTRY.md`,
+  `v5/SUMMARY_ALL_VERSIONS.md`, `v8/capture_playback/` (живой инструментарий перезаписи через
+  устройство), NODE `.autopilot/{GOAL,PROGRESS,DECISIONS}.md` (все три на месте, рядом ещё
+  `PLAN.md`, `guardrails.md`, `operating-protocol.md`, `telegram.md`),
+  **LAP `/Users/claude/zakhar-recordings/_smoke/`** — 29 записей, код, породивший все счёты в
+  `fish_recap` (`audit_reject_large.py`, `final_sort_new.py`, `resort_existing.py`,
+  `smoke_orchestrator.py`, `stt_sort.py`, `source_validate.py` + калибровочные `_cal*` / `_probe*.wav`).
+  ⚠️ Каталог **на НОУТЕ, не на ноде**: `find / -maxdepth 7 -type d -name _smoke` по ноде не
+  находит ничего, там же лежит и сам `fish_recap`. Раньше здесь стоял адрес «NODE `_smoke/`» —
+  проверка «копия на месте?» по нему давала ENOENT и читалась как «копия потеряна».
+* **M4 репо `data/config.json` и два `.bak`** — мусорные по форме, но содержат API-ключи (оттуда
+  берётся ключ fish.audio). Не удалять не глядя и **не шарить**.
+
+---
+
+## 4. Ложные имена и что они значили
+
+Историческая причина у всех одна — смена цели, описанная в шапке. Первоисточник большинства
+ложных имён — `fish_audio/README.md` и дефолты `gen_fish_positives.py` (оба исправлены этим
+заходом).
+
+В левой колонке — **старое (ложное) имя**, то есть исторический путь. У строк со статусом
+«переименован» каталога под этим именем на диске уже нет: в репозитории и на NODE он живёт
+симлинком, в `Downloads old` (кроме smoke-каталогов) — не живёт вообще; на LAP симлинки есть у
+двух fish-пулов и нет у `neg_confus_*` (полная раскладка — таблица четырёх локаций в шапке).
+Актуальное имя ищи в колонке «Статус».
+
+| Каталог (СТАРОЕ имя) | Что обещает имя | Что внутри на самом деле | Почему так вышло | Статус |
+|---|---|---|---|---|
+| `samples/negative_short_fish_src` (11997) | негативы | **Текущий целевой ПОЗИТИВ** — короткий «захар» | Дефолт `--out-short` из эпохи «short = негатив» | ✅ **переименован** → `pos_short_fish_raw_pool_2606` (симлинк со старым именем оставлен) |
+| `samples/positive_fish_src` (23999) | позитивы | Позитивы **прошлой** эпохи — протяжный «захааар» (a2..a5). Имя не врёт, но скрывает форму слова; вдобавок бакет a2 (6000 файлов, 25%) по длине сильно перекрывается с коротким (медианы 0.93 против 0.83, AUC разделимости 0.63) | Общее имя из эпохи, когда протяжный был единственным позитивом | ✅ **переименован** → `pos_drawn_fish_raw_pool_2606` |
+| `samples/fish_device_out/short_reject` (847), `drawn_reject` (1821) | негативы («reject») | Отбраковка ASR, в основном галлюцинации whisper. Счёт **раздельный по манифестам**, по ТОЧНОМУ равенству строки транскрипции: `short_reject` — «Субтитры сделал DimaTorzok» **144**, «Продолжение следует...» **24**; `drawn_reject` — те же две фразы **415** и **144**. Подстрочный счёт (`~ /DimaTorzok/`) даёт больше: 181 / 29 по короткому и 452 / 150 по протяжному. Все эти строки идут с вердиктом `NO` и лежат ровно в `rej_*` (168 / 168 и 559 / 559); в `pos_*_keep_2606` их 0. **В обучение не идёт ни в каком классе** | `reject` читается как «негативы» | ✅ **переименованы** → `rej_short_fish_dev_asr_2606` / `rej_drawn_fish_dev_asr_2606` |
+| `samples/fish_device_out/short`, `drawn` | нейтрально | Device-перезапись, прошедшая ASR-фильтр — оба позитивы | Из имени не видно ни тракта, ни стадии | ✅ **переименованы** → `pos_short_fish_dev_keep_2606` / `pos_drawn_fish_dev_keep_2606` |
+| `samples/negative_*_recorded` (5 классов) | негативы | Имя верное по роли, но не говорит ни класса шума, ни источника, ни тракта; `negative_speech_recorded` — это ТВ-речь (piper), а `negative_speech_radio_recorded` — OpenSTT-радио, и по имени они путаются | Именовались по мере появления | ✅ **переименованы** → `neg_{radio,silence,music,tv,vacuum}_*_dev_2606` |
+| `samples/positive_mix_recorded` (1220) | позитивы, «микс» | Микс section-real + Yandex через устройство. **Форма слова не установлена** — v29.yaml зовёт «захааар», `.autopilot` использует его же clean-16 как эталон короткого | Спор не разрешён | ⛔ **НЕ переименован** — до ASR-прогона по clean-16 (43 клипа). Иначе в имя зашьётся ошибка |
+| `samples/positive_samples_real_people`, `positive_samples_yandex` (450) | сырые позитивы | Верно, но `raw` в имени нет — а именно raw-вариант в обучение брать запрещено | Ранняя эпоха | ⛔ **НЕ переименован** — эти 450 файлов под git, переименование = коммит с 450 переименованиями |
+| `models/` (210M) | модели wake word | Piper TTS ×2, Silero VAD, Vosk — **рантайм ассистента**, к wake word отношения не имеет | Общее имя в проекте про wake word | ⛔ **НЕ переименован** — завязан на код сервера ассистента и на `.gitignore:16` |
+| `microWakeWord/v28/` | версия модели | Верно | — | ⛔ **НЕ переименовывать никогда** — на него ссылается `esphome/zakhar-voice-preroll.yaml:85`; переименование ломает сборку прошивки |
+| M4 `Downloads old/zakhar_hard_neg_labeled` (91) | hard-негативы (другое слово) | Побайтовые копии **бракованных позитивов** августовского пула; метка в `labels.tsv` — не «negative», а «bad» | Выгрузка ручной отбраковки в каталог с «negative» в имени | ✅ **переименован** → `rej_short_fish_raw_badgen_2608` (вне репо; обратного симлинка нет) |
+| M4 `Downloads old/zakhar_short_pos_v29` (14615) | позитивы | Имя честное, но это **сырой пул**, не готовый набор: 661 клип, где ASR услышал «сахар», 233 пустых по ASR | Нет `stage` в имени | ✅ **переименован** → `pos_short_fish_raw_pool_2608`; keep-список рядом — `pos_short_fish_raw_keep_2608.list` (9462 строки). Вне репо; обратного симлинка нет |
+| M4 `Downloads old/zakhar_neg_fish` (3490), `zakhar_coart_pos_fish` (2907), `device_ir_capture` (8) | — | Близнецы «сахар», ко-артикуляция, цепочка измерения IR | Ранние рабочие имена из свалки | ✅ **переименованы** → `neg_confus_fish_raw_pool_2608`, `pos_coart_fish_raw_pool_2608`, `tool_device_ir_capture_2608` (вместе с одноимёнными `.manifest.tsv` / `.scan.tsv` / `.keep.list` / `.gen.log`). Вне репо; обратных симлинков нет |
+| NODE `fish/short_train` (648) | имя нейтральное и **верное** | Короткий «захар», **обучается позитивом** (`features_fish_short` truth `true`, sw 12.0 в angmax / v29 / exp1-4) | — | Врало не имя, а проза вокруг — и она **правлена в этом заходе** (проверено на ноде). **Было:** «# short negatives» в `nr2/fish_prep.sh`, «short «захар» negatives» в `nr2/fish_split.py`, «short negatives / truth false» в `FISH_RECIPE.md`. **Стало** — искать содержимым, не номером строки (эти файлы на ноде правятся каждым заходом, любой `:NN` протухает): из `~/zakhar-mww` `grep -n POSITIVE nr2/fish_prep.sh nr2/fish_split.py` даёт «short «захар» is a POSITIVE, the target word since v28 (truth: true, sw 12.0)» и «short «захар» POSITIVES … Since v28 the short form is the TARGET word, not a negative»; `grep -n "ПОПРАВКА ЭПОХИ" FISH_RECIPE.md` — врезку эпохи в шапке; `grep -n "POSITIVE \*today\*" FISH_RECIPE.md` — «**features_fish_short** — short «захар» is a POSITIVE *today*, the target word since v28». Каталог не трогали |
+| NODE `nr2/short_negs` (1842) | негативы (короткие) | Синтетика: клипы `positive_mix_recorded`, растянутые time-stretch ровно до 1.0 и 1.4 с | Рычаг прошлой эпохи «наказать короткую форму». `features_nr2_short` не используется ни одним действующим конфигом (только 12 старых) | вне репо; честное имя — `dead_shortstretch_synth_2606` |
+
+### Что ещё врёт, но не именем
+
+* `fish_audio/README.md` — первоисточник формулировки «short → негативы». **Исправлен.**
+* `gen_fish_positives.py` — help у `--out-short` («short NEGATIVES dir»), лог `short(negatives)`,
+  докстринг модуля. **Исправлены.** Дефолты выходных каталогов: без аргументов — курированные пулы
+  `pos_drawn_fish_raw_pool_2606` / `pos_short_fish_raw_pool_2606` (режим «дозалить в них же»); с
+  одним `--out X` короткая половина **производная** — `X_short`, чтобы пробный прогон вида
+  `--out /tmp/newrun` не дописывал ничего в курированный пул (сверка 11997/11997 с копией на LAP
+  должна оставаться валидной).
+* `microWakeWord/README.md:3` — утверждение «короткий «захар» НЕ цель», противоречившее строке 25
+  того же файла. **Снято.**
+* `microWakeWord/README.md`, раздел «Деплой: v28» — стояли cutoff 0.90 и размер 78992 B.
+  Фактически залито **0.80** и **77728 B** ([v28/DEPLOY_v28.md](v28/DEPLOY_v28.md), `zakhar.json`,
+  `esphome/zakhar-voice-preroll.yaml`). **Исправлено**, заодно приведены recall-числа именно
+  залитой (свёрнутой) модели, а не незалитого angular.
+* `v14/TZ_night_real_positives.md:24-25` — упоминает старые имена `negative_*_recorded`. Оставлено
+  как есть: это датированное ТЗ прошлого раунда, оно описывает архив, который реально уезжал на
+  ноду под теми именами. Симлинки делают его по-прежнему рабочим.
+* NODE `nr2/fish_prep.sh`, `nr2/fish_split.py`, `FISH_RECIPE.md` — «short negatives /
+  truth false» против фактического `features_fish_short truth: true sw 12`. **Исправлено**;
+  нода — одна из четырёх локаций этого захода (см. таблицу локаций в шапке), а не «вне» него.
+  ⚠️ **Номерами строк на ноду не указываем.** Эти файлы правятся каждым заходом, и любой
+  записанный здесь `:NN` протухает к следующему (так уже случилось дважды: указатель
+  «`FISH_RECIPE.md:4,11,35`» стал мимо, а сменивший его «`:55-57`» — тоже). Ищи содержимым,
+  из `~/zakhar-mww` на .226:
+
+  ```sh
+  grep -n POSITIVE nr2/fish_prep.sh nr2/fish_split.py   # комментарии обоих скриптов
+  grep -n "ПОПРАВКА ЭПОХИ" FISH_RECIPE.md               # врезка эпохи в шапке
+  grep -n "POSITIVE \*today\*" FISH_RECIPE.md           # строка про features_fish_short
+  grep -n "short negatives" FISH_RECIPE.md              # единственное вхождение — сама врезка
+  ```
+
+  Что должно найтись. Скрипты: `fish_prep.sh` — «short «захар» is a POSITIVE, the target word
+  since v28 (truth: true, sw 12.0)»; `fish_split.py` — «short «захар» POSITIVES … Since v28 the
+  short form is the TARGET word, not a negative». `FISH_RECIPE.md`: врезка «**ПОПРАВКА ЭПОХИ**»
+  в шапке и строка «**features_fish_short** — short «захар» is a POSITIVE *today*, the target
+  word since v28 … `sampling_weight 12.0 / penalty 1.0 / truth: true`». Подстроки «real short
+  negatives» в `FISH_RECIPE.md` больше нет (`grep -c` → 0); единственное вхождение
+  «short negatives» — сама врезка, которая эту формулировку и опровергает.

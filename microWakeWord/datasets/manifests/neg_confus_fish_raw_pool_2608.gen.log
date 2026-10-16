@@ -1,0 +1,126 @@
+[gen] texts=60 voices=600 (child 90) per-voice=6 tags=[''] -> 3600 clips
+[gen] input bytes 89880 -> est $1.348  model=s2-pro
+[gen] out=/Users/vvzvlad/zakhar_neg_fish  manifest=/Users/vvzvlad/zakhar_neg_fish.manifest.tsv
+[gen] generating 3600 clips, 8 workers...
+[gen] 36/3600 (1.0%) | made 36 skip 0 fail 0
+[gen] 72/3600 (2.0%) | made 72 skip 0 fail 0
+   fail 5a149f_6c6beb7b_04.wav: HTTP 429: b'{"status":429,"message":"Too many requests. You have exceeded your current concurrency limit. See https://docs.fish.audi'
+   fail c19914_083370ef_01.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+   fail 69ff95_083370ef_00.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+   fail a3df17_083370ef_02.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+   fail cfbcb6_083370ef_04.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+   fail 86f654_083370ef_05.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+   fail 9fd3ec_c4085d1c_00.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+   fail 3a684e_c4085d1c_01.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+   fail 7bc0a3_c4085d1c_02.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+   fail 3fdb85_c4085d1c_03.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+   fail 0e95cf_c4085d1c_04.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+   fail a46d9e_c4085d1c_05.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+[gen] 108/3600 (3.0%) | made 96 skip 0 fail 12
+   fail 163640_083370ef_03.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+[gen] 144/3600 (4.0%) | made 131 skip 0 fail 13
+   fail cbd14e_fa73ba7c_02.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+   fail 240fe6_fa73ba7c_03.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+   fail 6c9465_fa73ba7c_04.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+   fail 7ac1ee_fa73ba7c_05.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+   fail 4dbcb2_fa73ba7c_00.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+   fail 580dc8_f84ed892_00.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+[gen] 180/3600 (5.0%) | made 161 skip 0 fail 19
+   fail 290941_f84ed892_01.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+[gen] 216/3600 (6.0%) | made 191 skip 0 fail 25
+[gen] 252/3600 (7.0%) | made 227 skip 0 fail 25
+[gen] 288/3600 (8.0%) | made 263 skip 0 fail 25
+[gen] 324/3600 (9.0%) | made 299 skip 0 fail 25
+[gen] 360/3600 (10.0%) | made 335 skip 0 fail 25
+[gen] 396/3600 (11.0%) | made 371 skip 0 fail 25
+[gen] 432/3600 (12.0%) | made 407 skip 0 fail 25
+[gen] 468/3600 (13.0%) | made 442 skip 0 fail 26
+[gen] 504/3600 (14.0%) | made 478 skip 0 fail 26
+[gen] 540/3600 (15.0%) | made 514 skip 0 fail 26
+[gen] 576/3600 (16.0%) | made 550 skip 0 fail 26
+[gen] 612/3600 (17.0%) | made 586 skip 0 fail 26
+[gen] 648/3600 (18.0%) | made 622 skip 0 fail 26
+[gen] 684/3600 (19.0%) | made 658 skip 0 fail 26
+[gen] 720/3600 (20.0%) | made 694 skip 0 fail 26
+[gen] 756/3600 (21.0%) | made 730 skip 0 fail 26
+[gen] 792/3600 (22.0%) | made 766 skip 0 fail 26
+[gen] 828/3600 (23.0%) | made 802 skip 0 fail 26
+[gen] 864/3600 (24.0%) | made 838 skip 0 fail 26
+[gen] 900/3600 (25.0%) | made 874 skip 0 fail 26
+[gen] 936/3600 (26.0%) | made 910 skip 0 fail 26
+[gen] 972/3600 (27.0%) | made 946 skip 0 fail 26
+[gen] 1008/3600 (28.0%) | made 976 skip 0 fail 32
+[gen] 1044/3600 (29.0%) | made 1012 skip 0 fail 32
+[gen] 1080/3600 (30.0%) | made 1048 skip 0 fail 32
+[gen] 1116/3600 (31.0%) | made 1084 skip 0 fail 32
+[gen] 1152/3600 (32.0%) | made 1120 skip 0 fail 32
+[gen] 1188/3600 (33.0%) | made 1156 skip 0 fail 32
+[gen] 1224/3600 (34.0%) | made 1192 skip 0 fail 32
+[gen] 1260/3600 (35.0%) | made 1227 skip 0 fail 33
+[gen] 1296/3600 (36.0%) | made 1263 skip 0 fail 33
+[gen] 1332/3600 (37.0%) | made 1299 skip 0 fail 33
+[gen] 1368/3600 (38.0%) | made 1335 skip 0 fail 33
+[gen] 1404/3600 (39.0%) | made 1371 skip 0 fail 33
+[gen] 1440/3600 (40.0%) | made 1407 skip 0 fail 33
+[gen] 1476/3600 (41.0%) | made 1442 skip 0 fail 34
+[gen] 1512/3600 (42.0%) | made 1478 skip 0 fail 34
+[gen] 1548/3600 (43.0%) | made 1514 skip 0 fail 34
+[gen] 1584/3600 (44.0%) | made 1550 skip 0 fail 34
+[gen] 1620/3600 (45.0%) | made 1586 skip 0 fail 34
+[gen] 1656/3600 (46.0%) | made 1616 skip 0 fail 40
+[gen] 1692/3600 (47.0%) | made 1652 skip 0 fail 40
+[gen] 1728/3600 (48.0%) | made 1688 skip 0 fail 40
+[gen] 1764/3600 (49.0%) | made 1718 skip 0 fail 46
+[gen] 1800/3600 (50.0%) | made 1742 skip 0 fail 58
+[gen] 1836/3600 (51.0%) | made 1778 skip 0 fail 58
+[gen] 1872/3600 (52.0%) | made 1814 skip 0 fail 58
+[gen] 1908/3600 (53.0%) | made 1850 skip 0 fail 58
+[gen] 1944/3600 (54.0%) | made 1886 skip 0 fail 58
+[gen] 1980/3600 (55.0%) | made 1917 skip 0 fail 63
+[gen] 2016/3600 (56.0%) | made 1952 skip 0 fail 64
+[gen] 2052/3600 (57.0%) | made 1988 skip 0 fail 64
+[gen] 2088/3600 (58.0%) | made 2024 skip 0 fail 64
+[gen] 2124/3600 (59.0%) | made 2054 skip 0 fail 70
+[gen] 2160/3600 (60.0%) | made 2090 skip 0 fail 70
+[gen] 2196/3600 (61.0%) | made 2120 skip 0 fail 76
+[gen] 2232/3600 (62.0%) | made 2156 skip 0 fail 76
+[gen] 2268/3600 (63.0%) | made 2192 skip 0 fail 76
+[gen] 2304/3600 (64.0%) | made 2228 skip 0 fail 76
+[gen] 2340/3600 (65.0%) | made 2264 skip 0 fail 76
+[gen] 2376/3600 (66.0%) | made 2300 skip 0 fail 76
+[gen] 2412/3600 (67.0%) | made 2336 skip 0 fail 76
+[gen] 2448/3600 (68.0%) | made 2372 skip 0 fail 76
+[gen] 2484/3600 (69.0%) | made 2407 skip 0 fail 77
+[gen] 2520/3600 (70.0%) | made 2443 skip 0 fail 77
+[gen] 2556/3600 (71.0%) | made 2479 skip 0 fail 77
+[gen] 2592/3600 (72.0%) | made 2515 skip 0 fail 77
+[gen] 2628/3600 (73.0%) | made 2550 skip 0 fail 78
+[gen] 2664/3600 (74.0%) | made 2586 skip 0 fail 78
+[gen] 2700/3600 (75.0%) | made 2622 skip 0 fail 78
+[gen] 2736/3600 (76.0%) | made 2658 skip 0 fail 78
+[gen] 2772/3600 (77.0%) | made 2694 skip 0 fail 78
+[gen] 2808/3600 (78.0%) | made 2730 skip 0 fail 78
+[gen] 2844/3600 (79.0%) | made 2766 skip 0 fail 78
+[gen] 2880/3600 (80.0%) | made 2802 skip 0 fail 78
+[gen] 2916/3600 (81.0%) | made 2838 skip 0 fail 78
+[gen] 2952/3600 (82.0%) | made 2874 skip 0 fail 78
+[gen] 2988/3600 (83.0%) | made 2910 skip 0 fail 78
+[gen] 3024/3600 (84.0%) | made 2946 skip 0 fail 78
+[gen] 3060/3600 (85.0%) | made 2982 skip 0 fail 78
+[gen] 3096/3600 (86.0%) | made 3018 skip 0 fail 78
+[gen] 3132/3600 (87.0%) | made 3053 skip 0 fail 79
+[gen] 3168/3600 (88.0%) | made 3089 skip 0 fail 79
+[gen] 3204/3600 (89.0%) | made 3125 skip 0 fail 79
+[gen] 3240/3600 (90.0%) | made 3161 skip 0 fail 79
+[gen] 3276/3600 (91.0%) | made 3197 skip 0 fail 79
+[gen] 3312/3600 (92.0%) | made 3233 skip 0 fail 79
+[gen] 3348/3600 (93.0%) | made 3269 skip 0 fail 79
+[gen] 3384/3600 (94.0%) | made 3305 skip 0 fail 79
+[gen] 3420/3600 (95.0%) | made 3341 skip 0 fail 79
+[gen] 3456/3600 (96.0%) | made 3376 skip 0 fail 80
+[gen] 3492/3600 (97.0%) | made 3401 skip 0 fail 91
+[gen] 3528/3600 (98.0%) | made 3429 skip 0 fail 99
+[gen] 3564/3600 (99.0%) | made 3455 skip 0 fail 109
+[gen] 3600/3600 (100.0%) | made 3490 skip 0 fail 110
+[gen] DONE: made 3490, skipped 0, failed 110 -> /Users/vvzvlad/zakhar_neg_fish
+[gen] manifest -> /Users/vvzvlad/zakhar_neg_fish.manifest.tsv

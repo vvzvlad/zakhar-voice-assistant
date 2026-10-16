@@ -1,0 +1,494 @@
+00:38:39 [fish] start: voices=15000 mode=short model=s2-pro a=2..9 workers=6 src=/Users/vvzvlad/Data/Projects/zakhar-voice-assistant/microWakeWord/fish_audio/fish_voices_clean.tsv
+00:38:39 [fish] collecting 15000 ru voices (vet=OFF, tag=None, title=None)...
+00:38:39 [fish] kept 15000 voices (tried 15000, rejected 0).
+00:38:39 [fish] plan: 15000 voices -> drawn 0 + short 15000; est. $6.750
+00:38:39 [fish] generating 15000 clips with 6 workers...
+00:38:40   FAIL fish_8efe720a_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+00:38:44   FAIL fish_073e2b5e_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+00:38:49   FAIL fish_9045f29d_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+00:38:53   FAIL fish_70ec8cd1_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+00:39:00   bad-dur fish_d307128a_00_short_neu.wav: 0.3s
+00:39:07   bad-dur fish_ca818835_00_short_neu.wav: 0.3s
+00:39:07   FAIL fish_18847387_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+00:39:08   FAIL fish_9bba34b0_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+00:39:16 [fish] 150/15000 (1.0%) | drawn 0 short 142
+00:39:19   FAIL fish_a0454283_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+00:39:56 [fish] 300/15000 (2.0%) | drawn 0 short 291
+00:40:00   FAIL fish_32bfbdd8_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+00:40:08   FAIL fish_bdad7788_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+00:40:13   FAIL fish_4329cf48_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+00:40:29   bad-dur fish_c779f3a9_00_short_neu.wav: 0.2s
+00:40:31   FAIL fish_82b08b51_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+00:40:34   bad-dur fish_6cb12f23_00_short_neu.wav: 0.3s
+00:40:34 [fish] 450/15000 (3.0%) | drawn 0 short 435
+00:40:37   bad-dur fish_a6519664_00_short_neu.wav: 0.3s
+00:40:41   FAIL fish_8a44c95c_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+00:40:45   FAIL fish_d7bbd302_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+00:40:52   FAIL fish_7a2ab241_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+00:40:57   FAIL fish_8cf534f1_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+00:41:11 [fish] 600/15000 (4.0%) | drawn 0 short 580
+00:41:12   FAIL fish_9e81dc73_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+00:41:37   FAIL fish_cb264c24_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+00:41:49 [fish] 750/15000 (5.0%) | drawn 0 short 728
+00:41:56   FAIL fish_a930a117_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+00:41:58   FAIL fish_261fc653_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+00:42:26 [fish] 900/15000 (6.0%) | drawn 0 short 876
+00:42:27   FAIL fish_0fe1f68c_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+00:42:28   FAIL fish_cb219505_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+00:42:46   bad-dur fish_09496087_00_short_neu.wav: 0.3s
+00:42:50   FAIL fish_ea817d5a_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+00:42:52   FAIL fish_5e5716dc_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+00:43:05 [fish] 1050/15000 (7.0%) | drawn 0 short 1021
+00:43:15   FAIL fish_9a527281_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+00:43:41   FAIL fish_13dd8028_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+00:43:43   FAIL fish_d3c7c733_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+00:43:44 [fish] 1200/15000 (8.0%) | drawn 0 short 1168
+00:43:45   bad-dur fish_0ede5ed2_00_short_neu.wav: 0.2s
+00:43:50   bad-dur fish_c3abeedd_00_short_neu.wav: 0.2s
+00:43:51   FAIL fish_88e41566_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+00:44:05   FAIL fish_d734bafe_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+00:44:22 [fish] 1350/15000 (9.0%) | drawn 0 short 1314
+00:44:53   FAIL fish_585195cd_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+00:44:56   bad-dur fish_495c3a47_00_short_neu.wav: 0.2s
+00:44:58   FAIL fish_4a48efb5_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+00:45:01 [fish] 1500/15000 (10.0%) | drawn 0 short 1461
+00:45:08   FAIL fish_b36253bc_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+00:45:34   FAIL fish_92d5d19c_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+00:45:37 [fish] 1650/15000 (11.0%) | drawn 0 short 1609
+00:46:00   FAIL fish_7a34f243_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+00:46:14 [fish] 1800/15000 (12.0%) | drawn 0 short 1758
+00:46:14   FAIL fish_9bea8e7b_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+00:46:23   FAIL fish_85c70244_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+00:46:23   FAIL fish_2706693c_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+00:46:28   FAIL fish_5eee4721_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+00:46:28   FAIL fish_97bc2407_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+00:46:50 [fish] 1950/15000 (13.0%) | drawn 0 short 1903
+00:46:52   FAIL fish_c7ea4d93_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+00:46:59   FAIL fish_98ded801_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+00:47:02   FAIL fish_2c6371d9_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+00:47:02   FAIL fish_3221c680_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+00:47:12   FAIL fish_aace3538_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+00:47:15   FAIL fish_6f8ddc02_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+00:47:23   FAIL fish_7c5ce636_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+00:47:27 [fish] 2100/15000 (14.0%) | drawn 0 short 2046
+00:47:38   bad-dur fish_17a869e1_00_short_neu.wav: 0.3s
+00:47:47   FAIL fish_5508f514_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+00:47:57   FAIL fish_7dd40e14_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+00:48:05 [fish] 2250/15000 (15.0%) | drawn 0 short 2193
+00:48:07   FAIL fish_8432cb8b_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+00:48:21   FAIL fish_7c7c7235_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+00:48:42 [fish] 2400/15000 (16.0%) | drawn 0 short 2341
+00:48:54   FAIL fish_4b0785e6_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+00:49:18 [fish] 2550/15000 (17.0%) | drawn 0 short 2490
+00:49:34   FAIL fish_32baa2e6_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+00:49:56 [fish] 2700/15000 (18.0%) | drawn 0 short 2639
+00:50:01   FAIL fish_d80756c3_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+00:50:32 [fish] 2850/15000 (19.0%) | drawn 0 short 2788
+00:50:34   FAIL fish_dd979622_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+00:50:36   FAIL fish_7a8d123f_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+00:50:57   bad-dur fish_59b7a534_00_short_neu.wav: 0.2s
+00:51:03   FAIL fish_d19acf69_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+00:51:10 [fish] 3000/15000 (20.0%) | drawn 0 short 2934
+00:51:13   FAIL fish_bf5d1e68_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+00:51:16   FAIL fish_aa75e110_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+00:51:17   FAIL fish_c20b4268_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+00:51:29   FAIL fish_2b78c480_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+00:51:29   FAIL fish_54f7cda4_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+00:51:34   bad-dur fish_dea9c6b3_00_short_neu.wav: 0.2s
+00:51:37   bad-dur fish_56e30b92_00_short_neu.wav: 0.3s
+00:51:40   FAIL fish_24658d57_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+00:51:47 [fish] 3150/15000 (21.0%) | drawn 0 short 3076
+00:51:55   bad-dur fish_9fb1dfa0_00_short_neu.wav: 0.3s
+00:52:01   FAIL fish_ceb7d436_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+00:52:03   FAIL fish_a0ce84d6_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+00:52:12   FAIL fish_6fe81fd0_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+00:52:26 [fish] 3300/15000 (22.0%) | drawn 0 short 3222
+00:52:44   FAIL fish_332eca77_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+00:52:54   FAIL fish_d3ba2705_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+00:52:58   FAIL fish_c48d0e54_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+00:53:07   FAIL fish_5254a924_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+00:53:10 [fish] 3450/15000 (23.0%) | drawn 0 short 3368
+00:53:15   bad-dur fish_c48ef11e_00_short_neu.wav: 0.3s
+00:53:21   FAIL fish_45f9d266_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+00:53:41   FAIL fish_022b137f_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+00:53:41   FAIL fish_0a0b4622_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+00:53:47 [fish] 3600/15000 (24.0%) | drawn 0 short 3514
+00:53:49   FAIL fish_295f8bb9_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+00:53:50   FAIL fish_31e85ee5_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+00:53:57   FAIL fish_57095d81_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+00:54:10   bad-dur fish_efc97856_00_short_neu.wav: 0.3s
+00:54:18   FAIL fish_8bde0406_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+00:54:21   FAIL fish_213b1fcc_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+00:54:24 [fish] 3750/15000 (25.0%) | drawn 0 short 3658
+00:54:53   FAIL fish_4733ddb9_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+00:54:57   FAIL fish_e10a4c6a_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+00:55:03 [fish] 3900/15000 (26.0%) | drawn 0 short 3806
+00:55:05   FAIL fish_363d4e2a_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+00:55:13   FAIL fish_c39c0de7_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+00:55:36   FAIL fish_2df90553_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+00:55:41 [fish] 4050/15000 (27.0%) | drawn 0 short 3953
+00:55:48   FAIL fish_eab971ac_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+00:55:53   FAIL fish_150270d0_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+00:56:00   FAIL fish_c43b64b9_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+00:56:22 [fish] 4200/15000 (28.0%) | drawn 0 short 4100
+00:56:42   bad-dur fish_c8ce3376_00_short_neu.wav: 0.3s
+00:56:49   FAIL fish_00337eb7_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+00:56:55   FAIL fish_50f8c66b_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+00:57:02   bad-dur fish_f70897c2_00_short_neu.wav: 0.2s
+00:57:02 [fish] 4350/15000 (29.0%) | drawn 0 short 4246
+00:57:18   bad-dur fish_3519560e_00_short_neu.wav: 0.3s
+00:57:19   FAIL fish_9fd4c3cf_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+00:57:40 [fish] 4500/15000 (30.0%) | drawn 0 short 4394
+00:57:48   FAIL fish_a5b6625f_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+00:57:56   FAIL fish_568d31d7_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+00:57:57   FAIL fish_6ea30cfa_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+00:58:07   FAIL fish_b27eb84f_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+00:58:09   FAIL fish_e9d7428d_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+00:58:14   FAIL fish_91314501_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+00:58:16   FAIL fish_d28d1247_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+00:58:17 [fish] 4650/15000 (31.0%) | drawn 0 short 4537
+00:58:18   FAIL fish_2c7d2025_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+00:58:26   bad-dur fish_5b506ad9_00_short_neu.wav: 0.2s
+00:58:56 [fish] 4800/15000 (32.0%) | drawn 0 short 4685
+00:59:34 [fish] 4950/15000 (33.0%) | drawn 0 short 4835
+00:59:37   bad-dur fish_71de7df0_00_short_neu.wav: 0.3s
+00:59:43   bad-dur fish_0d844cbe_00_short_neu.wav: 0.3s
+01:00:12   FAIL fish_527478c5_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:00:13   FAIL fish_58da8828_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:00:14 [fish] 5100/15000 (34.0%) | drawn 0 short 4981
+01:00:15   FAIL fish_7dca434b_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:00:28   bad-dur fish_a0c09347_00_short_neu.wav: 0.3s
+01:00:53 [fish] 5250/15000 (35.0%) | drawn 0 short 5129
+01:00:56   FAIL fish_6b09b467_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:01:11   FAIL fish_f2e4b737_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:01:20   FAIL fish_c5be063a_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:01:32 [fish] 5400/15000 (36.0%) | drawn 0 short 5276
+01:01:50   FAIL fish_831fb59f_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:02:01   FAIL fish_5f939643_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:02:02   FAIL fish_6b29b268_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:02:12 [fish] 5550/15000 (37.0%) | drawn 0 short 5423
+01:02:24   FAIL fish_6c7fae60_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:02:25   FAIL fish_92228f65_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:02:37   FAIL fish_23016ab6_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:02:40   FAIL fish_e6367090_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:02:49   FAIL fish_6883ddb1_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:02:49   FAIL fish_69543a2e_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:02:50 [fish] 5700/15000 (38.0%) | drawn 0 short 5567
+01:02:53   FAIL fish_977a93bf_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:02:56   FAIL fish_be04a3ab_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:03:13   FAIL fish_5e587b26_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:03:15   bad-dur fish_6fc6ad54_00_short_neu.wav: 0.3s
+01:03:23   FAIL fish_d380e2a7_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:03:28 [fish] 5850/15000 (39.0%) | drawn 0 short 5712
+01:03:32   FAIL fish_faeee38e_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:03:33   bad-dur fish_05ce5819_00_short_neu.wav: 0.2s
+01:03:39   FAIL fish_7531b327_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:03:59   FAIL fish_205195d2_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:04:07 [fish] 6000/15000 (40.0%) | drawn 0 short 5858
+01:04:15   FAIL fish_e64cca6a_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:04:16   FAIL fish_ec159ed6_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:04:44 [fish] 6150/15000 (41.0%) | drawn 0 short 6006
+01:04:51   FAIL fish_4c1ea4a1_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:04:52   FAIL fish_790a4963_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:04:57   FAIL fish_06137710_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:05:18   bad-dur fish_c58b06e2_00_short_neu.wav: 0.3s
+01:05:22   FAIL fish_f84c662a_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:05:24 [fish] 6300/15000 (42.0%) | drawn 0 short 6151
+01:05:39   FAIL fish_894e9d9e_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:06:02 [fish] 6450/15000 (43.0%) | drawn 0 short 6300
+01:06:07   FAIL fish_7f23a605_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:06:15   FAIL fish_cddf65f3_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:06:42 [fish] 6600/15000 (44.0%) | drawn 0 short 6448
+01:07:06   FAIL fish_223fe334_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:07:14   FAIL fish_67279a75_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:07:21 [fish] 6750/15000 (45.0%) | drawn 0 short 6596
+01:07:30   FAIL fish_31692cbc_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:07:57   FAIL fish_c4450f1e_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:07:57   FAIL fish_c568806b_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:08:00   FAIL fish_ed1dbeb3_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:08:00 [fish] 6900/15000 (46.0%) | drawn 0 short 6742
+01:08:27   FAIL fish_a2ec845f_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:08:29   bad-dur fish_5b933368_00_short_neu.wav: 47.6s
+01:08:39 [fish] 7050/15000 (47.0%) | drawn 0 short 6890
+01:08:52   FAIL fish_310c856b_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:08:54   FAIL fish_53b715da_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:08:55   FAIL fish_5ce08ec0_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:08:59   FAIL fish_7d08ce21_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:09:16   FAIL fish_4223def7_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:09:17 [fish] 7200/15000 (48.0%) | drawn 0 short 7035
+01:09:19   FAIL fish_b4a901a7_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:09:35   FAIL fish_4ed27420_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:09:47   FAIL fish_c42c1766_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:09:56 [fish] 7350/15000 (49.0%) | drawn 0 short 7182
+01:10:01   bad-dur fish_7284b67b_00_short_neu.wav: 0.3s
+01:10:14   FAIL fish_49dddd7e_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:10:23   FAIL fish_b0be5327_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:10:29   FAIL fish_ddc3e2eb_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:10:29   FAIL fish_e05738a2_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:10:29   FAIL fish_e3516ab5_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:10:33 [fish] 7500/15000 (50.0%) | drawn 0 short 7326
+01:10:45   FAIL fish_c74c6a18_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:10:46   FAIL fish_fc452332_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:10:50   FAIL fish_2d14d62b_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:11:06   FAIL fish_bc54a191_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:11:12   FAIL fish_e411dbcd_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:11:14 [fish] 7650/15000 (51.0%) | drawn 0 short 7471
+01:11:21   bad-dur fish_8c73cdaa_00_short_neu.wav: 0.3s
+01:11:31   FAIL fish_2936bb6b_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:11:49   FAIL fish_aaf7830b_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:11:52 [fish] 7800/15000 (52.0%) | drawn 0 short 7618
+01:11:53   FAIL fish_c25fcfc5_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:12:04   FAIL fish_36d89f65_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:12:09   FAIL fish_a51e7956_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:12:31 [fish] 7950/15000 (53.0%) | drawn 0 short 7765
+01:12:32   FAIL fish_6cd6348e_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:12:32   FAIL fish_72881bd2_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:12:37   FAIL fish_a19513f0_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:12:47   FAIL fish_de4ac358_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:12:49   FAIL fish_ed9396b6_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:13:07   FAIL fish_067a84f0_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:13:12 [fish] 8100/15000 (54.0%) | drawn 0 short 7909
+01:13:16   FAIL fish_378e6934_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:13:16   FAIL fish_38a7d0fc_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:13:38   FAIL fish_d115f599_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:13:51 [fish] 8250/15000 (55.0%) | drawn 0 short 8056
+01:14:04   FAIL fish_22c12618_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:14:05   bad-dur fish_22ca43cf_00_short_neu.wav: 0.2s
+01:14:28 [fish] 8400/15000 (56.0%) | drawn 0 short 8204
+01:14:28   FAIL fish_bfaab95e_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:14:36   FAIL fish_fef92608_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:14:39   FAIL fish_38dde2cd_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:14:55   FAIL fish_1de9f966_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:15:09 [fish] 8550/15000 (57.0%) | drawn 0 short 8350
+01:15:18   bad-dur fish_b3a288e7_00_short_neu.wav: 0.3s
+01:15:22   FAIL fish_cd718400_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:15:26   FAIL fish_eca00054_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:15:37   FAIL fish_67a395c9_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:15:51   FAIL fish_22df5b76_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:15:51   FAIL fish_25664b4a_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:15:51 [fish] 8700/15000 (58.0%) | drawn 0 short 8494
+01:15:53   FAIL fish_39079915_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:16:02   FAIL fish_6c9040ce_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:16:05   FAIL fish_8a7fc5e1_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:16:11   FAIL fish_a7439994_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:16:26   FAIL fish_f5613553_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:16:33   FAIL fish_236f3c84_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:16:34   FAIL fish_3c6eef23_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:16:35 [fish] 8850/15000 (59.0%) | drawn 0 short 8637
+01:16:37   FAIL fish_6e58f2b8_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:16:55   FAIL fish_261254df_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:16:59   FAIL fish_41028a70_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:17:03   FAIL fish_4f5a404a_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:17:09   FAIL fish_68f3c91f_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:17:15   FAIL fish_7aea565e_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:17:15   FAIL fish_7ef41f63_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:17:20 [fish] 9000/15000 (60.0%) | drawn 0 short 8780
+01:17:20   FAIL fish_8e85a0bc_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:17:22   bad-dur fish_9a19ee6c_00_short_neu.wav: 0.2s
+01:17:28   FAIL fish_be7450d5_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:17:37   FAIL fish_fa0644d6_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:17:52   FAIL fish_ec55b6c9_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:17:58 [fish] 9150/15000 (61.0%) | drawn 0 short 8925
+01:18:13   FAIL fish_5cd903c6_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:18:27   FAIL fish_a83048a4_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:18:27   FAIL fish_a8657db8_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:18:37 [fish] 9300/15000 (62.0%) | drawn 0 short 9072
+01:18:57   FAIL fish_90dcd900_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:19:03   FAIL fish_e82bd14a_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:19:14   FAIL fish_1f9b4e04_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:19:19 [fish] 9450/15000 (63.0%) | drawn 0 short 9219
+01:19:22   FAIL fish_4e36b178_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:19:25   FAIL fish_5997e0cd_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:19:50   bad-dur fish_e7988322_00_short_neu.wav: 0.2s
+01:19:54   FAIL fish_f84ed892_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:19:57 [fish] 9600/15000 (64.0%) | drawn 0 short 9365
+01:20:03   FAIL fish_78e2ffd9_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:20:27   bad-dur fish_459858b3_00_short_neu.wav: 0.3s
+01:20:30   FAIL fish_54765eef_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:20:33   FAIL fish_6930a8e7_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:20:37   bad-dur fish_7ae104d7_00_short_neu.wav: 0.3s
+01:20:37 [fish] 9750/15000 (65.0%) | drawn 0 short 9510
+01:20:48   bad-dur fish_8c4a3173_00_short_neu.wav: 31.8s
+01:21:19 [fish] 9900/15000 (66.0%) | drawn 0 short 9659
+01:21:28   FAIL fish_0ebb45a7_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:21:29   FAIL fish_13a8fe16_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:21:35   FAIL fish_2d51caab_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:21:48   FAIL fish_5b3f87ed_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:21:50   FAIL fish_667f8305_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:21:52   FAIL fish_7046f288_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:21:54   FAIL fish_793bffca_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:21:57   FAIL fish_85297069_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:21:59 [fish] 10050/15000 (67.0%) | drawn 0 short 9801
+01:22:10   FAIL fish_bd26e34e_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:22:16   FAIL fish_d4e735a0_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:22:25   FAIL fish_fbc9aa31_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:22:34   FAIL fish_49aa8af3_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:22:38 [fish] 10200/15000 (68.0%) | drawn 0 short 9947
+01:22:52   bad-dur fish_07e41940_00_short_neu.wav: 0.3s
+01:22:58   FAIL fish_21fe4dfa_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:23:02   FAIL fish_31c4aa2b_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:23:11   FAIL fish_5f35dc8c_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:23:14   FAIL fish_6714a988_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:23:20 [fish] 10350/15000 (69.0%) | drawn 0 short 10092
+01:23:23   FAIL fish_899897d2_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:23:27   FAIL fish_9a482875_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:23:40   FAIL fish_cbf328a5_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:23:59 [fish] 10500/15000 (70.0%) | drawn 0 short 10239
+01:24:03   FAIL fish_d6a1a256_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:24:09   FAIL fish_122a4b0c_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:24:13   FAIL fish_1ea4bf2f_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:24:17   FAIL fish_2c2cf0f5_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:24:38 [fish] 10650/15000 (71.0%) | drawn 0 short 10385
+01:24:40   bad-dur fish_8ce579c8_00_short_neu.wav: 0.2s
+01:24:50   FAIL fish_ad283283_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:24:55   FAIL fish_c1695dba_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:24:56   FAIL fish_c5702f73_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:24:56   FAIL fish_c62dd3ce_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:25:09   FAIL fish_f20dd02a_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:25:12   FAIL fish_ff2af4c9_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:25:17 [fish] 10800/15000 (72.0%) | drawn 0 short 10528
+01:25:20   FAIL fish_5809f236_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:25:25   bad-dur fish_a40e25b8_00_short_neu.wav: 0.3s
+01:25:26   bad-dur fish_a6ea991c_00_short_neu.wav: 0.3s
+01:25:29   FAIL fish_e49e2504_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:25:49   FAIL fish_4423e329_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:25:50   FAIL fish_47e7b5f8_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:25:52   FAIL fish_4d16fc1a_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:25:55 [fish] 10950/15000 (73.0%) | drawn 0 short 10671
+01:26:14   FAIL fish_9d0f7238_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:26:16   FAIL fish_b120ec82_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:26:21   FAIL fish_c49a5861_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:26:26   FAIL fish_d1070e74_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:26:35 [fish] 11100/15000 (74.0%) | drawn 0 short 10817
+01:26:39   FAIL fish_05a59106_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:26:59   FAIL fish_05d33f1c_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:27:15 [fish] 11250/15000 (75.0%) | drawn 0 short 10965
+01:27:47   FAIL fish_9bba1d3e_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:27:48   FAIL fish_9fe5eb47_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:27:53   FAIL fish_b46fdf7b_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:27:54 [fish] 11400/15000 (76.0%) | drawn 0 short 11112
+01:28:04   bad-dur fish_d4a05c96_00_short_neu.wav: 0.3s
+01:28:20   FAIL fish_5fa97e5c_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:28:26   FAIL fish_a6a1e0b2_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:28:33 [fish] 11550/15000 (77.0%) | drawn 0 short 11259
+01:28:37   FAIL fish_0e5d0ee4_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:28:52   FAIL fish_26499ccf_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:29:04   FAIL fish_50448282_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:29:06   FAIL fish_54096fc3_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:29:10   FAIL fish_65b66dba_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:29:17 [fish] 11700/15000 (78.0%) | drawn 0 short 11404
+01:29:19   FAIL fish_88714941_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:29:29   FAIL fish_b48f8fec_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:29:55 [fish] 11850/15000 (79.0%) | drawn 0 short 11552
+01:30:01   FAIL fish_3f1911d4_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:30:08   FAIL fish_89104adc_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:30:25   FAIL fish_18cd07c6_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:30:34 [fish] 12000/15000 (80.0%) | drawn 0 short 11699
+01:30:34   FAIL fish_303a7fc8_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:30:38   FAIL fish_3ddc3d17_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:30:40   bad-dur fish_47566fee_00_short_neu.wav: 0.3s
+01:30:44   FAIL fish_575f9226_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:31:13 [fish] 12150/15000 (81.0%) | drawn 0 short 11845
+01:31:24   bad-dur fish_cc1f80c8_00_short_neu.wav: 0.3s
+01:31:24   FAIL fish_cfe87949_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:31:44   FAIL fish_201bd945_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:31:52   FAIL fish_71cf0fb4_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:31:52 [fish] 12300/15000 (82.0%) | drawn 0 short 11991
+01:32:11   FAIL fish_0fa90072_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:32:13   FAIL fish_19e49223_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:32:26   FAIL fish_388e62ec_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:32:30   bad-dur fish_4435e376_00_short_neu.wav: 0.2s
+01:32:31 [fish] 12450/15000 (83.0%) | drawn 0 short 12137
+01:32:32   FAIL fish_528a1931_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:32:36   FAIL fish_5708821a_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:32:36   FAIL fish_5b07bd0b_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:33:00   FAIL fish_9b8eb570_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:33:08   FAIL fish_b28fbe75_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:33:08 [fish] 12600/15000 (84.0%) | drawn 0 short 12282
+01:33:28   FAIL fish_e2b42e67_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:33:42   FAIL fish_2c904c66_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:33:43   FAIL fish_2cf948c0_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:33:45   FAIL fish_4a806688_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:33:46 [fish] 12750/15000 (85.0%) | drawn 0 short 12428
+01:33:47   FAIL fish_5cbff8b3_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:33:50   FAIL fish_7a0862ab_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:34:04   FAIL fish_01aea450_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:34:23 [fish] 12900/15000 (86.0%) | drawn 0 short 12575
+01:34:24   bad-dur fish_404d8d3a_00_short_neu.wav: 0.3s
+01:34:31   FAIL fish_4d3b4848_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:34:31   FAIL fish_4ddf9d41_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:34:32   FAIL fish_50d3faee_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:34:33   FAIL fish_53970dc9_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:34:48   FAIL fish_77bd51d0_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:34:49   bad-dur fish_7ae4aaab_00_short_neu.wav: 0.3s
+01:34:57   FAIL fish_92f8414e_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:35:01 [fish] 13050/15000 (87.0%) | drawn 0 short 12717
+01:35:05   FAIL fish_a47fedf7_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:35:07   FAIL fish_ab3d9779_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:35:12   FAIL fish_b677190b_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:35:22   FAIL fish_d45ecea6_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:35:28   FAIL fish_ea885c35_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:35:31   FAIL fish_f5a2f6dd_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:35:34   FAIL fish_fe535a03_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:35:37 [fish] 13200/15000 (88.0%) | drawn 0 short 12860
+01:36:09   FAIL fish_21487d7f_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:36:10   FAIL fish_253d64f9_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:36:16 [fish] 13350/15000 (89.0%) | drawn 0 short 13008
+01:36:25   FAIL fish_49276a6e_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:36:35   bad-dur fish_664c5c2e_00_short_neu.wav: 0.3s
+01:36:51   FAIL fish_903f9fb3_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:36:51   FAIL fish_8fc2ae68_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:36:53 [fish] 13500/15000 (90.0%) | drawn 0 short 13154
+01:36:54   FAIL fish_9c6c11f2_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:37:03   FAIL fish_ae63a28b_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:37:18   FAIL fish_d4a54020_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:37:31 [fish] 13650/15000 (91.0%) | drawn 0 short 13301
+01:37:47   FAIL fish_2e3c8ff9_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:37:51   FAIL fish_52b523f5_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:38:08   FAIL fish_ef16fefa_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:38:09 [fish] 13800/15000 (92.0%) | drawn 0 short 13448
+01:38:14   FAIL fish_098fcc6e_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:38:50   FAIL fish_5308819c_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:38:50 [fish] 13950/15000 (93.0%) | drawn 0 short 13596
+01:38:52   FAIL fish_56d9a400_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:38:58   bad-dur fish_62877a59_00_short_neu.wav: 0.3s
+01:39:04   FAIL fish_72979e3e_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:39:06   FAIL fish_751d5514_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:39:16   bad-dur fish_8e4d490d_00_short_neu.wav: 0.3s
+01:39:17   FAIL fish_90091aa2_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:39:18   FAIL fish_94230677_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:39:19   FAIL fish_94df4b2a_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:39:28 [fish] 14100/15000 (94.0%) | drawn 0 short 13738
+01:39:30   FAIL fish_b033dbad_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:39:32   bad-dur fish_b089ee14_00_short_neu.wav: 0.3s
+01:39:40   bad-dur fish_c50f9f92_00_short_neu.wav: 0.3s
+01:39:48   FAIL fish_d96c97b7_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:40:05 [fish] 14250/15000 (95.0%) | drawn 0 short 13884
+01:40:24   FAIL fish_c7e4b67c_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:40:26   FAIL fish_db81a37e_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:40:43 [fish] 14400/15000 (96.0%) | drawn 0 short 14032
+01:40:54   FAIL fish_2f6351e5_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:40:59   FAIL fish_3a9cf3c2_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:41:19   FAIL fish_63e662e7_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:41:19 [fish] 14550/15000 (97.0%) | drawn 0 short 14179
+01:41:36   FAIL fish_871ea111_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:41:41   bad-dur fish_90b15d40_00_short_neu.wav: 0.3s
+01:41:41   FAIL fish_91fefd74_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:41:46   FAIL fish_9e36a1f7_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:41:48   FAIL fish_a6724783_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:41:57 [fish] 14700/15000 (98.0%) | drawn 0 short 14324
+01:42:00   FAIL fish_c0f5cdd6_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:42:04   FAIL fish_cca5ef67_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:42:13   FAIL fish_d995d52d_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:42:16   FAIL fish_e3d492a5_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:42:19   FAIL fish_ee239ecf_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:42:27   FAIL fish_fd909128_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:42:31   FAIL fish_23bf618e_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:42:34 [fish] 14850/15000 (99.0%) | drawn 0 short 14467
+01:42:38   FAIL fish_5be62aea_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:43:05   FAIL fish_0b3e0bea_00_short_neu.wav: HTTP 400: b'{"message":"Reference not found","status":400}'
+01:43:12 [fish] 15000/15000 (100.0%) | drawn 0 short 14615
+01:43:12 [fish] DONE: drawn(positives) 0 -> /Users/vvzvlad/Data/Projects/zakhar-voice-assistant/microWakeWord/fish_audio/../samples/positive_fish_src
+01:43:12 [fish]       short(negatives) 14615 -> /Users/vvzvlad/zakhar_short_pos_v29
+01:43:12 [fish] NEXT: playback-recapture BOTH through the device, then STT-filter (large-v3) + train.
+01:43:12 [fish] log saved -> /Users/vvzvlad/zakhar_short_pos_v29.log
