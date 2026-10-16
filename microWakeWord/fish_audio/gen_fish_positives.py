@@ -1,14 +1,19 @@
 #!/usr/bin/env python3
-"""Generate «захааар» (drawn-out POSITIVE) and «захар» (short NEGATIVE) via fish.audio.
+"""Generate «захар» (short — the TARGET word) and «захааар» (drawn-out) via fish.audio.
+
+TARGET CHANGE (v28): both outputs are POSITIVES today. The project originally targeted the drawn
+«захааар» and used the short «захар» as a length-discrimination hard-negative; v16/DURATION_CAUSALITY
+showed the model is an ONSET detector that cannot tell length apart, so the discrimination was
+dropped and the SHORT «захар» became the target positive (features_fish_short truth=true, sw 12.0).
+Flag and directory names below still carry the old wording — see ../DATASETS.md.
 
 WHY: the recall floor (~21% FRR on held-out UNFAMILIAR voices) is a generalization
 problem — the model keys on the «заха» onset, which is voice-specific. #E showed even
 cloned device-tract synthetic positives HELP recall. fish.audio gives 2,000,000+
 DISTINCT community voices for pennies («захааар» ≈ 14 UTF-8 bytes; $15 per 1M bytes),
 so it's the cheapest shot at real voice diversity to lift the floor — INCLUDING
-children's voices (a known weak spot). The SAME voices also give the SHORT «захар»
-hard-negatives we need for duration-awareness (#A) — drawn vs short from one voice is
-exactly the duration-discrimination signal.
+children's voices (a known weak spot). The SAME voices also give the SHORT «захар» —
+originally collected as duration-discrimination hard-negatives (#A), a positive since v28.
 
 VOICE VETTING: ~1/3 of community voices mispronounce / say garbage, and it's
 voice-dependent. So each candidate voice gets ONE short «захар» probe that is checked
@@ -19,14 +24,14 @@ TEXT TRICKS (from operator):
   - drawn-out length comes from the NUMBER of «а» in the text: «зах»+«а»*N+«рр».
   - a DOUBLE «рр» at the end helps the trailing «р» render.
   - emotion tags work well, written in brackets BEFORE the text: «[sobbing] Захаааарр».
-    Supported: emphasis | angry | laughing | sobbing (plus neutral). DRAWN positives get
-    ONE clip per tag (voice × every tag) for intonation variety; SHORT negatives are
+    Supported: emphasis | angry | laughing | sobbing (plus neutral). The DRAWN set gets
+    ONE clip per tag (voice × every tag) for intonation variety; the SHORT set is
     NEUTRAL only — sobbing/laughing stretch «захар» so it stops being short.
   - `normalize` is OFF so «ааа» / «рр» / «[tag]» are preserved verbatim.
 
 IMPORTANT — these are CLEAN studio wavs. Raw synthetic HURTS (v11b); only device-tract
 helps (#E). So this output MUST be playback-recaptured through the device before
-training. drawn -> positives, short -> negatives.
+training. Since v28 BOTH sets go in as positives (short = the target word).
 
 API (verified against src/plugins/tts/fishaudio.py):
   POST https://api.fish.audio/v1/tts   headers: Authorization: Bearer KEY, model: s1
@@ -38,7 +43,7 @@ API (verified against src/plugins/tts/fishaudio.py):
 Usage:
   export FISH_API_KEY=...   (or it is read from data/config.json tts.instances.fishaudio.api_key)
   python gen_fish_positives.py --dry-run                          # preview voices + cost, spend nothing
-  python gen_fish_positives.py --mode both --voices 400           # vetted drawn positives + short negatives
+  python gen_fish_positives.py --mode both --voices 400           # vetted drawn + short sets (both positives)
   python gen_fish_positives.py --title детск --mode both          # target children's voices
 """
 import argparse, json, os, sys, time, wave, urllib.request, urllib.parse, urllib.error
@@ -51,6 +56,13 @@ REPO = os.path.join(os.path.dirname(__file__), os.pardir, os.pardir)  # fish_aud
 PRICE_PER_MB = 15.0  # USD per 1,000,000 UTF-8 bytes of input text
 TAGS = ["", "emphasis", "angry", "laughing", "sobbing"]  # "" = neutral
 VOSK_DIR = os.path.join(REPO, "models", "vosk-model-small-ru-0.22")
+SAMPLES = os.path.join(os.path.dirname(__file__), os.pardir, "samples")
+# Canonical June-2026 raw pools. Used ONLY when neither --out nor --out-short is given, i.e. when
+# the intent is to top up the curated pools themselves. As soon as --out names another directory,
+# the short half is derived from it (<out>_short) and these are left alone — a bare
+# `--out /tmp/newrun` must never write into a curated pool.
+DEFAULT_OUT_DRAWN = os.path.join(SAMPLES, "pos_drawn_fish_raw_pool_2606")
+DEFAULT_OUT_SHORT = os.path.join(SAMPLES, "pos_short_fish_raw_pool_2606")
 
 
 class Log:
@@ -290,8 +302,13 @@ def synth_one(key, args, vid, k, n_a, tag, out_dir, form, log=print):
 
 def main():
     ap = argparse.ArgumentParser(description="Generate «захааар»/«захар» via fish.audio.")
-    ap.add_argument("--out", default=os.path.join(os.path.dirname(__file__), os.pardir, "samples", "positive_fish_src"))
-    ap.add_argument("--out-short", default=None, help="short NEGATIVES dir (default: <out>_short)")
+    # Both outputs are POSITIVES since v28: the short «захар» is the target word, the drawn
+    # «захааар» is the pre-v28 target kept in the same positive class. See ../DATASETS.md.
+    ap.add_argument("--out", default=None,
+                    help=f"drawn «захааар» dir (pre-v28 target, still a positive). Default: {DEFAULT_OUT_DRAWN}")
+    ap.add_argument("--out-short", default=None,
+                    help="short «захар» dir — the TARGET word, POSITIVE since v28. "
+                         f"Default: <out>_short, or {DEFAULT_OUT_SHORT} when --out is not given either")
     ap.add_argument("--mode", choices=["drawn", "short", "both"], default="both")
     ap.add_argument("--voices", type=int, default=400, help="how many GOOD (vetted) voices")
     ap.add_argument("--voices-file", default=None, help="curated voice TSV (fish_voices_clean.tsv); use instead of pulling the catalog")
@@ -322,13 +339,20 @@ def main():
         print("error: no fish.audio key (--api-key, $FISH_API_KEY, or data/config.json)", file=sys.stderr)
         return 2
 
-    out_short = args.out_short or (args.out.rstrip("/") + "_short")
+    # Resolve output dirs. Three cases, in this order:
+    #   neither flag       -> the canonical curated pools (top-up run)
+    #   only --out X       -> drawn X, short X_short  (derived: never touches a curated pool)
+    #   --out X --out-short Y -> exactly as asked
+    out_drawn = args.out or DEFAULT_OUT_DRAWN
+    out_short = args.out_short or (args.out.rstrip("/") + "_short" if args.out else DEFAULT_OUT_SHORT)
     tags = [""] if args.no_tags else (TAGS[:args.drawn_tags] if args.drawn_tags else TAGS)  # drawn intonations (see --drawn-tags)
-    short_tags = [""]  # short negatives: NEUTRAL only — sobbing/laughing stretch «захар» => not short
+    # Short «захар»: NEUTRAL only — sobbing/laughing stretch it and it stops being short. This rule
+    # dates from the pre-v28 «short = length-discrimination negative» era; short is the TARGET now.
+    short_tags = [""]
     a_counts = list(range(args.a_min, args.a_max + 1))
 
     log_path = args.log or os.path.join(
-        os.path.dirname(os.path.abspath(args.out.rstrip("/"))), f"fish_gen_{time.strftime('%Y%m%d_%H%M%S')}.log")
+        os.path.dirname(os.path.abspath(out_drawn.rstrip("/"))), f"fish_gen_{time.strftime('%Y%m%d_%H%M%S')}.log")
     if not args.dry_run:
         os.makedirs(os.path.dirname(log_path), exist_ok=True)
     log = Log(None if args.dry_run else log_path)
@@ -348,6 +372,8 @@ def main():
     sample = build_text(a_counts[len(a_counts) // 2], "sobbing")[0]
     est = (n_d + n_s) * len(sample.encode("utf-8")) / 1_000_000 * PRICE_PER_MB
     log(f"[fish] plan: {len(voices)} voices -> drawn {n_d} + short {n_s}; est. ${est:.3f}")
+    log(f"[fish] out: drawn -> {out_drawn}")
+    log(f"[fish]      short -> {out_short}")
 
     if args.dry_run:
         from collections import Counter
@@ -359,7 +385,7 @@ def main():
         return 0
 
     if n_d:
-        os.makedirs(args.out, exist_ok=True)
+        os.makedirs(out_drawn, exist_ok=True)
     if n_s:
         os.makedirs(out_short, exist_ok=True)
     # build the full job list, then run TTS in parallel (network-bound) with a progress %
@@ -371,7 +397,7 @@ def main():
             for _ in range(args.per_voice):
                 for tag in tags:
                     n_a = a_counts[gd % len(a_counts)]  # vary vowel length across voices/tags
-                    jobs.append(("drawn", vid, ci, n_a, tag, args.out, f"a{n_a}"))
+                    jobs.append(("drawn", vid, ci, n_a, tag, out_drawn, f"a{n_a}"))
                     ci += 1
                     gd += 1
         if args.mode in ("short", "both"):
@@ -397,8 +423,8 @@ def main():
             if done % step == 0 or done == total:
                 log(f"[fish] {done}/{total} ({100 * done / total:.1f}%) | drawn {made_d} short {made_s}")
 
-    log(f"[fish] DONE: drawn(positives) {made_d} -> {args.out}")
-    log(f"[fish]       short(negatives) {made_s} -> {out_short}")
+    log(f"[fish] DONE: drawn(positives, pre-v28 target) {made_d} -> {out_drawn}")
+    log(f"[fish]       short(positives, TARGET word)    {made_s} -> {out_short}")
     log("[fish] NEXT: playback-recapture BOTH through the device, then STT-filter (large-v3) + train.")
     log(f"[fish] log saved -> {log_path}")
     log.close()
