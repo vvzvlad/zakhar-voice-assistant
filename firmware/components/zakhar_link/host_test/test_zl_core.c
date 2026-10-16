@@ -125,6 +125,8 @@ static void test_numbers(void)
     assert(!zl_silent(1000, 1001, 30000));  // a frame stamped after `now` was read
     assert(!zl_silent(30999, 1000, 30000) && zl_silent(31000, 1000, 30000));
     assert(zl_silent(29998, UINT32_MAX - 1, 30000));  // across the tick counter wrap
+    assert(!zl_capture_done(48999, 1000, 48000) && zl_capture_done(49000, 1000, 48000));
+    assert(!zl_capture_done(47997, UINT32_MAX - 1, 48000) && zl_capture_done(47998, UINT32_MAX - 1, 48000));
     printf("ok: numbers\n");
 }
 

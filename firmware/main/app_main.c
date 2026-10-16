@@ -65,8 +65,7 @@ static void on_net_event(void *arg, esp_event_base_t base, int32_t id, void *dat
 
 // No Wi-Fi power save once Bluetooth is released (until then Wi-Fi sleeps outside its coexistence
 // time slice regardless). IDF's default modem sleep holds the server's TCP ACKs until the next
-// beacon, which stalls the two-channel mic stream past zakhar_link's send timeout; the speaker is
-// mains-powered.
+// beacon and stalls the two-channel mic stream; the speaker is mains-powered.
 static void wifi_no_power_save(void)
 {
     ESP_ERROR_CHECK_WITHOUT_ABORT(esp_wifi_set_ps(WIFI_PS_NONE));

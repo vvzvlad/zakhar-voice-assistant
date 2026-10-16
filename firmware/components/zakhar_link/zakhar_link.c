@@ -28,7 +28,12 @@ static const char *TAG = "zakhar_link";
 
 #define PASS_MS 20             // the component task's loop: microphone frames and timers
 #define MAX_FRAMES_PER_PASS 8  // at most 8 microphone frames (256 ms) per pass
-#define SEND_TIMEOUT_MS 2000   // a send that cannot go out in this long fails and the link drops
+// A send that cannot go out in this long fails and the link drops. Long enough to wait out the
+// ~1.6 s retransmission timeout after a segment lost on Wi-Fi, short enough that the microphone
+// frames waiting meanwhile still fit the device's tap (3.1 s on the Voice PE and the panel; about
+// 1 s while a session's 2 s pre-roll is still going out): a longer wait would skip the oldest of
+// them and splice the audio instead of dropping the link.
+#define SEND_TIMEOUT_MS 3000
 #define SILENCE_MS 30000       // nothing heard for this long drops the link
 #define RX_CAP 4096            // a text frame larger than this is skipped; fits a long reply
 #define PEAK_MS 1000           // wake_peak period
@@ -58,7 +63,6 @@ static TickType_t s_heard;     // the last frame received
 static uint32_t s_backoff = 1; // seconds before the next connect; 1 again after a `config`
 static zl_sess_t s_sess;
 static uint32_t s_capture_ms;  // the last `capture`
-static TickType_t s_capture_since, s_capture_ticks;
 static bool s_peak_on;
 static int s_volume;
 static zl_playq_t s_playq;
@@ -79,6 +83,8 @@ static uint8_t *s_model;
 // so the samples from byte 2 are aligned.
 static uint32_t s_mic_pos;
 static int16_t s_tx[1 + ZL_FRAME_FRAMES * 2];
+// The component task only: the running capture's first frame and length (set by capture_start()).
+static uint32_t s_capture_start, s_capture_frames;
 
 static void lock(void)
 {
@@ -447,7 +453,7 @@ static void wake(void)
 }
 
 // A `capture` from the server: from now, no pre-roll; refused while a session is open.
-static void capture_start(TickType_t now)
+static void capture_start(void)
 {
     const uint32_t pos = s_cfg.mic_position();
     lock();
@@ -456,8 +462,8 @@ static void capture_start(TickType_t now)
     const uint32_t ms = s_capture_ms;
     if (started) {
         s_mic_pos = pos;
-        s_capture_since = now;
-        s_capture_ticks = pdMS_TO_TICKS(ms);
+        s_capture_start = pos;
+        s_capture_frames = ms * (ZL_MIC_RATE / 1000);
     }
     unlock();
     if (!online) return;
@@ -470,10 +476,12 @@ static void capture_start(TickType_t now)
     if (s_cb.on_capture != NULL) s_cb.on_capture(true);
 }
 
-static void capture_poll(TickType_t now)
+// The capture ends when its audio is sent, not by the clock: a pass that waited in a send must not
+// cut off the frames still in the tap.
+static void capture_poll(void)
 {
     lock();
-    const bool over = s_sess.capture && now - s_capture_since >= s_capture_ticks;
+    const bool over = s_sess.capture && zl_capture_done(s_mic_pos, s_capture_start, s_capture_frames);
     if (over) s_sess.capture = false;
     unlock();
     if (!over) return;
@@ -488,10 +496,12 @@ static void mic_poll(void)
 {
     lock();
     const bool on = s_online && (s_sess.mic || s_sess.capture);
+    const bool capture = s_sess.capture;
     unlock();
     if (!on) return;
     const size_t samples = ZL_FRAME_FRAMES * (size_t)s_cfg.mic_channels;
     for (int i = 0; i < MAX_FRAMES_PER_PASS; i++) {
+        if (capture && zl_capture_done(s_mic_pos, s_capture_start, s_capture_frames)) break;
         if (s_cfg.mic_position() - s_mic_pos < ZL_FRAME_FRAMES) break;
         if (s_cfg.mic_read(&s_mic_pos, s_tx + 1, ZL_FRAME_FRAMES) != ZL_FRAME_FRAMES) break;
         const int len = 1 + (int)(samples * sizeof(int16_t));
@@ -542,12 +552,12 @@ static void link_task(void *arg)
         if (s_ws == NULL && (int32_t)(now - connect_at) >= 0 && !link_connect()) {
             connect_at = now + pdMS_TO_TICKS(backoff_take() * 1000);
         }
-        if (ev & EV_CAPTURE) capture_start(now);
+        if (ev & EV_CAPTURE) capture_start();
         if (ev & EV_WAKE) wake();
         if (ev & EV_PLAYED) send_played();
         if (ev & EV_VOLUME) send_volume();
         mic_poll();
-        capture_poll(now);
+        capture_poll();
         if (now - peak_at >= pdMS_TO_TICKS(PEAK_MS)) {
             peak_at = now;
             peak_poll();

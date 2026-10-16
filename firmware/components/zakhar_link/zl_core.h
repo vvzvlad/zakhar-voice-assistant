@@ -76,6 +76,9 @@ uint32_t zl_backoff_next(uint32_t s);  // 1, 2, 4 ... 30 seconds
 // Whether `limit` ticks or more passed from `heard` to `now`. The difference is signed: `heard`
 // can be stamped by the client's task after `now` was read, and that is not silence.
 bool zl_silent(uint32_t now, uint32_t heard, uint32_t limit);
+// Whether a capture that started at microphone position `start` has its `frames` frames by `pos`
+// (positions count frames written and wrap).
+bool zl_capture_done(uint32_t pos, uint32_t start, uint32_t frames);
 
 // ---------------------------------------------------------------- the voice session
 

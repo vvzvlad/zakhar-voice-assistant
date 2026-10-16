@@ -288,6 +288,11 @@ bool zl_silent(uint32_t now, uint32_t heard, uint32_t limit)
     return (int32_t)(now - heard) >= (int32_t)limit;
 }
 
+bool zl_capture_done(uint32_t pos, uint32_t start, uint32_t frames)
+{
+    return pos - start >= frames;
+}
+
 // ---------------------------------------------------------------- the voice session
 
 zl_wake_t zl_sess_wake_check(const zl_sess_t *s)
