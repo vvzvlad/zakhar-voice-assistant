@@ -476,7 +476,7 @@ static void link_task(void *arg)
         xTaskNotifyWait(0, UINT32_MAX, &ev, pdMS_TO_TICKS(PASS_MS));
         const TickType_t now = xTaskGetTickCount();
         lock();
-        const bool silent = s_online && now - s_heard >= pdMS_TO_TICKS(SILENCE_MS);
+        const bool silent = s_online && zl_silent(now, s_heard, pdMS_TO_TICKS(SILENCE_MS));
         unlock();
         if (silent) ESP_LOGW(TAG, "nothing heard for %d s", SILENCE_MS / 1000);
         if (s_ws != NULL && ((ev & EV_LINK_DOWN) || silent)) connect_at = now + pdMS_TO_TICKS(link_lost() * 1000);

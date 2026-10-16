@@ -108,6 +108,9 @@ static void test_numbers(void)
     const uint32_t want[] = {2, 4, 8, 16, 30, 30};
     uint32_t s = 1;
     for (size_t i = 0; i < sizeof want / sizeof want[0]; i++) assert((s = zl_backoff_next(s)) == want[i]);
+    assert(!zl_silent(1000, 1001, 30000));  // a frame stamped after `now` was read
+    assert(!zl_silent(30999, 1000, 30000) && zl_silent(31000, 1000, 30000));
+    assert(zl_silent(29998, UINT32_MAX - 1, 30000));  // across the tick counter wrap
     printf("ok: numbers\n");
 }
 

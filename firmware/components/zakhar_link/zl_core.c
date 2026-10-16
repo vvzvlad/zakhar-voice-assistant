@@ -252,6 +252,11 @@ uint32_t zl_backoff_next(uint32_t s)
     return s * 2 > 30 ? 30 : s * 2;
 }
 
+bool zl_silent(uint32_t now, uint32_t heard, uint32_t limit)
+{
+    return (int32_t)(now - heard) >= (int32_t)limit;
+}
+
 // ---------------------------------------------------------------- the voice session
 
 zl_wake_t zl_sess_wake_check(const zl_sess_t *s)

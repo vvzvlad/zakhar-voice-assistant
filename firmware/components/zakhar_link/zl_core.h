@@ -66,6 +66,9 @@ const char *zl_state_name(zl_state_t state);  // the wire value: "listening" ...
 uint8_t zl_cutoff_u8(double percent);  // trunc(percent / 100 * 255)
 int zl_peak_percent(uint8_t peak);     // 0..255 -> 0..100, rounded
 uint32_t zl_backoff_next(uint32_t s);  // 1, 2, 4 ... 30 seconds
+// Whether `limit` ticks or more passed from `heard` to `now`. The difference is signed: `heard`
+// can be stamped by the client's task after `now` was read, and that is not silence.
+bool zl_silent(uint32_t now, uint32_t heard, uint32_t limit);
 
 // ---------------------------------------------------------------- the voice session
 
