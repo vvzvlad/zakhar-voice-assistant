@@ -2,7 +2,7 @@ menu "zakhar"
 
 config ZAKHAR_SERVER_URL
     string "Server WebSocket URL"
-    default "ws://10.31.41.59:8200/device"
+    default "ws://10.31.50.139:8200/device"
 
 config ZAKHAR_WIFI_SSID
     string "Wi-Fi SSID of the one-time seed image"
