@@ -31,9 +31,10 @@ RUN mkdir -p data
 # Code and static assets
 COPY src/ src/
 COPY templates/ templates/
-# The speaker's wake-word and VAD models, sent to it at every connection (src/device_server.py).
-COPY microWakeWord/v31/model/zakhar.tflite microWakeWord/v31/model/zakhar.tflite
-COPY microWakeWord/vad/vad.tflite microWakeWord/vad/vad.tflite
+# Every wake-word model (picked per device in the panel) and the VAD model, sent to the
+# speaker at every connection (src/device_server.py). .dockerignore lets only the .tflite files
+# under microWakeWord/ and the ESPHome models' LICENSE/NOTICE into the build context.
+COPY microWakeWord/ microWakeWord/
 COPY main.py .
 
 # Built admin panel from the frontend stage. The backend serves it from this

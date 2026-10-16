@@ -20,6 +20,7 @@ import respx
 import src.plugins  # noqa: F401  register all providers
 from aiohttp.test_utils import TestClient, TestServer
 from src.config_service import ConfigService
+from src.device_server import RELEASE_WAKE_MODEL
 from src.panel_api import PanelServer
 from src.plugins.base import Deps
 from src.plugins.tts.fishaudio import FISH_TTS_URL
@@ -182,6 +183,19 @@ async def test_get_chimes_lists_bundled_files(tmp_path):
         # relative path the pipeline opens verbatim.
         assert any(o.endswith(".wav") for o in body["options"])
         assert all(o.startswith("assets/chimes/") for o in body["options"])
+    finally:
+        await client.close()
+
+
+async def test_get_wake_models_lists_the_release_models(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / RELEASE_WAKE_MODEL).parent.mkdir(parents=True)
+    (tmp_path / RELEASE_WAKE_MODEL).write_bytes(b"")
+    client, _svc_ = await _client(tmp_path)
+    try:
+        resp = await client.get("/api/wake-models")
+        assert resp.status == 200
+        assert await resp.json() == {"options": [RELEASE_WAKE_MODEL], "release": RELEASE_WAKE_MODEL}
     finally:
         await client.close()
 

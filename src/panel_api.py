@@ -35,7 +35,7 @@ from pydantic import ValidationError
 from src import config_store, dataset_jobs
 from src.audio_prep import pcm_to_wav_bytes
 from src.capture_jobs import CaptureJobManager
-from src.device_server import CAPTURE_MAX_SECONDS, CaptureBusyError
+from src.device_server import CAPTURE_MAX_SECONDS, RELEASE_WAKE_MODEL, CaptureBusyError, list_wake_models
 from src.plugins.base import get_provider
 from src.runs_store import db_file_size
 from src.tts import pcm_rate
@@ -320,6 +320,11 @@ class PanelServer:
     async def _get_chimes(self, request: web.Request) -> web.Response:
         """List the bundled end-of-phrase chime files for the ack sound_path selector."""
         return web.json_response({"options": list_chimes()})
+
+    async def _get_wake_models(self, request: web.Request) -> web.Response:
+        """List the wake-word models the release carries for a device's wake_model selector,
+        plus the one an empty wake_model falls back to."""
+        return web.json_response({"options": list_wake_models(), "release": RELEASE_WAKE_MODEL})
 
     async def _post_play_chime(self, request: web.Request) -> web.Response:
         """Play the selected end-of-phrase chime on the speaker(s) for an operator preview.
@@ -1263,6 +1268,7 @@ class PanelServer:
             web.get("/api/options", self._get_options),
             web.get("/api/chimes", self._get_chimes),
             web.post("/api/chimes/play", self._post_play_chime),
+            web.get("/api/wake-models", self._get_wake_models),
             web.post("/api/tts/test", self._post_tts_test),
             web.get("/api/prompt", self._get_prompt),
             web.put("/api/prompt", self._put_prompt),

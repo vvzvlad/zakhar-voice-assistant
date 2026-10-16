@@ -14,7 +14,7 @@ import {
   getPromptProfiles, getPromptProfile, createPromptProfile, updatePromptProfile,
   deletePromptProfile, activatePromptProfile,
   getTools, getOptions, startCapture, getCaptureStatus, downloadCaptureResult, getDeviceControls, setDeviceControl,
-  getWakeProbability, setWakeProbabilityStream, getConfig,
+  getWakeProbability, setWakeProbabilityStream, getConfig, getWakeModels,
 } from "../api.js";
 import { deviceLabel, deviceVersion } from "../format.js";
 
@@ -559,19 +559,44 @@ export function Prompt() {
 }
 
 // ── Devices ───────────────────────────────────────────────────────────────
+// A wake-word model path as the selector shows it: without the shared directory.
+const modelName = (path) => path.replace(/^microWakeWord\//, "");
+
 // Add mode (`onSave({name, enabled})`) asks for a device id. Edit mode (`device`, the
-// saved id) edits the display label (`onSave(label)`), shows the id read-only — it is
-// what the firmware sends in hello — and hosts the live controls; `online` says
-// whether the device is reachable.
-function DeviceModal({ onSave, onClose, title, device, label: savedLabel = "", online }) {
+// saved id) edits the display label and the wake-word model (`onSave` gets only the
+// changed ones of {label, wake_model}; wake_model "" = the release default), shows the
+// id read-only — it is what the firmware sends in hello — and hosts the live controls;
+// `online` says whether the device is reachable.
+function DeviceModal({ onSave, onClose, title, device, label: savedLabel = "", wakeModel: savedWakeModel = "", online }) {
   const [name, setName] = useState("");
   const [label, setLabel] = useState(savedLabel);
+  const [wakeModel, setWakeModel] = useState(savedWakeModel);
+  const [wakeModels, setWakeModels] = useState(null); // {options, release} from GET /api/wake-models
+  useEffect(() => {
+    if (!device) return undefined;
+    let alive = true;
+    getWakeModels()
+      .then((r) => { if (alive) setWakeModels(r); })
+      .catch(() => { /* the model field stays hidden */ });
+    return () => { alive = false; };
+  }, [device]);
   if (device) {
+    const unchanged = label.trim() === savedLabel && wakeModel === savedWakeModel;
     return <Modal title={title} onClose={onClose}
       footer={<><button className="z-btn g" onClick={onClose}>Close</button>
-        <button className="z-btn p" disabled={label.trim() === savedLabel} onClick={() => onSave(label.trim())}>Save</button></>}>
+        <button className="z-btn p" disabled={unchanged} onClick={() => onSave({
+          // Only the edited fields: the rest stays as in the server's fresh list (saveList).
+          ...(label.trim() !== savedLabel && { label: label.trim() }),
+          ...(wakeModel !== savedWakeModel && { wake_model: wakeModel }),
+        })}>Save</button></>}>
       <Field label="Name" hint="Shown in the panel instead of the device id; empty shows the id."><div className="z-inp"><input value={label} placeholder={device} onChange={(e) => setLabel(e.target.value)} /></div></Field>
       <Field label="Device id" hint="Sent by the firmware when it connects — keys the device's settings and dialog context."><div className="z-inp"><input value={device} readOnly /></div></Field>
+      {wakeModels && <Field label="Wake-word model" hint="Sent to the device on save and at every connection.">
+        <Select value={wakeModel} onChange={setWakeModel} options={[
+          { value: "", label: `Release default (${modelName(wakeModels.release)})` },
+          ...wakeModels.options.map((p) => ({ value: p, label: modelName(p) })),
+        ]} />
+      </Field>}
       <CaptureControl device={device} online={online} />
       <DeviceControls device={device} />
       <WakeProbabilityMeter device={device} online={online} />
@@ -857,8 +882,8 @@ export function Devices() {
     } catch (e) { setBusyErr(e); }
   };
   const onAdd = (d) => saveList((list) => [...list, d]);
-  const onLabel = (name, label) => saveList((list) => list.map((x) => (
-    x.name === name ? { ...x, label } : x
+  const onEdit = (name, edit) => saveList((list) => list.map((x) => (
+    x.name === name ? { ...x, ...edit } : x
   )));
   const onDelete = (name) => {
     if (!window.confirm(`Delete speaker "${deviceLabel(devices, name)}"?`)) return;
@@ -901,6 +926,7 @@ export function Devices() {
     {modal?.mode === "add" && <DeviceModal title="Add speaker" onSave={onAdd} onClose={() => setModal(null)} />}
     {modal?.mode === "edit" && <DeviceModal title="Edit speaker" onClose={() => setModal(null)}
       device={modal.name} label={devices.find((d) => d.name === modal.name)?.label || ""}
-      onSave={(label) => onLabel(modal.name, label)} online={statusOf(modal.name) === "online"} />}
+      wakeModel={devices.find((d) => d.name === modal.name)?.wake_model || ""}
+      onSave={(edit) => onEdit(modal.name, edit)} online={statusOf(modal.name) === "online"} />}
   </div>;
 }

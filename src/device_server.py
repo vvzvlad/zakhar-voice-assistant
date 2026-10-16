@@ -11,8 +11,10 @@ import asyncio
 import io
 import itertools
 import json
+import re
 import wave
 from collections import deque
+from pathlib import Path
 
 import numpy as np
 import soxr
@@ -34,8 +36,8 @@ CLOSE_REPLACED = 4001
 HEARTBEAT_S = 10.0
 # Largest payload per binary frame, playback and model alike.
 PLAY_FRAME_BYTES = 4096
-# The models the release ships (the Dockerfile copies them into the image), sent to a device
-# whose core.devices[].wake_model / vad_model is empty.
+# The release's default models (the Dockerfile copies every .tflite under microWakeWord/ into
+# the image), sent to a device whose core.devices[].wake_model / vad_model is empty.
 RELEASE_WAKE_MODEL = "microWakeWord/v31/model/zakhar.tflite"
 RELEASE_VAD_MODEL = "microWakeWord/vad/vad.tflite"  # stock: esphome/micro-wake-word-models models/v2/vad.tflite
 # The server keeps at most buffer_ms minus this much audio ahead of the device's playback.
@@ -80,6 +82,15 @@ def _spawn(coro) -> None:
 def _model_paths(cfg) -> dict[str, str]:
     """The model file sent to a device per `model` kind: the configured one, else the release's."""
     return {"wake": cfg.wake_model or RELEASE_WAKE_MODEL, "vad": cfg.vad_model or RELEASE_VAD_MODEL}
+
+
+def list_wake_models() -> list[str]:
+    """The wake-word models a device's wake_model can name: every .tflite under microWakeWord/
+    except the VAD model's directory, as paths relative to the working directory (where
+    send_model opens them), in natural version order (v8 before v10)."""
+    paths = [p.as_posix() for p in Path("microWakeWord").rglob("*.tflite")
+             if not p.is_relative_to("microWakeWord/vad")]
+    return sorted(paths, key=lambda p: [int(t) if t.isdigit() else t for t in re.split(r"(\d+)", p)])
 
 
 class CaptureBusyError(Exception):

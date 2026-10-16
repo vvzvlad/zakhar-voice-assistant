@@ -11,3 +11,9 @@ tests/
 .DS_Store
 frontend/node_modules/
 frontend/dist/
+# Only the wake-word and VAD models from the training tree go into the image, with the
+# license the ESPHome models are redistributed under.
+microWakeWord/**
+!microWakeWord/**/*.tflite
+!microWakeWord/esphome/LICENSE
+!microWakeWord/esphome/NOTICE

@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
 // Devices page: every write of the device list starts from the server's current
 // list (a cutoff set from a slider, a device that connected while the page was
-// open), the Edit dialog shows the id read-only, saves a display label, and shows
-// why its controls cannot load, and a slider write or a newly connected device
-// refreshes the app's config snapshot.
+// open), the Edit dialog shows the id read-only, saves a display label and a
+// wake-word model, and shows why its controls cannot load, and a slider write or a
+// newly connected device refreshes the app's config snapshot.
 import React from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
@@ -18,6 +18,10 @@ vi.mock("../api.js", () => ({
   setDeviceControl: vi.fn(),
   getWakeProbability: vi.fn(async () => ({ online: true, value: null })),
   setWakeProbabilityStream: vi.fn(async () => ({})),
+  getWakeModels: vi.fn(async () => ({
+    options: ["microWakeWord/v8/model/zakhar.tflite", "microWakeWord/v31/model/zakhar.tflite"],
+    release: "microWakeWord/v31/model/zakhar.tflite",
+  })),
 }));
 
 afterEach(cleanup);
@@ -84,6 +88,9 @@ describe("Devices page", () => {
 
   it("edit saves a label onto the server's current list and the table shows it", async () => {
     api.getDeviceControls.mockResolvedValue({ device: "kitchen", online: true, versions: [], controls: [] });
+    // A model set elsewhere (an agent) since the page loaded survives a label edit.
+    const fresh = [{ ...FRESH[0], wake_model: "microWakeWord/v32/model/zakhar.tflite" }, FRESH[1]];
+    api.getConfig.mockResolvedValue({ core: { devices: fresh } });
     const { rerender } = render(<Devices />);
     fireEvent.click(screen.getByText("Edit"));
     expect(screen.getByDisplayValue("kitchen")).toHaveAttribute("readonly");
@@ -91,13 +98,34 @@ describe("Devices page", () => {
     fireEvent.click(screen.getByText("Save"));
     await waitFor(() => expect(data.patch).toHaveBeenCalledTimes(1));
     expect(data.patch).toHaveBeenCalledWith({ core: { devices: [
-      { ...FRESH[0], label: "Кухня" },
+      { ...fresh[0], label: "Кухня" },
       FRESH[1],
     ] } });
 
     data.catalog.core.values.devices = [{ ...STALE[0], label: "Кухня" }];
     rerender(<Devices />);
     expect(screen.getByText("Кухня")).toBeInTheDocument();
+  });
+
+  it("edit picks a wake-word model from the release's and saves its path", async () => {
+    api.getDeviceControls.mockResolvedValue({ device: "kitchen", online: true, versions: [], controls: [] });
+    data.catalog.core.values.devices = [{ ...STALE[0], wake_model: "microWakeWord/v31/model/zakhar.tflite" }];
+    // A label set elsewhere since the page loaded survives a model edit.
+    const fresh = [{ ...FRESH[0], label: "Кухня" }, FRESH[1]];
+    api.getConfig.mockResolvedValue({ core: { devices: fresh } });
+    render(<Devices />);
+    fireEvent.click(screen.getByText("Edit"));
+    fireEvent.click(await screen.findByText("v31/model/zakhar.tflite"));
+    expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual([
+      "Release default (v31/model/zakhar.tflite)", "v8/model/zakhar.tflite", "v31/model/zakhar.tflite",
+    ]);
+    fireEvent.click(screen.getByRole("option", { name: "v8/model/zakhar.tflite" }));
+    fireEvent.click(screen.getByText("Save"));
+    await waitFor(() => expect(data.patch).toHaveBeenCalledTimes(1));
+    expect(data.patch).toHaveBeenCalledWith({ core: { devices: [
+      { ...fresh[0], wake_model: "microWakeWord/v8/model/zakhar.tflite" },
+      FRESH[1],
+    ] } });
   });
 
   it("edit shows the id read-only and a slider write refreshes the config", async () => {

@@ -199,7 +199,7 @@ Shape (see `templates/default_config.json` for the full default):
   `runs` (enabled / retention_days),
   `reminders` (enabled), `capture` (enabled / dir — save every utterance as WAV),
   `ack` (enabled / sound_path — the end-of-phrase chime), `devices` (list of
-  `{name, enabled, wake_cutoff, vad_cutoff, wake_model, vad_model}`, see [Devices](#devices-and-firmware)),
+  `{name, label, enabled, wake_cutoff, vad_cutoff, wake_model, vad_model}`, see [Devices](#devices-and-firmware)),
   `tts_timeout`, `log_level`.
 
 API keys are plain string fields in the JSON (this is a trusted-LAN service); `data/` is
@@ -256,9 +256,11 @@ espanel wall panel. The server URL is the `CONFIG_ZAKHAR_SERVER_URL` default in
 `firmware/main/Kconfig.projbuild`; the device id is the speaker's Wi-Fi MAC (12 lowercase
 hex), as with the panel, so one image gives every speaker its own id, and the name the
 admin panel shows is the label set on the Devices page. The speaker gets its wake-word and VAD
-models from the server at every connection: the release image carries the deployed wake
-model and the VAD model, and `core.devices[].wake_model` / `vad_model` point a device at
-another file. The firmware carries no Wi-Fi password:
+models from the server at every connection: the release image carries every wake-word
+model of `microWakeWord/` (the trained "Zakhar" versions and the ESPHome Okay Nabu, Hey
+Jarvis, Hey Mycroft and Alexa) and the VAD model. A device's wake model is picked in its Edit
+dialog on the Devices page (`core.devices[].wake_model`, empty for the release default);
+`vad_model` points a device at another VAD file. The firmware carries no Wi-Fi password:
 a speaker with no network stored shows a warm white twinkle and is set up with
 Espressif's ESP BLE Provisioning app (iOS, Android), where it appears as
 `PROV_ZAKHAR_<6 hex digits>` and asks for no code. Holding the center button for

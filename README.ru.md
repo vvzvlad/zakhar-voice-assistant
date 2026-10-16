@@ -202,7 +202,7 @@ docker compose pull && docker compose up -d
   агенту MCP-эндпоинт, отдаваемый панелью на `/mcp`), `runs` (enabled /
   retention_days), `reminders` (enabled), `capture` (enabled / dir — сохранять
   каждую реплику в WAV), `ack` (enabled / sound_path — звук конца фразы), `devices`
-  (список `{name, enabled, wake_cutoff, vad_cutoff, wake_model, vad_model}`, см.
+  (список `{name, label, enabled, wake_cutoff, vad_cutoff, wake_model, vad_model}`, см.
   [Устройства](#устройства-и-прошивка)), `tts_timeout`, `log_level`.
 
 API-ключи — это обычные строковые поля в JSON (сервис рассчитан на доверенную LAN);
@@ -262,9 +262,11 @@ wake-word и VAD.
 в `firmware/main/Kconfig.projbuild`; id устройства — Wi-Fi MAC колонки (12 строчных
 шестнадцатеричных цифр), как у панели, поэтому одна сборка даёт каждой колонке свой id, а
 имя, которое показывает админка, — подпись со страницы Devices. Модели wake-word и VAD колонка
-получает от сервера при каждом подключении: образ релиза везёт рабочую модель
-wake-word и модель VAD, а `core.devices[].wake_model` / `vad_model` направляют
-устройство на другой файл. Пароля от Wi-Fi в прошивке нет:
+получает от сервера при каждом подключении: образ релиза везёт все модели wake-word
+из `microWakeWord/` (обученные версии «Захара» и модели ESPHome Okay Nabu, Hey Jarvis,
+Hey Mycroft и Alexa) и модель VAD. Модель wake-word устройства выбирается в его окне Edit
+на странице Devices (`core.devices[].wake_model`, пусто — модель релиза по умолчанию);
+`vad_model` направляет устройство на другой файл VAD. Пароля от Wi-Fi в прошивке нет:
 колонка без сохранённой сети мерцает тёплым белым, и сеть ей задают приложением
 Espressif ESP BLE Provisioning (iOS, Android) — там она видна как
 `PROV_ZAKHAR_<6 hex-цифр>` и кода не спрашивает. Если 10 с держать центральную

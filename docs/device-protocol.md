@@ -33,6 +33,11 @@ The owner's words:
   and the device swaps them without a restart.
 - «файлы моделей должны приходить с релизом, внутри него», «всм просто с релизом» — the model
   files ship inside the server's release image, not on the models volume.
+- «теперь надо сделать так чтобы я мог выбирать в панели нужную модель» — the panel's device
+  dialog picks the device's wake-word model from the models the release carries.
+- «еще модели из esphome же можно притащить, джарвис, набу», option chosen: «Просто добавить в
+  список» — the ESPHome models (Okay Nabu, Hey Jarvis, Hey Mycroft, Alexa) are in the list; the
+  server's second wake-word check stays as it is, so wakes on them pass only with that check off.
 
 ## Transport
 

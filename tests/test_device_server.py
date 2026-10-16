@@ -274,6 +274,23 @@ async def test_models_follow_the_config_and_the_reload_command(srv, tmp_path):
     assert (await dev.model())[0] == {"type": "model", "kind": "vad", "name": str(other), "size": 100}
 
 
+def test_wake_models_list_in_version_order_without_vad(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    for path in ("v10/candidates/angular_s10.tflite", "v10/candidates/angular_s08.tflite", "v31/model/zakhar.tflite",
+                 "v8/model/zakhar.tflite", "v19/zakhar.tflite", "v1/model/zakhar.tflite", "vad/vad.tflite",
+                 "v8/model/notes.txt"):
+        (tmp_path / "microWakeWord" / path).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / "microWakeWord" / path).write_bytes(b"")
+    assert device_server.list_wake_models() == [
+        "microWakeWord/v1/model/zakhar.tflite",
+        "microWakeWord/v8/model/zakhar.tflite",
+        "microWakeWord/v10/candidates/angular_s08.tflite",
+        "microWakeWord/v10/candidates/angular_s10.tflite",
+        "microWakeWord/v19/zakhar.tflite",
+        "microWakeWord/v31/model/zakhar.tflite",
+    ]
+
+
 async def test_wake_session_end_to_end(srv):
     dev = await srv.connect()
     await dev.recv()  # config

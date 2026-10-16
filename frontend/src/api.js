@@ -55,6 +55,9 @@ export const getOptions = (category, plugin, field, q) =>
   request(`/api/options?category=${encodeURIComponent(category)}&plugin=${encodeURIComponent(plugin)}&field=${encodeURIComponent(field)}${q ? `&q=${encodeURIComponent(q)}` : ""}`);
 // Bundled end-of-phrase chime files for the ack sound_path selector.
 export const getChimes = () => request("/api/chimes");
+// Wake-word models the release carries, for a device's wake_model selector:
+// {options: [paths], release: the path an empty wake_model falls back to}.
+export const getWakeModels = () => request("/api/wake-models");
 // Play the selected end-of-phrase chime on the speaker(s) for an operator preview.
 // soundPath "" = the synthesized default; device omitted = play on every online speaker.
 // Returns {played: [names], offline: [names]}.
