@@ -63,6 +63,15 @@ static void on_net_event(void *arg, esp_event_base_t base, int32_t id, void *dat
     }
 }
 
+// No Wi-Fi power save once Bluetooth is released (until then Wi-Fi sleeps outside its coexistence
+// time slice regardless). IDF's default modem sleep holds the server's TCP ACKs until the next
+// beacon, which stalls the two-channel mic stream past zakhar_link's send timeout; the speaker is
+// mains-powered.
+static void wifi_no_power_save(void)
+{
+    ESP_ERROR_CHECK_WITHOUT_ABORT(esp_wifi_set_ps(WIFI_PS_NONE));
+}
+
 // The provisioning manager's events, on the default event loop as in the network_provisioning
 // wifi_prov example. Credentials that fail are forgotten, so the app can send others; the manager
 // stops the service on its own a while after the success, and its deinit then releases the
@@ -84,6 +93,7 @@ static void on_prov_event(void *arg, esp_event_base_t base, int32_t id, void *da
         break;
     case NETWORK_PROV_END:
         network_prov_mgr_deinit();
+        wifi_no_power_save();
         xEventGroupSetBits(s_net, BT_FREE);
         break;
     default:
@@ -150,6 +160,7 @@ static void wifi_start(void)
         ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wc));
     }
     ESP_ERROR_CHECK(esp_wifi_start());
+    wifi_no_power_save();
 }
 
 // The center button held FORGET_HOLD_MS: the stored network is erased and the device restarts. A
