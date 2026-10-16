@@ -105,9 +105,15 @@ static void wifi_start(void)
     if (esp_efuse_mac_get_custom(custom) == ESP_OK) ESP_ERROR_CHECK(esp_base_mac_addr_set(custom));
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
-    esp_netif_create_default_wifi_sta();
+    esp_netif_t *sta = esp_netif_create_default_wifi_sta();
     const wifi_init_config_t init = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&init));
+    // The DHCP host name ESPHome gave the speaker: its name plus the MAC tail.
+    uint8_t mac[6];
+    char host[24];
+    ESP_ERROR_CHECK(esp_wifi_get_mac(WIFI_IF_STA, mac));
+    snprintf(host, sizeof host, "zakhar-voice-%02x%02x%02x", mac[3], mac[4], mac[5]);
+    ESP_ERROR_CHECK(esp_netif_set_hostname(sta, host));
     ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, on_net_event, NULL));
     ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, on_net_event, NULL));
     ESP_ERROR_CHECK(esp_event_handler_register(NETWORK_PROV_EVENT, ESP_EVENT_ANY_ID, on_prov_event, NULL));
@@ -121,9 +127,7 @@ static void wifi_start(void)
     ESP_ERROR_CHECK(network_prov_mgr_is_wifi_provisioned(&provisioned));
 
     if (!provisioned && CONFIG_ZAKHAR_WIFI_SSID[0] == '\0') {
-        uint8_t mac[6];
         char name[24];
-        ESP_ERROR_CHECK(esp_wifi_get_mac(WIFI_IF_STA, mac));
         snprintf(name, sizeof name, "PROV_ZAKHAR_%02X%02X%02X", mac[3], mac[4], mac[5]);
         ESP_LOGI(TAG, "no Wi-Fi network stored: BLE provisioning as %s", name);
         atomic_store(&s_provisioning, true);
