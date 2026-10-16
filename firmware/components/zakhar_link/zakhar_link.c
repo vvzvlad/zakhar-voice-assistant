@@ -390,9 +390,16 @@ static bool server_find(void)
         ESP_LOGW(TAG, "mDNS query for the server failed: %s", esp_err_to_name(err));
         return false;
     }
+    if (results == NULL) {
+        ESP_LOGW(TAG, "no server answers _zakhar._tcp");
+        return false;
+    }
     bool found = false;
     for (const mdns_result_t *r = results; r != NULL && !found; r = r->next) {
-        if (r->hostname == NULL) continue;  // no SRV record: no host and no port
+        if (r->hostname == NULL) {  // no SRV record: no host and no port
+            ESP_LOGW(TAG, "%s answers without its host and port", r->instance_name ? r->instance_name : "a server");
+            continue;
+        }
         esp_ip4_addr_t ip = {0};
         for (const mdns_ip_addr_t *a = r->addr; a != NULL; a = a->next) {
             if (a->addr.type == ESP_IPADDR_TYPE_V4) {
@@ -402,12 +409,14 @@ static bool server_find(void)
         }
         // The parser keeps an A record only when the SRV record came before it in the packet, and
         // python-zeroconf orders those records at random: then the address is asked for by name.
-        if (ip.addr == 0 && mdns_query_a(r->hostname, 1000, &ip) != ESP_OK) continue;
+        if (ip.addr == 0 && mdns_query_a(r->hostname, 1000, &ip) != ESP_OK) {
+            ESP_LOGW(TAG, "no address for %s.local", r->hostname);
+            continue;
+        }
         snprintf(s_url, sizeof s_url, "ws://" IPSTR ":%u/device", IP2STR(&ip), (unsigned)r->port);
         found = true;
     }
     mdns_query_results_free(results);
-    if (!found) ESP_LOGW(TAG, "no server answers _zakhar._tcp");
     return found;
 }
 
