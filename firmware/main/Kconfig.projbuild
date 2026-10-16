@@ -9,11 +9,14 @@ config ZAKHAR_SERVER_URL
     default "ws://10.31.41.59:8200/device"
 
 config ZAKHAR_WIFI_SSID
-    string "Wi-Fi SSID"
+    string "Wi-Fi SSID of the one-time seed image"
     default ""
+    help
+        Set only in the image of `make fw-build-seed` (from sdkconfig.secrets). A device with no
+        stored network stores this one and connects; empty, it starts BLE provisioning.
 
 config ZAKHAR_WIFI_PASSWORD
-    string "Wi-Fi password"
+    string "Wi-Fi password of the one-time seed image"
     default ""
 
 endmenu

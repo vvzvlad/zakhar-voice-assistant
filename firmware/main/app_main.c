@@ -1,5 +1,7 @@
-// The Voice PE firmware: Wi-Fi, then the board in the stock order (the XMOS, then the DAC, then the
-// amplifier), then the zakhar WebSocket device protocol through zakhar_link.
+// The Voice PE firmware: Wi-Fi (the stored network, or BLE provisioning when there is none), then
+// the board in the stock order (the XMOS, then the DAC, then the amplifier), then the zakhar
+// WebSocket device protocol through zakhar_link.
+#include <stdatomic.h>
 #include <stdio.h>
 
 #include "aic3204.h"
@@ -20,6 +22,8 @@
 #include "freertos/task.h"
 #include "leds.h"
 #include "net_log.h"
+#include "network_provisioning/manager.h"
+#include "network_provisioning/scheme_ble.h"
 #include "nvs_flash.h"
 #include "ota_http.h"
 #include "volume.h"
@@ -29,21 +33,27 @@
 
 static const char *TAG = "voicepe";
 
-#define NET_UP BIT0  // the first IP
+#define NET_UP BIT0   // the first IP
+#define BT_FREE BIT1  // no provisioning runs and the Bluetooth memory is released
 
 // A new image is kept once it has run this long with an IP (ESPHome's safe_mode
 // boot_is_good_after), and restarts into the previous one when it gets no IP this long.
 #define VALID_AFTER_MS (60 * 1000)
 #define NEW_IMAGE_IP_WAIT_MS (120 * 1000)
 
+// The provisioning manager's tries of the credentials the app sent before it reports them failed
+// (the example's CONFIG_EXAMPLE_PROV_MGR_CONNECTION_CNT).
+#define PROV_CONN_ATTEMPTS 5
+
 static EventGroupHandle_t s_net;
+static _Atomic bool s_provisioning;  // the provisioning manager makes the connection attempts
 
 static void on_net_event(void *arg, esp_event_base_t base, int32_t id, void *data)
 {
     (void)arg;
     if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) leds_set_network(false);
     if (base == WIFI_EVENT && (id == WIFI_EVENT_STA_START || id == WIFI_EVENT_STA_DISCONNECTED)) {
-        esp_wifi_connect();
+        if (!atomic_load(&s_provisioning)) esp_wifi_connect();
     } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
         const ip_event_got_ip_t *ev = data;
         ESP_LOGI(TAG, "IP " IPSTR, IP2STR(&ev->ip_info.ip));
@@ -52,6 +62,39 @@ static void on_net_event(void *arg, esp_event_base_t base, int32_t id, void *dat
     }
 }
 
+// The provisioning manager's events, on the default event loop as in the network_provisioning
+// wifi_prov example. Credentials that fail are forgotten, so the app can send others; the manager
+// stops the service on its own a while after the success, and its deinit then releases the
+// Bluetooth memory (NETWORK_PROV_SCHEME_BLE_EVENT_HANDLER_FREE_BTDM).
+static void on_prov_event(void *arg, esp_event_base_t base, int32_t id, void *data)
+{
+    (void)arg;
+    (void)base;
+    (void)data;
+    switch (id) {
+    case NETWORK_PROV_WIFI_CRED_FAIL:
+        ESP_LOGW(TAG, "provisioning: the network refused the credentials or was not found");
+        network_prov_mgr_reset_wifi_sm_state_on_failure();
+        break;
+    case NETWORK_PROV_WIFI_CRED_SUCCESS:
+        ESP_LOGI(TAG, "provisioning: the network is stored");
+        atomic_store(&s_provisioning, false);
+        leds_set_provisioning(false);
+        break;
+    case NETWORK_PROV_END:
+        network_prov_mgr_deinit();
+        xEventGroupSetBits(s_net, BT_FREE);
+        break;
+    default:
+        break;
+    }
+}
+
+// The stored network, else the one compiled into the one-time seed image (stored by
+// esp_wifi_set_config, which persists it to NVS), else BLE provisioning as PROV_ZAKHAR_<MAC tail>
+// with security 1 and no proof of possession: the ESP BLE Provisioning app pairs without a code.
+// The provisioning manager is set up in every case, as the example does, so that its deinit
+// releases the Bluetooth memory when it is not needed.
 static void wifi_start(void)
 {
     s_net = xEventGroupCreate();
@@ -62,15 +105,51 @@ static void wifi_start(void)
     ESP_ERROR_CHECK(esp_wifi_init(&init));
     ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, on_net_event, NULL));
     ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, on_net_event, NULL));
-    wifi_config_t wc = {
-        .sta = {
-            .ssid = CONFIG_ZAKHAR_WIFI_SSID,
-            .password = CONFIG_ZAKHAR_WIFI_PASSWORD,
-        },
+    ESP_ERROR_CHECK(esp_event_handler_register(NETWORK_PROV_EVENT, ESP_EVENT_ANY_ID, on_prov_event, NULL));
+    const network_prov_mgr_config_t pc = {
+        .scheme = network_prov_scheme_ble,
+        .scheme_event_handler = NETWORK_PROV_SCHEME_BLE_EVENT_HANDLER_FREE_BTDM,
+        .network_prov_wifi_conn_cfg = {.wifi_conn_attempts = PROV_CONN_ATTEMPTS},
     };
+    ESP_ERROR_CHECK(network_prov_mgr_init(pc));
+    bool provisioned = false;
+    ESP_ERROR_CHECK(network_prov_mgr_is_wifi_provisioned(&provisioned));
+
+    if (!provisioned && CONFIG_ZAKHAR_WIFI_SSID[0] == '\0') {
+        uint8_t mac[6];
+        char name[24];
+        ESP_ERROR_CHECK(esp_wifi_get_mac(WIFI_IF_STA, mac));
+        snprintf(name, sizeof name, "PROV_ZAKHAR_%02X%02X%02X", mac[3], mac[4], mac[5]);
+        ESP_LOGI(TAG, "no Wi-Fi network stored: BLE provisioning as %s", name);
+        atomic_store(&s_provisioning, true);
+        leds_set_provisioning(true);
+        ESP_ERROR_CHECK(network_prov_mgr_start_provisioning(NETWORK_PROV_SECURITY_1, NULL, name, NULL));
+        return;
+    }
+
+    ESP_ERROR_CHECK(network_prov_mgr_deinit());
+    xEventGroupSetBits(s_net, BT_FREE);
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
-    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wc));
+    if (!provisioned) {
+        ESP_LOGI(TAG, "no Wi-Fi network stored: storing the seed image's");
+        wifi_config_t wc = {
+            .sta = {
+                .ssid = CONFIG_ZAKHAR_WIFI_SSID,
+                .password = CONFIG_ZAKHAR_WIFI_PASSWORD,
+            },
+        };
+        ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wc));
+    }
     ESP_ERROR_CHECK(esp_wifi_start());
+}
+
+// The center button held FORGET_HOLD_MS: the stored network is erased and the device restarts. A
+// normal image then comes up in BLE provisioning; the seed image stores its compiled network again.
+static void forget_wifi(void)
+{
+    ESP_LOGW(TAG, "the center button held %d s: forgetting the Wi-Fi network", FORGET_HOLD_MS / 1000);
+    network_prov_mgr_reset_wifi_provisioning();
+    esp_restart();
 }
 
 // ---------------------------------------------------------------- zakhar_link callbacks
@@ -136,12 +215,15 @@ static void mark_valid_task(void *arg)
 
 // The bootloader rolls a new image back when it restarts before the image is marked valid. So a
 // new image that gets no IP restarts, and one that does is marked valid a minute later: a crash
-// within that minute is a restart too.
+// within that minute is a restart too. The boot goes on only once a provisioning that gave the IP
+// has ended and released the Bluetooth memory, so the board comes up without it.
 static void wait_network(void)
 {
     const TickType_t wait = image_pending() ? pdMS_TO_TICKS(NEW_IMAGE_IP_WAIT_MS) : portMAX_DELAY;
-    if (!(xEventGroupWaitBits(s_net, NET_UP, pdFALSE, pdTRUE, wait) & NET_UP)) {
-        ESP_LOGE(TAG, "a new image with no IP in %d s: restarting into the previous one", NEW_IMAGE_IP_WAIT_MS / 1000);
+    const EventBits_t ready = NET_UP | BT_FREE;
+    if ((xEventGroupWaitBits(s_net, ready, pdFALSE, pdTRUE, wait) & ready) != ready) {
+        ESP_LOGE(TAG, "a new image not up in %d s (no IP, or provisioning still running): restarting into "
+                      "the previous one", NEW_IMAGE_IP_WAIT_MS / 1000);
         esp_restart();
     }
     if (xTaskCreate(mark_valid_task, "mark_valid", 4 * 1024, NULL, 1, NULL) != pdPASS) {
@@ -158,6 +240,7 @@ void app_main(void)
     volume_init();
     leds_start();
     wifi_start();
+    if (controls_button_start(forget_wifi) != ESP_OK) ESP_LOGE(TAG, "the center button is not watched");
 
     // POST /ota and the network log come up with the first IP, before the board: nothing below
     // aborts, a failed bring-up step is logged and ends app_main, leaving Wi-Fi, POST /ota and the

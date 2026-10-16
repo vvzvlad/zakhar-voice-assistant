@@ -57,6 +57,7 @@ make run               # runs .venv/bin/python main.py
 ## Firmware
 ```bash
 make fw-build                          # idf.py in docker on cirunner, never on the laptop
+make fw-build-seed                     # one-time ESPHome switch image, Wi-Fi from sdkconfig.secrets
 make fw-host-test fw-voicepe-host-test # host tests of the pure C cores
 make fw-ota HOST=<address>             # fw-flash PORT=… over USB, fw-logs HOST=… for the log
 ```

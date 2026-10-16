@@ -27,6 +27,7 @@
 #define PIN_LED_POWER 45  // high: LED power on
 
 #define PIN_MUTE 3  // high: the mute switch is on (it also cuts the microphones in hardware)
+#define PIN_BUTTON 0  // the center button, active low (the stock center_button, GPIO0 inverted)
 // The dial: active low, external pull-ups.
 #define PIN_DIAL_A 16
 #define PIN_DIAL_B 18

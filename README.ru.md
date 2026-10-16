@@ -256,12 +256,21 @@ wake-word и VAD.
 
 Прошивка колонки Voice PE лежит в `firmware/` — чистый ESP-IDF на C. Её компонент
 `components/zakhar_link` — сторона протокола на устройстве, общая с настенной
-панелью espanel. Wi-Fi, id устройства и адрес сервера одной колонки — в
-`firmware/sdkconfig.secrets` (в gitignore, строки `CONFIG_ZAKHAR_*` поверх
-`firmware/sdkconfig.defaults`).
+панелью espanel. Id устройства и адрес сервера — значения `CONFIG_ZAKHAR_*` по
+умолчанию в `firmware/main/Kconfig.projbuild`. Пароля от Wi-Fi в прошивке нет:
+колонка без сохранённой сети мерцает тёплым белым, и сеть ей задают приложением
+Espressif ESP BLE Provisioning (iOS, Android) — там она видна как
+`PROV_ZAKHAR_<6 hex-цифр>` и кода не спрашивает. Если 10 с держать центральную
+кнопку, колонка забывает сеть и возвращается к этому. Для разового перехода с
+ESPHome нужен образ из `make fw-build-seed`: он собран с сетью из
+`firmware/sdkconfig.secrets` (в gitignore, строки `CONFIG_ZAKHAR_WIFI_SSID` и
+`CONFIG_ZAKHAR_WIFI_PASSWORD`) и сохраняет её всякий раз, когда сохранённой сети
+нет, — поэтому на разовом образе удержание кнопки возвращает ту же сеть, а не
+настройку через приложение; сразу после перехода залейте обычный образ.
 
 ```bash
 make fw-build                       # собрать на docker-хосте cirunner в firmware/build/
+make fw-build-seed                  # то же плюс Wi-Fi из firmware/sdkconfig.secrets
 make fw-ota HOST=<адрес>            # залить по Wi-Fi на колонку с этой прошивкой
 make fw-flash PORT=/dev/cu.usbmodem…  # или по USB
 make fw-logs HOST=<адрес>           # живой лог колонки по Wi-Fi

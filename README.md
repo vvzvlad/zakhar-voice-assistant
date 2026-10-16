@@ -249,12 +249,21 @@ Debug and dataset calls of the panel API (`http://<host>:8201`), meant for an ag
 
 The Voice PE speaker firmware lives in `firmware/` — plain ESP-IDF C. Its
 `components/zakhar_link` is the device side of the protocol and is shared with the
-espanel wall panel. Wi-Fi credentials, the device id and the server URL of one
-speaker go into `firmware/sdkconfig.secrets` (gitignored, `CONFIG_ZAKHAR_*` lines
-over `firmware/sdkconfig.defaults`).
+espanel wall panel. The device id and the server URL are the `CONFIG_ZAKHAR_*`
+defaults in `firmware/main/Kconfig.projbuild`. The firmware carries no Wi-Fi password:
+a speaker with no network stored shows a warm white twinkle and is set up with
+Espressif's ESP BLE Provisioning app (iOS, Android), where it appears as
+`PROV_ZAKHAR_<6 hex digits>` and asks for no code. Holding the center button for
+10 s forgets the network and brings that back. The one-time switch from ESPHome
+takes the image of `make fw-build-seed`: it is built with the network of
+`firmware/sdkconfig.secrets` (gitignored, `CONFIG_ZAKHAR_WIFI_SSID` and
+`CONFIG_ZAKHAR_WIFI_PASSWORD` lines) and stores it whenever no network is stored —
+so on the seed image the button hold brings that same network back, not the app
+setup; flash the normal image right after the switch.
 
 ```bash
 make fw-build                       # build on the cirunner docker host into firmware/build/
+make fw-build-seed                  # the same, plus the Wi-Fi of firmware/sdkconfig.secrets
 make fw-ota HOST=<address>          # send it over Wi-Fi to a speaker running this firmware
 make fw-flash PORT=/dev/cu.usbmodem…  # or over USB
 make fw-logs HOST=<address>         # the speaker's live log over Wi-Fi
