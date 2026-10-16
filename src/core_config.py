@@ -170,6 +170,14 @@ class DeviceConfig(BaseModel):
     # its on-device VAD gate.
     wake_cutoff: int = Field(80, ge=0, le=100)
     vad_cutoff: int = Field(30, ge=0, le=100)
+    # The .tflite models sent to the device: its wake-word model and the VAD model that gates
+    # it. Empty: the model the release ships (device_server.RELEASE_WAKE_MODEL /
+    # RELEASE_VAD_MODEL); otherwise the path of another file, e.g. on the models volume.
+    # Empty rather than a path by default: device lists are written back to config.json with
+    # every field (Device.set_control and _hello dump them), so a default path would be frozen
+    # into the stored config and outlive its file in a later release.
+    wake_model: str = ""
+    vad_model: str = ""
 
 
 class PromptConfig(BaseModel):

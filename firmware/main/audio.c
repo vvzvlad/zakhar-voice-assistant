@@ -39,9 +39,6 @@ static void mic_task(void *arg)
     static int32_t raw[MIC_STEP * 2];
     static int16_t both[MIC_STEP * 2];
     static int16_t ch1[MIC_STEP];
-    if (!wake_word_init()) {
-        vTaskDelete(NULL);
-    }
     for (;;) {
         size_t got = 0;
         if (i2s_channel_read(s_rx, raw, sizeof raw, &got, portMAX_DELAY) != ESP_OK) continue;

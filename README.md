@@ -65,8 +65,9 @@ already present). The Silero TTS voice runs on PyTorch — an optional dependenc
 deliberately NOT in `requirements.txt` or the Docker image — so install it
 yourself (e.g. `pip install torch`) to use that provider.
 
-Docker note: the published image ships WITHOUT model files (the Dockerfile neither
-downloads nor bundles `models/`), so `docker-compose.yml` mounts a second named
+Docker note: the published image ships WITHOUT the files of `models/` (the Dockerfile
+neither downloads nor bundles them; it carries only the speaker's wake-word and VAD
+`.tflite`), so `docker-compose.yml` mounts a second named
 volume, `zakhar-voice-assistant-models`, at `/app/models` — and it has to be
 populated. This is not optional the way "offline backends are optional" suggests:
 `templates/default_config.json` selects the **Piper** TTS voice at
@@ -198,7 +199,7 @@ Shape (see `templates/default_config.json` for the full default):
   `runs` (enabled / retention_days),
   `reminders` (enabled), `capture` (enabled / dir — save every utterance as WAV),
   `ack` (enabled / sound_path — the end-of-phrase chime), `devices` (list of
-  `{name, enabled, wake_cutoff, vad_cutoff}`, see [Devices](#devices-and-firmware)),
+  `{name, enabled, wake_cutoff, vad_cutoff, wake_model, vad_model}`, see [Devices](#devices-and-firmware)),
   `tts_timeout`, `log_level`.
 
 API keys are plain string fields in the JSON (this is a trusted-LAN service); `data/` is
@@ -238,6 +239,8 @@ Debug and dataset calls of the panel API (`http://<host>:8201`), meant for an ag
 - `POST /api/device/detect` `{"device": "<name>", "enabled": false}` — turn the device's
   wake-word detection off (`true`: on). The model keeps running, so the wake probability
   still streams; detection is back on at the device's next connection.
+- `POST /api/device/model` `{"device": "<name>"}` — send the device its wake-word and VAD
+  models again, read from disk anew; the device swaps them without a restart.
 - `POST /api/datasets/<set>` `{"device": "<name>", "takes": 200, "seconds": 3}` — record a
   wake-word dataset: for each take the speaker beeps, then records `seconds` (1–10, default
   3) into `data/datasets/<set>/NNNN.wav`; a new session on the same set continues the
@@ -250,7 +253,10 @@ Debug and dataset calls of the panel API (`http://<host>:8201`), meant for an ag
 The Voice PE speaker firmware lives in `firmware/` — plain ESP-IDF C. Its
 `components/zakhar_link` is the device side of the protocol and is shared with the
 espanel wall panel. The device id and the server URL are the `CONFIG_ZAKHAR_*`
-defaults in `firmware/main/Kconfig.projbuild`. The firmware carries no Wi-Fi password:
+defaults in `firmware/main/Kconfig.projbuild`. The speaker gets its wake-word and VAD
+models from the server at every connection: the release image carries the deployed wake
+model and the VAD model, and `core.devices[].wake_model` / `vad_model` point a device at
+another file. The firmware carries no Wi-Fi password:
 a speaker with no network stored shows a warm white twinkle and is set up with
 Espressif's ESP BLE Provisioning app (iOS, Android), where it appears as
 `PROV_ZAKHAR_<6 hex digits>` and asks for no code. Holding the center button for

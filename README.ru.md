@@ -67,8 +67,8 @@ Python-цели (`make test`, `make run`) сами создают и переи�
 поэтому установите её сами (например, `pip install torch`), чтобы пользоваться
 этим провайдером.
 
-Про Docker: публикуемый образ идёт БЕЗ файлов моделей (Dockerfile их не скачивает
-и не вшивает `models/`), поэтому `docker-compose.yml` монтирует второй именованный
+Про Docker: публикуемый образ идёт БЕЗ файлов из `models/` (Dockerfile их не скачивает
+и не вшивает; в образе только `.tflite` колонки — модели wake-word и VAD), поэтому `docker-compose.yml` монтирует второй именованный
 том, `zakhar-voice-assistant-models`, в `/app/models` — и его нужно наполнить. Это
 не «опционально» в том смысле, в каком опциональны офлайн-бэкенды:
 `templates/default_config.json` выбирает голос **Piper** по пути
@@ -202,7 +202,7 @@ docker compose pull && docker compose up -d
   агенту MCP-эндпоинт, отдаваемый панелью на `/mcp`), `runs` (enabled /
   retention_days), `reminders` (enabled), `capture` (enabled / dir — сохранять
   каждую реплику в WAV), `ack` (enabled / sound_path — звук конца фразы), `devices`
-  (список `{name, enabled, wake_cutoff, vad_cutoff}`, см.
+  (список `{name, enabled, wake_cutoff, vad_cutoff, wake_model, vad_model}`, см.
   [Устройства](#устройства-и-прошивка)), `tts_timeout`, `log_level`.
 
 API-ключи — это обычные строковые поля в JSON (сервис рассчитан на доверенную LAN);
@@ -245,6 +245,8 @@ wake-word и VAD.
   wake-word на устройстве (`true` — включить). Модель продолжает работать, вероятность
   wake-word по-прежнему стримится; при следующем подключении устройства детекция снова
   включена.
+- `POST /api/device/model` `{"device": "<имя>"}` — заново прочитать с диска и отправить
+  устройству модели wake-word и VAD; устройство подменяет их без перезагрузки.
 - `POST /api/datasets/<набор>` `{"device": "<имя>", "takes": 200, "seconds": 3}` — записать
   датасет wake-word: на каждый дубль колонка пикает и пишет `seconds` секунд (1–10, по
   умолчанию 3) в `data/datasets/<набор>/NNNN.wav`; новая серия в тот же набор продолжает
@@ -257,7 +259,10 @@ wake-word и VAD.
 Прошивка колонки Voice PE лежит в `firmware/` — чистый ESP-IDF на C. Её компонент
 `components/zakhar_link` — сторона протокола на устройстве, общая с настенной
 панелью espanel. Id устройства и адрес сервера — значения `CONFIG_ZAKHAR_*` по
-умолчанию в `firmware/main/Kconfig.projbuild`. Пароля от Wi-Fi в прошивке нет:
+умолчанию в `firmware/main/Kconfig.projbuild`. Модели wake-word и VAD колонка
+получает от сервера при каждом подключении: образ релиза везёт рабочую модель
+wake-word и модель VAD, а `core.devices[].wake_model` / `vad_model` направляют
+устройство на другой файл. Пароля от Wi-Fi в прошивке нет:
 колонка без сохранённой сети мерцает тёплым белым, и сеть ей задают приложением
 Espressif ESP BLE Provisioning (iOS, Android) — там она видна как
 `PROV_ZAKHAR_<6 hex-цифр>` и кода не спрашивает. Если 10 с держать центральную

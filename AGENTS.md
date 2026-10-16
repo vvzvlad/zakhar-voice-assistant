@@ -68,7 +68,10 @@ make fw-ota HOST=<address>             # fw-flash PORT=… over USB, fw-logs HOS
 - `.gitea/workflows/image-check-publish.yml` (push to `main`): the same steps, then pushes
   `:<sha>` and `:latest` to `gitea.vvzvlad.xyz`. Production follows `:latest` via Portainer's
   image updater (`docker-compose.yml`).
-- The image carries no models; production mounts them on the `/app/models` volume.
+- The image carries none of the server's own models (STT, TTS, server VAD); production mounts
+  them on the `/app/models` volume.
+  It does carry the speaker's wake-word and VAD `.tflite` files, which the server sends to the
+  devices (`Dockerfile`, `src/device_server.py`).
 
 ## Configuration
 

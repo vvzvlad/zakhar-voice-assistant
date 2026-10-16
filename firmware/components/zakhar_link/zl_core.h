@@ -1,6 +1,6 @@
 // The pure core of zakhar_link: no ESP headers, host-tested (make fw-host-test). Message
-// encode/decode over cJSON, the session filter and the playback queue accounting. Nothing here
-// locks; the transport (zakhar_link.c) serialises every call.
+// encode/decode over cJSON, the session filter, the playback queue accounting and the model
+// receiver's. Nothing here locks; the transport (zakhar_link.c) serialises every call.
 #pragma once
 
 #include <stdbool.h>
@@ -13,6 +13,7 @@
 #define ZL_FRAME_FRAMES (ZL_MIC_RATE * 32 / 1000)  // 32 ms of microphone audio per binary frame
 #define ZL_KIND_MIC 0x01      // binary frame kinds: the first byte
 #define ZL_KIND_PLAY 0x02
+#define ZL_KIND_MODEL 0x03
 
 // ---------------------------------------------------------------- messages, server -> device
 
@@ -28,6 +29,7 @@ typedef enum {
     ZL_MSG_WAKE_PEAK_STREAM,
     ZL_MSG_CAPTURE,
     ZL_MSG_DETECT,
+    ZL_MSG_MODEL,
 } zl_msg_type_t;
 
 typedef struct {
@@ -41,7 +43,10 @@ typedef struct {
     int value;            // SET_VOLUME, percent
     bool on;              // WAKE_PEAK_STREAM, DETECT
     uint32_t capture_ms;  // CAPTURE
-    void *json;           // the parsed object that `text` points into
+    zl_model_t model;     // MODEL: its kind
+    const char *name;     // MODEL
+    uint32_t size;        // MODEL: the bytes its 0x03 frames carry, > 0
+    void *json;           // the parsed object that `text` and `name` point into
 } zl_msg_t;
 
 // One text frame. False for anything the device ignores: not a JSON object, an unknown type, a
@@ -58,11 +63,13 @@ char *zl_encode_played(uint32_t id, bool dropped);
 char *zl_encode_volume(int percent);
 char *zl_encode_wake_peak(int percent);
 char *zl_encode_audio_end(const char *reason);
+char *zl_encode_model_loaded(zl_model_t kind, const char *name, bool ok);
 void zl_free(char *json);
 
 // ---------------------------------------------------------------- numbers
 
 const char *zl_state_name(zl_state_t state);  // the wire value: "listening" ...
+const char *zl_model_name(zl_model_t kind);   // the wire value: "wake", "vad"
 uint8_t zl_cutoff_u8(double percent);  // trunc(percent / 100 * 255)
 int zl_peak_percent(uint8_t peak);     // 0..255 -> 0..100, rounded
 uint32_t zl_backoff_next(uint32_t s);  // 1, 2, 4 ... 30 seconds
@@ -151,3 +158,19 @@ size_t zl_playq_read(zl_playq_t *q, int16_t *out, size_t max);
 size_t zl_playq_flush(zl_playq_t *q, uint32_t *dropped);
 // Moves the `done` ids into ids (ZL_PLAYQ_STREAMS slots); returns their count.
 size_t zl_playq_take_done(zl_playq_t *q, uint32_t *ids);
+
+// ---------------------------------------------------------------- the model receiver
+
+// Counts the bytes of one model: `model` announced `size`, the 0x03 payloads bring them in order.
+// The bytes themselves stay with the caller.
+typedef struct {
+    bool active;  // from the start until the last byte is in
+    size_t size, got;
+} zl_modelrx_t;
+
+// A `model` of `size` bytes (> 0); one still receiving is dropped.
+void zl_modelrx_start(zl_modelrx_t *r, size_t size);
+// n payload bytes in: returns how many of them belong to the model, to be written at offset *at
+// (the rest lies past `size` and is dropped); *done turns true with the last byte, and the
+// receiver is inactive from then on. 0 while inactive.
+size_t zl_modelrx_write(zl_modelrx_t *r, size_t n, size_t *at, bool *done);

@@ -7,6 +7,7 @@ import io
 import itertools
 import json
 import wave
+from pathlib import Path
 
 import aiohttp
 import numpy as np
@@ -15,7 +16,7 @@ import soxr
 
 from src import device_server
 from src.config_service import ConfigService
-from src.device_server import MIC, PLAY, CaptureBusyError, CaptureEmptyError, DeviceManager
+from src.device_server import MIC, MODEL, PLAY, CaptureBusyError, CaptureEmptyError, DeviceManager
 from src.plugins.base import Deps
 from src.plugins.vad.webrtc import WebRtcVadBackend
 from src.prompt_store import PromptStore
@@ -59,6 +60,13 @@ class PcmTts(TtsBackend):
         return pcm_mime(16000), clip
 
 
+def is_model(msg) -> bool:
+    """A `model` message or one of its 0x03 frames."""
+    if msg.type == aiohttp.WSMsgType.BINARY:
+        return msg.data[0] == MODEL
+    return msg.type == aiohttp.WSMsgType.TEXT and json.loads(msg.data)["type"] == "model"
+
+
 class FakeDevice:
     """The device end of the protocol. Play frames are collected per stream id."""
 
@@ -69,9 +77,12 @@ class FakeDevice:
         self._stream = None
 
     async def recv(self, timeout=5.0) -> dict:
-        """The next text message; play frames before it go into self.plays."""
+        """The next text message other than `model`; play frames before it go into
+        self.plays, models are skipped (model() reads them)."""
         while True:
             msg = await asyncio.wait_for(self.ws.receive(), timeout)
+            if is_model(msg):
+                continue
             if msg.type == aiohttp.WSMsgType.BINARY:
                 assert msg.data[0] == PLAY
                 self.plays[self._stream] += msg.data[1:]
@@ -83,6 +94,20 @@ class FakeDevice:
                 self._stream = data["id"]
                 self.plays[self._stream] = b""
             return data
+
+    async def model(self, timeout=5.0) -> tuple[dict, bytes]:
+        """The next frame must start a `model`: it and the 0x03 payload that follows."""
+        msg = await asyncio.wait_for(self.ws.receive(), timeout)
+        assert msg.type == aiohttp.WSMsgType.TEXT, (msg.type, msg.data)
+        model = json.loads(msg.data)
+        assert model["type"] == "model", model
+        data = b""
+        while len(data) < model["size"]:
+            msg = await asyncio.wait_for(self.ws.receive(), timeout)
+            assert msg.type == aiohttp.WSMsgType.BINARY and msg.data[0] == MODEL, (msg.type, msg.data)
+            assert len(msg.data) - 1 <= 4096
+            data += msg.data[1:]
+        return model, data
 
     async def send(self, **msg):
         await self.ws.send_str(json.dumps(msg))
@@ -111,6 +136,8 @@ class FakeDevice:
 
     async def closed_with(self) -> int:
         msg = await asyncio.wait_for(self.ws.receive(), 5.0)
+        while is_model(msg):
+            msg = await asyncio.wait_for(self.ws.receive(), 5.0)
         assert msg.type == aiohttp.WSMsgType.CLOSE, (msg.type, msg.data)
         return msg.data
 
@@ -152,8 +179,7 @@ class Server:
     async def connect(self, id="kitchen", *, speaker=True, rate=16000, buffer_ms=4000) -> FakeDevice:
         ws = await self.http.ws_connect(f"http://127.0.0.1:{self.manager.port}/device")
         hello = {"type": "hello", "id": id, "fw": "voicepe 0.1.0 (a1b2c3d)",
-                 "model": "zakhar_v28", "caps": {"speaker": speaker, "screen": False},
-                 "mic": {"channels": 2}}
+                 "caps": {"speaker": speaker, "screen": False}, "mic": {"channels": 2}}
         if speaker:
             hello.update(play={"rate": rate, "buffer_ms": buffer_ms}, volume=60)
         await ws.send_str(json.dumps(hello))
@@ -167,6 +193,11 @@ class Server:
 async def srv(tmp_path, monkeypatch):
     monkeypatch.setattr("src.config_store.DATA_DIR", str(tmp_path))
     patch_llm(monkeypatch, reply="готово")
+    # The release's models; the wake one spans three 0x03 frames.
+    for const, name, size in (("RELEASE_WAKE_MODEL", "zakhar.tflite", 10000),
+                              ("RELEASE_VAD_MODEL", "vad.tflite", 3000)):
+        (tmp_path / name).write_bytes(bytes(i % 251 for i in range(size)))
+        monkeypatch.setattr(device_server, const, str(tmp_path / name))
     server = Server(tmp_path)
     await server.manager.start()
     yield server
@@ -198,12 +229,49 @@ def session_msgs(session, *rest):
     ]
 
 
-async def test_hello_gets_config_and_shows_online(srv):
+async def test_hello_gets_config_and_both_models(srv):
     dev = await srv.connect()
     assert await dev.recv() == {"type": "config", "wake_cutoff": 80, "vad_cutoff": 30}
+    # wake_model / vad_model are empty: the release's files go out.
+    for kind, path in (("wake", device_server.RELEASE_WAKE_MODEL), ("vad", device_server.RELEASE_VAD_MODEL)):
+        msg, data = await dev.model()
+        assert msg == {"type": "model", "kind": kind, "name": path, "size": len(data)}
+        assert data == Path(path).read_bytes()
     status = srv.manager.statuses()[0]
     assert (status["name"], status["online"]) == ("kitchen", True)
-    assert [v["value"] for v in status["versions"]] == ["voicepe 0.1.0 (a1b2c3d)", "zakhar_v28"]
+    assert [v["value"] for v in status["versions"]] == ["voicepe 0.1.0 (a1b2c3d)", None]
+    # The panel's Model is the wake model the device reports loaded.
+    await dev.send(type="model_loaded", kind="wake", name=device_server.RELEASE_WAKE_MODEL, ok=True)
+    await until(lambda: srv.manager.statuses()[0]["versions"][1]["value"] == device_server.RELEASE_WAKE_MODEL)
+    # A failed load leaves the device without a wake model, so the panel shows none.
+    await dev.send(type="model_loaded", kind="wake", name="models/other.tflite", ok=False)
+    await until(lambda: srv.manager.statuses()[0]["versions"][1]["value"] is None)
+
+
+async def test_models_follow_the_config_and_the_reload_command(srv, tmp_path):
+    with pytest.raises(LookupError):
+        srv.manager.reload_model("nope")
+    with pytest.raises(RuntimeError, match="offline"):
+        srv.manager.reload_model("kitchen")
+    dev = await srv.connect()
+    await dev.recv()  # config
+    await dev.model()
+    await dev.model()
+
+    # A changed path is sent; the kind whose path stayed is not.
+    other = tmp_path / "other.tflite"
+    other.write_bytes(b"\x07" * 100)
+    srv.svc.apply({"core": {"devices": [{"name": "kitchen", "vad_model": str(other)}]}})
+    await srv.manager.reconfigure()
+    assert await dev.model() == ({"type": "model", "kind": "vad", "name": str(other), "size": 100}, b"\x07" * 100)
+    with pytest.raises(asyncio.TimeoutError):
+        await dev.model(timeout=0.2)
+
+    # The reload command re-reads and sends both; a file that cannot be read sends nothing.
+    missing = str(tmp_path / "missing.tflite")
+    srv.svc.apply({"core": {"devices": [{"name": "kitchen", "wake_model": missing, "vad_model": str(other)}]}})
+    assert srv.manager.reload_model("kitchen") == {"device": "kitchen", "models": {"vad": str(other)}}
+    assert (await dev.model())[0] == {"type": "model", "kind": "vad", "name": str(other), "size": 100}
 
 
 async def test_wake_session_end_to_end(srv):

@@ -186,7 +186,7 @@ class PanelServer:
                  device_status=None, device_capture=None, device_play=None,
                  device_controls_get=None, device_controls_set=None,
                  device_wake_prob_get=None, device_wake_prob_set=None,
-                 device_detect_set=None,
+                 device_detect_set=None, device_model_reload=None,
                  static_dir=None, runs_store=None, tool_sources=None,
                  run_events=None, prompt_store=None, agent_mcp=None,
                  heartbeat_interval: float = 1.0, reload_status=None):
@@ -239,6 +239,10 @@ class PanelServer:
         #   {device, detect} (DeviceManager.set_detect). None -> POST /api/device/detect
         #   returns 503.
         self.device_detect_set = device_detect_set
+        # device_model_reload: optional SYNC callable (device_name) -> dict that sends the
+        #   device its wake-word and VAD models again and returns {device, models}
+        #   (DeviceManager.reload_model). None -> POST /api/device/model returns 503.
+        self.device_model_reload = device_model_reload
         # Background capture jobs: the recording runs as a server-side task so a
         # browser disconnect cannot cancel it.
         self._capture_jobs = CaptureJobManager(device_capture) if device_capture is not None else None
@@ -790,6 +794,26 @@ class PanelServer:
         except RuntimeError as e:  # offline
             return web.json_response({"error": str(e)}, status=409)
 
+    async def _post_model(self, request: web.Request) -> web.Response:
+        """Reload a device's models: the server re-reads the wake-word and VAD model files and
+        sends them, the device swaps them without a restart. Body: {device}. Returns {device,
+        models}. Status codes: 200 ok, 400 bad input, 404 unknown device, 409 offline, 503 not
+        wired."""
+        if self.device_model_reload is None:
+            return web.json_response({"error": "model reload not available"}, status=503)
+        body = await _read_json(request)
+        if not isinstance(body, dict):
+            return web.json_response({"error": "body must be a JSON object"}, status=400)
+        device = body.get("device")
+        if not isinstance(device, str) or not device:
+            return web.json_response({"error": 'field "device" (string) is required'}, status=400)
+        try:
+            return web.json_response(self.device_model_reload(device))
+        except LookupError as e:
+            return web.json_response({"error": str(e)}, status=404)
+        except RuntimeError as e:  # offline
+            return web.json_response({"error": str(e)}, status=409)
+
     async def _post_capture(self, request: web.Request) -> web.Response:
         """Start a background capture of a manual sample on a speaker (non-blocking).
 
@@ -1255,6 +1279,7 @@ class PanelServer:
             web.get("/api/device/wake-probability", self._get_wake_probability),
             web.post("/api/device/wake-probability", self._post_wake_probability),
             web.post("/api/device/detect", self._post_detect),
+            web.post("/api/device/model", self._post_model),
             web.post("/api/capture", self._post_capture),
             web.get("/api/capture", self._get_capture_status),
             web.get("/api/capture/result", self._get_capture_result),

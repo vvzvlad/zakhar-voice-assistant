@@ -1279,6 +1279,32 @@ async def test_post_detect_switches_and_rejects_non_bool(tmp_path):
         await client.close()
 
 
+async def test_post_model_reloads_and_maps_errors(tmp_path):
+    def reload(device):
+        if device == "nope":
+            raise LookupError(f"unknown device {device!r}")
+        if device == "away":
+            raise RuntimeError(f"{device} is offline")
+        return {"device": device, "models": {"wake": "w.tflite", "vad": "v.tflite"}}
+
+    client, _svc_ = await _client(tmp_path, device_model_reload=reload)
+    try:
+        resp = await client.post("/api/device/model", json={"device": "hall"})
+        assert resp.status == 200
+        assert await resp.json() == {"device": "hall", "models": {"wake": "w.tflite", "vad": "v.tflite"}}
+        for body, status in (({}, 400), ({"device": ""}, 400), ({"device": "nope"}, 404),
+                             ({"device": "away"}, 409)):
+            resp = await client.post("/api/device/model", json=body)
+            assert resp.status == status, body
+    finally:
+        await client.close()
+    client, _svc_ = await _client(tmp_path)
+    try:
+        assert (await client.post("/api/device/model", json={"device": "hall"})).status == 503
+    finally:
+        await client.close()
+
+
 async def test_get_tools(tmp_path):
     # tool_sources is a zero-arg callable returning ToolHub.describe() output.
     sources = [{

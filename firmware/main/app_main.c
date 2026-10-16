@@ -210,6 +210,11 @@ static void on_detect(void)
     zl_wake(WAKE_WORD_NAME);
 }
 
+static bool on_model(zl_model_t kind, uint8_t *data, size_t size)
+{
+    return wake_word_load(kind == ZL_MODEL_WAKE ? WAKE_WORD_MODEL_WAKE : WAKE_WORD_MODEL_VAD, data, size);
+}
+
 // ---------------------------------------------------------------- boot
 
 // True while the running image is new and unconfirmed: the bootloader rolls it back on a restart.
@@ -280,6 +285,8 @@ void app_main(void)
     wake_word_set_detect_cb(on_detect);
     esp_err_t err = i2c_new_master_bus(&bc, &bus);
     if (err == ESP_OK) err = xmos_boot(bus);
+    // The mic task feeds the engine from its first read; the models come later from the server.
+    if (err == ESP_OK && !wake_word_init()) err = ESP_ERR_NO_MEM;
     // The I2S clocks run once the XMOS answers; a slave channel started before that fails.
     if (err == ESP_OK) err = audio_start();
     if (err == ESP_OK) err = aic3204_init(bus, volume_get());
@@ -296,7 +303,6 @@ void app_main(void)
         .url = CONFIG_ZAKHAR_SERVER_URL,
         .id = CONFIG_ZAKHAR_DEVICE_ID,
         .fw = fw,
-        .model = WAKE_WORD_MODEL_VERSION,
         .screen = false,
         .mic_channels = 2,
         .preroll_ms = 2000,
@@ -314,6 +320,7 @@ void app_main(void)
         .on_set_volume = controls_request_volume,
         .on_capture = leds_set_capture,
         .can_start = can_start,
+        .on_model = on_model,
     };
     zl_start(&cfg, &cb);
     // zl_start() reports no failure; its task exists only when the start got through (the playback

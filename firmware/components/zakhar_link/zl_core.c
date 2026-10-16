@@ -17,6 +17,11 @@ static const char *const STATES[] = {
     [ZL_STATE_ERROR] = "error",
 };
 
+static const char *const MODELS[] = {
+    [ZL_MODEL_WAKE] = "wake",
+    [ZL_MODEL_VAD] = "vad",
+};
+
 static const cJSON *field(const cJSON *o, const char *name)
 {
     return cJSON_GetObjectItemCaseSensitive(o, name);
@@ -118,6 +123,19 @@ static bool decode_fields(const cJSON *o, const char *type, zl_msg_t *m)
         m->capture_ms = (uint32_t)(v->valuedouble * 1000);
         return true;
     }
+    if (strcmp(type, "model") == 0) {
+        m->type = ZL_MSG_MODEL;
+        const cJSON *kind = field(o, "kind"), *name = field(o, "name");
+        if (!cJSON_IsString(kind) || !cJSON_IsString(name) || !get_u32(field(o, "size"), &m->size) || m->size == 0) {
+            return false;
+        }
+        size_t i = 0;
+        while (i < sizeof MODELS / sizeof MODELS[0] && strcmp(kind->valuestring, MODELS[i]) != 0) i++;
+        if (i == sizeof MODELS / sizeof MODELS[0]) return false;
+        m->model = (zl_model_t)i;
+        m->name = name->valuestring;
+        return true;
+    }
     return false;
 }
 
@@ -144,6 +162,7 @@ void zl_msg_free(zl_msg_t *m)
     cJSON_Delete(m->json);
     m->json = NULL;
     m->text = NULL;
+    m->name = NULL;
 }
 
 // ---------------------------------------------------------------- encode
@@ -173,7 +192,6 @@ char *zl_encode_hello(const zl_config_t *cfg, int volume)
     cJSON *caps = NULL, *mic = NULL, *play = NULL;
     bool ok = o != NULL && cJSON_AddStringToObject(o, "id", cfg->id) != NULL &&
               cJSON_AddStringToObject(o, "fw", cfg->fw) != NULL &&
-              cJSON_AddStringToObject(o, "model", cfg->model) != NULL &&
               (caps = cJSON_AddObjectToObject(o, "caps")) != NULL &&
               cJSON_AddBoolToObject(caps, "speaker", speaker) != NULL &&
               cJSON_AddBoolToObject(caps, "screen", cfg->screen) != NULL &&
@@ -225,6 +243,14 @@ char *zl_encode_audio_end(const char *reason)
     return finish(o, o != NULL && cJSON_AddStringToObject(o, "reason", reason) != NULL);
 }
 
+char *zl_encode_model_loaded(zl_model_t kind, const char *name, bool ok)
+{
+    cJSON *o = message("model_loaded");
+    return finish(o, o != NULL && cJSON_AddStringToObject(o, "kind", MODELS[kind]) != NULL &&
+                         cJSON_AddStringToObject(o, "name", name) != NULL &&
+                         cJSON_AddBoolToObject(o, "ok", ok) != NULL);
+}
+
 void zl_free(char *json)
 {
     cJSON_free(json);
@@ -235,6 +261,11 @@ void zl_free(char *json)
 const char *zl_state_name(zl_state_t state)
 {
     return STATES[state];
+}
+
+const char *zl_model_name(zl_model_t kind)
+{
+    return MODELS[kind];
 }
 
 uint8_t zl_cutoff_u8(double percent)
@@ -414,4 +445,25 @@ size_t zl_playq_take_done(zl_playq_t *q, uint32_t *ids)
     memcpy(ids, q->done, n * sizeof *ids);
     q->ndone = 0;
     return n;
+}
+
+// ---------------------------------------------------------------- the model receiver
+
+void zl_modelrx_start(zl_modelrx_t *r, size_t size)
+{
+    *r = (zl_modelrx_t){.active = true, .size = size};
+}
+
+size_t zl_modelrx_write(zl_modelrx_t *r, size_t n, size_t *at, bool *done)
+{
+    *at = r->got;
+    *done = false;
+    if (!r->active) return 0;
+    const size_t take = n < r->size - r->got ? n : r->size - r->got;
+    r->got += take;
+    if (r->got == r->size) {
+        r->active = false;
+        *done = true;
+    }
+    return take;
 }

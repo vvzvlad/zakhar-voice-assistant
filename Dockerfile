@@ -31,6 +31,9 @@ RUN mkdir -p data
 # Code and static assets
 COPY src/ src/
 COPY templates/ templates/
+# The speaker's wake-word and VAD models, sent to it at every connection (src/device_server.py).
+COPY microWakeWord/v31/model/zakhar.tflite microWakeWord/v31/model/zakhar.tflite
+COPY microWakeWord/vad/vad.tflite microWakeWord/vad/vad.tflite
 COPY main.py .
 
 # Built admin panel from the frontend stage. The backend serves it from this
