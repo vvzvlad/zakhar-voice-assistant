@@ -1,6 +1,6 @@
 # training/ — пайплайн обучения «Захар» (microWakeWord)
 
-Реальные скрипты и конфиги, которыми обучалась модель [../model/zakhar.tflite](../model/zakhar.tflite).
+Реальные скрипты и конфиги, которыми обучалась модель [../zakhar.tflite](../zakhar.tflite).
 Полное пошаговое описание процесса и порядок запуска — в
 [../TRAINING_PROCESS.md](../TRAINING_PROCESS.md).
 

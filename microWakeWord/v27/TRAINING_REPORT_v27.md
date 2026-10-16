@@ -3,7 +3,7 @@
 > состояния). Честно (свежее состояние на клип): **v27 short-fire ≈ v16 (~0.65)** — v27 НЕ чинит
 > короткий «захар». РЕАЛЬНЫЙ плюс v27 над v16: **recall FRR ~21.3→19.6% и music-FAPH 5.8→2.9/ч**
 > (short-негативы помогли им, не short-fire). radio-FAPH тоже скорректирован 2.3→1.3.
-> Разбор: [../STATE_LEAK_BUG.md](../STATE_LEAK_BUG.md). Числа «65→23» ниже — СТАРЫЕ (артефакт).
+> Разбор: [STATE_LEAK_BUG.md](STATE_LEAK_BUG.md). Числа «65→23» ниже — СТАРЫЕ (артефакт).
 
 # zakhar microWakeWord — v27 (RECOMMENDED SHIP)
 

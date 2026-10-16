@@ -3,7 +3,7 @@
 Документ описывает, **как именно** была обучена модель `model/zakhar.tflite` для
 on-device распознавания слова «Захар» на ESP32-S3 / HA Voice PE, чтобы прогон можно было
 воспроизвести или итерировать. Это пересказ реального пайплайна; формальный отчёт с
-метриками — в [model/TRAINING_REPORT.md](model/TRAINING_REPORT.md), а исходники всех шагов —
+метриками — в [TRAINING_REPORT.md](TRAINING_REPORT.md), а исходники всех шагов —
 в [training/](training/).
 
 > TL;DR результата (v1, отгружено): модель `mixednet` 26 049 параметров, INT8-streaming
@@ -161,11 +161,11 @@ python training/generate_manifest.py <tflite> zakhar.json zakhar.tflite 0.90 3
 
 | Путь | Что |
 |------|-----|
-| [model/zakhar.tflite](model/zakhar.tflite) | обученная INT8 streaming модель (v1) |
-| [model/zakhar.json](model/zakhar.json) | манифест v2 для ESPHome |
-| [model/esphome_micro_wake_word.yaml](model/esphome_micro_wake_word.yaml) | готовый сниппет `micro_wake_word` |
-| [model/TRAINING_REPORT.md](model/TRAINING_REPORT.md) | формальный отчёт агента (метрики, лимиты) |
-| [model/eval/](model/eval/) | сетки оценки порогов (recall/FAPH) |
+| [zakhar.tflite](zakhar.tflite) | обученная INT8 streaming модель (v1) |
+| [zakhar.json](zakhar.json) | манифест v2 для ESPHome |
+| [esphome_micro_wake_word.yaml](esphome_micro_wake_word.yaml) | готовый сниппет `micro_wake_word` |
+| [TRAINING_REPORT.md](TRAINING_REPORT.md) | формальный отчёт агента (метрики, лимиты) |
+| [eval/](eval/) | сетки оценки порогов (recall/FAPH) |
 | [training/](training/) | реальные скрипты и конфиги пайплайна (см. выше) |
-| [TZ_zakhar_microwakeword.md](TZ_zakhar_microwakeword.md) | исходное ТЗ |
-| [compass_artifact_…md](compass_artifact_wf-7bd4ae7f-f31c-4361-bdd6-e5164733eb58_text_markdown.md) | исследование по microWakeWord |
+| [TZ_zakhar_microwakeword.md](../TZ_zakhar_microwakeword.md) | исходное ТЗ |
+| [compass_artifact_…md](../compass_artifact_wf-7bd4ae7f-f31c-4361-bdd6-e5164733eb58_text_markdown.md) | исследование по microWakeWord |

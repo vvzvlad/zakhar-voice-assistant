@@ -1,3 +1,23 @@
+> ⚠️ **CORRECTION (after the fresh-state audit).** The «short-«захар» firing 65%→17%» result below
+> (#A PROTOTYPE table and its "PoC success" paragraph, and the #A bullet in the FINAL block) is an
+> **ARTEFACT of an eval-harness state leak**: clips were scored back-to-back through one streaming
+> model instance without resetting its state, so on a ~1 s short clip the windowed probability
+> reflected the NEIGHBOURING clip, not the short «захар». Honest (fresh state per clip): short-negs
+> do **NOT** reduce short-firing — **v27 0.643 ≈ v16 0.674** (both ~65%). v21 itself was never
+> re-measured fresh-state; its number came from the same broken harness and is retracted with it.
+> What the short-negs really bought (v27 over v16): **recall FRR ~21.3→19.6% and music-FAPH
+> 5.8→2.9/h**; radio-FAPH was also corrected 2.3→1.3.
+> Write-up: [../v27/STATE_LEAK_BUG.md](../v27/STATE_LEAK_BUG.md). **This file contains no fresh-state
+> re-baseline of its own** — it is in [../v27/SUMMARY_real_eval.md](../v27/SUMMARY_real_eval.md),
+> section «NIGHT PROGRAM … HONEST FRESH-STATE RE-BASELINE» (`:351-360` at time of writing;
+> `grep -n 'FRESH-STATE RE-BASELINE' ../v27/SUMMARY_real_eval.md`).
+> Every number in this file was produced by the PRE-fix harness. Per STATE_LEAK_BUG the leak washes
+> out over long clips (the FRR / silence / music / speech / vacuum tables are largely unaffected;
+> radio-FAPH is the exception) and corrupts SHORT-clip numbers — so treat every «@1.0s / @0.8s /
+> short-fire» figure below, including the **#A PROBE** table, as old-harness. Of those, only v16's
+> 0.65 @1.0 s has been reconfirmed fresh-state (0.674); v17/v19/v21/v22 short-fire was never
+> re-measured.
+
 # SUMMARY — device-eval round 2 (REAL device positives + real device negatives)
 
 Eval: held-out device «захааар» positives (362, leakage-safe by source key) + real device
@@ -87,13 +107,17 @@ All models fire substantially on SHORT «захар» → they don't use vowel d
 DURATION_CAUSALITY verdict). v19 (best recall) is the WORST at distinguishing (93% fires on 1.0s).
 A short «захар» (common word) would falsely trigger — a false-accept class the FAPH eval misses.
 
-## #A PROTOTYPE — short-«захар» hard-negs instill DURATION-AWARENESS (standard model)
+## #A PROTOTYPE — ⚠️ RETRACTED: short-«захар» hard-negs instill DURATION-AWARENESS (standard model)
 | model | drawn-out FRR | short-«захар» firing @1.0s | @0.8s |
 |-------|--------------:|---------------------------:|------:|
 | v16 (baseline) | 21.0% | 0.65 | 0.60 |
-| **v21 = v16 + short-negs** | 26.0% | **0.175** | 0.235 |
+| **v21 = v16 + short-negs** ⚠️ RETRACTED row | 26.0% | ~~**0.175**~~ | ~~0.235~~ |
 | v19 angular | 3.0% | 0.93 | 0.72 |
 | v22 = angular + short-negs | 5.2% | 0.93 | 0.94 |
+
+⚠️ **RETRACTED (state leak — see the correction at the top of this file):** the «65%→17%» drop is an
+artefact; fresh-state, short-negs do not reduce short-firing (v27 0.643 ≈ v16 0.674). The recall/FAPH
+half of this paragraph survives; the duration-awareness claim does not. Original text follows.
 
 **Result (PoC success):** the STANDARD model (v21) learns duration discrimination from synthetic
 compress-shorts — firing on a 1.0 s short «захар» drops 65%→17% while drawn-out recall barely moves
@@ -113,9 +137,13 @@ a calibrated narrow soft-pool, not full-window noisy-OR. Documented as next-step
 # ============ FINAL (round: real positives + the 4 follow-ups) ============
 SHIP UNCHANGED: **output_v16/ (=output_best/)** single-model — FRR 21%, all-class FAPH 0 (VAD),
 strictly better than v8. The 4 follow-ups produced INSIGHTS, not a better single model:
-- **#A (headline):** models fire on SHORT «захар» (duration verdict confirmed); synthetic short-«захар»
-  hard-negs INSTILL duration-awareness in the STANDARD model (short-firing 65%→17%, small recall cost
-  21→26%); ANGULAR can't learn it. → next round: standard model + REAL short «захар» negs (de-risked).
+- **#A (headline):** models fire on SHORT «захар» (duration verdict confirmed); ⚠️ ~~synthetic
+  short-«захар» hard-negs INSTILL duration-awareness in the STANDARD model (short-firing 65%→17%,
+  small recall cost 21→26%)~~ **— RETRACTED, state-leak artefact (see the correction at the top);
+  fresh-state short-fire is NOT reduced, v27 0.643 ≈ v16 0.674**; ANGULAR can't learn it.
+  → next round: standard model + REAL short «захар» negs (de-risked). ⚠️ That "next round" plan is
+  itself cancelled since v28 — the short «захар» is now the TARGET word and trains as a POSITIVE
+  (`features_fish_short` truth `true`, sw 12.0); see [../README.md](../README.md).
 - **#C:** DET curves — v16 flat ~21% recall floor (all-FAPH 0); v19 angular tunable (4.4%/5.8h → 10.8%/3.3h).
 - **#D:** on-device 2-stage = dual-OUTPUT tflite [kws,verify] + per-trigger AND (spec+host-ref ready),
   BUT the verifier needs a STREAMING-INT8-embedding refit to actually work on-device (offline 3.8%/0.85
