@@ -15,7 +15,9 @@ import httpx
 from loguru import logger
 
 from src import config_store
+from src.chains import referenced_instances
 from src.logging_setup import setup_logging
+from src.plugins.base import get_provider
 from src.runs_store import RunsStore
 from src.tool_factory import build_sources
 
@@ -43,7 +45,8 @@ def changed_paths(old, new, prefix: str = "") -> set[str]:
 # `hidden_sources` is panel-only UI state (simple-nlu catalog editor) that no
 # backend reads, so a change applies "live" — it must never rebuild the NLU model.
 _LLM_LIVE_LEAVES = {"reply_rate_limit", "reply_empty", "reply_empty_after_tools",
-                    "reply_error", "max_tool_rounds", "hidden_sources"}
+                    "reply_error", "reply_error_after_tools", "max_tool_rounds",
+                    "hidden_sources"}
 
 
 def action_for(path: str) -> str:
@@ -85,6 +88,8 @@ def action_for(path: str) -> str:
         return "rebuild_runs"
     if path.startswith("core.devices"):
         return "rebuild_devices"
+    if path == "core.chains":
+        return "rebuild_backends"   # builds newly referenced STT/handler backends, drops unreferenced
     # stage providers
     if (path.startswith("vad") or path.startswith("wakeword") or path.startswith("stt")
             or path.startswith("tts") or path.startswith("stress")):
@@ -105,16 +110,38 @@ ASYNC_ACTIONS = {"rebuild_backends", "rebuild_audio", "rebuild_runs",
 
 
 def backend_categories(paths) -> set[str]:
-    """Subset of {'vad','wakeword','stt','llm','stress','tts'} whose backend must be rebuilt for these paths."""
+    """Subset of the single-backend stages {'vad','wakeword','stress'} whose
+    backend must be rebuilt for these paths."""
     cats = set()
     for p in paths:
         if action_for(p) != "rebuild_backends":
             continue
         top = p.split(".", 1)[0]
-        if top in ("vad", "wakeword", "stt", "llm", "stress", "tts"):
+        if top in ("vad", "wakeword", "stress"):
             cats.add(top)
-        elif p == "core.tts_timeout":
-            cats.add("tts")
+    return cats
+
+
+def pool_instances(paths) -> set[tuple[str, str]]:
+    """(category, provider id) of the STT/handler/TTS instances whose own settings
+    changed in a way that needs a backend rebuild (`stt|llm|tts.instances.<id>.<field>`)."""
+    keys = set()
+    for p in paths:
+        parts = p.split(".")
+        if (len(parts) > 3 and parts[0] in ("stt", "llm", "tts") and parts[1] == "instances"
+                and action_for(p) == "rebuild_backends"):
+            keys.add((parts[0], parts[2]))
+    return keys
+
+
+def reconciled_pools(paths) -> set[str]:
+    """Pool categories whose set of backends in use may have changed: stt/llm on a
+    core.chains change, tts on a tts.variants change."""
+    cats = set()
+    if "core.chains" in paths:
+        cats |= {"stt", "llm"}
+    if "tts.variants" in paths:
+        cats.add("tts")
     return cats
 
 
@@ -221,20 +248,32 @@ class Reconfigurator:
           `create()` keeps that stage's old backend and is logged, while the other
           affected stages are still rebuilt (apply-what-you-can)."""
         await self._rebuild_backend_cats(backend_categories(paths))
+        await self._rebuild_pool(self._pool_keys(paths), reconcile=reconciled_pools(paths))
+
+    def _in_use(self) -> set[tuple[str, str]]:
+        """(category, provider id) of every pool backend the runtime keeps built: the
+        STT and handler of each enabled chain and each enabled TTS variant."""
+        return referenced_instances(self.rt.core.chains) | {
+            ("tts", pid) for pid in self.rt.svc.tts_variants()}
+
+    def _pool_keys(self, paths) -> set[tuple[str, str]]:
+        """Pool instances to rebuild for `paths`: those whose own settings changed,
+        plus every enabled TTS variant on a core.tts_timeout change (the timeout is
+        baked into each TTS backend)."""
+        keys = pool_instances(paths)
+        if "core.tts_timeout" in paths:
+            keys |= {("tts", pid) for pid in self.rt.svc.tts_variants()}
+        return keys
 
     async def _rebuild_backend_cats(self, cats) -> None:
-        """Rebuild the given backend categories (subset of {'vad','wakeword','stt','llm','stress','tts'}) and swap
+        """Rebuild the given backend categories (subset of {'vad','wakeword','stress'}) and swap
         them into the runtime. Shared by path-driven rebuilds (_rebuild_backends) and the
         http rebuild (which rebuilds all cloud backends off the new client). Same
-        contracts as _rebuild_backends: tts_timeout push-before-create, per-category
-        isolation, old backend kept on a failed create()."""
+        contracts as _rebuild_backends: per-category isolation, old backend kept on a
+        failed create()."""
         if not cats:
             return
         svc = self.rt.svc
-        if "tts" in cats:
-            # tts_timeout is baked into the TTS backend; push it into the shared
-            # Deps bag BEFORE rebuilding so the new backend picks it up.
-            self.deps.tts_timeout = self.rt.core.tts_timeout
         for cat in cats:
             # Mark this category as loading for the duration of the (possibly slow,
             # e.g. RuAccent model download) create(). The set is mutated ONLY from
@@ -252,6 +291,45 @@ class Reconfigurator:
             setattr(self.rt, f"{cat}_backend", backend)
             logger.info(
                 f"hot-reloaded {cat} backend -> "
+                f"{getattr(backend, 'backend_desc', type(backend).__name__)}"
+            )
+
+    async def _rebuild_pool(self, keys, *, reconcile=frozenset()) -> None:
+        """Rebuild the pool backends named by `keys` ((category, provider id)) that are
+        in use — the STT/handler of an enabled chain, or an enabled TTS variant — and
+        swap each into the runtime's `<cat>_backends` dict; an instance not in use is
+        not built. For each category in `reconcile` (see reconciled_pools) it also
+        builds every newly used instance and drops the ones no longer used.
+
+        Same contracts as _rebuild_backend_cats: config read at apply time, each
+        instance rebuilt independently, the old backend kept on a failed create(),
+        and reloading() reports the category ("stt"/"llm"/"tts") while it loads.
+        tts_timeout is baked into a TTS backend, so it is pushed into the shared Deps
+        bag BEFORE any create() of this job when a TTS backend is among them."""
+        wanted = self._in_use()
+        keys = set(keys) & wanted
+        for cat in reconcile:
+            pool = getattr(self.rt, f"{cat}_backends")
+            why = "not an enabled variant" if cat == "tts" else "no enabled chain uses it"
+            for pid in [p for p in pool if (cat, p) not in wanted]:
+                del pool[pid]
+                logger.info(f"dropped {cat} backend {pid!r}: {why}")
+            keys |= {(c, p) for c, p in wanted if c == cat and p not in pool}
+        if any(c == "tts" for c, _ in keys):
+            self.deps.tts_timeout = self.rt.core.tts_timeout
+        svc = self.rt.svc
+        for cat, pid in sorted(keys):
+            self._reloading.add(cat)
+            try:
+                backend = await asyncio.to_thread(svc.create_instance, cat, pid)
+            except Exception as e:
+                logger.error(f"hot-reload of {cat} backend {pid!r} failed: {e}")
+                continue
+            finally:
+                self._reloading.discard(cat)
+            getattr(self.rt, f"{cat}_backends")[pid] = backend
+            logger.info(
+                f"hot-reloaded {cat} backend {pid!r} -> "
                 f"{getattr(backend, 'backend_desc', type(backend).__name__)}"
             )
 
@@ -360,14 +438,16 @@ class Reconfigurator:
     async def _rebuild_http(self, paths) -> None:
         """Rebuild the external (proxied) HTTP client, then rebuild the stages bound to it
         PLUS any stages whose own config changed in this job, then close the old client.
-        Rebuilt stages are the UNION of (a) the cloud stages whose selected provider reports
-        uses_http_cloud — these MUST rebuild because their create() binds to deps.http_cloud,
-        which just changed — and (b) the stages named by `paths` (incl. OFFLINE backends like
-        vosk STT / piper TTS), so a coalesced patch touching both core.network.*
-        and a selected offline backend does not silently drop that backend's change. The
-        OpenWeatherMap tool source also captures http_cloud, so tools are always rebuilt.
-        Proxy changes are rare; an in-flight request on the old client may fail when it is
-        closed."""
+        Rebuilt stages are the UNION of (a) the cloud backends — the single-backend stages
+        whose selected provider reports uses_http_cloud, and the STT/handler instances an
+        enabled chain references and the enabled TTS variants whose provider does — these
+        MUST rebuild because their create() binds to deps.http_cloud, which just changed —
+        and (b) the backends named by `paths` (incl. OFFLINE ones like vosk STT / piper
+        TTS, and a core.chains / tts.variants change), so a coalesced patch touching both
+        core.network.* and an offline backend does not silently drop that backend's
+        change. The OpenWeatherMap tool source also captures http_cloud, so tools are
+        always rebuilt. Proxy changes are rare; an in-flight request on the old client may
+        fail when it is closed."""
         core = self.rt.core
         old = self.deps.http_cloud
         try:
@@ -383,9 +463,12 @@ class Reconfigurator:
         # offline (uses_http_cloud defaults False), so a proxy change never needs to
         # rebuild them. A coalesced patch that also touches their config is still
         # picked up via backend_categories(paths) below.
-        cloud_cats = {c for c in ("vad", "stt", "llm", "tts") if svc.provider(c).uses_http_cloud}
+        cloud_cats = {c for c in ("vad",) if svc.provider(c).uses_http_cloud}
         cats = cloud_cats | backend_categories(paths)
         await self._rebuild_backend_cats(cats)
+        cloud_pool = {(c, p) for c, p in self._in_use() if get_provider(c, p).uses_http_cloud}
+        await self._rebuild_pool(cloud_pool | self._pool_keys(paths),
+                                 reconcile=reconciled_pools(paths))
         await self._rebuild_tools()              # OpenWeatherMap source also uses http_cloud
         # Close the old client after dependents have been rebuilt off the new one.
         try:

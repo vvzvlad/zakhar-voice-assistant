@@ -75,7 +75,7 @@ while `src/app.py` is still building backends — before the device server start
 container with an empty models volume therefore writes its first-boot config and
 then exits with `FileNotFoundError`; it does not fall back to cloud-only. Run
 `make models` on the host and copy the result into the volume, or switch
-`tts.selected` to a cloud provider in `data/config.json` before the first boot.
+`tts.variants` to a cloud provider in `data/config.json` before the first boot.
 
 ## Deployment
 
@@ -164,16 +164,27 @@ are applied at process start.
 
 Shape (see `templates/default_config.json` for the full default):
 
-- **Stage providers** — for each stage you pick one provider and configure it:
+- **Stage providers** — each provider has one set of settings under `instances`:
   - `vad`: `webrtc` (WebRTC VAD) — aggressiveness; the end-pointing
     thresholds and the decision-only VAD auto gain (`mic_auto_gain`, in the core
     Voice-capture settings) stay in `core.vad`.
-  - `stt`: `groq` (cloud Whisper) | `vosk` (offline) | `yandex` (SpeechKit v3 streaming, gRPC) — `selected` + per-provider `instances`.
-  - `llm`: `openrouter` | `groq` — model, api_key, temperature, max_tokens, max_tool_rounds.
+  - `stt`: `groq` (cloud Whisper) | `vosk` (offline) | `yandex` (SpeechKit v3 streaming, gRPC).
+  - `llm` (handlers): `openrouter` | `groq` — model, api_key, temperature, max_tokens,
+    max_tool_rounds; `simple-nlu` — the offline command engine (aliases, action verbs).
+  - Which STT feeds which handler is set by `core.chains`: an ordered list of
+    `{name, enabled, stt, handler, narrow, parallel}`. One utterance goes through the
+    enabled chains in order on the same audio until one answers; the next chain is tried
+    when the STT fails or hears nothing, when the handler declines, or when it fails
+    before running a tool. `narrow` restricts the chain's STT to its handler's vocabulary
+    (Vosk + `simple-nlu`); `parallel` starts the chain's STT together with the first one.
+    When another chain follows, `simple-nlu` runs strict: it executes a command only if
+    every word is explained (alias, verb, number, filler word) and declines otherwise.
   - `stress`: `ruaccent` (offline Russian stress placement) — runs between LLM and TTS,
     marks the stressed vowels in the reply (the canonical `+vowel` text every TTS backend
     already adapts); `enabled` (on by default) + model size.
   - `tts`: `piper` (offline) | `silero` (offline, needs PyTorch) | `yandex` (SpeechKit) | `fishaudio` (cloud) — voice/key/etc. per provider.
+    `tts.variants` is an ordered fallback list of `{provider, enabled}`: the next variant
+    speaks when synthesis fails before the speaker receives audio.
   Each provider declares its own settings schema (`src/plugins/<stage>/<id>.py`); adding a
   provider is one file, no changes to the config core.
 - **`core`** — non-provider settings: `context` (max_turns / ttl_seconds), `audio`

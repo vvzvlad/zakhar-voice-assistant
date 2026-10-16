@@ -12,6 +12,7 @@ from loguru import logger
 import src.plugins  # noqa: F401  triggers provider registration
 from src import config_store
 from src.agent_mcp import AgentMcpEndpoint
+from src.chains import referenced_instances
 from src.config_service import ConfigDoc, ConfigService
 from src.device_server import DeviceManager
 from src.panel_api import PanelServer
@@ -67,14 +68,14 @@ async def main() -> None:
     deps = Deps(http_cloud=client_ext, http_local=client_local, tts_timeout=core.tts_timeout)
 
     svc = ConfigService(doc, deps)
-    # Let offline STT read the active intent engine's command vocabulary live (per
-    # decode) for Vosk grammar restriction; svc was just built, deps is shared.
-    deps.command_vocabulary = svc.command_vocabulary
     core = svc.core
     vad_backend = svc.create("vad")
-    stt_backend = svc.create("stt")
-    tts_backend = svc.create("tts")
-    llm_backend = svc.create("llm")
+    # One STT / handler backend per provider an enabled recognition chain references.
+    pools = {"stt": {}, "llm": {}}
+    for cat, pid in sorted(referenced_instances(core.chains)):
+        pools[cat][pid] = svc.create_instance(cat, pid)
+    # One TTS backend per enabled variant.
+    tts_backends = {pid: svc.create_instance("tts", pid) for pid in svc.tts_variants()}
     # Defer the accent (stress) backend: RuAccent loads an ONNX model from
     # disk/HuggingFace, which would block boot for seconds. Start with no stress
     # backend (the pipeline skips the stage) and load it in the background after the
@@ -87,8 +88,10 @@ async def main() -> None:
     # request_initial_load below), like the stress stage.
     wakeword_backend = None
     # Startup log: name the exact backend ("provider/model") behind every stage.
-    for cat, b in (("vad", vad_backend), ("stt", stt_backend), ("llm", llm_backend),
-                   ("tts", tts_backend)):
+    stages = [("vad", vad_backend)]
+    stages += [(cat, b) for cat in ("stt", "llm") for b in pools[cat].values()]
+    stages += [("tts", b) for b in tts_backends.values()]
+    for cat, b in stages:
         logger.info(f"{cat} backend: {getattr(b, 'backend_desc', type(b).__name__)}")
     logger.info("stress/wakeword backends: deferred — load in the background after boot (if enabled)")
 
@@ -142,7 +145,7 @@ async def main() -> None:
     rt = Runtime(
         svc,
         vad_backend=vad_backend,
-        stt_backend=stt_backend, llm_backend=llm_backend, tts_backend=tts_backend,
+        stt_backends=pools["stt"], llm_backends=pools["llm"], tts_backends=tts_backends,
         stress_backend=stress_backend, wakeword_backend=wakeword_backend,
         hub=hub,
         runs_store=runs_store, run_events=run_events,

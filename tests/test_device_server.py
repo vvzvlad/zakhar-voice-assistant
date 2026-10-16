@@ -119,15 +119,16 @@ class Server:
     def __init__(self, tmp_path):
         doc = {
             "version": 1,
-            "stt": {"selected": "groq", "instances": {}},
-            "llm": {"selected": "openrouter", "instances": {}},
-            "tts": {"selected": "yandex", "instances": {}},
+            "stt": {"instances": {}},
+            "llm": {"instances": {}},
+            "tts": {"variants": [{"provider": "yandex"}], "instances": {}},
             "core": {
                 "audio": {"host": "127.0.0.1", "port": 0},
                 "ack": {"enabled": False},
                 "vad": {"min_speech_ms": 40, "silence_ms": 100, "max_utterance_ms": 400,
                         "no_speech_timeout_ms": 200, "trim_start_ms": 0},
                 "devices": [{"name": "kitchen"}],
+                "chains": [{"name": "main", "stt": "groq", "handler": "openrouter"}],
             },
         }
         self.svc = ConfigService(doc, Deps(http_cloud=None, http_local=None),
@@ -139,9 +140,9 @@ class Server:
         self.rt = Runtime(
             self.svc,
             vad_backend=WebRtcVadBackend(vad_factory=lambda: FakeVad(PHRASE_VAD)),
-            stt_backend=self.stt,
-            llm_backend=object(),
-            tts_backend=self.tts,
+            stt_backends={"groq": self.stt},
+            llm_backends={"openrouter": object()},
+            tts_backends={"yandex": self.tts},
             hub=FakeToolHub(),
             prompt_store=PromptStore(str(tmp_path / "prompts.db"), seed_path=str(prompt)),
         )

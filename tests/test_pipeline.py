@@ -14,6 +14,7 @@ from src.audio_prep import (
 )
 from src.core_config import (
     AckConfig,
+    ChainConfig,
     ContextConfig,
     CoreConfig,
     PromptConfig,
@@ -31,20 +32,30 @@ from src.stage_errors import StageError
 from src.tts import OwnedChunks, TtsBackend, pcm_mime
 
 class FakeSvc:
-    """Tiny ConfigService stand-in for the Runtime: just exposes a live CoreConfig
-    via `.core` and the selected LLM config via `.get("llm")`. The pipeline reads
-    both through the Runtime, so mutating `core` here changes them live."""
+    """Tiny ConfigService stand-in for the Runtime: exposes a live CoreConfig via
+    `.core`, every handler's config via `.instance_config("llm", id)`, its closed
+    vocabulary via `.vocabulary(id)` and the enabled TTS variants via
+    `.tts_variants()` (the mutable `variants` list). The pipeline reads them through
+    the Runtime, so mutating them here changes them live."""
 
-    def __init__(self, core, llm_cfg):
+    def __init__(self, core, llm_cfg, vocabulary=(), tts_variants=("fake",)):
         self._core = core
         self._llm = llm_cfg
+        self._vocabulary = list(vocabulary)
+        self.variants = list(tts_variants)
 
     @property
     def core(self):
         return self._core
 
-    def get(self, _category):
+    def instance_config(self, _category, _provider_id):
         return self._llm
+
+    def vocabulary(self, _handler_id):
+        return list(self._vocabulary)
+
+    def tts_variants(self):
+        return list(self.variants)
 
 
 class FakeSttBackend:
@@ -135,7 +146,12 @@ class FakeToolHub:
 
 def make_pipeline(tmp_path, monkeypatch, name="dev", stt_text="распознанный текст",
                   stt_backend=None, tts_backend=None, runs_store=None,
-                  run_events=None, ack=False, hub=None, stress_backend=None):
+                  run_events=None, ack=False, hub=None, stress_backend=None,
+                  tts_backends=None):
+    # `tts_backend` is the single TTS variant "fake"; `tts_backends` ({id: backend})
+    # makes every entry an enabled variant, in dict order.
+    if tts_backends is None:
+        tts_backends = {"fake": tts_backend or FakeTtsBackend()}
     # The data dir is hardcoded in config_store; the pipeline reads it as a module
     # attribute, so isolate per-test context files by monkeypatching DATA_DIR to
     # tmp_path BEFORE the pipeline (and its _context_path) is built.
@@ -153,18 +169,20 @@ def make_pipeline(tmp_path, monkeypatch, name="dev", stt_text="распозна�
         context=ContextConfig(),
         ack=AckConfig(enabled=ack),
         prompt=PromptConfig(system_prompt_path=str(prompt_path)),
+        # One recognition chain over the "fake" STT and handler below.
+        chains=[ChainConfig(name="main", stt="fake", handler="fake")],
     )
     rt = Runtime(
-        FakeSvc(core, LlmConfig()),
+        FakeSvc(core, LlmConfig(), tts_variants=list(tts_backends)),
         # Real WebRTC backend by default: tests that need scripted frame-level
         # speech/silence decisions swap it via install_fake_vad() before on_start.
         vad_backend=WebRtcVadBackend(),
-        stt_backend=stt_backend or FakeSttBackend(stt_text),
-        llm_backend=object(),
+        stt_backends={"fake": stt_backend or FakeSttBackend(stt_text)},
+        llm_backends={"fake": object()},
         # Accent stage backend: None by default so every existing test runs with the
         # stage skipped; the accent test injects a fake accentizer.
         stress_backend=stress_backend,
-        tts_backend=tts_backend or FakeTtsBackend(),
+        tts_backends=tts_backends,
         # Default hub double: the filler tests' slow tools are slow, everything
         # else (set_light, ...) is fast — the same shape the real ToolHub exposes.
         hub=hub or FakeToolHub(slow_tools={"search_events", "google", "get_current_weather"}),
@@ -245,7 +263,7 @@ def patch_llm(monkeypatch, reply="ответ", error=None, result=None):
         def __init__(self, backend, hub, cfg):
             pass
 
-        async def respond(self, req, *, on_filler=None):
+        async def respond(self, req, *, on_filler=None, has_next=False):
             if error is not None:
                 raise error
             return result if result is not None else make_llm_result(reply)
@@ -556,13 +574,13 @@ async def test_vad_no_speech_finalize(tmp_path, monkeypatch):
 
     # Spy on transcribe to assert it is never called on a no-speech run.
     stt_calls = []
-    orig_transcribe = pipeline.stt_backend.transcribe
+    orig_transcribe = pipeline.rt.stt_backends["fake"].transcribe
 
     async def spy_transcribe(pcm):
         stt_calls.append(pcm)
         return await orig_transcribe(pcm)
 
-    pipeline.stt_backend.transcribe = spy_transcribe
+    pipeline.rt.stt_backends["fake"].transcribe = spy_transcribe
 
     await pipeline.on_start("cid", None)
     # no_speech_timeout_ms=200 -> 10 frames; feed 11 to cross it.
@@ -596,13 +614,13 @@ async def test_no_speech_run_is_recorded_as_empty(tmp_path, monkeypatch):
     install_fake_vad(pipeline, [False])
 
     stt_calls = []
-    orig_transcribe = pipeline.stt_backend.transcribe
+    orig_transcribe = pipeline.rt.stt_backends["fake"].transcribe
 
     async def spy_transcribe(pcm):
         stt_calls.append(pcm)
         return await orig_transcribe(pcm)
 
-    pipeline.stt_backend.transcribe = spy_transcribe
+    pipeline.rt.stt_backends["fake"].transcribe = spy_transcribe
 
     await pipeline.on_start("cid", None)
     # no_speech_timeout_ms=200 -> 10 frames; feed 11 to cross it.
@@ -713,7 +731,7 @@ async def test_history_flows_across_runs(tmp_path, monkeypatch):
         def __init__(self, backend, hub, cfg):
             pass
 
-        async def respond(self, req, *, on_filler=None):
+        async def respond(self, req, *, on_filler=None, has_next=False):
             seen.append((req.user_text, req.history))
             return make_llm_result(replies[req.user_text])
 
@@ -744,7 +762,7 @@ async def test_history_flows_across_runs(tmp_path, monkeypatch):
 
     # Run 2 on the same pipeline instance with a different utterance.
     # on_start resets all per-run state (including _finalized).
-    pipeline.stt_backend.text = "второй вопрос"
+    pipeline.rt.stt_backends["fake"].text = "второй вопрос"
     await pipeline.on_start("cid", None)
     await pipeline.on_audio(b"\x01\x02" * 100)
     await pipeline.on_stop(False)
@@ -1391,13 +1409,13 @@ async def test_normal_run_hard_cap_truncates_at_60s(tmp_path, monkeypatch):
     pipeline.rt.core.vad.trim_start_ms = 0
     install_fake_vad(pipeline, [True])  # always speech: only the cap can finalize
 
-    orig_transcribe = pipeline.stt_backend.transcribe
+    orig_transcribe = pipeline.rt.stt_backends["fake"].transcribe
 
     async def spy(pcm):
         captured["len"] = len(pcm)
         return await orig_transcribe(pcm)
 
-    pipeline.stt_backend.transcribe = spy
+    pipeline.rt.stt_backends["fake"].transcribe = spy
 
     await pipeline.on_start("cid", None)
     # 65 s worth of PCM in a single chunk -> HARD_CAP fires, buffer trimmed to 60 s.
@@ -1480,13 +1498,13 @@ async def test_stt_receives_trimmed_pcm(tmp_path, monkeypatch):
     pipeline.rt.core.vad.trim_start_ms = 10
 
     stt_calls = []
-    orig_transcribe = pipeline.stt_backend.transcribe
+    orig_transcribe = pipeline.rt.stt_backends["fake"].transcribe
 
     async def spy_transcribe(pcm):
         stt_calls.append(pcm)
         return await orig_transcribe(pcm)
 
-    pipeline.stt_backend.transcribe = spy_transcribe
+    pipeline.rt.stt_backends["fake"].transcribe = spy_transcribe
 
     fed = b"\x01\x02" * 400  # 800 bytes
     await pipeline.on_start("cid", None)
@@ -1509,13 +1527,13 @@ async def test_stt_receives_full_pcm_when_trim_exceeds_short_utterance(
     assert pipeline.rt.core.vad.trim_start_ms == 200
 
     stt_calls = []
-    orig_transcribe = pipeline.stt_backend.transcribe
+    orig_transcribe = pipeline.rt.stt_backends["fake"].transcribe
 
     async def spy_transcribe(pcm):
         stt_calls.append(pcm)
         return await orig_transcribe(pcm)
 
-    pipeline.stt_backend.transcribe = spy_transcribe
+    pipeline.rt.stt_backends["fake"].transcribe = spy_transcribe
 
     fed = b"\x01\x02" * 400  # 800 bytes, far shorter than 6400
     await pipeline.on_start("cid", None)
@@ -1576,7 +1594,7 @@ async def test_run_top_level_exception_is_recorded_and_run_ends(tmp_path, monkey
     patch_llm(monkeypatch)
     store = FakeRunsStore()
     pipeline, events = make_pipeline(tmp_path, monkeypatch, stt_text="включи свет", runs_store=store)
-    pipeline.rt.stt_backend = RaisingSttBackend(RuntimeError("boom"))
+    pipeline.rt.stt_backends["fake"] = RaisingSttBackend(RuntimeError("boom"))
 
     await pipeline.on_start("cid", None)
     await pipeline.on_audio(b"\x01\x02" * 100)
@@ -1804,7 +1822,7 @@ def patch_llm_with_filler(monkeypatch, *, tool_names, content, reply="готов
         def __init__(self, backend, hub, cfg):
             pass
 
-        async def respond(self, req, *, on_filler=None):
+        async def respond(self, req, *, on_filler=None, has_next=False):
             if on_filler is not None:
                 for _ in range(times):
                     await on_filler(content, tool_names)
@@ -2340,19 +2358,6 @@ async def test_filler_think_block_stripped_before_announce(tmp_path, monkeypatch
     assert store.records[0]["filler_text"] == "Щас гляну"
 
 
-async def test_spoken_llm_fallback_maps_kind_to_configured_phrase(tmp_path, monkeypatch):
-    # Direct unit test of the StageError(kind) -> spoken phrase policy:
-    # "rate_limit" gets its dedicated line; any unknown/future kind falls back to
-    # the generic error phrase.
-    pipeline, _ = make_pipeline(tmp_path, monkeypatch)
-
-    rate_limited = StageError("llm", "x", kind="rate_limit")
-    assert pipeline._spoken_llm_fallback(rate_limited) == pipeline.llm_cfg.reply_rate_limit
-
-    unknown_kind = StageError("llm", "x", kind="timeout")  # not specially mapped
-    assert pipeline._spoken_llm_fallback(unknown_kind) == pipeline.llm_cfg.reply_error
-
-
 class RestartingSttBackend:
     """STT double that re-fires pipeline.on_start (a new wake word) MID-transcription,
     then returns its text — driving the conversation-id snapshot race."""
@@ -2375,7 +2380,7 @@ async def test_intent_end_keeps_conversation_id_snapshotted_at_claim(tmp_path, m
     # (the conversation_id parameter of _run), not the relabeled one.
     patch_llm(monkeypatch, reply="готово")
     pipeline, events = make_pipeline(tmp_path, monkeypatch)
-    pipeline.rt.stt_backend = RestartingSttBackend(pipeline, "cid2")
+    pipeline.rt.stt_backends["fake"] = RestartingSttBackend(pipeline, "cid2")
 
     await pipeline.on_start("cid1", None)
     await pipeline.on_audio(b"\x01\x02" * 100)
@@ -2436,7 +2441,7 @@ async def test_llm_request_carries_assembled_prompt_and_device(tmp_path, monkeyp
         def __init__(self, backend, hub, cfg):
             pass
 
-        async def respond(self, req, *, on_filler=None):
+        async def respond(self, req, *, on_filler=None, has_next=False):
             seen.append(req)
             return make_llm_result("готово")
 
@@ -2458,7 +2463,7 @@ async def test_llm_request_carries_assembled_prompt_and_device(tmp_path, monkeyp
 
 
 async def test_llm_backend_hot_swap_applies_on_next_run(tmp_path, monkeypatch):
-    # The pipeline constructs a fresh LlmStage per run from rt.llm_backend, so
+    # The pipeline constructs a fresh LlmStage per run from rt.llm_backends, so
     # swapping the backend on the runtime (what the reconfigurator does on an
     # llm.* change) takes effect on the NEXT run without rebuilding the pipeline
     # — mirrors test_vad_backend_hot_swap_applies_on_next_run.
@@ -2468,12 +2473,12 @@ async def test_llm_backend_hot_swap_applies_on_next_run(tmp_path, monkeypatch):
         def __init__(self, backend, hub, cfg):
             backends.append(backend)
 
-        async def respond(self, req, *, on_filler=None):
+        async def respond(self, req, *, on_filler=None, has_next=False):
             return make_llm_result("готово")
 
     monkeypatch.setattr("src.llm.LlmStage", RecordingLlmStage)
     pipeline, _ = make_pipeline(tmp_path, monkeypatch, stt_text="включи свет")
-    old = pipeline.rt.llm_backend
+    old = pipeline.rt.llm_backends["fake"]
 
     await pipeline.on_start("cid", None)
     await pipeline.on_audio(b"\x01\x02" * 100)
@@ -2482,7 +2487,7 @@ async def test_llm_backend_hot_swap_applies_on_next_run(tmp_path, monkeypatch):
 
     # Hot-swap: the next run's stage is constructed with the NEW backend object.
     new = object()
-    pipeline.rt.llm_backend = new
+    pipeline.rt.llm_backends["fake"] = new
     await pipeline.on_start("cid", None)
     await pipeline.on_audio(b"\x01\x02" * 100)
     await pipeline.on_stop(False)
@@ -2764,18 +2769,18 @@ class _StreamingSttBackend:
 
 async def test_on_disconnect_closes_unfinalized_streaming_session(tmp_path, monkeypatch):
     # Speaker vanished mid-utterance: on_start opened a streaming session but the run
-    # was never finalized. on_disconnect() must close that session and drop the ref so
+    # was never finalized. on_disconnect() must close that session and drop the refs so
     # the gRPC stream/channel don't linger until the next run.
     stt = _StreamingSttBackend()
     pipeline, _events = make_pipeline(tmp_path, monkeypatch, stt_backend=stt)
     install_fake_vad(pipeline, [False])  # no endpoint -> run never finalizes
     await pipeline.on_start("cid", None)
-    assert pipeline._stt_stream is stt.session
+    assert pipeline._stt_streams == {"main": stt.session}
     assert pipeline._finalized is False
 
     await pipeline.on_disconnect()
     assert stt.session.closed is True
-    assert pipeline._stt_stream is None
+    assert pipeline._stt_streams == {}
 
 
 async def test_on_disconnect_skips_finalized_run(tmp_path, monkeypatch):
@@ -2790,7 +2795,7 @@ async def test_on_disconnect_skips_finalized_run(tmp_path, monkeypatch):
 
     await pipeline.on_disconnect()
     assert stt.session.closed is False
-    assert pipeline._stt_stream is stt.session
+    assert pipeline._stt_streams == {"main": stt.session}
 
 
 # --- streaming STT open: non-streaming backend vs genuine open failure -----------
@@ -2814,25 +2819,249 @@ class _RaisingStreamSttBackend:
 
 async def test_on_start_non_streaming_backend_falls_back_silently(tmp_path, monkeypatch):
     # FakeSttBackend is a duck-typed double WITHOUT open_stream() (a non-streaming
-    # backend): on_start must treat it as "no streaming session", leaving _stt_stream
-    # None for the batch route — NOT as an open failure to warn about.
+    # backend): on_start must treat it as "no streaming session", leaving no entry
+    # in _stt_streams for the batch route — NOT as an open failure to warn about.
     stt = FakeSttBackend()
     assert not hasattr(stt, "open_stream")
     pipeline, _events = make_pipeline(tmp_path, monkeypatch, stt_backend=stt)
     install_fake_vad(pipeline, [False])
 
     await pipeline.on_start("cid", None)
-    assert pipeline._stt_stream is None
+    assert pipeline._stt_streams == {}
 
 
 async def test_on_start_streaming_open_failure_falls_back_to_batch(tmp_path, monkeypatch):
     # A streaming-capable backend whose open_stream() raises is a GENUINE failure
-    # (the warn path): on_start must still swallow it and leave _stt_stream None so
-    # the run continues via the batch transcribe() route.
+    # (the warn path): on_start must still swallow it and leave no session in
+    # _stt_streams so the run continues via the batch transcribe() route.
     stt = _RaisingStreamSttBackend()
     pipeline, _events = make_pipeline(tmp_path, monkeypatch, stt_backend=stt)
     install_fake_vad(pipeline, [False])
 
     await pipeline.on_start("cid", None)
     assert stt.open_called is True
-    assert pipeline._stt_stream is None
+    assert pipeline._stt_streams == {}
+
+
+# --- TTS variants: fallback before the speaker has any audio ---------------------
+
+
+class _FailingTts(TtsBackend):
+    """Fails to start (the default stream adapter calls synthesize()) after `delay`
+    seconds; counts its calls."""
+
+    def __init__(self, message, delay=0.0):
+        self.message = message
+        self.delay = delay
+        self.calls = 0
+
+    async def synthesize(self, text, lang="ru"):
+        import asyncio
+
+        self.calls += 1
+        await asyncio.sleep(self.delay)
+        raise RuntimeError(self.message)
+
+
+class _ChunkIter:
+    """Async chunk iterator double: yields `chunks`, then raises `error` (if any);
+    records aclose()."""
+
+    def __init__(self, chunks=(), error=None):
+        self._chunks = list(chunks)
+        self._error = error
+        self.closed = False
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        if self._chunks:
+            return self._chunks.pop(0)
+        if self._error is not None:
+            raise self._error
+        raise StopAsyncIteration
+
+    async def aclose(self):
+        self.closed = True
+
+
+class _IterTts(TtsBackend):
+    """Streaming TTS double handing out a prepared _ChunkIter."""
+
+    def __init__(self, it):
+        self.it = it
+        self.calls = 0
+
+    async def synthesize(self, text, lang="ru"):
+        raise AssertionError("streaming path must not call buffered synthesize")
+
+    async def synthesize_stream(self, text, lang="ru"):
+        self.calls += 1
+        return ("audio/mpeg", self.it)
+
+
+async def _voice_run(pipeline):
+    await pipeline.on_start("cid", None)
+    await pipeline.on_audio(b"\x01\x02" * 100)
+    await pipeline.on_stop(False)
+
+
+def _tts_attempts(rec):
+    return [(a["provider"], a["outcome"], a["error"])
+            for a in rec["attempts"] if a["kind"] == "tts"]
+
+
+async def test_tts_first_variant_fails_to_start_second_speaks(tmp_path, monkeypatch):
+    # synthesize() raises, so the stream fails before any iterator exists: the next
+    # variant speaks, and the run is a success whose t_tts counts from the first attempt.
+    patch_llm(monkeypatch, reply="готово")
+    store = FakeRunsStore()
+    pipeline, events = make_pipeline(
+        tmp_path, monkeypatch, runs_store=store,
+        tts_backends={"a": _FailingTts("a down", delay=0.05), "b": FakeTtsBackend(audio=b"B")},
+    )
+
+    await _voice_run(pipeline)
+
+    assert pipeline.play.calls == [(b"B", "audio/mpeg")]
+    rec = store.records[0]
+    assert (rec["result"], rec["error_stage"]) == ("ok", None)
+    assert _tts_attempts(rec) == [("a", "error", "a down"), ("b", "spoke", None)]
+    assert rec["t_tts"] >= 50
+
+
+async def test_tts_stream_failing_on_first_chunk_switches_and_closes_it(tmp_path, monkeypatch):
+    # The first variant's stream opens but fails on its first chunk: nothing was
+    # handed to the device yet, so the next variant speaks; the failed iterator is
+    # closed and never reached the device.
+    patch_llm(monkeypatch, reply="готово")
+    store = FakeRunsStore()
+    broken = _ChunkIter(error=RuntimeError("first chunk boom"))
+    pipeline, events = make_pipeline(
+        tmp_path, monkeypatch, runs_store=store,
+        tts_backends={"a": _IterTts(broken), "b": _IterTts(_ChunkIter([b"b1", b"b2"]))},
+    )
+
+    await _voice_run(pipeline)
+
+    assert broken.closed is True
+    assert pipeline.play.calls == [(b"b1b2", "audio/mpeg")]
+    rec = store.records[0]
+    assert rec["result"] == "ok"
+    assert _tts_attempts(rec) == [("a", "error", "first chunk boom"), ("b", "spoke", None)]
+
+
+async def test_tts_failure_after_first_chunk_played_does_not_switch(tmp_path, monkeypatch):
+    # The first variant started (its first chunk went to the device) and then fails
+    # mid-stream: the device already plays it, so no other variant is tried.
+    patch_llm(monkeypatch, reply="готово")
+    store = FakeRunsStore()
+    second = _IterTts(_ChunkIter([b"never"]))
+    pipeline, events = make_pipeline(
+        tmp_path, monkeypatch, runs_store=store,
+        tts_backends={"a": _IterTts(_ChunkIter([b"a1"], RuntimeError("mid boom"))),
+                      "b": second},
+    )
+    played = []
+
+    async def _player(mime, audio):
+        async for chunk in audio:
+            played.append(chunk)
+
+    pipeline.play = _player
+
+    await _voice_run(pipeline)
+
+    assert played == [b"a1"]
+    assert second.calls == 0
+    rec = store.records[0]
+    assert (rec["result"], rec["error_stage"], rec["error_text"]) == ("error", "TTS", "mid boom")
+    assert _tts_attempts(rec) == [("a", "spoke", None)]
+
+
+async def test_tts_all_variants_fail_reports_last_error(tmp_path, monkeypatch):
+    patch_llm(monkeypatch, reply="готово")
+    store = FakeRunsStore()
+    pipeline, events = make_pipeline(
+        tmp_path, monkeypatch, runs_store=store,
+        tts_backends={"a": _FailingTts("a down"), "b": _FailingTts("b down")},
+    )
+
+    await _voice_run(pipeline)
+
+    assert pipeline.play.calls == []
+    assert types_of(events)[-1] == StageEvent.RUN_END
+    rec = store.records[0]
+    assert (rec["result"], rec["error_stage"], rec["error_text"]) == ("error", "TTS", "b down")
+    assert _tts_attempts(rec) == [("a", "error", "a down"), ("b", "error", "b down")]
+    assert rec["t_tts"] == 0
+
+
+async def test_tts_walks_only_the_enabled_variants_in_config_order(tmp_path, monkeypatch):
+    # The order and the enabled set come from the config per utterance: a built
+    # backend that is no enabled variant is never used, and an enabled variant whose
+    # backend is not loaded counts as a failed attempt.
+    patch_llm(monkeypatch, reply="готово")
+    store = FakeRunsStore()
+    disabled = _FailingTts("must not run")
+    pipeline, _events = make_pipeline(
+        tmp_path, monkeypatch, runs_store=store,
+        tts_backends={"off": disabled, "b": FakeTtsBackend(audio=b"B")},
+    )
+    pipeline.rt.svc.variants = ["missing", "b"]
+
+    await _voice_run(pipeline)
+
+    assert disabled.calls == 0
+    assert pipeline.play.calls == [(b"B", "audio/mpeg")]
+    assert _tts_attempts(store.records[0]) == [
+        ("missing", "error", "tts backend 'missing' is not loaded"), ("b", "spoke", None)]
+
+
+async def test_speak_falls_back_to_the_next_variant(tmp_path, monkeypatch):
+    # Filler, announcements and reminders go through speak(): same variant list.
+    pipeline, _ = make_pipeline(
+        tmp_path, monkeypatch,
+        tts_backends={"a": _FailingTts("a down"), "b": FakeTtsBackend(audio=b"B")},
+    )
+
+    await pipeline.speak("привет")
+
+    assert pipeline.play.calls == [(b"B", "audio/mpeg")]
+
+
+async def test_speak_closes_prefetched_stream_when_play_fails(tmp_path, monkeypatch):
+    # The pre-fetched stream goes to play() un-iterated; a play hook that fails before
+    # iterating closes it (as Device.play does when the device is offline), and
+    # closing it closes the backend's iterator.
+    it = _ChunkIter([b"x", b"y"])
+    pipeline, _ = make_pipeline(tmp_path, monkeypatch, tts_backend=_IterTts(it))
+
+    async def _offline(mime, audio):
+        await audio.aclose()
+        raise RuntimeError("cannot play: offline")
+
+    pipeline.play = _offline
+    with pytest.raises(RuntimeError, match="offline"):
+        await pipeline.speak("привет")
+    assert it.closed is True
+
+
+async def test_run_text_records_tts_attempts_and_time_to_start(tmp_path, monkeypatch):
+    patch_llm(monkeypatch, reply="готово")
+    store = FakeRunsStore()
+    pipeline, _ = make_pipeline(
+        tmp_path, monkeypatch, runs_store=store,
+        tts_backends={"a": _FailingTts("a down", delay=0.05), "b": FakeTtsBackend(audio=b"B")},
+    )
+
+    result = await pipeline.run_text("включи свет")
+
+    assert result["result"] == "ok"
+    assert pipeline.play.calls == [(b"B", "audio/mpeg")]
+    rec = store.records[0]
+    assert [a["kind"] for a in rec["attempts"]] == ["chain", "tts", "tts"]
+    assert _tts_attempts(rec) == [("a", "error", "a down"), ("b", "spoke", None)]
+    assert rec["t_tts"] == sum(a["t"] for a in rec["attempts"] if a["kind"] == "tts")
+    assert rec["t_tts"] >= 50

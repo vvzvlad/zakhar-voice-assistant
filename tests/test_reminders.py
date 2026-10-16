@@ -494,7 +494,7 @@ class _ScriptedBackend:
     def __init__(self):
         self._i = 0
 
-    async def complete(self, messages, tools):
+    async def complete(self, messages, tools, *, has_next=False):
         self._i += 1
         if self._i == 1:
             return {

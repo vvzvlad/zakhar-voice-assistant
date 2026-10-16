@@ -78,7 +78,10 @@ the only env-tunable values are the bind host/port of the admin panel
 start. The agent MCP endpoint rides the panel server at `/mcp` (same port); its
 only setting is `core.agent_mcp.enabled`, panel-editable and read live per request.
 
-- Per stage (`vad`/`stt`/`llm`/`stress`/`tts`) the doc holds `{selected, instances}`; each provider
+- `vad`/`wakeword`/`stress` hold `{selected, instances}`; `stt`/`llm` hold only `{instances}` —
+  which STT feeds which handler is `core.chains`, an ordered list of `{name, enabled, stt,
+  handler, narrow, parallel}` tried in turn on the same audio (`src/chains.py`); `tts` holds
+  `{variants, instances}`, an ordered fallback list. Each provider
   defines its own settings via a pydantic `ConfigModel` in `src/plugins/<stage>/<id>.py`.
   The config core (`ConfigService`/`config_store`) is provider-agnostic — it never names a
   provider's fields. Adding a provider = one new plugin file; zero changes to the core.
@@ -111,3 +114,9 @@ only setting is `core.agent_mcp.enabled`, panel-editable and read live per reque
   the review", "since the incident") goes into the commit message.
 - This file stays under ~150 lines: only what an agent would get wrong without it. No decision
   history, incident logs or retelling of the code.
+
+## FPF
+
+Read a pattern through the `fpf` MCP (`read_pattern <ID>`) before applying it.
+
+- Changing the system-prompt profile, the LLM, an STT/TTS/VAD provider, an MCP server's tools or `max_tool_rounds` — SYSE.46 "Test an Agent and Its Support in Representative Work": replay real requests from the run log (the agent MCP serves them with rounds and stage timings), include ones that must end in a refusal or a clarifying question, and compare the tool calls and their effects, not only the spoken reply.

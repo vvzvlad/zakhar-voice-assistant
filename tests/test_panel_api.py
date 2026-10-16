@@ -28,22 +28,23 @@ from src.run_events import RunEventsHub
 from src.runs_store import RunsStore
 
 
+YANDEX_ONLY = [{"provider": "yandex", "enabled": True}]
+
+
 def _doc(prompt_path):
-    """Minimal valid config doc: selected stt/llm/tts + instances + core."""
+    """Minimal valid config doc: stt/llm instances, one tts variant, core with one chain."""
     return {
         "version": 1,
-        "stt": {"selected": "groq", "instances": {"groq": {"api_key": "gsk-x"}}},
-        "llm": {
-            "selected": "openrouter",
-            "instances": {"openrouter": {"api_key": "sk-or-x", "model": "m1"}},
-        },
+        "stt": {"instances": {"groq": {"api_key": "gsk-x"}}},
+        "llm": {"instances": {"openrouter": {"api_key": "sk-or-x", "model": "m1"}}},
         "tts": {
-            "selected": "yandex",
+            "variants": YANDEX_ONLY,
             "instances": {"yandex": {"api_key": "AQVN-x", "voice": "jane", "speed": 1.2}},
         },
         "core": {
             "prompt": {"system_prompt_path": str(prompt_path)},
             "log_level": "DEBUG",
+            "chains": [{"name": "main", "stt": "groq", "handler": "openrouter"}],
         },
     }
 
@@ -317,7 +318,7 @@ async def test_tts_test_synthesizes_with_draft_settings(tmp_path):
             assert w.readframes(w.getnframes()) == b"PCMBYTES"
         assert route.call_count == 1
         # The stored config was never touched by the ad-hoc build.
-        assert svc.document()["tts"]["selected"] == "yandex"
+        assert svc.document()["tts"]["variants"] == YANDEX_ONLY
         assert "fishaudio" not in svc.document()["tts"]["instances"]
     finally:
         await client.close()
@@ -663,9 +664,9 @@ async def test_prompt_profile_activate_switches_what_get_prompt_returns(tmp_path
 
 async def test_prompt_profile_activate_apply_voice_sets_tts(tmp_path):
     # Activating with apply_voice=true reads the profile's preferred-voice marker
-    # and applies it to the TTS config. The test ConfigService registers no
-    # reconfig callbacks, so apply() only validates+persists — selecting piper does
-    # NOT load an ONNX file.
+    # and applies it to the TTS config: its provider becomes the first variant, the
+    # others stay. The test ConfigService registers no reconfig callbacks, so apply()
+    # only validates+persists — enabling piper does NOT load an ONNX file.
     store = _prompt_store(tmp_path)
     client, svc = await _client(tmp_path, prompt_store=store)
     try:
@@ -686,7 +687,7 @@ async def test_prompt_profile_activate_apply_voice_sets_tts(tmp_path):
         }
 
         doc = svc.document()
-        assert doc["tts"]["selected"] == "piper"
+        assert doc["tts"]["variants"] == [{"provider": "piper", "enabled": True}] + YANDEX_ONLY
         assert doc["tts"]["instances"]["piper"]["voice_path"] == "models/x.onnx"
     finally:
         await client.close()
@@ -707,7 +708,7 @@ async def test_prompt_profile_activate_apply_voice_no_marker(tmp_path):
         assert resp.status == 200
         body = await resp.json()
         assert body["voice_applied"] is None
-        assert svc.document()["tts"]["selected"] == "yandex"
+        assert svc.document()["tts"]["variants"] == YANDEX_ONLY
     finally:
         await client.close()
         store.close()
@@ -730,7 +731,7 @@ async def test_prompt_profile_activate_apply_voice_unknown_provider(tmp_path):
         body = await resp.json()
         assert body["active_id"] == pid
         assert "voice_error" in body and "nope" in body["voice_error"]
-        assert svc.document()["tts"]["selected"] == "yandex"
+        assert svc.document()["tts"]["variants"] == YANDEX_ONLY
     finally:
         await client.close()
         store.close()
@@ -750,7 +751,7 @@ async def test_prompt_profile_activate_no_body_back_compat(tmp_path):
         resp = await client.post(f"/api/prompt/profiles/{pid}/activate")
         assert resp.status == 200
         assert (await resp.json()) == {"ok": True, "active_id": pid}
-        assert svc.document()["tts"]["selected"] == "yandex"
+        assert svc.document()["tts"]["variants"] == YANDEX_ONLY
     finally:
         await client.close()
         store.close()
@@ -1346,6 +1347,7 @@ def _seed_runs(tmp_path):
         "t_total": 1600, "audio_ms": None, "audio_bytes": 500, "audio_fmt": "mp3",
         "error_stage": None, "error_text": None,
         "rounds": [{"round": 1, "note": "final answer", "tokens": 10, "calls": []}],
+        "chain": "fast",
     })
     store.insert({
         "ts": now, "device": "bedroom", "result": "error", "reason": "endpoint",
@@ -1382,6 +1384,11 @@ async def test_get_runs_list_and_filters(tmp_path):
         # search filter.
         found = await (await client.get("/api/runs", params={"search": "свет"})).json()
         assert [r["stt_text"] for r in found["runs"]] == ["включи свет"]
+
+        # chain filter (exact match), with the matching total.
+        fast = await (await client.get("/api/runs", params={"chain": "fast"})).json()
+        assert ([r["chain"] for r in fast["runs"]], fast["total"]) == (["fast"], 1)
+        assert (await (await client.get("/api/runs", params={"chain": "fas"})).json())["total"] == 0
     finally:
         await client.close()
         store.close()
@@ -1796,13 +1803,14 @@ async def test_runs_stream_handshake_disconnect_is_quiet(tmp_path, monkeypatch):
 
 async def test_patch_config_value_error_returns_422_with_empty_detail(tmp_path):
     # apply() raises a *plain* ValueError (not a pydantic ValidationError) when a patch
-    # selects an unknown provider — get_provider() raises ValueError("Unknown ..."). That
+    # names an unknown provider — get_provider() raises ValueError("Unknown ..."). That
     # branch returns 422 with detail=[] and an "error" string, and must NOT persist.
     client, svc = await _client(tmp_path)
     try:
         before = svc.document()
         # A real patch whose merged doc fails inside apply() with a bare ValueError.
-        resp = await client.patch("/api/config", json={"stt": {"selected": "nope"}})
+        resp = await client.patch(
+            "/api/config", json={"tts": {"variants": [{"provider": "nope", "enabled": True}]}})
         assert resp.status == 422
         body = await resp.json()
         # The plain-ValueError branch yields detail == [] (no pydantic error list).
@@ -1810,7 +1818,7 @@ async def test_patch_config_value_error_returns_422_with_empty_detail(tmp_path):
         assert isinstance(body["error"], str) and body["error"]
         # Nothing was applied: the in-memory/on-disk document is unchanged.
         assert svc.document() == before
-        assert svc.document()["stt"]["selected"] == "groq"
+        assert svc.document()["tts"]["variants"] == YANDEX_ONLY
     finally:
         await client.close()
 
@@ -1872,9 +1880,9 @@ class _LimitSpyStore:
         self._inner = inner
         self.limits = []
 
-    def list(self, *, device=None, result=None, search=None, limit=100, offset=0):
+    def list(self, *, device=None, result=None, search=None, chain=None, limit=100, offset=0):
         self.limits.append(limit)
-        return self._inner.list(device=device, result=result, search=search,
+        return self._inner.list(device=device, result=result, search=search, chain=chain,
                                 limit=limit, offset=offset)
 
     # Delegate anything else the server might touch (incl. count) to the real store.

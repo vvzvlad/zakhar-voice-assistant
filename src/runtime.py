@@ -9,7 +9,7 @@ rebuilding the pipelines.
 
 
 class Runtime:
-    def __init__(self, svc, *, vad_backend, stt_backend, llm_backend, tts_backend,
+    def __init__(self, svc, *, vad_backend, stt_backends, llm_backends, tts_backends,
                  hub, runs_store=None, run_events=None,
                  prompt_store=None, stress_backend=None, wakeword_backend=None):
         self.svc = svc
@@ -19,13 +19,19 @@ class Runtime:
         # STT. Defaults to None so the pipeline guards a None/passthrough backend and
         # simply accepts (skips the gate) until a real verifier is loaded.
         self.wakeword_backend = wakeword_backend
-        self.stt_backend = stt_backend
-        self.llm_backend = llm_backend
+        # Built STT / handler (llm) backends keyed by provider id: one per provider an
+        # enabled recognition chain references (core.chains). The Reconfigurator
+        # adds, rebuilds and drops entries as the chains and instances change.
+        self.stt_backends = stt_backends
+        self.llm_backends = llm_backends
         # Accent (Russian stress) stage backend, between LLM and TTS. Defaults to
         # None so test fixtures that don't pass it keep working (the pipeline guards
         # for a None backend and simply skips the stage).
         self.stress_backend = stress_backend
-        self.tts_backend = tts_backend
+        # Built TTS backends keyed by provider id: one per enabled variant (tts.variants).
+        # The pipeline walks the variants in config order; the Reconfigurator adds,
+        # rebuilds and drops entries as the variants and instances change.
+        self.tts_backends = tts_backends
         self.hub = hub
         self.runs_store = runs_store
         self.run_events = run_events
@@ -40,9 +46,3 @@ class Runtime:
     def core(self):
         """Current CoreConfig — always reflects the latest applied document."""
         return self.svc.core
-
-    @property
-    def llm_cfg(self):
-        """Validated config of the selected LLM provider (live fields like
-        reply_* / max_tool_rounds are read from here per request)."""
-        return self.svc.get("llm")

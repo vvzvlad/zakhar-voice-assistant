@@ -187,12 +187,12 @@ export const streamTtsVoice = async (provider, settings, text, signal) => {
 export const getTools = () => request("/api/tools");
 
 // --- observability (run log + metrics) -------------------------------------
-// Builds /api/runs?device=&result=&search=&limit=&offset= from the given params,
+// Builds /api/runs?device=&chain=&result=&search=&limit=&offset= from the given params,
 // dropping empty/undefined ones so the backend sees a clean query string. `offset`
 // is the number of matching rows to skip for offset-based numbered pagination.
 export const getRuns = (params = {}) => {
   const q = new URLSearchParams();
-  for (const k of ["device", "result", "search", "limit", "offset"]) {
+  for (const k of ["device", "chain", "result", "search", "limit", "offset"]) {
     const v = params[k];
     if (v !== undefined && v !== null && v !== "") q.set(k, String(v));
   }

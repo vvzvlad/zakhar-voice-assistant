@@ -18,10 +18,31 @@ from src.core_config import CoreConfig
 from src.plugins.base import Deps, get_provider, providers
 
 STAGE_CATEGORIES = ("vad", "wakeword", "stt", "llm", "stress", "tts")
+# Categories whose providers are chosen per recognition chain (core.chains), not by
+# one `selected` id: the slot is a pool of provider instances.
+POOL_CATEGORIES = ("stt", "llm")
+# tts holds an ordered list of fallback variants instead of one `selected` id.
+SLOT_CATEGORIES = tuple(c for c in STAGE_CATEGORIES if c not in POOL_CATEGORIES + ("tts",))
 
 
 class StageSlot(BaseModel):
     selected: str
+    instances: dict[str, dict] = {}
+
+
+class StagePool(BaseModel):
+    instances: dict[str, dict] = {}
+
+
+class TtsVariant(BaseModel):
+    provider: str     # tts provider id (its settings live in tts.instances.<id>)
+    enabled: bool = True
+
+
+class TtsVariants(BaseModel):
+    """The TTS stage: enabled variants are tried in list order, the next one taking
+    over when a provider fails before the speaker has received any audio."""
+    variants: list[TtsVariant]
     instances: dict[str, dict] = {}
 
 
@@ -33,13 +54,46 @@ class ConfigDoc(BaseModel):
     # wakeword has a default slot (like vad/stress) so configs written before the
     # wakeword stage existed still parse; the vosk provider's own defaults apply.
     wakeword: StageSlot = StageSlot(selected="vosk")
-    stt: StageSlot
-    llm: StageSlot
+    stt: StagePool
+    llm: StagePool
     # stress has a default slot (like vad) so configs written before the stress
     # stage existed still parse; the ruaccent provider's own defaults then apply.
     stress: StageSlot = StageSlot(selected="ruaccent")
-    tts: StageSlot
+    tts: TtsVariants
     core: CoreConfig = CoreConfig()
+
+
+def _validate(doc: ConfigDoc) -> None:
+    """Checks a parsed document must pass beyond its pydantic structure: every
+    selected slot instance validates; tts.variants is usable — at least one enabled
+    variant, no provider listed twice, every variant's provider registered and its
+    instance config valid; and core.chains is usable — at least one enabled chain,
+    unique non-empty names, registered provider ids, and every referenced instance
+    config validates. Raises ValueError/ValidationError."""
+    for cat in SLOT_CATEGORIES:
+        slot = getattr(doc, cat)
+        get_provider(cat, slot.selected).ConfigModel(**slot.instances.get(slot.selected, {}))
+    variants = doc.tts.variants
+    if not any(v.enabled for v in variants):
+        raise ValueError("tts.variants: at least one enabled variant is required")
+    pids = [v.provider for v in variants]
+    dupes = sorted({p for p in pids if pids.count(p) > 1})
+    if dupes:
+        raise ValueError(f"tts.variants: duplicate providers: {dupes}")
+    for pid in pids:
+        get_provider("tts", pid).ConfigModel(**doc.tts.instances.get(pid, {}))
+    chains = doc.core.chains
+    if not any(c.enabled for c in chains):
+        raise ValueError("core.chains: at least one enabled chain is required")
+    names = [c.name for c in chains]
+    if any(not n.strip() for n in names):
+        raise ValueError("core.chains: every chain needs a name")
+    dupes = sorted({n for n in names if names.count(n) > 1})
+    if dupes:
+        raise ValueError(f"core.chains: duplicate chain names: {dupes}")
+    for chain in chains:
+        for cat, pid in (("stt", chain.stt), ("llm", chain.handler)):
+            get_provider(cat, pid).ConfigModel(**getattr(doc, cat).instances.get(pid, {}))
 
 
 def _deep_merge(base: dict, patch: dict) -> dict:
@@ -97,9 +151,7 @@ class ConfigService:
         self._deps = deps
         self._path = path or config_store.DEFAULT_PATH
         self._cbs = []
-        # Eagerly validate the selected providers' instance configs.
-        for cat in STAGE_CATEGORIES:
-            self.get(cat)
+        _validate(self._doc)
 
     @property
     def core(self) -> CoreConfig:
@@ -113,15 +165,22 @@ class ConfigService:
         return getattr(self._doc, category)
 
     def get(self, category: str) -> BaseModel:
-        """Validated config model of the SELECTED provider for this category."""
-        slot = self._slot(category)
-        prov = get_provider(category, slot.selected)
-        return prov.ConfigModel(**slot.instances.get(slot.selected, {}))
+        """Validated config model of the SELECTED provider of a slot category."""
+        return self.instance_config(category, self._slot(category).selected)
+
+    def instance_config(self, category: str, provider_id: str) -> BaseModel:
+        """Validated config model of one provider instance of a category."""
+        prov = get_provider(category, provider_id)
+        return prov.ConfigModel(**self._slot(category).instances.get(provider_id, {}))
 
     def create(self, category: str):
-        slot = self._slot(category)
-        prov = get_provider(category, slot.selected)
-        cfg = prov.ConfigModel(**slot.instances.get(slot.selected, {}))
+        """Build the backend of the SELECTED provider of a slot category."""
+        return self.create_instance(category, self._slot(category).selected)
+
+    def create_instance(self, category: str, provider_id: str):
+        """Build the backend of one provider instance of a category."""
+        prov = get_provider(category, provider_id)
+        cfg = self.instance_config(category, provider_id)
         backend = prov.create(cfg, self._deps)
         self._stamp_desc(backend, prov, cfg)
         return backend
@@ -137,25 +196,19 @@ class ConfigService:
             pass
 
     def provider(self, category: str):
-        """Return the selected provider instance for a category (for runtime reconfig)."""
+        """Return the selected provider of a slot category (for runtime reconfig)."""
         return get_provider(category, self._slot(category).selected)
 
-    def command_vocabulary(self) -> list[str]:
-        """The closed command vocabulary for offline STT grammar restriction: the
-        active LLM provider's vocabulary() (e.g. Simple NLU's phrase/verb/number
-        words), or [] when the active provider offers none (a free-form LLM imposes
-        no closed vocabulary). Read live (per decode) by the Vosk STT backend."""
-        # Single atomic _doc snapshot so the provider and its config can never
-        # straddle a concurrent apply() swap (this runs in the decode worker thread
-        # and apply() may rebind self._doc on an LLM-provider switch). Any error
-        # degrades to no closed vocabulary (full-vocabulary recognition).
-        slot = self._slot("llm")
-        try:
-            prov = get_provider("llm", slot.selected)
-            cfg = prov.ConfigModel(**slot.instances.get(slot.selected, {}))
-            return list(prov.vocabulary(cfg) or [])
-        except Exception:
-            return []
+    def tts_variants(self) -> list[str]:
+        """Provider ids of the enabled TTS variants, in fallback order. Read per
+        utterance, so a reorder applies without a rebuild."""
+        return [v.provider for v in self._doc.tts.variants if v.enabled]
+
+    def vocabulary(self, handler_id: str) -> list[str]:
+        """The closed command vocabulary of an llm provider instance (e.g. Simple
+        NLU's phrase/verb/number words) that a chain narrows its STT to; [] for a
+        free-form LLM. Read per utterance, so handler edits apply without a rebuild."""
+        return list(get_provider("llm", handler_id).vocabulary(self.instance_config("llm", handler_id)))
 
     def options(self, category, plugin, field, query: str = ""):
         prov = get_provider(category, plugin)
@@ -194,13 +247,26 @@ class ConfigService:
                 # Stage provider schemas are flat: annotate each field with its action.
                 for field, node in schema.get("properties", {}).items():
                     node["apply"] = action_for(f"{cat}.instances.{pid}.{field}")
-                provs.append({
+                entry = {
                     "id": pid,
                     "label": prov.label,
                     "schema": schema,
                     "values": values.model_dump(mode="json"),
-                })
-            categories.append({"id": cat, "selected": slot.selected, "providers": provs})
+                }
+                # What a chain's `narrow` can do: an STT that takes a per-call
+                # vocabulary, and a handler that has one to give.
+                if cat == "stt":
+                    entry["supports_vocabulary"] = prov.supports_vocabulary
+                elif cat == "llm":
+                    entry["has_vocabulary"] = bool(prov.vocabulary(values))
+                provs.append(entry)
+            if cat in POOL_CATEGORIES:
+                categories.append({"id": cat, "providers": provs})
+            elif cat == "tts":
+                variants = [v.model_dump(mode="json") for v in slot.variants]
+                categories.append({"id": cat, "variants": variants, "providers": provs})
+            else:
+                categories.append({"id": cat, "selected": slot.selected, "providers": provs})
         core_schema = CoreConfig.model_json_schema()
         _annotate_core_apply(core_schema, action_for)
         return {
@@ -222,11 +288,7 @@ class ConfigService:
         base = self._doc.model_dump(mode="json")
         merged = _deep_merge(base, patch)
         new_doc = ConfigDoc(**merged)      # structural + core validation
-        # Validate every touched provider's selected instance config.
-        for cat in STAGE_CATEGORIES:
-            slot = getattr(new_doc, cat)
-            prov = get_provider(cat, slot.selected)
-            prov.ConfigModel(**slot.instances.get(slot.selected, {}))
+        _validate(new_doc)
 
         # Compute the change set BEFORE swapping the document. Imported locally to
         # avoid any import-cycle risk with src.reconfig.
