@@ -99,7 +99,7 @@ def _attempt(chain, *, voice: bool) -> dict:
     return {
         "kind": "chain", "chain": chain.name,
         "stt": chain.stt if voice else None, "handler": chain.handler,
-        "text": "", "outcome": None, "error": None, "t_stt": 0, "t_handler": 0,
+        "text": "", "outcome": None, "error": None, "detail": None, "t_stt": 0, "t_handler": 0,
     }
 
 
@@ -191,7 +191,7 @@ async def run(rt, *, device: str, request, pcm: bytes = b"", text: str | None = 
             attempt["t_handler"] = _ms(t)
             out.t_llm += attempt["t_handler"]
             if declined is not None:
-                attempt["outcome"] = "declined"
+                attempt.update(outcome="declined", detail=declined.reason or None)
                 out.reply, out.partial = declined.reply, {}
                 logger.info(f"{device}: ↪️ chain {chain.name!r} declined: {declined.reply!r}")
                 continue

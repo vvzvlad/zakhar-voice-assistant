@@ -404,7 +404,7 @@ class SimpleNluBackend(LlmBackend):
             # Empty content: avoid double-speak (the on_filler path would speak it).
             return self._envelope("", tool_calls, intent["name"])
         if has_next:
-            raise Declined(self._reply_unmatched)
+            raise Declined(self._reply_unmatched, reason=intent["reason"])
         return self._envelope(self._reply_unmatched, None, "none")
 
     def _envelope(self, content: str, tool_calls, intent_name: str) -> dict:
@@ -707,15 +707,19 @@ class SimpleNluBackend(LlmBackend):
     # --- detection ------------------------------------------------------- #
 
     def _detect(self, user_text: str, model: dict | None, *, strict: bool = False) -> dict:
-        """Classify `user_text` into {is_command, tool, args, name}.
+        """Classify `user_text` into {is_command, tool, args, name, reason}; `reason`
+        says why the utterance is no command ("" for a command).
 
         `strict` runs only the deterministic path (no fuzzy phrase match, no
         classifier), matches action verbs by exact word form instead of by lemma,
         and keeps a command only when every word of the utterance is explained
         (see _unexplained)."""
-        no_match = {"is_command": False, "tool": None, "args": {}, "name": "none"}
+        def no_match(reason: str) -> dict:
+            return {"is_command": False, "tool": None, "args": {}, "name": "none",
+                    "reason": reason}
+
         if not model or not user_text:
-            return no_match
+            return no_match("")
         lemmatizer = model["lemmatizer"]
         tools_index = model["tools_index"]
         user_tokens = self._normalize(user_text)
@@ -741,6 +745,7 @@ class SimpleNluBackend(LlmBackend):
         # the longest matched alias phrase (most specific).
         best_tool = None
         best_len = -1
+        verbless = []  # tools whose alias phrase matched but no applicable verb is present
         for tname, tinfo in tools_index.items():
             phrase_sets = model["per_tool_alias_phrases"].get(tname, [])
             matched_phrase_len = -1
@@ -759,6 +764,7 @@ class SimpleNluBackend(LlmBackend):
             if state_slot is not None and not any(
                 action in tinfo["slots"][state_slot]["enum"] for _, action in present_verbs
             ):
+                verbless.append(tname)
                 continue
             if matched_phrase_len > best_len:
                 best_len = matched_phrase_len
@@ -781,7 +787,9 @@ class SimpleNluBackend(LlmBackend):
                 logger.warning(f"simple-nlu: classifier prediction failed: {e}")
 
         if chosen is None:
-            return no_match
+            if verbless:
+                return no_match(f"no applicable verb for {', '.join(verbless)}")
+            return no_match("no alias phrase matched")
 
         # 3) FILL SLOTS for the chosen tool. The deterministic path already proved a
         # real alias-phrase match, so it may auto-fill required single-value enums;
@@ -796,13 +804,16 @@ class SimpleNluBackend(LlmBackend):
         # filled from the utterance, else it is an unsupported guess -> no command.
         if from_classifier and tinfo["enum_slots"]:
             if not any(slot in args for slot in tinfo["enum_slots"]):
-                return no_match
+                return no_match(f"classifier guess {chosen} has no slot from the utterance")
         # Required-slot validation is the main false-positive guard.
-        if not tinfo["required"] <= set(args.keys()):
-            return no_match
-        if strict and self._unexplained(user_tokens, user_lemmas, evidence):
-            return no_match
-        return {"is_command": True, "tool": chosen, "args": args, "name": chosen}
+        missing = tinfo["required"] - set(args.keys())
+        if missing:
+            return no_match(f"missing required slot for {chosen}: {', '.join(sorted(missing))}")
+        if strict:
+            unknown = self._unexplained(user_tokens, user_lemmas, evidence)
+            if unknown:
+                return no_match(f"unknown words: {', '.join(unknown)}")
+        return {"is_command": True, "tool": chosen, "args": args, "name": chosen, "reason": ""}
 
     def _unexplained(self, tokens: list[str], lemmas: list[str], evidence: dict) -> list[str]:
         """The words of the utterance nothing in the command accounts for. A word is

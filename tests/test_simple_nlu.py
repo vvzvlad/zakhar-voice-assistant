@@ -433,6 +433,18 @@ async def test_strict_declines_an_unexplained_word(text):
     assert ei.value.reply == SimpleNluConfig().reply_unmatched
 
 
+@pytest.mark.parametrize("text, reason", [
+    ("расскажи анекдот", "no alias phrase matched"),
+    ("свет в зале", "no applicable verb for set_light"),
+    ("включи кондиционер", "missing required slot for set_climate: temperature"),
+    ("включи свет в зале и расскажи анекдот", "unknown words: и, расскажи, анекдот"),
+])
+async def test_strict_decline_says_why(text, reason):
+    with pytest.raises(Declined) as ei:
+        await _strict(_backend(), text)
+    assert ei.value.reason == reason
+
+
 async def test_last_chain_ignores_extra_words_as_before():
     # Without a later chain there is no coverage gate: the same utterances still run.
     backend = _backend()

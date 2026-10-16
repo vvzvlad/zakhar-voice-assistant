@@ -108,7 +108,8 @@ def outcomes(run):
 # --- the runner -----------------------------------------------------------------------
 
 async def test_declined_goes_to_next_chain_which_answers():
-    nlu, llm = Handler(Declined("Не понял команду")), Handler("Сейчас 12 часов")
+    nlu = Handler(Declined("Не понял команду", reason="no alias phrase matched"))
+    llm = Handler("Сейчас 12 часов")
     rt = runtime([chain("nlu"), chain("llm")],
                  stt={"nlu": Stt("который час"), "llm": Stt("который час?")},
                  handlers={"nlu": nlu, "llm": llm})
@@ -123,6 +124,8 @@ async def test_declined_goes_to_next_chain_which_answers():
     assert nlu.calls == [("который час", True)] and llm.calls == [("который час?", False)]
     assert heard == ["который час"]   # once, with the first non-empty transcript
     assert run.attempts[0]["stt"] == "nlu" and run.attempts[0]["handler"] == "nlu"
+    # Why the handler declined rides on its attempt; an answer carries none.
+    assert [a["detail"] for a in run.attempts] == ["no alias phrase matched", None]
 
 
 @pytest.mark.parametrize("first", [
