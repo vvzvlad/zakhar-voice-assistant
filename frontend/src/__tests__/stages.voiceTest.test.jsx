@@ -41,7 +41,8 @@ const PHRASE_PLACEHOLDER = "Phrase to synthesize";
 
 // Minimal catalog mirroring /api/catalog: all three provider stages so the
 // STT/LLM pages render too (they must NOT show the voice-test card). tts lists
-// its variants; stt/llm have no selected provider.
+// its variants; stt/llm have no selected provider; the TTS page also renders the
+// stress settings.
 function makeCatalog() {
   const schema = { type: "object", properties: { base_url: { type: "string" } } };
   const cat = (id, pid) => ({
@@ -53,6 +54,7 @@ function makeCatalog() {
       cat("stt", "groq"),
       cat("llm", "openrouter"),
       { ...cat("tts", "piper"), variants: [{ provider: "piper", enabled: true }] },
+      { id: "stress", selected: "ruaccent", providers: [{ id: "ruaccent", label: "RuAccent", schema: { type: "object", properties: {} }, values: { enabled: true } }] },
     ],
     core: { schema: {}, values: {} },
   };

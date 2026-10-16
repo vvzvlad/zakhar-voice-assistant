@@ -11,7 +11,7 @@ export function Topbar({ active }) {
   const { system, connected } = useAppData();
   const reloading = system?.reloading || [];
   // Match both top-level item ids and nested children ids so nested
-  // sections (e.g. mcp/prompt under llm) keep their group breadcrumb.
+  // sections (e.g. prompt under llm) keep their group breadcrumb.
   const grp = NAV.find((g) =>
     g.items.some(([i, , kids]) => i === active || (kids || []).some(([ci]) => ci === active)),
   );

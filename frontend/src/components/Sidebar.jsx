@@ -20,7 +20,7 @@ export function Sidebar({ active, onNav }) {
       onClick={() => onNav(id)}
       onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onNav(id); } }}>
       <Ic n={id} />{label}
-      {id === "mcp" && <span className="badge">{mcpCount}</span>}
+      {id === "tools" && <span className="badge">{mcpCount}</span>}
       {id === "devices" && devTotal > 0 && <span className="badge">{online}/{devTotal}</span>}
     </div>
   );

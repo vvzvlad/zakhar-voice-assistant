@@ -20,7 +20,7 @@ button{font-family:inherit;}
 .z-side{width:212px;flex:0 0 212px;background:var(--panel);border-right:1px solid var(--line);display:flex;flex-direction:column;}
 .z-main{flex:1;min-width:0;display:flex;flex-direction:column;}
 .z-top{height:50px;flex:0 0 50px;background:var(--panel);border-bottom:1px solid var(--line);display:flex;align-items:center;gap:12px;padding:0 18px;}
-.z-scroll{flex:1;overflow-y:auto;}
+.z-scroll{flex:1;overflow-y:auto;scroll-padding-bottom:90px;}
 .z-page{padding:20px 24px 40px;max-width:1280px;margin:0 auto;}
 .z-page.narrow{max-width:860px;}   /* compact width for single-column form pages */
 
@@ -176,9 +176,18 @@ button{font-family:inherit;}
 .z-btn.d:hover{background:var(--bad-bg);}
 .z-btn.sm{padding:6px 11px;font-size:11.5px;}
 .z-btn.warn{background:var(--warn);color:#fff;}
+.z-btn:disabled{opacity:.45;cursor:default;box-shadow:none;}
 .z-dirty{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;color:#b45309;font-weight:500;}
 .z-dirty s{width:7px;height:7px;border-radius:50%;background:var(--warn);text-decoration:none;}
 .z-foot{display:flex;align-items:center;gap:11px;padding:14px 17px;border-top:1px solid var(--line);background:var(--panel2);border-radius:0 0 var(--r) var(--r);}
+/* FormPage: the page body is a fieldset so one `disabled` covers every input while
+   saving (pointer-events also stop the span/div widgets a fieldset cannot disable);
+   the save bar sticks to the bottom of the scroll area, above the vocabulary
+   editor's top-sticky .e-bar (z-index 8) and below drawers and modals (40+). */
+.z-formpage{border:0;margin:0;padding:0;min-width:0;}
+.z-formpage:disabled{pointer-events:none;}
+.z-savebar{position:sticky;bottom:0;z-index:9;margin-top:16px;padding-bottom:14px;}
+.z-savebar-in{display:flex;align-items:center;gap:11px;background:var(--panel);border:1px solid var(--line);border-radius:var(--r);box-shadow:0 6px 24px rgba(15,23,42,.12);padding:11px 14px;}
 
 /* ── Tables ─────────────────────────────────────────────── */
 .z-tbl{width:100%;border-collapse:collapse;}

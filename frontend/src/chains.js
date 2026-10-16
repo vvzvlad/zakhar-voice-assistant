@@ -1,10 +1,11 @@
 // Pure helpers for recognition chains (config.core.chains) and TTS variants
-// (the tts catalog category's `variants`), shared by the Chains, STT/LLM/TTS,
+// (the tts catalog category's `variants`), shared by the Logic, Speech, STT/LLM,
 // Commands and Dashboard pages and kept here so they can be unit-tested.
 //
 // A chain is {name, enabled, stt, handler, narrow, parallel}: `stt` is an stt
 // provider id, `handler` an llm-category provider id. Chains run in list order
 // on the same audio until one answers.
+import { voiceField, voiceName } from "./voiceMarker.js";
 
 export const chainsOf = (config) => config?.core?.chains || [];
 
@@ -28,19 +29,15 @@ export const canNarrow = (catalog, chain) =>
 // nothing for a chain with no enabled chain before it.
 export const startsFirst = (chains, i) => !chains.slice(0, i).some((c) => c.enabled);
 
-// The backend turns on strict mode for a vocabulary-bound handler by itself when
-// an enabled chain follows it (it declines instead of guessing); not a setting.
-export const isStrict = (catalog, chains, i) =>
-  handlerHasVocabulary(catalog, chains[i].handler) && chains.slice(i + 1).some((c) => c.enabled);
-
 export function lastEnabledIndex(chains) {
   for (let i = chains.length - 1; i >= 0; i--) if (chains[i].enabled) return i;
   return -1;
 }
 
-// Names of the chains whose `field` ("stt" | "handler") points at provider `id`.
+// Names of the chains whose `field` ("stt" | "handler") points at provider `id`;
+// a disabled chain is marked "(off)".
 export const chainsUsing = (chains, field, id) =>
-  chains.filter((c) => c[field] === id).map((c) => c.name);
+  chains.filter((c) => c[field] === id).map((c) => (c.enabled ? c.name : `${c.name} (off)`));
 
 // Swap item i with its neighbour i+delta; out-of-range moves return the list as is.
 export function moveItem(list, i, delta) {
@@ -68,13 +65,21 @@ export function newChain(chains, catalog) {
 }
 
 // The offline command engine is an llm-category provider, but its settings and
-// vocabulary live on the Commands page; every other provider on its category page.
+// vocabulary live on the Commands page; every other provider on its category's
+// Providers page.
 export const COMMANDS_PROVIDER = "simple-nlu";
 export const settingsPageFor = (cat, id) =>
   (cat === "llm" && id === COMMANDS_PROVIDER ? "commands" : cat);
 
 export const ttsVariantsOf = (catalog) =>
   catalog?.categories?.find((c) => c.id === "tts")?.variants || [];
+
+// The voice a TTS provider speaks with, by name, read from its settings the way
+// a prompt voice marker names it; "" when the settings name no voice.
+export function voiceOf(values = {}) {
+  const voice = { fields: values };
+  return voiceField(voice) ? voiceName(voice, values) : "";
+}
 
 // Dashboard rows, one per enabled chain: its share of the served requests
 // (served / sum of served over every chain in per_chain; null when nothing was

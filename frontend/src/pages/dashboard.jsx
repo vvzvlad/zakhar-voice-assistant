@@ -1,61 +1,35 @@
-// Pipeline overview. KPIs + per-stage and per-chain stats from /api/metrics, the live
-// service map from the catalog/config, and a recent-requests table from
-// /api/runs (rows deep-link into the Log page).
+// Pipeline overview. KPIs + per-stage and per-chain stats from /api/metrics, the
+// Capture → Logic → Speech service map from the catalog/config, and a
+// recent-requests table from /api/runs (rows deep-link into the Log page).
 import React, { useState, useEffect } from "react";
 import { nav } from "../navStore.js";
 import { Ic } from "../components/icons.jsx";
 import { PageHeader, Waterfall, Loading } from "../components/primitives.jsx";
 import { useAppData } from "../appData.jsx";
-import { STAGES } from "../stageMeta.js";
 import { getMetrics, getRuns, openRunsStream } from "../api.js";
 import { STAGE_COLOR, fmtSec, mapRun, totalMs, statusMeta, applyStreamedRun } from "../runsModel.js";
-import { chainsOf, chainRows, ttsVariantsOf } from "../chains.js";
+import { chainsOf, chainRows, ttsVariantsOf, voiceOf } from "../chains.js";
 
 const SC = STAGE_COLOR;
 
-// The provider a stage node shows: tts speaks with its first enabled variant,
-// the other categories with their selected provider.
-function activeId(stage, cat, catalog) {
-  if (stage.cat === "tts") return ttsVariantsOf(catalog).find((v) => v.enabled)?.provider;
-  return cat.selected;
+const categoryOf = (catalog, id) => catalog?.categories?.find((c) => c.id === id);
+
+// The selected provider of a single-choice category (vad, wakeword, stress):
+// its id, its human label (the id when the catalog has no entry) and its values.
+function selectedOf(catalog, cat) {
+  const c = categoryOf(catalog, cat);
+  const p = c?.providers?.find((x) => x.id === c.selected);
+  return { id: c?.selected, label: p?.label || c?.selected, values: p?.values || {} };
 }
 
-// Pick a short, human "detail" line for a stage from its active provider values.
-// Exported for unit tests.
-export function detailFor(stage, catalog, config) {
-  if (stage.key === "vad") {
-    const v = config?.core?.vad;
-    return v ? `silence ${v.silence_ms} ms` : "—";
-  }
-  const cat = catalog.categories.find((c) => c.id === stage.cat);
-  if (!cat) return "—";
-  const id = activeId(stage, cat, catalog);
-  if (!id) return "—";
-  const prov = cat.providers.find((p) => p.id === id);
-  const v = prov?.values || {};
-  if (stage.cat === "tts") {
-    const fallbacks = ttsVariantsOf(catalog).filter((x) => x.enabled).length - 1;
-    const main = v.voice ? `voice · ${v.voice}` : (prov?.label || id);
-    return fallbacks > 0 ? `${main} · +${fallbacks} fallback` : main;
-  }
-  return prov?.label || id;
+// What the Speech tile shows: the first enabled TTS variant's provider and voice
+// name, and how many enabled variants stand behind it as fallbacks.
+function speechOf(catalog) {
+  const enabled = ttsVariantsOf(catalog).filter((v) => v.enabled);
+  const first = enabled[0];
+  const p = first && categoryOf(catalog, "tts")?.providers?.find((x) => x.id === first.provider);
+  return { provider: p?.label || first?.provider, voice: voiceOf(p?.values), fallbacks: Math.max(0, enabled.length - 1) };
 }
-// Exported for unit tests. Two-argument signature: (stage, catalog).
-export function providerOf(stage, catalog) {
-  const cat = catalog.categories.find((c) => c.id === stage.cat);
-  if (!cat) return "—";
-  const id = activeId(stage, cat, catalog);
-  // vad shows the human provider label ("WebRTC VAD"); the others keep the id.
-  if (stage.key === "vad") {
-    const prov = cat.providers.find((p) => p.id === id);
-    return prov?.label || id || "—";
-  }
-  return id || "—";
-}
-
-// Service-map order: the per-category stages around one Chains block that
-// stands for STT and the handler (which pair runs is set per chain).
-const MAP_NODES = ["vad", "wakeword", "chains", "stress", "tts"];
 
 const fmtShare = (share) => (share == null ? "—" : `${Math.round(share * 100)}%`);
 
@@ -63,39 +37,68 @@ function Configure() {
   return <span className="cfg">Configure <svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M2 6h7M6 3l3 3-3 3" /></svg></span>;
 }
 
-function StageNode({ s, avg, loading, catalog, config }) {
-  return <div className="z-svc" onClick={() => nav(s.key)}>
-    <div className="z-svc-h"><span className={"z-dot " + (loading ? "loading" : "ok")} /><b>{s.name}</b><span className="prov">{providerOf(s, catalog)}</span></div>
-    <div className="mdl">{loading ? <span className="z-loading-inline"><span className="z-spin" />loading…</span> : detailFor(s, catalog, config)}</div>
-    <div className="lat">{avg != null
-      ? <><b style={{ color: SC[s.key] }}>{(avg / 1000).toFixed(2)}</b><s>s avg</s></>
-      : <span style={{ fontSize: 12, color: "var(--mut)" }}>{s.role}</span>}</div>
-    <span style={{ height: 16 }} />
+// One service-map tile. Its dot is grey when what it stands for is off (no VAD
+// provider, no enabled chain, no enabled TTS variant) and blinks while reloading.
+function Tile({ title, page, on, loading, prov, flex, children }) {
+  return <div className="z-svc" style={flex ? { flex } : undefined} onClick={() => nav(page)} data-testid={`tile-${page}`}>
+    <div className="z-svc-h"><span className={"z-dot " + (loading ? "loading" : on ? "ok" : "off")} /><b>{title}</b><span className="prov">{prov}</span></div>
+    {loading && <div className="mdl"><span className="z-loading-inline"><span className="z-spin" />loading…</span></div>}
+    {children}
     <Configure />
   </div>;
+}
+
+// A switch inside a tile (wake-word verify, stress): grey dot when off.
+function Mark({ label, on }) {
+  return <div className="mdl" style={{ display: "flex", alignItems: "center", gap: 6 }}>
+    <span className={"z-dot " + (on ? "ok" : "off")} />{label} {on ? "on" : "off"}
+  </div>;
+}
+
+function Avg({ ms, color, role }) {
+  return <div className="lat">{ms != null
+    ? <><b style={{ color }}>{(ms / 1000).toFixed(2)}</b><s>s avg</s></>
+    : <span style={{ fontSize: 12, color: "var(--mut)" }}>{role}</span>}</div>;
 }
 
 function McpChip({ config }) {
   return config?.core?.mcp_servers?.length > 0
-    ? <span className="z-mcpchip" onClick={(e) => { e.stopPropagation(); nav("mcp"); }}>◆ MCP</span>
-    : <span style={{ height: 16 }} />;
+    ? <span className="z-mcpchip" onClick={(e) => { e.stopPropagation(); nav("tools"); }}>◆ MCP</span>
+    : null;
 }
 
-// The Chains block: one row per enabled chain with "stt → handler", its share
-// of the served requests and its average time.
-function ChainsNode({ rows, loading, config }) {
-  return <div className="z-svc" style={{ flex: 2 }} onClick={() => nav("chains")}>
-    <div className="z-svc-h"><span className={"z-dot " + (loading ? "loading" : "ok")} /><b>Chains</b><span className="prov">{rows.length} enabled</span></div>
-    {loading && <div className="mdl"><span className="z-loading-inline"><span className="z-spin" />loading…</span></div>}
-    {rows.length === 0 && <div className="mdl">no enabled chain</div>}
-    {rows.map((r) => <div key={r.name} className="mdl" data-testid="chain-row" title={r.name} style={{ display: "flex", gap: 8 }}>
-      <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>{r.stt} → {r.handler}</span>
-      <span style={{ color: "var(--mut)" }}>{fmtShare(r.share)}</span>
-      <span style={{ color: SC.llm }}>{fmtSec(r.avg_ms)}</span>
-    </div>)}
-    <McpChip config={config} />
-    <Configure />
-  </div>;
+// Capture → Logic → Speech. Logic has one row per enabled chain: its name, its
+// share of the served requests and its average time.
+function ServiceMap({ catalog, config, stageAvg, perChain, reloading }) {
+  const vad = selectedOf(catalog, "vad");
+  const wake = selectedOf(catalog, "wakeword");
+  const stress = selectedOf(catalog, "stress");
+  const speech = speechOf(catalog);
+  const rows = chainRows(chainsOf(config), perChain);
+  const busy = (...cats) => cats.some((c) => reloading.has(c));
+  const arrow = <div className="z-arrow"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6"><path d="M2 8h11M9 4l4 4-4 4" strokeLinecap="round" strokeLinejoin="round" /></svg></div>;
+  return <div className="z-card"><div className="z-map">
+    <Tile title="Capture" page="capture" on={!!vad.id} loading={busy("vad", "wakeword")} prov={vad.label || "—"}>
+      <Mark label="wake-word verify" on={!!wake.values.enabled} />
+      <Avg ms={stageAvg.vad} color={SC.vad} role="Voice capture" />
+    </Tile>
+    {arrow}
+    <Tile title="Logic" page="logic" on={rows.length > 0} loading={busy("stt", "llm")} prov={`${rows.length} enabled`} flex={2}>
+      {rows.length === 0 && <div className="mdl">no enabled chain</div>}
+      {rows.map((r) => <div key={r.name} className="mdl" data-testid="chain-row" title={`${r.stt} → ${r.handler}`} style={{ display: "flex", gap: 8 }}>
+        <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>{r.name}</span>
+        <span style={{ color: "var(--mut)" }}>{fmtShare(r.share)}</span>
+        <span style={{ color: SC.llm }}>{fmtSec(r.avg_ms)}</span>
+      </div>)}
+      <McpChip config={config} />
+    </Tile>
+    {arrow}
+    <Tile title="Speech" page="speech" on={!!speech.provider} loading={busy("tts", "stress")} prov={speech.provider || "—"}>
+      <div className="mdl" data-testid="speech-voice">{speech.voice || "—"}{speech.fallbacks > 0 ? ` · +${speech.fallbacks} fallback` : ""}</div>
+      <Mark label="stress" on={!!stress.values.enabled} />
+      <Avg ms={stageAvg.tts} color={SC.tts} role="Text → speech" />
+    </Tile>
+  </div></div>;
 }
 
 function Dashboard() {
@@ -153,18 +156,7 @@ function Dashboard() {
     </div>
 
     <div className="z-sl">Pipeline service map<div className="ln" /></div>
-    <div className="z-card"><div className="z-map">
-      {MAP_NODES.map((key, i) => {
-        const s = STAGES.find((x) => x.key === key);
-        return <React.Fragment key={key}>
-          {s
-            ? <StageNode s={s} avg={stageAvg[s.key]} loading={reloading.has(s.cat)} catalog={catalog} config={config} />
-            : <ChainsNode rows={chainRows(chainsOf(config), m.per_chain)} config={config}
-                loading={reloading.has("stt") || reloading.has("llm")} />}
-          {i < MAP_NODES.length - 1 && <div className="z-arrow"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6"><path d="M2 8h11M9 4l4 4-4 4" strokeLinecap="round" strokeLinejoin="round" /></svg></div>}
-        </React.Fragment>;
-      })}
-    </div></div>
+    <ServiceMap catalog={catalog} config={config} stageAvg={stageAvg} perChain={m.per_chain} reloading={reloading} />
 
     <div className="z-sl">Recent requests<div className="ln" /><a onClick={() => nav("log")}>View full log →</a></div>
     <div className="z-card">

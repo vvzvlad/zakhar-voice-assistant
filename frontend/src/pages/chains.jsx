@@ -1,16 +1,16 @@
-// Chains page — the ordered list of recognition chains (core.chains). A chain
+// Logic page — the ordered list of recognition chains (core.chains). A chain
 // pairs an STT provider with a handler (an llm-category provider: an LLM or the
 // offline command engine). After the input stages the chains are tried in order
 // on the same audio until one answers. The whole list is one draft saved as ONE
 // patch of the full array, because PATCH /api/config replaces lists.
 import React from "react";
-import { PageHeader, FormSaveBar, Select, Toggle, Field } from "../components/primitives.jsx";
+import { PageHeader, FormPage, Select, Toggle, Field } from "../components/primitives.jsx";
 import { Ic } from "../components/icons.jsx";
 import { useAppData } from "../appData.jsx";
-import { useStageForm, errorLines } from "../useStageForm.js";
+import { useStageForm } from "../useStageForm.js";
 import { nav, navTab } from "../navStore.js";
 import {
-  chainsOf, providerIds, canNarrow, startsFirst, isStrict, lastEnabledIndex, handlerHasVocabulary,
+  chainsOf, providerIds, canNarrow, startsFirst, lastEnabledIndex, handlerHasVocabulary,
   moveItem, newChain, settingsPageFor,
 } from "../chains.js";
 
@@ -32,7 +32,6 @@ function ProviderPick({ label, cat, value, options, onChange }) {
 }
 
 function ChainCard({ chain, index, count, catalog, chains, isLastEnabled, onUpdate, onMove, onDelete }) {
-  const strict = isStrict(catalog, chains, index);
   const openEnded = isLastEnabled && handlerHasVocabulary(catalog, chain.handler);
   return <div className="z-card" data-testid="chain-card" style={{ opacity: chain.enabled ? 1 : 0.55 }}>
     <div className="z-card-h">
@@ -68,9 +67,6 @@ function ChainCard({ chain, index, count, catalog, chains, isLastEnabled, onUpda
         hint="Start this chain's STT together with the first chain. Handlers still run in order.">
         <Toggle on={!!chain.parallel} onChange={(on) => onUpdate({ parallel: on })} />
       </Field>}
-      {strict && <div className="z-f">
-        <div className="z-fh" style={{ marginTop: 0 }}>strict mode: on — another chain follows</div>
-      </div>}
       {openEnded && <div className="z-banner warn" style={{ margin: "12px 0" }}>
         <Ic n="restart" w={15} />
         <span>This is the last enabled chain and its handler only knows its vocabulary: phrases outside its vocabulary get «не понял».</span>
@@ -82,16 +78,16 @@ function ChainCard({ chain, index, count, catalog, chains, isLastEnabled, onUpda
 export default function Chains() {
   const { catalog, config, patch } = useAppData();
   const buildPatch = (d) => ({ core: { chains: d.chains } });
-  const { draft, onChange, dirty, saving, err, save } = useStageForm({ chains: chainsOf(config) }, buildPatch, patch);
-  const list = draft.chains || [];
-  const setList = (next) => onChange("chains", next);
+  const form = useStageForm({ chains: chainsOf(config) }, buildPatch, patch);
+  const list = form.draft.chains || [];
+  const setList = (next) => form.onChange("chains", next);
   const last = lastEnabledIndex(list);
   // `narrow` stays as it is while its checkbox is hidden: the backend ignores it
   // for a pair that cannot narrow.
   const update = (i, fields) => setList(list.map((c, j) => (j === i ? { ...c, ...fields } : c)));
 
-  return <div className="z-page narrow">
-    <PageHeader title="Recognition chains" crumb="Pipeline / Stage 03"
+  return <FormPage form={form} narrow>
+    <PageHeader title="Logic · Recognition chains"
       desc="Each chain is an STT plus a handler. Chains are tried in order on the same audio: the next one takes over when the handler declines, the STT returns nothing or fails, or the handler fails before running a tool."
       actions={<button className="z-btn p" onClick={() => setList([...list, newChain(list, catalog)])}><Ic n="add" w={14} />Add chain</button>} />
     <div className="z-grid">
@@ -101,9 +97,6 @@ export default function Chains() {
         onUpdate={(fields) => update(i, fields)}
         onMove={(delta) => setList(moveItem(list, i, delta))}
         onDelete={() => setList(list.filter((_, j) => j !== i))} />)}
-      <div className="z-card">
-        <FormSaveBar dirty={dirty} saving={saving} onSave={save} errors={errorLines(err)} />
-      </div>
     </div>
-  </div>;
+  </FormPage>;
 }

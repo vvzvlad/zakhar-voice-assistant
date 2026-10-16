@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { TITLES } from "./nav.js";
-import { setNavigate } from "./navStore.js";
+import { setNavigate, nav, confirmLeave } from "./navStore.js";
 import { Sidebar } from "./components/Sidebar.jsx";
 import { Topbar } from "./components/Topbar.jsx";
 import { PAGES } from "./pages/index.js";
@@ -32,6 +32,8 @@ function initialId() {
 export default function App() {
   const { loading, error, reload } = useAppData();
   const [active, setActive] = useState(initialId);
+  const activeRef = useRef(active); // the popstate handler is registered once
+  activeRef.current = active;
 
   // Apply a section switch without touching browser history (used by clicks and popstate).
   const applyActive = (id) => {
@@ -42,6 +44,7 @@ export default function App() {
   };
 
   // Navigate from user intent (sidebar / page links): push a new history entry, then apply.
+  // Called through navStore's nav(), which first asks about unsaved changes.
   const navigate = (id) => {
     if (id === active) return; // avoid duplicate history entries on re-click
     try { window.history.pushState({ id }, "", "/" + id); } catch { /* ignore */ }
@@ -59,6 +62,11 @@ export default function App() {
     }
     const onPop = () => {
       const id = idFromPath(window.location.pathname) || "dashboard";
+      if (id !== activeRef.current && !confirmLeave()) {
+        // Stay: put the current section back on top of the history.
+        try { window.history.pushState({ id: activeRef.current }, "", "/" + activeRef.current); } catch { /* ignore */ }
+        return;
+      }
       applyActive(id); // no pushState here, otherwise history would loop
     };
     window.addEventListener("popstate", onPop);
@@ -71,7 +79,7 @@ export default function App() {
 
   return (
     <div className="z-app">
-      <Sidebar active={active} onNav={navigate} />
+      <Sidebar active={active} onNav={(id) => { if (id !== active) nav(id); }} />
       <div className="z-main">
         <Topbar active={active} />
         <div className="z-scroll">

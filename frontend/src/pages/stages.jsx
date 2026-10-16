@@ -1,22 +1,19 @@
+// Providers pages: every provider and engine setting. Which provider runs and
+// which stages are on is chosen on the Pipeline pages (pipeline.jsx, chains.jsx).
+// Each page has ONE Save, in the bar at the bottom (FormPage), that sends every
+// dirty card and tab as one PATCH (usePageForm); switching a provider tab never
+// PATCHes.
 import React, { useState, useEffect, useRef } from "react";
-import { Selector, PageHeader, FormSaveBar, Toggle } from "../components/primitives.jsx";
+import { Selector, Card, FormPage, PageHeader } from "../components/primitives.jsx";
 import SchemaForm from "../components/SchemaForm.jsx";
 import { useAppData } from "../appData.jsx";
-import { useStageForm, errorLines } from "../useStageForm.js";
+import { usePageForm } from "../usePageForm.js";
 import { getOptions, getChimes, playChime, streamTtsVoice } from "../api.js";
 import { playAudioResponse } from "../streamAudio.js";
 import { buildVoiceMarker } from "../voiceMarker.js";
 import { pendingTab, clearTab } from "../navStore.js";
-import { chainsOf, chainsUsing, moveItem, settingsPageFor, COMMANDS_PROVIDER } from "../chains.js";
+import { chainsOf, chainsUsing, settingsPageFor, COMMANDS_PROVIDER } from "../chains.js";
 import NluCatalogEditor from "../components/NluCatalogEditor.jsx";
-
-function Card({ title, sub, children, foot }) {
-  return <div className="z-card">
-    {title && <div className="z-card-h"><b>{title}</b>{sub && <span className="sub">{sub}</span>}</div>}
-    <div className="z-card-b">{children}</div>
-    {foot}
-  </div>;
-}
 
 // Shared end-of-phrase chime preview: plays a chime on every online speaker via the
 // same announce path as the real ack. `busy` holds the sound_path currently playing
@@ -130,8 +127,7 @@ function VoiceTestCard({ provider, settings }) {
 
   return <Card title="Test voice" sub="hear the draft settings in the browser"
     foot={
-      // Footer mirrors FormSaveBar: button + hint on the left, error right-aligned
-      // where the save bar shows its "Unsaved" badge.
+      // Footer: button + hint on the left, the synthesis error right-aligned.
       <div className="z-foot">
         {/* One button, three phases: idle → Synthesizing (disabled) → Stop (danger style). */}
         <button
@@ -244,47 +240,23 @@ function ReloadingBanner({ cat, label }) {
   </div>;
 }
 
-// ── Generic provider stage with a selected provider (Wakeword / Accents) ──
-function ProviderStage({ cat, title, crumb, desc }) {
-  const { catalog, patch } = useAppData();
-  const category = catalog.categories.find((c) => c.id === cat);
-  const selected = category.selected;
-  const prov = category.providers.find((p) => p.id === selected) || category.providers[0];
+// Page-form parts, one per provider of `cat`: its settings, saved into its instance.
+const providerParts = (cat, providers) => providers.map((p) => ({
+  key: `${cat}:${p.id}`,
+  values: p.values,
+  toPatch: (d) => ({ [cat]: { instances: { [p.id]: d } } }),
+}));
 
-  const buildPatch = (draft) => ({ [cat]: { selected, instances: { [selected]: draft } } });
-  const { draft, onChange, dirty, saving, err, save } = useStageForm(prov.values, buildPatch, patch);
-
-  const switchProvider = async (newId) => {
-    if (newId === selected) return;
-    try { await patch({ [cat]: { selected: newId } }); } catch { /* surfaced elsewhere */ }
+// The selected provider of a stage switched on and off on a Pipeline page
+// (wakeword, stress) and its page-form part: its settings without `enabled`.
+function selectedSettings(category) {
+  const prov = category.providers.find((p) => p.id === category.selected) || category.providers[0];
+  const { enabled: _enabled, ...values } = prov.values;
+  return {
+    prov,
+    part: { key: `${category.id}:${prov.id}`, values, toPatch: (d) => ({ [category.id]: { instances: { [prov.id]: d } } }) },
   };
-
-  return <div className="z-page narrow">
-    <PageHeader title={title} crumb={crumb} desc={desc} />
-    <ReloadingBanner cat={cat} label={prov.label} />
-    <Selector
-      label="Provider"
-      options={category.providers.map((p) => p.id)}
-      value={selected}
-      onChange={switchProvider}
-      caption={prov.label}
-    />
-    <div className="z-grid">
-      <Card title={prov.label} foot={<FormSaveBar dirty={dirty} saving={saving} onSave={save} errors={errorLines(err)} />}>
-        {/* key={selected}: dynamic selects fetch their option list once on mount, and
-            providers often share an identical field set, so without the key a provider
-            switch would be reconciled in place and keep the PREVIOUS provider's options.
-            The key forces a remount so every DynamicSelect refetches. */}
-        <SchemaForm key={selected} schema={prov.schema} values={draft} onChange={onChange}
-          optionsFor={optionsLoader(cat, selected)} />
-      </Card>
-    </div>
-  </div>;
 }
-
-// ── Provider settings without a selected provider (STT / LLM / TTS / Commands) ──
-// Which provider runs is decided elsewhere (the Chains page, the TTS variant
-// list), so these pages show one provider's settings at a time behind tabs.
 
 // The tab to show: a provider requested by a "configure" link from another page,
 // else `preferred` (the provider in use), else the first one.
@@ -300,27 +272,29 @@ function useProviderTab(cat, providers, preferred) {
   return [ids.includes(tab) ? tab : ids[0], setTab];
 }
 
-// Switching a tab only changes which provider's settings are shown; it never PATCHes.
-function ProviderTabs({ providers, tab, onTab }) {
+// Switching a tab only changes which provider's settings are shown; it never
+// PATCHes. A tab holding unsaved edits carries a dot. One provider gets no tabs.
+function ProviderTabs({ cat, providers, tab, onTab, form }) {
+  if (providers.length < 2) return null;
   const prov = providers.find((p) => p.id === tab);
   return <Selector label="Provider settings" options={providers.map((p) => p.id)} value={tab}
-    onChange={onTab} caption={prov?.label} />;
+    onChange={onTab} caption={prov?.label}
+    marked={providers.filter((p) => form.isDirty(`${cat}:${p.id}`)).map((p) => p.id)} />;
 }
 
-// One provider's settings form. Saving patches only that provider's instance and
-// never touches routing. Render it with key={provider id}: the remount drops the
-// previous tab's draft and makes every DynamicSelect refetch for the new provider.
+// One provider's settings form, bound to its page-form part. Render it with
+// key={provider id}: the remount makes every DynamicSelect refetch for the new
+// provider, while the draft lives in the page form and survives it.
 // `usage` is a line shown above the form; `children(draft, onChange)` renders
 // extra cards bound to the same live draft.
-function ProviderSettings({ cat, prov, usage, skip = [], children }) {
-  const { patch } = useAppData();
-  const buildPatch = (draft) => ({ [cat]: { instances: { [prov.id]: draft } } });
-  const { draft, onChange, dirty, saving, err, save } = useStageForm(prov.values, buildPatch, patch);
+function ProviderSettings({ cat, prov, form, usage, children }) {
+  const key = `${cat}:${prov.id}`;
+  const draft = form.draftOf(key);
+  const onChange = form.onChangeOf(key);
   return <>
-    <Card title={prov.label} foot={<FormSaveBar dirty={dirty} saving={saving} onSave={save} errors={errorLines(err)} />}>
+    <Card title={prov.label}>
       {usage && <div className="z-fh" style={{ margin: 0, padding: "11px 0 2px" }}>{usage}</div>}
-      <SchemaForm schema={prov.schema} values={draft} onChange={onChange}
-        optionsFor={optionsLoader(cat, prov.id)} skip={skip} />
+      <SchemaForm schema={prov.schema} values={draft} onChange={onChange} optionsFor={optionsLoader(cat, prov.id)} />
     </Card>
     {children && children(draft, onChange)}
   </>;
@@ -330,125 +304,98 @@ function usageLine(chains, field, id) {
   const names = chainsUsing(chains, field, id);
   return names.length ? `Used in chains: ${names.join(", ")}` : "Not used in any chain";
 }
+// Where a VAD engine and a TTS provider are put to use: on Capture and Speech.
+const vadUsage = (selected, id) => (selected === id ? "Selected on Capture" : "Not selected");
+function ttsUsage(variants, id) {
+  const i = variants.findIndex((v) => v.provider === id);
+  return i < 0 ? "Not in variants" : `Variant ${i + 1} on Speech${variants[i].enabled ? "" : " (off)"}`;
+}
 
 // STT and LLM: provider tabs; `field` is the chain field that names this
 // category's provider. The offline command engine is excluded from the LLM tabs
 // (it has its own Commands page).
-function ChainProviderStage({ cat, field, title, crumb, desc }) {
-  const { catalog, config } = useAppData();
+function ChainProviderStage({ cat, field, title, desc }) {
+  const { catalog, config, patch } = useAppData();
   const chains = chainsOf(config);
   const category = catalog.categories.find((c) => c.id === cat);
   const providers = category.providers.filter((p) => settingsPageFor(cat, p.id) === cat);
   const [tab, setTab] = useProviderTab(cat, providers, chains.find((c) => c.enabled)?.[field]);
+  const form = usePageForm(providerParts(cat, providers), patch);
   const prov = providers.find((p) => p.id === tab);
 
-  return <div className="z-page narrow">
-    <PageHeader title={title} crumb={crumb} desc={desc} />
+  return <FormPage form={form} narrow>
+    <PageHeader title={title} desc={desc} />
     {prov && <ReloadingBanner cat={cat} label={prov.label} />}
     {prov
       ? <>
-        <ProviderTabs providers={providers} tab={tab} onTab={setTab} />
+        <ProviderTabs cat={cat} providers={providers} tab={tab} onTab={setTab} form={form} />
         <div className="z-grid">
-          <ProviderSettings key={tab} cat={cat} prov={prov} usage={usageLine(chains, field, tab)} />
+          <ProviderSettings key={tab} cat={cat} prov={prov} form={form} usage={usageLine(chains, field, tab)} />
         </div>
       </>
       : <div className="z-card"><div className="z-empty"><b>No providers</b>The backend reports no providers for this stage.</div></div>}
-  </div>;
+  </FormPage>;
 }
 
-// TTS variants: the ordered fallback list (tts.variants) — the next enabled
-// variant takes over when a provider fails before the speaker gets any audio.
-// Edited as one draft and saved as ONE patch of the whole array (PATCH replaces
-// lists). "Configure" only switches the settings tab below.
-function TtsVariantsCard({ variants, providers, onConfigure }) {
-  const { patch } = useAppData();
-  const buildPatch = (d) => ({ tts: { variants: d.variants } });
-  const { draft, onChange, dirty, saving, err, save } = useStageForm({ variants }, buildPatch, patch);
-  const list = draft.variants || [];
-  const set = (next) => onChange("variants", next);
-  const unlisted = providers.filter((p) => !list.some((v) => v.provider === p.id));
-  const labelOf = (id) => providers.find((p) => p.id === id)?.label;
-
-  return <Card title="Variants" sub="tried in order until one starts speaking"
-    foot={<FormSaveBar dirty={dirty} saving={saving} onSave={save} errors={errorLines(err)} />}>
-    {list.length === 0 && <div className="z-fh" style={{ padding: "11px 0" }}>Add at least one enabled variant — the server rejects a list without one.</div>}
-    {list.map((v, i) => <div key={v.provider} className="z-f row" data-testid="tts-variant" style={{ opacity: v.enabled ? 1 : 0.55 }}>
-      <div style={{ display: "flex", alignItems: "baseline", gap: 10, minWidth: 0 }}>
-        <span className="mono" style={{ color: "var(--mut2)", fontSize: 11 }}>{i + 1}</span>
-        <b className="mono" style={{ fontSize: 12.5 }}>{v.provider}</b>
-        {labelOf(v.provider) && <span className="z-fh" style={{ marginTop: 0 }}>{labelOf(v.provider)}</span>}
-      </div>
-      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-        <Toggle sm on={!!v.enabled} onChange={(on) => set(list.map((x, j) => (j === i ? { ...x, enabled: on } : x)))} />
-        <button type="button" className="z-mini" aria-label="Move up" disabled={i === 0} onClick={() => set(moveItem(list, i, -1))}>↑</button>
-        <button type="button" className="z-mini" aria-label="Move down" disabled={i === list.length - 1} onClick={() => set(moveItem(list, i, 1))}>↓</button>
-        <button type="button" className="z-mini" onClick={() => onConfigure(v.provider)}>Configure</button>
-        <button type="button" className="z-mini" onClick={() => set(list.filter((_, j) => j !== i))}>Remove</button>
-      </div>
-    </div>)}
-    {unlisted.length > 0 && <div className="z-f row">
-      <span className="z-fh" style={{ marginTop: 0 }}>Add a variant</span>
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 6, justifyContent: "flex-end" }}>
-        {unlisted.map((p) => <button type="button" key={p.id} className="z-mini"
-          onClick={() => set([...list, { provider: p.id, enabled: true }])}>+ {p.id}</button>)}
-      </div>
-    </div>}
-  </Card>;
-}
-
-export function Wakeword() {
-  return <ProviderStage cat="wakeword" title="Wakeword · Verify" crumb="Pipeline / Stage 02"
-    desc="Server-side wake-word verifier. Re-checks the captured phrase actually started with the wake word and rejects false triggers before STT." />;
-}
 export function STT() {
-  return <ChainProviderStage cat="stt" field="stt" title="STT · Speech to text" crumb="Providers"
-    desc="Settings of each speech recognizer: cloud Whisper or offline Vosk. Which one runs is set on the Chains page." />;
+  return <ChainProviderStage cat="stt" field="stt" title="STT · Speech to text"
+    desc="Settings of each speech recognizer: cloud Whisper or offline Vosk. Which one runs is set on the Logic page." />;
 }
 export function LLM() {
-  return <ChainProviderStage cat="llm" field="handler" title="LLM · Reasoning & tools" crumb="Providers"
-    desc="Settings of each chat model that generates the reply and calls smart-home tools over MCP. Which one runs is set on the Chains page." />;
+  return <ChainProviderStage cat="llm" field="handler" title="LLM · Reasoning & tools"
+    desc="Settings of each chat model that generates the reply and calls smart-home tools over MCP. Which one runs is set on the Logic page." />;
 }
 export function Commands() {
-  const { catalog, config } = useAppData();
+  const { catalog, config, patch } = useAppData();
   const llm = catalog.categories.find((c) => c.id === "llm");
   const prov = llm?.providers.find((p) => p.id === COMMANDS_PROVIDER);
-  return <div className="z-page narrow">
-    <PageHeader title="Commands · Offline command engine" crumb="Providers"
+  const form = usePageForm(prov ? providerParts("llm", [prov]) : [], patch);
+  const [open, setOpen] = useState(false); // the engine settings card starts collapsed
+  const key = `llm:${COMMANDS_PROVIDER}`;
+  const toggle = () => setOpen((o) => !o);
+  return <FormPage form={form} narrow>
+    <PageHeader title="Commands · Offline command engine"
       desc="The offline command engine answers smart-home commands from its own vocabulary without an LLM. Spoken names and verbs come from the MCP tool catalog." />
     {prov
       ? <div className="z-grid">
-        {/* `aliases`/`actions` are edited through the NluCatalogEditor below, so
-            their raw textareas are hidden; every other field stays. */}
-        <ProviderSettings cat="llm" prov={prov} usage={usageLine(chainsOf(config), "handler", prov.id)}
-          skip={["aliases", "actions"]}>
-          {(draft, onChange) => <NluCatalogEditor draft={draft} onChange={onChange} />}
-        </ProviderSettings>
+        <NluCatalogEditor draft={form.draftOf(key)} onChange={form.onChangeOf(key)} />
+        <div className="z-card">
+          <div className="z-card-h" role="button" tabIndex={0} aria-expanded={open} style={{ cursor: "pointer" }}
+            onClick={toggle} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); } }}>
+            <b>Engine settings</b><span className="sub">{open ? "▾" : "▸"}</span>
+          </div>
+          {open && <div className="z-card-b">
+            <div className="z-fh" style={{ margin: 0, padding: "11px 0 2px" }}>{usageLine(chainsOf(config), "handler", prov.id)}</div>
+            {/* `aliases`/`actions` are edited through the vocabulary editor above,
+                so their raw textareas are hidden; every other field stays. */}
+            <SchemaForm schema={prov.schema} values={form.draftOf(key)} onChange={form.onChangeOf(key)}
+              optionsFor={optionsLoader("llm", prov.id)} skip={["aliases", "actions"]} />
+          </div>}
+        </div>
       </div>
       : <div className="z-card"><div className="z-empty"><b>Unavailable</b>The backend has no offline command engine.</div></div>}
-  </div>;
-}
-export function Accents() {
-  return <ProviderStage cat="stress" title="Accents · Stress placement" crumb="Pipeline / Stage 04"
-    desc="Place Russian word stress on the reply text so TTS pronounces it correctly." />;
+  </FormPage>;
 }
 export function TTS() {
-  const { catalog } = useAppData();
+  const { catalog, patch } = useAppData();
   const category = catalog.categories.find((c) => c.id === "tts");
   const providers = category.providers;
   const variants = category.variants || [];
+  const stress = selectedSettings(catalog.categories.find((c) => c.id === "stress"));
   const [tab, setTab] = useProviderTab("tts", providers, variants.find((v) => v.enabled)?.provider);
+  const form = usePageForm([...providerParts("tts", providers), stress.part], patch);
   const prov = providers.find((p) => p.id === tab);
 
-  return <div className="z-page narrow">
-    <PageHeader title="TTS · Text to speech" crumb="Pipeline / Stage 05"
-      desc="Synthesize the reply to audio served to the speakers. Variants are tried in order; settings are per provider." />
+  return <FormPage form={form} narrow>
+    <PageHeader title="TTS · Text to speech"
+      desc="Settings of each speech synthesizer and of stress placement on the reply text. Which synthesizers run, and in what order, is set on the Speech page." />
     {prov && <ReloadingBanner cat="tts" label={prov.label} />}
+    <ReloadingBanner cat="stress" label={stress.prov.label} />
     <div className="z-grid">
-      <TtsVariantsCard variants={variants} providers={providers} onConfigure={setTab} />
       {prov && <div>
-        <ProviderTabs providers={providers} tab={tab} onTab={setTab} />
+        <ProviderTabs cat="tts" providers={providers} tab={tab} onTab={setTab} form={form} />
         <div className="z-grid">
-          <ProviderSettings key={tab} cat="tts" prov={prov}>
+          <ProviderSettings key={tab} cat="tts" prov={prov} form={form} usage={ttsUsage(variants, tab)}>
             {(draft) => <>
               {/* Test the CURRENT (unsaved) draft settings with an in-browser playback. */}
               <VoiceTestCard provider={tab} settings={draft} />
@@ -458,70 +405,42 @@ export function TTS() {
           </ProviderSettings>
         </div>
       </div>}
+      <Card title="Stress placement" sub={stress.prov.label}>
+        <SchemaForm schema={stress.prov.schema} values={form.draftOf(stress.part.key)} onChange={form.onChangeOf(stress.part.key)}
+          optionsFor={optionsLoader("stress", stress.prov.id)} skip={["enabled"]} />
+      </Card>
     </div>
-  </div>;
+  </FormPage>;
 }
 
-// ── VAD (catalog category + core sub-sections) ────────────────────────────
-
-// Embeddable provider card for one catalog category: selector + schema form +
-// save bar — same mechanics as ProviderStage, minus the PageHeader. Render it
-// only when the category exists in the catalog.
-function ProviderCard({ cat, sub }) {
-  const { catalog, patch } = useAppData();
-  const category = catalog.categories.find((c) => c.id === cat);
-  const selected = category.selected;
-  const prov = category.providers.find((p) => p.id === selected) || category.providers[0];
-
-  const buildPatch = (draft) => ({ [cat]: { selected, instances: { [selected]: draft } } });
-  const { draft, onChange, dirty, saving, err, save } = useStageForm(prov.values, buildPatch, patch);
-
-  const switchProvider = async (newId) => {
-    if (newId === selected) return;
-    try { await patch({ [cat]: { selected: newId } }); } catch { /* surfaced elsewhere */ }
-  };
-
-  return <Card title={prov.label} sub={sub} foot={<FormSaveBar dirty={dirty} saving={saving} onSave={save} errors={errorLines(err)} />}>
-    <Selector
-      label="Provider"
-      options={category.providers.map((p) => p.id)}
-      value={selected}
-      onChange={switchProvider}
-      caption={prov.label}
-    />
-    {/* key={selected}: see ProviderStage — remount the form on provider switch so
-        DynamicSelect fields (which fetch options on mount) refetch for the new
-        provider instead of keeping the previous provider's option list. */}
-    <SchemaForm key={selected} schema={prov.schema} values={draft} onChange={onChange} optionsFor={optionsLoader(cat, selected)} />
-  </Card>;
-}
+// ── VAD (catalog category + core sub-sections + wake-word verify) ─────────
 
 export function VAD() {
   const { catalog, patch } = useAppData();
   // VAD is a catalog category since R2 (webrtc provider: aggressiveness).
   // Tolerate an older backend without it — render the core.vad cards only.
   const vadCat = catalog.categories.find((c) => c.id === "vad");
+  const engines = vadCat ? vadCat.providers : [];
+  const wake = selectedSettings(catalog.categories.find((c) => c.id === "wakeword"));
   const coreSchema = catalog.core.schema;
   // vad prop is a $ref to $defs.VadConfig — resolve to the object schema.
   const vadSchema = coreSchema.$defs ? coreSchema.$defs.VadConfig : null;
-  const rawVad = catalog.core.values.vad || {};
-  // mic_channel / mic_normalize / mic_highpass live in VadConfig but get their own card
-  // below. Split them out: the Advanced card edits everything EXCEPT the mic fields, the
-  // mic card edits ONLY the mic fields. Both patch core.vad and apply() deep-merges the
-  // partial patch, so the two disjoint subsets never clobber each other.
-  const { mic_channel, mic_normalize, mic_highpass, ...vadValues } = rawVad;
-
-  const buildPatch = (draft) => ({ core: { vad: draft } });
-  const { draft, onChange, dirty, saving, err, save } = useStageForm(vadValues, buildPatch, patch);
-
-  // Independent form for the server-side end-of-phrase confirmation chime
   const ackSchema = coreSchema.$defs ? coreSchema.$defs.AckConfig : null;
-  const ackValues = catalog.core.values.ack || {};
-  const buildAckPatch = (draft) => ({ core: { ack: draft } });
-  const {
-    draft: ackDraft, onChange: ackOnChange, dirty: ackDirty,
-    saving: ackSaving, err: ackErr, save: ackSave,
-  } = useStageForm(ackValues, buildAckPatch, patch);
+  // mic_channel / mic_normalize / mic_highpass live in VadConfig but get their own card,
+  // so core.vad is split into two disjoint parts; both patch core.vad and the merge
+  // of the two keeps them apart.
+  const { mic_channel, mic_normalize, mic_highpass, ...vadValues } = catalog.core.values.vad || {};
+  // The chime's `enabled` is switched on the Capture page.
+  const { enabled: _ackEnabled, ...ackValues } = catalog.core.values.ack || {};
+  const [tab, setTab] = useProviderTab("vad", engines, vadCat?.selected);
+  const form = usePageForm([
+    { key: "endpointing", values: vadValues, toPatch: (d) => ({ core: { vad: d } }) },
+    { key: "mic", values: { mic_channel, mic_normalize, mic_highpass }, toPatch: (d) => ({ core: { vad: d } }) },
+    { key: "ack", values: ackValues, toPatch: (d) => ({ core: { ack: d } }) },
+    ...providerParts("vad", engines),
+    wake.part,
+  ], patch);
+  const engine = engines.find((p) => p.id === tab);
 
   // Chime selector options for core.ack.sound_path: bundled files from assets/chimes,
   // shown by bare filename, plus an empty-valued "synthesized" default at the top.
@@ -545,45 +464,48 @@ export function VAD() {
       mic_highpass: vadSchema.properties.mic_highpass,
     },
   } : null;
-  const micValues = { mic_channel, mic_normalize, mic_highpass };
-  const buildMicPatch = (draft) => ({ core: { vad: draft } });
-  const {
-    draft: micDraft, onChange: micOnChange, dirty: micDirty,
-    saving: micSaving, err: micErr, save: micSave,
-  } = useStageForm(micValues, buildMicPatch, patch);
 
   const chime = useChimePreview();
 
   if (!vadSchema) return <div className="z-page"><div className="z-card"><div className="z-empty"><b>VAD</b>Schema unavailable.</div></div></div>;
 
-  return <div className="z-page">
-    <PageHeader title="VAD · Voice capture" crumb="Pipeline / Stage 01"
-      desc="The speaker streams audio continuously and never signals end-of-phrase — we detect it server-side with the selected VAD. Tune sensitivity to pauses here." />
-    {/* Two equal columns: VAD provider + end-pointing on the left, mic + chime cards stacked on the right */}
+  return <FormPage form={form}>
+    <PageHeader title="VAD · Voice capture"
+      desc="The speaker streams audio continuously and never signals end-of-phrase — we detect it server-side with the VAD engine chosen on the Capture page. Tune sensitivity to pauses here." />
+    <ReloadingBanner cat="wakeword" label={wake.prov.label} />
+    {/* Two equal columns: VAD engine + end-pointing on the left, mic + chime + wake-word cards stacked on the right */}
     <div className="z-cols even">
       <div className="z-grid">
-        {vadCat && <ProviderCard cat="vad" sub="speech/no-speech classifier" />}
-        <Card title="End-pointing thresholds" sub="when a phrase is considered started / finished"
-          foot={<FormSaveBar dirty={dirty} saving={saving} onSave={save} errors={errorLines(err)} />}>
-          <SchemaForm schema={{ ...vadSchema, $defs: coreSchema.$defs }} root={{ ...vadSchema, $defs: coreSchema.$defs }} values={draft} onChange={onChange} skip={["mic_channel", "mic_normalize", "mic_highpass"]} />
+        {engine && <div>
+          <ProviderTabs cat="vad" providers={engines} tab={tab} onTab={setTab} form={form} />
+          <ProviderSettings key={tab} cat="vad" prov={engine} form={form} usage={vadUsage(vadCat.selected, tab)} />
+        </div>}
+        <Card title="End-pointing thresholds" sub="when a phrase is considered started / finished">
+          <SchemaForm schema={{ ...vadSchema, $defs: coreSchema.$defs }} root={{ ...vadSchema, $defs: coreSchema.$defs }}
+            values={form.draftOf("endpointing")} onChange={form.onChangeOf("endpointing")} skip={["mic_channel", "mic_normalize", "mic_highpass"]} />
         </Card>
       </div>
-      {(micSchema || ackSchema) && <div className="z-grid">
-        {micSchema && <Card title="Microphone input & conditioning" sub="which device mic stream feeds the pipeline · pre-STT conditioning"
-          foot={<FormSaveBar dirty={micDirty} saving={micSaving} onSave={micSave} errors={errorLines(micErr)} />}>
-          <SchemaForm schema={{ ...micSchema, $defs: coreSchema.$defs }} root={{ ...micSchema, $defs: coreSchema.$defs }} values={micDraft} onChange={micOnChange} skip={["mic_normalize", "mic_highpass"]} />
+      <div className="z-grid">
+        {micSchema && <Card title="Microphone input & conditioning" sub="which device mic stream feeds the pipeline · pre-STT conditioning">
+          <SchemaForm schema={{ ...micSchema, $defs: coreSchema.$defs }} root={{ ...micSchema, $defs: coreSchema.$defs }}
+            values={form.draftOf("mic")} onChange={form.onChangeOf("mic")} skip={["mic_normalize", "mic_highpass"]} />
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20, alignItems: "start" }}>
-            <SchemaForm schema={{ ...micSchema, $defs: coreSchema.$defs }} root={{ ...micSchema, $defs: coreSchema.$defs }} values={micDraft} onChange={micOnChange} skip={["mic_channel"]} />
+            <SchemaForm schema={{ ...micSchema, $defs: coreSchema.$defs }} root={{ ...micSchema, $defs: coreSchema.$defs }}
+              values={form.draftOf("mic")} onChange={form.onChangeOf("mic")} skip={["mic_channel"]} />
           </div>
         </Card>}
-        {ackSchema && <Card title="End-of-phrase chime" sub="confirmation played when your phrase ends"
-          foot={<FormSaveBar dirty={ackDirty} saving={ackSaving} onSave={ackSave} errors={errorLines(ackErr)} />}>
-          <SchemaForm schema={{ ...ackSchema, $defs: coreSchema.$defs }} root={{ ...ackSchema, $defs: coreSchema.$defs }} values={ackDraft} onChange={ackOnChange} optionsFor={ackOptionsFor}
+        {ackSchema && <Card title="End-of-phrase chime" sub="confirmation played when your phrase ends">
+          <SchemaForm schema={{ ...ackSchema, $defs: coreSchema.$defs }} root={{ ...ackSchema, $defs: coreSchema.$defs }}
+            values={form.draftOf("ack")} onChange={form.onChangeOf("ack")} optionsFor={ackOptionsFor} skip={["enabled"]}
             itemActionFor={(field) => (field === "sound_path" ? chime.play : null)} itemActionBusy={chime.busy} />
           {/* Per-item play buttons live in the dropdown; only surface preview errors here. */}
           {chime.msg && <div className="z-fh" style={{ marginTop: 6, ...(chime.msg.tone === "err" ? { color: "#b91c1c" } : {}) }}>{chime.msg.text}</div>}
         </Card>}
-      </div>}
+        <Card title="Wake-word verify" sub={wake.prov.label}>
+          <SchemaForm schema={wake.prov.schema} values={form.draftOf(wake.part.key)} onChange={form.onChangeOf(wake.part.key)}
+            optionsFor={optionsLoader("wakeword", wake.prov.id)} skip={["enabled"]} />
+        </Card>
+      </div>
     </div>
-  </div>;
+  </FormPage>;
 }

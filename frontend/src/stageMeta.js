@@ -13,15 +13,13 @@ export const STAGE_ORDER = ["vad", "wakeword", "stt", "llm", "stress", "tts"];
 // pipeline stage). Distinct from the STAGE_COLOR palette so it reads as an event.
 export const FILLER_COLOR = "#f59e0b";
 
-// Pipeline stages shown in the dashboard service-map and the stage page sub-nav.
-// `cat` links a stage to a catalog category. All stages are catalog
-// categories now; the VAD page additionally edits core.vad sections
-// (end-pointing thresholds, mic conditioning).
+// Pipeline stages by catalog category (`cat`); the top bar names a category whose
+// backend is reloading by its stage `name`.
 export const STAGES = [
-  { key: "vad", name: "VAD", role: "Voice capture", cat: "vad" },
-  { key: "wakeword", name: "Wakeword", role: "Wake-word verify", cat: "wakeword" },
-  { key: "stt", name: "STT", role: "Speech → text", cat: "stt" },
-  { key: "llm", name: "LLM", role: "Reasoning + tools", cat: "llm" },
-  { key: "stress", name: "Accents", role: "Stress placement", cat: "stress" },
-  { key: "tts", name: "TTS", role: "Text → speech", cat: "tts" },
+  { key: "vad", name: "VAD", cat: "vad" },
+  { key: "wakeword", name: "Wakeword", cat: "wakeword" },
+  { key: "stt", name: "STT", cat: "stt" },
+  { key: "llm", name: "LLM", cat: "llm" },
+  { key: "stress", name: "Accents", cat: "stress" },
+  { key: "tts", name: "TTS", cat: "tts" },
 ];

@@ -1,16 +1,17 @@
 // @vitest-environment jsdom
-// Render-level tests for the Dashboard service map. Even though providerOf has
-// unit tests, this pins the actual render path: the vad node shows the human
-// provider label with a new backend, and an old backend (no vad category)
-// degrades to "—" without crashing the page.
+// Render-level tests for the Dashboard: the Capture → Logic → Speech service map
+// (what each tile shows, grey dots for what is off, where a click leads, an old
+// backend without categories) and the KPI tiles.
 import React from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, cleanup } from "@testing-library/react";
+import { render, screen, cleanup, fireEvent, within } from "@testing-library/react";
 import Dashboard from "../pages/dashboard.jsx";
 import { useAppData } from "../appData.jsx";
 import { getMetrics } from "../api.js";
+import { nav } from "../navStore.js";
 
 vi.mock("../appData.jsx", () => ({ useAppData: vi.fn() }));
+vi.mock("../navStore.js", () => ({ nav: vi.fn() }));
 vi.mock("../api.js", () => ({
   getMetrics: vi.fn(async () => ({})),
   getRuns: vi.fn(async () => ({ runs: [] })),
@@ -20,15 +21,33 @@ vi.mock("../api.js", () => ({
 afterEach(cleanup);
 beforeEach(() => vi.clearAllMocks());
 
-const config = { core: { vad: { silence_ms: 800 }, mcp_servers: [] } };
+const chains = [
+  { name: "fast", enabled: true, stt: "vosk", handler: "simple-nlu" },
+  { name: "off", enabled: false, stt: "groq", handler: "openrouter" },
+  { name: "smart", enabled: true, stt: "groq", handler: "openrouter" },
+];
+const config = { core: { chains, mcp_servers: [{ name: "home" }] } };
 
-function catalogWithVad() {
+const single = (id, selected, label, values) => ({ id, selected, providers: [{ id: selected, label, values }] });
+
+function catalog({ wake = true, stress = true } = {}) {
   return {
     categories: [
+      single("vad", "webrtc", "WebRTC VAD", {}),
+      single("wakeword", "vosk", "Vosk", { enabled: wake }),
+      single("stress", "ruaccent", "RuAccent", { enabled: stress }),
       {
-        id: "vad",
-        selected: "webrtc",
-        providers: [{ id: "webrtc", label: "WebRTC VAD" }],
+        id: "tts",
+        variants: [
+          { provider: "yandex", enabled: false },
+          { provider: "fishaudio", enabled: true },
+          { provider: "piper", enabled: true },
+        ],
+        providers: [
+          { id: "yandex", label: "Yandex", values: { voice: "alena" } },
+          { id: "fishaudio", label: "Fish Audio", values: { reference_id: "9b64e", reference_id_label: "Anna" } },
+          { id: "piper", label: "Piper", values: {} },
+        ],
       },
     ],
   };
@@ -42,59 +61,62 @@ async function renderDashboard() {
   return utils;
 }
 
+const tile = (page) => screen.getByTestId(`tile-${page}`);
+const dots = (el) => [...el.querySelectorAll(".z-dot")].map((d) => d.className.replace("z-dot ", ""));
+
 describe("Dashboard service map", () => {
-  it("shows the vad provider label on the vad service node (new backend)", async () => {
-    useAppData.mockReturnValue({ catalog: catalogWithVad(), config });
-    const { container } = await renderDashboard();
-    const provs = [...container.querySelectorAll(".z-svc .prov")];
-    expect(provs).toHaveLength(5); // vad, wakeword, chains, stress, tts
-    expect(provs[0].textContent).toBe("WebRTC VAD");
-  });
-
-  it('shows "—" and still renders the page when the catalog lacks a vad category (old backend)', async () => {
-    useAppData.mockReturnValue({ catalog: { categories: [] }, config });
-    const { container } = await renderDashboard();
-    expect(screen.getByText("Pipeline overview")).toBeInTheDocument();
-    const provs = [...container.querySelectorAll(".z-svc .prov")];
-    expect(provs).toHaveLength(5);
-    expect(provs[0].textContent).toBe("—");
-  });
-
-  it("shows one Chains row per enabled chain with its share of served requests and average time", async () => {
+  it("shows Capture, Logic and Speech with their providers, switches and averages", async () => {
     getMetrics.mockResolvedValueOnce({
-      per_stage_avg_ms: {},
+      per_stage_avg_ms: { vad: 1200, tts: 600 },
       per_chain: { fast: { served: 3, avg_ms: 400 }, smart: { served: 1, avg_ms: 9000 } },
     });
-    const chains = [
-      { name: "fast", enabled: true, stt: "vosk", handler: "simple-nlu" },
-      { name: "off", enabled: false, stt: "groq", handler: "openrouter" },
-      { name: "smart", enabled: true, stt: "groq", handler: "openrouter" },
-    ];
-    useAppData.mockReturnValue({ catalog: catalogWithVad(), config: { core: { ...config.core, chains } } });
+    useAppData.mockReturnValue({ catalog: catalog(), config });
     await renderDashboard();
-    const rows = screen.getAllByTestId("chain-row").map((r) => r.textContent);
-    expect(rows).toEqual(["vosk → simple-nlu75%0.40s", "groq → openrouter25%9.00s"]);
-    expect(screen.getByText("2 enabled")).toBeInTheDocument();
+
+    const capture = tile("capture");
+    expect(capture.querySelector(".prov").textContent).toBe("WebRTC VAD");
+    expect(capture.textContent).toContain("wake-word verify on");
+    expect(capture.textContent).toContain("1.20s avg");
+
+    // Logic rows name the chain, not its stt → handler pair.
+    expect(screen.getAllByTestId("chain-row").map((r) => r.textContent)).toEqual(["fast75%0.40s", "smart25%9.00s"]);
+    expect(within(tile("logic")).getByText("2 enabled")).toBeInTheDocument();
+
+    const speech = tile("speech");
+    expect(speech.querySelector(".prov").textContent).toBe("Fish Audio");
+    expect(within(speech).getByTestId("speech-voice").textContent).toBe("Anna · +1 fallback");
+    expect(speech.textContent).toContain("stress on");
+    expect(speech.textContent).toContain("0.60s avg");
+
+    expect([capture, tile("logic"), speech].map(dots)).toEqual([["ok", "ok"], ["ok"], ["ok", "ok"]]);
   });
 
-  it("shows the TTS node's first enabled variant and the number of fallbacks", async () => {
-    const tts = {
-      id: "tts",
-      variants: [
-        { provider: "fish", enabled: false },
-        { provider: "yandex", enabled: true },
-        { provider: "piper", enabled: true },
-      ],
-      providers: [
-        { id: "yandex", label: "Yandex", values: { voice: "alena" } },
-        { id: "piper", label: "Piper", values: {} },
-      ],
-    };
-    useAppData.mockReturnValue({ catalog: { categories: [...catalogWithVad().categories, tts] }, config });
-    const { container } = await renderDashboard();
-    const node = [...container.querySelectorAll(".z-svc")].pop();
-    expect(node.querySelector(".prov").textContent).toBe("yandex");
-    expect(node.querySelector(".mdl").textContent).toBe("voice · alena · +1 fallback");
+  it("greys the dot of whatever is off", async () => {
+    useAppData.mockReturnValue({
+      catalog: catalog({ wake: false, stress: false }),
+      config: { core: { chains: chains.map((c) => ({ ...c, enabled: false })) } },
+    });
+    await renderDashboard();
+    expect(tile("capture").textContent).toContain("wake-word verify off");
+    expect(tile("speech").textContent).toContain("stress off");
+    expect([tile("capture"), tile("logic"), tile("speech")].map(dots)).toEqual([["ok", "off"], ["off"], ["ok", "off"]]);
+    expect(within(tile("logic")).getByText("no enabled chain")).toBeInTheDocument();
+  });
+
+  it("opens the tile's pipeline page on click, and Tools from the MCP chip", async () => {
+    useAppData.mockReturnValue({ catalog: catalog(), config });
+    await renderDashboard();
+    for (const page of ["capture", "logic", "speech"]) fireEvent.click(tile(page));
+    fireEvent.click(screen.getByText("◆ MCP"));
+    expect(nav.mock.calls.map((c) => c[0])).toEqual(["capture", "logic", "speech", "tools"]);
+  });
+
+  it('shows "—" and still renders the page when the catalog has no categories (old backend)', async () => {
+    useAppData.mockReturnValue({ catalog: { categories: [] }, config: { core: {} } });
+    await renderDashboard();
+    expect(screen.getByText("Pipeline overview")).toBeInTheDocument();
+    expect(tile("capture").querySelector(".prov").textContent).toBe("—");
+    expect(tile("speech").querySelector(".prov").textContent).toBe("—");
   });
 
   it("surfaces rejected_24h as its own KPI tile", async () => {
@@ -102,15 +124,11 @@ describe("Dashboard service map", () => {
       requests_24h: 5, p50_ms: 1200, p95_ms: 2000, error_rate: 0.2, rejected_24h: 3,
       per_stage_avg_ms: {},
     });
-    useAppData.mockReturnValue({ catalog: catalogWithVad(), config });
+    useAppData.mockReturnValue({ catalog: catalog(), config });
     const { container } = await renderDashboard();
-    // The KPI label is present and its value cell shows the reject count.
-    expect(screen.getByText("Rejected · 24h")).toBeInTheDocument();
-    const labels = [...container.querySelectorAll(".z-kpi .k")].map((e) => e.textContent);
-    expect(labels).toContain("Rejected · 24h");
-    const tile = [...container.querySelectorAll(".z-kpi")].find(
+    const tileEl = [...container.querySelectorAll(".z-kpi")].find(
       (el) => el.querySelector(".k")?.textContent === "Rejected · 24h",
     );
-    expect(tile.querySelector(".v").textContent).toBe("3");
+    expect(tileEl.querySelector(".v").textContent).toBe("3");
   });
 });
