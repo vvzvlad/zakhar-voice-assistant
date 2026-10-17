@@ -2,16 +2,23 @@
 # Values below are PLACEHOLDERS (XXX / your_..._here), not real secrets.
 #
 # Deviation from the canonical web template: this is a LAN device<->server service,
-# NOT a public web service behind Traefik. So there are no Traefik labels and no
-# external `docker_main_net`. Instead the container runs on the host network: the
-# devices find the server by its mDNS advertisement (_zakhar._tcp), and multicast does
-# not leave a Docker bridge network. The device port (core.audio.port, default 8200)
-# and the panel port (PANEL_PORT, default 8201) open straight on the host.
+# NOT a public web service behind Traefik. So there are no Traefik labels; instead the
+# device port is published straight to the LAN (`ports`). The devices find the server
+# by its mDNS advertisement (_zakhar._tcp). Multicast does not leave a bridge network,
+# so an mDNS repeater on the host relays `docker_main_net` to the LAN
+# (jdbeeler/mdns-repeater, network_mode: host, USE_MDNS_REPEATER=1,
+# DOCKER_NETWORK_NAME=docker_main_net, EXTERNAL_INTERFACE=eth0, /var/run/docker.sock
+# mounted), and core.audio.advertise_host in data/config.json holds the host's LAN
+# address: inside the bridge the container sees only its own.
 #
 # Config lives in data/config.json INSIDE the named volume (created from
 # templates/default_config.json on first boot). Edit it there to set providers,
 # API keys, devices, etc. The only environment-tunable values are the admin
 # panel's bind host/port (PANEL_HOST / PANEL_PORT); everything else is in the JSON.
+
+networks:
+  docker_main_net:
+    external: true
 
 volumes:
   zakhar-voice-assistant:
@@ -35,13 +42,22 @@ services:
     # the one place that has to be changed by hand if the registry or the repo moves.
     image: gitea.vvzvlad.xyz/projects/zakhar-voice-assistant:latest
     container_name: zakhar-voice-assistant
+    # Names the mDNS advertisement (zakhar-<hostname>); without it the container id would.
+    hostname: your_docker_host_here
     restart: always
     volumes:
       - zakhar-voice-assistant:/app/data   # all mutable state survives restart/update
       # Model files, read-only to the app in practice but mounted rw so they can be
       # updated in place. Required for boot — see the note on the volume above.
       - zakhar-voice-assistant-models:/app/models
-    network_mode: host
+    networks:
+      - docker_main_net
+    ports:
+      # Must match core.audio.port in data/config.json (default 8200).
+      - "8200:8200"                          # publish the device server to the LAN
+      # Admin panel API + UI (also serves the agent MCP endpoint at /mcp);
+      # must match PANEL_PORT (default 8201).
+      - "8201:8201"
     environment:
       # All app config is in data/config.json (in the volume). The only env-tunable
       # values are the admin panel's bind host/port (applied at process start).

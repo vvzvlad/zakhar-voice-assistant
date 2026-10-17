@@ -378,8 +378,36 @@ static uint32_t link_lost(void)
     return delay;
 }
 
+// The first IPv4 address in an mDNS result's address list.
+static bool first_ipv4(const mdns_ip_addr_t *a, esp_ip4_addr_t *ip)
+{
+    for (; a != NULL; a = a->next) {
+        if (a->addr.type == ESP_IPADDR_TYPE_V4) {
+            *ip = a->addr.u_addr.ip4;
+            return true;
+        }
+    }
+    return false;
+}
+
+// The address of <host>.local. Asked for with a multicast answer (QM), not mdns_query_a()'s
+// unicast one (QU): a server in a Docker bridge network answers through an mDNS repeater on its
+// host, which relays multicast only. The browse answer has just multicast this record, and
+// python-zeroconf multicasts it again no sooner than 1 s later (RFC 6762 section 14): the answer
+// comes 1.02-1.12 s after the question, so the wait is 2 s.
+static bool address_find(const char *host, esp_ip4_addr_t *ip)
+{
+    mdns_result_t *results = NULL;
+    if (mdns_query_generic(host, NULL, NULL, MDNS_TYPE_A, MDNS_QUERY_MULTICAST, 2000, 1, &results) != ESP_OK) {
+        return false;
+    }
+    const bool found = results != NULL && first_ipv4(results->addr, ip);
+    mdns_query_results_free(results);
+    return found;
+}
+
 // Finds the server by mDNS into s_url: the first `_zakhar._tcp` answer with a host and port. The
-// queries block this task for up to 3 + 1 s, but only while there is no client: offline, nothing
+// queries block this task for up to 3 + 2 s, but only while there is no client: offline, nothing
 // is being streamed.
 static bool server_find(void)
 {
@@ -400,16 +428,10 @@ static bool server_find(void)
             ESP_LOGW(TAG, "%s answers without its host and port", r->instance_name ? r->instance_name : "a server");
             continue;
         }
-        esp_ip4_addr_t ip = {0};
-        for (const mdns_ip_addr_t *a = r->addr; a != NULL; a = a->next) {
-            if (a->addr.type == ESP_IPADDR_TYPE_V4) {
-                ip = a->addr.u_addr.ip4;
-                break;
-            }
-        }
         // The parser keeps an A record only when the SRV record came before it in the packet, and
         // python-zeroconf orders those records at random: then the address is asked for by name.
-        if (ip.addr == 0 && mdns_query_a(r->hostname, 1000, &ip) != ESP_OK) {
+        esp_ip4_addr_t ip = {0};
+        if (!first_ipv4(r->addr, &ip) && !address_find(r->hostname, &ip)) {
             ESP_LOGW(TAG, "no address for %s.local", r->hostname);
             continue;
         }

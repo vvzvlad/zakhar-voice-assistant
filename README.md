@@ -103,9 +103,10 @@ don't build).
    devices (or edit `data/config.json` directly inside the volume). All JSON
    settings apply live — no restart needed. See [Configuration](#configuration).
 
-**Ports** (the container runs with `network_mode: host`, so they open straight on the
-host, no reverse proxy; host networking is what lets the server's mDNS advertisement reach
-the devices — multicast does not leave a Docker bridge network):
+**Ports** (published straight to the LAN, no reverse proxy; the devices find the server by
+its mDNS advertisement, which an mDNS repeater on the host relays from `docker_main_net` to
+the LAN — set `core.audio.advertise_host` to the host's LAN address, since inside the bridge
+the container sees only its own):
 
 - `8201` — admin panel UI + API, and the agent MCP endpoint at `/mcp` (matches
   `PANEL_PORT`).
@@ -297,7 +298,7 @@ make fw-host-test fw-voicepe-host-test  # host tests of the pure C cores
 | `models/` | Offline model files (Vosk / Piper / Silero), fetched by `make models`. Gitignored; not bundled in the Docker image. |
 | `templates/` | Committed reference assets (`default_prompt.md`, `default_config.json`) seeded into `data/` on first boot. |
 | `Dockerfile` | Two-stage build: a node stage builds the panel, the python stage carries only its `dist`; deps cached before code; no `EXPOSE`. |
-| `docker-compose.yml` | Deploy template — image from the Gitea registry, `data` + `models` volumes, host networking (ports open on the host, the mDNS advertisement reaches the LAN), auto-update label. |
+| `docker-compose.yml` | Deploy template — image from the Gitea registry, `data` + `models` volumes, `docker_main_net` relayed to the LAN by the host's mDNS repeater, device port published to LAN, auto-update label. |
 | `.gitea/workflows/` | CI: tests → build → smoke gate → push to `gitea.vvzvlad.xyz` (`<sha>` then `latest`). Pull requests run the same checks without publishing. |
 | `ci/smoke.py` | The gate between build and push: image contract, version stamp, native VAD libs, frontend bundle, boot and `/health`. |
 | `AGENTS.md` | Conventions / onboarding for agents. |
@@ -308,5 +309,5 @@ All mutable state in `data/`; all config in `data/config.json` (providers self-d
 their settings; the config core never hardcodes provider fields); tests are mandatory and
 gate the Docker build, and a smoke gate stands between the build and the registry; deploy a
 prebuilt image from the Gitea registry via docker-compose. Unlike a public
-web service, the container runs on the host network (no Traefik) so the devices can find the
-server by mDNS and connect.
+web service, the device port is published straight to the LAN (no Traefik) and the host's
+mDNS repeater relays the server's advertisement, so the devices can find it and connect.

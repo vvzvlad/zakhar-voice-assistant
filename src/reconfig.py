@@ -69,7 +69,7 @@ def action_for(path: str) -> str:
         return "live"          # capture.enabled/dir are read per-run via the Runtime read-through
     if path.startswith("core.ack"):
         return "live"          # ack.enabled/sound_path are read per-run via the Runtime read-through
-    if path.startswith("core.audio"):            # host/port -> rebind
+    if path.startswith("core.audio"):            # host/port -> rebind; all -> advert restart
         return "rebuild_audio"
     if path.startswith("core.prompt"):           # system_prompt_path read live
         return "live"
@@ -350,7 +350,7 @@ class Reconfigurator:
             return
         try:
             await self.rt.advert.stop()
-            await self.rt.advert.start(core.audio.host, self.rt.manager.port)
+            await self.rt.advert.start(core.audio.advertise_host or core.audio.host, self.rt.manager.port)
         except Exception as e:
             logger.error(
                 f"device server re-bound, but its mDNS advert failed: {e}; "

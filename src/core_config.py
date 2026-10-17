@@ -35,6 +35,13 @@ class AudioConfig(BaseModel):
     # Bind address of the device server (devices connect to ws://<server>:<port>/device).
     host: str = Field("0.0.0.0", title="Bind host")
     port: int = Field(8200, title="Port")
+    advertise_host: str = Field(
+        "",
+        title="Advertised address",
+        description="LAN address the devices find this server at by mDNS. Empty: the bind host, "
+        "or this machine's LAN address when it binds all; in a Docker bridge network that is the "
+        "container's own address, so set the host's LAN address there.",
+    )
 
 
 class AgentMcpConfig(BaseModel):

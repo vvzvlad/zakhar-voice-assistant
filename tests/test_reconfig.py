@@ -670,11 +670,12 @@ class _StubAdvert:
             raise OSError("Network is unreachable")
 
 
-def _audio_runtime(manager, *, host="0.0.0.0", port=8081):
+def _audio_runtime(manager, *, host="0.0.0.0", port=8081, advertise_host=""):
     return types.SimpleNamespace(
         manager=manager,
         advert=_StubAdvert(),
-        core=types.SimpleNamespace(audio=types.SimpleNamespace(host=host, port=port)),
+        core=types.SimpleNamespace(audio=types.SimpleNamespace(
+            host=host, port=port, advertise_host=advertise_host)),
     )
 
 
@@ -696,6 +697,15 @@ async def test_apply_job_audio_rebind_failure_is_attempted():
     await reconf.apply_job({"core.audio.port"})
     assert audio.rebinds == [("127.0.0.1", 9000)]   # attempted
     assert rt.advert.calls == []
+
+
+@pytest.mark.asyncio
+async def test_apply_job_audio_advertises_the_configured_address():
+    audio = _StubDeviceServer()
+    rt = _audio_runtime(audio, host="0.0.0.0", port=8200, advertise_host="10.31.50.139")
+    reconf = Reconfigurator(rt, types.SimpleNamespace(tts_timeout=30), asyncio.Queue())
+    await reconf.apply_job({"core.audio.advertise_host"})
+    assert rt.advert.calls == [("stop",), ("start", "10.31.50.139", 8200)]
 
 
 @pytest.mark.asyncio

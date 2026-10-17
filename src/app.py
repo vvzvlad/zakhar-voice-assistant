@@ -223,7 +223,7 @@ async def main() -> None:
         await manager.start()
         # Devices find the device server by mDNS; a rebind restarts the advert (Reconfigurator).
         advert = MdnsAdvert()
-        await advert.start(rt.core.audio.host, manager.port)
+        await advert.start(rt.core.audio.advertise_host or rt.core.audio.host, manager.port)
         rt.advert = advert
         # panel.start()/stop() own the agent MCP endpoint's lifecycle too.
         await panel.start()

@@ -46,8 +46,9 @@ def _lan_ipv4() -> str:
 def build_info(host: str, port: int, hostname: str) -> ServiceInfo:
     """The service record of a device server bound to host:port on `hostname`.
 
-    A concrete bind host is advertised as is; the wildcard ("0.0.0.0" or empty)
-    advertises the host's LAN IPv4 (_lan_ipv4). The A record lives under its own host
+    `host` is core.audio.advertise_host, else the bind host. A concrete one is
+    advertised as is; the wildcard ("0.0.0.0" or empty) advertises this machine's
+    LAN IPv4 (_lan_ipv4). The A record lives under its own host
     name, zakhar-<short host name>.local: a device that lost the A record of the
     browse answer asks for that name, and it cannot clash with the host's own
     hostname record."""
