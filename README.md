@@ -245,6 +245,9 @@ Debug and dataset calls of the panel API (`http://<host>:8201`), meant for an ag
   still streams; detection is back on at the device's next connection.
 - `POST /api/device/model` `{"device": "<name>"}` — send the device its wake-word and VAD
   models again, read from disk anew; the device swaps them without a restart.
+- `curl -F file=@zakhar.tflite http://<host>:8201/api/wake-models` — upload a wake-word model
+  as `uploaded/<stem>` (here `uploaded/zakhar`); devices already using that name get the new
+  file at once.
 - `POST /api/datasets/<set>` `{"device": "<name>", "takes": 200, "seconds": 3}` — record a
   wake-word dataset: for each take the speaker beeps, then records `seconds` (1–10, default
   3) into `data/datasets/<set>/NNNN.wav`; a new session on the same set continues the
@@ -264,8 +267,9 @@ models from the server at every connection: the release image carries every wake
 model of `microWakeWord/` (the trained "Zakhar" versions and the ESPHome Okay Nabu, Hey
 Jarvis, Hey Mycroft and Alexa) and the VAD model. A device's wake model is picked in its Edit
 dialog on the Devices page (`core.devices[].wake_model`, empty for the release default);
-`vad_model` points a device at another VAD file. The firmware carries no Wi-Fi password:
-a speaker with no network stored shows a warm white twinkle and is set up with
+the same dialog uploads any other `.tflite`, kept in `data/wake_models/` and listed as
+`uploaded/<stem>`. `vad_model` points a device at another VAD file.
+The firmware carries no Wi-Fi password: a speaker with no network stored shows a warm white twinkle and is set up with
 Espressif's ESP BLE Provisioning app (iOS, Android), where it appears as
 `PROV_ZAKHAR_<6 hex digits>` and asks for no code. Holding the center button for
 10 s forgets the network and brings that back. The one-time switch from ESPHome

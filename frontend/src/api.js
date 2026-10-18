@@ -18,7 +18,10 @@ export class ApiError extends Error {
 
 async function request(path, { method = "GET", body } = {}) {
   const opts = { method, headers: {} };
-  if (body !== undefined) {
+  if (body instanceof FormData) {
+    // Sent as is: the browser sets the multipart Content-Type with its boundary.
+    opts.body = body;
+  } else if (body !== undefined) {
     opts.headers["Content-Type"] = "application/json";
     opts.body = JSON.stringify(body);
   }
@@ -55,9 +58,16 @@ export const getOptions = (category, plugin, field, q) =>
   request(`/api/options?category=${encodeURIComponent(category)}&plugin=${encodeURIComponent(plugin)}&field=${encodeURIComponent(field)}${q ? `&q=${encodeURIComponent(q)}` : ""}`);
 // Bundled end-of-phrase chime files for the ack sound_path selector.
 export const getChimes = () => request("/api/chimes");
-// Wake-word models the release carries, for a device's wake_model selector:
-// {options: [names], release: the name an empty wake_model falls back to}.
+// Wake-word models (the release's and the uploaded ones), for a device's wake_model
+// selector: {options: [names], release: the name an empty wake_model falls back to}.
 export const getWakeModels = () => request("/api/wake-models");
+// Upload a .tflite wake-word model into the server's data volume. Returns
+// {name: "uploaded/<stem>"}, the name getWakeModels now lists.
+export const uploadWakeModel = (file) => {
+  const form = new FormData();
+  form.append("file", file);
+  return request("/api/wake-models", { method: "POST", body: form });
+};
 // Play the selected end-of-phrase chime on the speaker(s) for an operator preview.
 // soundPath "" = the synthesized default; device omitted = play on every online speaker.
 // Returns {played: [names], offline: [names]}.

@@ -2,7 +2,7 @@
 // Devices page: every write of the device list starts from the server's current
 // list (a cutoff set from a slider, a device that connected while the page was
 // open), the Edit dialog opens from the re-read config, shows the id read-only, saves a
-// display label and a wake-word model, and shows why its controls cannot load, and a slider write or a
+// display label and a wake-word model (a listed or an uploaded one), and shows why its controls cannot load, and a slider write or a
 // newly connected device refreshes the app's config snapshot.
 import React from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
@@ -22,6 +22,7 @@ vi.mock("../api.js", () => ({
     options: ["zakhar/zakhar_v8", "zakhar/zakhar_v31"],
     release: "zakhar/zakhar_v31",
   })),
+  uploadWakeModel: vi.fn(),
 }));
 
 afterEach(cleanup);
@@ -124,6 +125,27 @@ describe("Devices page", () => {
     await waitFor(() => expect(data.patch).toHaveBeenCalledTimes(1));
     expect(data.patch).toHaveBeenCalledWith({ core: { devices: [
       { ...fresh[0], wake_model: "zakhar/zakhar_v8" },
+      FRESH[1],
+    ] } });
+  });
+
+  it("edit uploads a .tflite, selects it and saves its name", async () => {
+    api.getDeviceControls.mockResolvedValue({ device: "kitchen", online: true, versions: [], controls: [] });
+    api.uploadWakeModel.mockResolvedValueOnce({ name: "uploaded/zakhar_v34" });
+    render(<Devices />);
+    fireEvent.click(screen.getByText("Edit"));
+    const input = await screen.findByLabelText("Wake-word model file");
+    api.getWakeModels.mockResolvedValueOnce({
+      options: ["uploaded/zakhar_v34", "zakhar/zakhar_v8", "zakhar/zakhar_v31"], release: "zakhar/zakhar_v31",
+    });
+    const file = new File([new Uint8Array([1, 2])], "zakhar_v34.tflite");
+    fireEvent.change(input, { target: { files: [file] } });
+    expect(await screen.findByText("uploaded/zakhar_v34")).toBeInTheDocument();
+    expect(api.uploadWakeModel).toHaveBeenCalledWith(file);
+    fireEvent.click(screen.getByText("Save"));
+    await waitFor(() => expect(data.patch).toHaveBeenCalledTimes(1));
+    expect(data.patch).toHaveBeenCalledWith({ core: { devices: [
+      { ...FRESH[0], wake_model: "uploaded/zakhar_v34" },
       FRESH[1],
     ] } });
   });

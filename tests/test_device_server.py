@@ -314,6 +314,16 @@ def test_wake_models_are_named_and_listed_in_version_order_without_vad(tmp_path,
     ]
 
 
+def test_an_uploaded_wake_model_is_named_by_its_stem(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("src.config_store.DATA_DIR", str(tmp_path / "data"))
+    assert device_server.wake_model_files() == {}  # no upload directory yet
+    path = tmp_path / "data/wake_models/zakhar_v34.tflite"
+    path.parent.mkdir(parents=True)
+    path.write_bytes(b"")
+    assert device_server.wake_model_files() == {"uploaded/zakhar_v34": path.as_posix()}
+
+
 def test_the_release_wake_model_is_a_model_of_the_repo():
     assert device_server.RELEASE_WAKE_MODEL in device_server.wake_model_files()
 

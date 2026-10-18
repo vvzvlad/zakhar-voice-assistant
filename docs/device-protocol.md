@@ -35,6 +35,10 @@ The owner's words:
   files ship inside the server's release image, not on the models volume.
 - «теперь надо сделать так чтобы я мог выбирать в панели нужную модель» — the panel's device
   dialog picks the device's wake-word model from the models the release carries.
+- «надо сделать чтобы можно было через интерфейс загрузить любую модель вручную» — the same
+  dialog uploads a `.tflite`: it is kept in `data/wake_models/` on the data volume, listed as
+  `uploaded/<stem>`, and a new file of the same name replaces it and is sent at once to every
+  device using it.
 - «еще модели из esphome же можно притащить, джарвис, набу», option chosen: «Просто добавить в
   список» — the ESPHome models (Okay Nabu, Hey Jarvis, Hey Mycroft, Alexa) are in the list; the
   server's second wake-word check stays as it is, so wakes on them pass only with that check off.
@@ -102,9 +106,11 @@ The owner's words:
 ## Models
 
 The device stores no model. The server sends the wake-word model and the VAD model that gates it
-at every connection, again when the model configured for the device changes, and on the direct
-reload command (panel API `POST /api/device/model {device}`). Which file goes out is the server's
-choice: `core.devices[].wake_model` / `vad_model`, empty for the models the release ships.
+at every connection, again when the model configured for the device changes, on the direct
+reload command (panel API `POST /api/device/model {device}`), and when a wake-word model file the
+device uses is uploaded anew (panel API `POST /api/wake-models`). Which file goes out is the
+server's choice: `core.devices[].wake_model` / `vad_model`, empty for the models the release
+ships.
 
 1. Server → `model`, then the bytes:
    ```json

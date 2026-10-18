@@ -14,7 +14,7 @@ import {
   getPromptProfiles, getPromptProfile, createPromptProfile, updatePromptProfile,
   deletePromptProfile, activatePromptProfile,
   getTools, getOptions, startCapture, getCaptureStatus, downloadCaptureResult, getDeviceControls, setDeviceControl,
-  getWakeProbability, setWakeProbabilityStream, getConfig, getWakeModels,
+  getWakeProbability, setWakeProbabilityStream, getConfig, getWakeModels, uploadWakeModel,
 } from "../api.js";
 import { deviceLabel, deviceVersion } from "../format.js";
 
@@ -561,14 +561,16 @@ export function Prompt() {
 // ── Devices ───────────────────────────────────────────────────────────────
 // Add mode (`onSave({name, enabled})`) asks for a device id. Edit mode (`device`, the
 // saved id) edits the display label and the wake-word model (`onSave` gets only the
-// changed ones of {label, wake_model}; wake_model "" = the release default), shows the
-// id read-only — it is what the firmware sends in hello — and hosts the live controls;
-// `online` says whether the device is reachable.
+// changed ones of {label, wake_model}; wake_model "" = the release default; an uploaded
+// .tflite becomes the selected model), shows the id read-only — it is what the firmware
+// sends in hello — and hosts the live controls; `online` says whether the device is reachable.
 function DeviceModal({ onSave, onClose, title, device, label: savedLabel = "", wakeModel: savedWakeModel = "", online }) {
   const [name, setName] = useState("");
   const [label, setLabel] = useState(savedLabel);
   const [wakeModel, setWakeModel] = useState(savedWakeModel);
   const [wakeModels, setWakeModels] = useState(null); // {options, release} from GET /api/wake-models
+  const [uploadErr, setUploadErr] = useState(null);
+  const fileRef = useRef(null);
   useEffect(() => {
     if (!device) return undefined;
     let alive = true;
@@ -577,6 +579,20 @@ function DeviceModal({ onSave, onClose, title, device, label: savedLabel = "", w
       .catch(() => { /* the model field stays hidden */ });
     return () => { alive = false; };
   }, [device]);
+  // Upload the picked .tflite, re-read the list and select the new model (Save sends it).
+  async function upload(e) {
+    const file = e.target.files?.[0];
+    e.target.value = ""; // picking the same file again fires another change
+    if (!file) return;
+    setUploadErr(null);
+    try {
+      const { name: uploaded } = await uploadWakeModel(file);
+      setWakeModels(await getWakeModels());
+      setWakeModel(uploaded);
+    } catch (err) {
+      setUploadErr(err.message);
+    }
+  }
   if (device) {
     const unchanged = label.trim() === savedLabel && wakeModel === savedWakeModel;
     return <Modal title={title} onClose={onClose}
@@ -588,11 +604,16 @@ function DeviceModal({ onSave, onClose, title, device, label: savedLabel = "", w
         })}>Save</button></>}>
       <Field label="Name" hint="Shown in the panel instead of the device id; empty shows the id."><div className="z-inp"><input value={label} placeholder={device} onChange={(e) => setLabel(e.target.value)} /></div></Field>
       <Field label="Device id" hint="Sent by the firmware when it connects — keys the device's settings and dialog context."><div className="z-inp"><input value={device} readOnly /></div></Field>
-      {wakeModels && <Field label="Wake-word model" hint="Sent to the device on save and at every connection.">
+      {wakeModels && <Field label="Wake-word model" hint="Sent to the device on save and at every connection. An uploaded .tflite is kept in the server's data volume; a new file of the same name replaces it and goes at once to every device using it.">
         <Select value={wakeModel} onChange={setWakeModel} options={[
           { value: "", label: `Release default (${wakeModels.release})` },
           ...wakeModels.options.map((n) => ({ value: n, label: n })),
         ]} />
+        <div style={{ marginTop: 8 }}>
+          <button className="z-btn g sm" onClick={() => fileRef.current.click()}>Upload .tflite</button>
+          <input ref={fileRef} type="file" accept=".tflite" hidden aria-label="Wake-word model file" onChange={upload} />
+        </div>
+        {uploadErr && <div className="z-fh" style={{ color: "#b91c1c" }}>{uploadErr}</div>}
       </Field>}
       <CaptureControl device={device} online={online} />
       <DeviceControls device={device} />

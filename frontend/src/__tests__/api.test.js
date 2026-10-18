@@ -2,7 +2,7 @@
 // so it is exercised through the exported `getCatalog` GET wrapper; `getRuns` is
 // tested directly for its query-string builder. global.fetch is stubbed per test.
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { ApiError, getCatalog, getRuns, runAudioUrl } from "../api.js";
+import { ApiError, getCatalog, getRuns, runAudioUrl, uploadWakeModel } from "../api.js";
 
 // Build a minimal Response-like stub for the request() body-reading path.
 function mockResponse({ ok = true, status = 200, text = "" }) {
@@ -22,6 +22,18 @@ describe("request (via getCatalog)", () => {
       mockResponse({ ok: true, status: 200, text: JSON.stringify({ hello: "world" }) })
     );
     await expect(getCatalog()).resolves.toEqual({ hello: "world" });
+  });
+
+  it("uploadWakeModel posts the file as multipart field \"file\", not as JSON", async () => {
+    global.fetch.mockResolvedValue(mockResponse({ text: JSON.stringify({ name: "uploaded/x" }) }));
+    const file = new File([new Uint8Array([1])], "x.tflite");
+    await expect(uploadWakeModel(file)).resolves.toEqual({ name: "uploaded/x" });
+    const [url, opts] = global.fetch.mock.calls[0];
+    expect(url).toBe("/api/wake-models");
+    expect(opts.method).toBe("POST");
+    expect(opts.body).toBeInstanceOf(FormData);
+    expect(opts.body.get("file")).toBe(file);
+    expect(opts.headers["Content-Type"]).toBeUndefined();
   });
 
   it("returns null for a 204 (empty body)", async () => {

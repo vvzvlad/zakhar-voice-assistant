@@ -21,6 +21,7 @@ import inspect
 import io
 import json
 import os
+import re
 import time
 import wave
 from datetime import datetime, timezone
@@ -35,7 +36,10 @@ from pydantic import ValidationError
 from src import config_store, dataset_jobs
 from src.audio_prep import pcm_to_wav_bytes
 from src.capture_jobs import CaptureJobManager
-from src.device_server import CAPTURE_MAX_SECONDS, RELEASE_WAKE_MODEL, CaptureBusyError, list_wake_models
+from src.device_server import (
+    CAPTURE_MAX_SECONDS, RELEASE_WAKE_MODEL, UPLOADED_WAKE_PREFIX, CaptureBusyError, list_wake_models,
+    uploaded_wake_models_dir,
+)
 from src.plugins.base import get_provider
 from src.runs_store import db_file_size
 from src.tts import pcm_rate
@@ -64,6 +68,10 @@ _ALLOWED_ORIGINS: frozenset[str] = frozenset()
 # core.ack.sound_path (the app runs from the repo root).
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _CHIME_EXTS = (".wav",)
+
+# Characters an uploaded wake-word model's file stem may keep; any other becomes "_", so the
+# saved name is a plain file name (no path separators).
+_UNSAFE_MODEL_STEM_RE = re.compile(r"[^A-Za-z0-9._-]")
 
 # Stored TTS audio mime -> download file extension.
 _EXT_FOR_MIME = {"audio/wav": "wav", "audio/mpeg": "mp3", "audio/flac": "flac"}
@@ -322,9 +330,46 @@ class PanelServer:
         return web.json_response({"options": list_chimes()})
 
     async def _get_wake_models(self, request: web.Request) -> web.Response:
-        """List the names of the wake-word models the release carries for a device's
-        wake_model selector, plus the one an empty wake_model falls back to."""
+        """List the names of the wake-word models (the release's and the uploaded ones) for a
+        device's wake_model selector, plus the one an empty wake_model falls back to."""
         return web.json_response({"options": list_wake_models(), "release": RELEASE_WAKE_MODEL})
+
+    async def _post_wake_model(self, request: web.Request) -> web.Response:
+        """Save an uploaded wake-word model and return {"name": "uploaded/<stem>"}, the name
+        GET /api/wake-models now lists.
+
+        Body: multipart/form-data with the field "file", a <stem>.tflite. The stem keeps ASCII
+        letters, digits, ".", "_" and "-" (any other character becomes "_"); the file goes to
+        <DATA_DIR>/wake_models/<stem>.tflite, replacing one of that name. aiohttp's default
+        1 MiB body limit applies (a model is ~80 KB).
+
+        Status codes: 200 saved, 400 no file / not a .tflite / empty name.
+        """
+        form = await request.post()
+        upload = form.get("file")
+        if not isinstance(upload, web.FileField):
+            return web.json_response({"error": 'multipart field "file" is required'}, status=400)
+        filename = upload.filename or ""
+        if not filename.lower().endswith(".tflite"):
+            return web.json_response({"error": "the file must be a .tflite model"}, status=400)
+        stem = _UNSAFE_MODEL_STEM_RE.sub("_", filename[:-len(".tflite")])
+        if not stem:
+            return web.json_response({"error": "the file name before .tflite is empty"}, status=400)
+        folder = uploaded_wake_models_dir()
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / f"{stem}.tflite").write_bytes(upload.file.read())
+        name = f"{UPLOADED_WAKE_PREFIX}{stem}"
+        # A device already set to this name would keep the replaced file: its wake_model does
+        # not change, so nothing re-sends it. Send it now to the online ones; an offline one
+        # gets the new file at its next connection.
+        if self.device_model_reload is not None:
+            for dev in self.svc.core.devices:
+                if dev.wake_model == name:
+                    try:
+                        self.device_model_reload(dev.name)
+                    except (LookupError, RuntimeError):
+                        pass
+        return web.json_response({"name": name})
 
     async def _post_play_chime(self, request: web.Request) -> web.Response:
         """Play the selected end-of-phrase chime on the speaker(s) for an operator preview.
@@ -1269,6 +1314,7 @@ class PanelServer:
             web.get("/api/chimes", self._get_chimes),
             web.post("/api/chimes/play", self._post_play_chime),
             web.get("/api/wake-models", self._get_wake_models),
+            web.post("/api/wake-models", self._post_wake_model),
             web.post("/api/tts/test", self._post_tts_test),
             web.get("/api/prompt", self._get_prompt),
             web.put("/api/prompt", self._put_prompt),

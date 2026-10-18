@@ -21,6 +21,7 @@ import soxr
 from aiohttp import WSCloseCode, WSMsgType, web
 from loguru import logger
 
+from src import config_store
 from src.audio_prep import pcm_to_wav_bytes
 from src.chime import build_ack_clip
 from src.pipeline import Pipeline
@@ -41,6 +42,8 @@ PLAY_FRAME_BYTES = 4096
 # one by its name (wake_model_files), the VAD one by its path.
 RELEASE_WAKE_MODEL = "zakhar/zakhar_v31"
 RELEASE_VAD_MODEL = "microWakeWord/vad/vad.tflite"  # stock: esphome/micro-wake-word-models models/v2/vad.tflite
+# Name prefix of the wake-word models uploaded through the panel (uploaded_wake_models_dir).
+UPLOADED_WAKE_PREFIX = "uploaded/"
 # The server keeps at most buffer_ms minus this much audio ahead of the device's playback.
 PACING_MARGIN_MS = 500
 # The wait for `played` gives up after the stream's duration + buffer_ms + this much.
@@ -89,12 +92,19 @@ def _model_paths(cfg) -> dict[str, tuple[str, str]]:
     return {"wake": (wake, wake_model_files().get(wake, wake)), "vad": (vad, vad)}
 
 
+def uploaded_wake_models_dir() -> Path:
+    """Where the panel saves uploaded wake-word models: under DATA_DIR, the docker volume, so
+    they survive image updates. DATA_DIR is read at call time so tests can monkeypatch it."""
+    return Path(config_store.DATA_DIR) / "wake_models"
+
+
 def wake_model_files() -> dict[str, str]:
     """The wake-word models a device's wake_model can name, {name: path}: every .tflite under
-    microWakeWord/ except the VAD model's directory, the path relative to the working
-    directory (where send_model opens it). microWakeWord/esphome/<stem>.tflite is
-    esphome/<stem>; microWakeWord/v<N>/…/zakhar.tflite is zakhar/zakhar_v<N> and any other
-    <stem>.tflite under v<N> is zakhar/zakhar_v<N>_<stem>."""
+    microWakeWord/ except the VAD model's directory, plus every .tflite directly in
+    uploaded_wake_models_dir(); the path is relative to the working directory (where
+    send_model opens it). microWakeWord/esphome/<stem>.tflite is esphome/<stem>;
+    microWakeWord/v<N>/…/zakhar.tflite is zakhar/zakhar_v<N> and any other <stem>.tflite
+    under v<N> is zakhar/zakhar_v<N>_<stem>; an uploaded <stem>.tflite is uploaded/<stem>."""
     files = {}
     for p in Path("microWakeWord").rglob("*.tflite"):
         if p.is_relative_to("microWakeWord/vad"):
@@ -105,6 +115,9 @@ def wake_model_files() -> dict[str, str]:
         else:
             name = f"zakhar/zakhar_{top}" + ("" if p.stem == "zakhar" else f"_{p.stem}")
         files[name] = p.as_posix()
+    # A missing directory (nothing uploaded yet) globs to nothing.
+    for p in uploaded_wake_models_dir().glob("*.tflite"):
+        files[f"{UPLOADED_WAKE_PREFIX}{p.stem}"] = p.as_posix()
     return files
 
 

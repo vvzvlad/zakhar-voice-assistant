@@ -200,6 +200,56 @@ async def test_get_wake_models_lists_the_release_models(tmp_path, monkeypatch):
         await client.close()
 
 
+async def _upload_wake_model(client, filename):
+    form = aiohttp.FormData(quote_fields=False)  # a browser sends the filename unescaped
+    form.add_field("file", b"\x01\x02", filename=filename)
+    return await client.post("/api/wake-models", data=form)
+
+
+async def test_post_wake_model_saves_the_upload_under_data(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("src.config_store.DATA_DIR", str(tmp_path / "data"))
+    client, _svc_ = await _client(tmp_path)
+    try:
+        resp = await _upload_wake_model(client, "zakhar v34.TFLITE")
+        assert resp.status == 200
+        assert await resp.json() == {"name": "uploaded/zakhar_v34"}
+        assert (tmp_path / "data/wake_models/zakhar_v34.tflite").read_bytes() == b"\x01\x02"
+        assert (await (await client.get("/api/wake-models")).json())["options"] == ["uploaded/zakhar_v34"]
+    finally:
+        await client.close()
+
+
+async def test_post_wake_model_resends_a_replaced_model_to_the_devices_using_it(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("src.config_store.DATA_DIR", str(tmp_path / "data"))
+    path = tmp_path / "data/wake_models/zakhar.tflite"
+    path.parent.mkdir(parents=True)
+    path.write_bytes(b"old")
+    # The resend reads the file, so it must see the new bytes.
+    reloaded = []
+    client, svc = await _client(tmp_path, device_model_reload=lambda d: reloaded.append((d, path.read_bytes())) or {})
+    try:
+        svc.apply({"core": {"devices": [{"name": "studio", "wake_model": "uploaded/zakhar"},
+                                        {"name": "kitchen", "wake_model": "zakhar/zakhar_v33"}]}})
+        assert (await _upload_wake_model(client, "zakhar.tflite")).status == 200
+        assert reloaded == [("studio", b"\x01\x02")]
+    finally:
+        await client.close()
+
+
+async def test_post_wake_model_rejects_a_non_tflite_file(tmp_path, monkeypatch):
+    monkeypatch.setattr("src.config_store.DATA_DIR", str(tmp_path / "data"))
+    client, _svc_ = await _client(tmp_path)
+    try:
+        resp = await _upload_wake_model(client, "notes.txt")
+        assert resp.status == 400
+        assert "error" in await resp.json()
+        assert not (tmp_path / "data/wake_models").exists()
+    finally:
+        await client.close()
+
+
 @pytest.fixture
 def _reset_openrouter_models_cache():
     """The OpenRouter model list is TTL-cached at module level; reset around each
