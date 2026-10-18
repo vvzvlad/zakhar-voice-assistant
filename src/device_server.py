@@ -1,9 +1,9 @@
 """Device server: the WebSocket endpoint voice devices connect to (docs/device-protocol.md).
 
 One aiohttp app on core.audio.host/port serves GET /device (the device protocol) and
-GET /health. DeviceManager keeps one Device per name; a Device keeps its Pipeline
-across reconnects and binds the pipeline's transport hooks (send_event, play,
-has_speaker) to its live Connection. This module alone maps StageEvents onto wire
+GET /health. DeviceManager keeps one Device per name; a Device keeps its Pipeline and its
+running capture across reconnects and binds the pipeline's transport hooks (send_event,
+play, has_speaker) to its live Connection. This module alone maps StageEvents onto wire
 messages and converts outgoing audio to what the device plays.
 """
 
@@ -12,6 +12,7 @@ import io
 import itertools
 import json
 import re
+import time
 import wave
 from collections import deque
 from pathlib import Path
@@ -21,8 +22,7 @@ import soxr
 from aiohttp import WSCloseCode, WSMsgType, web
 from loguru import logger
 
-from src import config_store
-from src.audio_prep import pcm_to_wav_bytes
+from src import captures, config_store
 from src.chime import build_ack_clip
 from src.pipeline import Pipeline
 from src.pipeline_events import StageEvent
@@ -32,6 +32,7 @@ from src.tts import pcm_rate
 MIC = 0x01
 PLAY = 0x02
 MODEL = 0x03
+CAPTURE_AUDIO = 0x04
 CLOSE_DISABLED = 4000
 CLOSE_REPLACED = 4001
 HEARTBEAT_S = 10.0
@@ -52,7 +53,7 @@ PLAYED_WAIT_MARGIN_S = 5.0
 # Maximum duration (seconds) of a manual "record X seconds" capture; the panel API
 # validates against it.
 CAPTURE_MAX_SECONDS = 300
-# Wall-clock margin on top of the requested capture seconds when waiting for audio_end.
+# A capture still running this long past its start + seconds is finished with what came.
 CAPTURE_WAIT_MARGIN = 8.0
 
 # Panel control ids.
@@ -131,8 +132,8 @@ class CaptureBusyError(Exception):
     """A capture is already in progress on this device (the panel API answers 409)."""
 
 
-class CaptureEmptyError(Exception):
-    """A capture finished but the device streamed no audio."""
+class DeviceOfflineError(RuntimeError):
+    """The device is not connected (the panel API answers 409, a dataset take waits)."""
 
 
 async def _one_chunk(data: bytes):
@@ -236,8 +237,7 @@ class Connection:
         self.cutoffs = None  # (wake, vad) last sent in `config`
         self.models: dict[str, str] = {}  # kind -> the name last sent in `model`
         self.closed = False
-        self.capture_buf: bytearray | None = None  # mic audio while a capture runs
-        self._capture_fut: asyncio.Future | None = None
+        self.held_capture = hello.get("capture")  # the id of the capture the device holds
         self._out: deque = deque()
         self._out_ready = asyncio.Event()
         self._streams: dict[int, _Stream] = {}
@@ -374,38 +374,9 @@ class Connection:
             stream.sent_s += seconds
             self._enqueue(bytes([PLAY]) + frame, stream)
 
-    async def capture(self, seconds: int) -> bytes:
-        """Record `seconds` of mic audio on the device; return it as a mono WAV."""
-        if self._capture_fut is not None:
-            raise CaptureBusyError(f"{self.name} capture already in progress")
-        self._capture_fut = asyncio.get_running_loop().create_future()
-        self.capture_buf = bytearray()
-        self.send({"type": "capture", "seconds": seconds})
-        try:
-            return await asyncio.wait_for(self._capture_fut, seconds + CAPTURE_WAIT_MARGIN)
-        except asyncio.TimeoutError:
-            raise TimeoutError(
-                f"{self.name} capture timed out after {seconds + CAPTURE_WAIT_MARGIN:.0f}s"
-            )
-        finally:
-            self._capture_fut = None
-            self.capture_buf = None
-
-    def on_audio_end(self, reason) -> None:
-        fut, pcm = self._capture_fut, self.capture_buf
-        if fut is None or fut.done():
-            return
-        if reason == "busy":
-            fut.set_exception(RuntimeError(f"{self.name} is busy: a voice session is running"))
-        elif reason == "capture":
-            if pcm:
-                fut.set_result(pcm_to_wav_bytes(bytes(pcm)))
-            else:
-                fut.set_exception(CaptureEmptyError(f"{self.name} capture produced no audio"))
-
     def close(self, code: int | None = None) -> None:
-        """Stop sending, end every pending play and capture, and (with a code) close
-        the socket in the background."""
+        """Stop sending, end every pending play, and (with a code) close the socket in
+        the background. A running capture outlives the connection (Device keeps it)."""
         if self.closed:
             return
         self.closed = True
@@ -413,14 +384,21 @@ class Connection:
         for stream in self._streams.values():
             stream.end("closed")
         self._streams.clear()
-        if self._capture_fut is not None and not self._capture_fut.done():
-            self._capture_fut.set_exception(ConnectionError(f"{self.name} disconnected"))
         if code is not None:
             _spawn(self.ws.close(code=code))
 
 
+def _channels(payload: bytes, channels: int) -> tuple[bytes, bytes | None]:
+    """Channel 0 and channel 1 (None for a one-channel mic) of interleaved mic audio."""
+    if channels == 2:
+        samples = np.frombuffer(payload, dtype="<i2")
+        return samples[0::2].tobytes(), samples[1::2].tobytes()
+    return payload, None
+
+
 class Device:
-    """One device name: its Pipeline (kept across reconnects) and its live Connection."""
+    """One device name: its Pipeline and its running capture (both kept across reconnects)
+    and its live Connection."""
 
     def __init__(self, name: str, runtime):
         self.name = name
@@ -429,6 +407,8 @@ class Device:
         self.pipeline = Pipeline(name, runtime)
         self.pipeline.send_event = self._send_event
         self.pipeline.play = self.play
+        self.capture: captures.Capture | None = None
+        self._capture_watchdog: asyncio.TimerHandle | None = None
 
     @property
     def cfg(self):
@@ -496,7 +476,9 @@ class Device:
         elif kind == "wake_peak":
             conn.wake_peak = msg["value"]
         elif kind == "audio_end":
-            conn.on_audio_end(msg.get("reason"))
+            if self.capture is not None and msg.get("id") == self.capture.id:
+                busy = msg.get("reason") == "busy"
+                self.finish_capture(f"{self.name} is busy: a voice session is running" if busy else None)
         elif kind == "model_loaded":
             ok = bool(msg.get("ok"))
             if ok:
@@ -509,21 +491,16 @@ class Device:
                 conn.model = msg.get("name") if ok else None
 
     async def on_binary(self, conn: Connection, data: bytes) -> None:
-        if conn is not self.conn or data[0] != MIC:
+        if conn is not self.conn:
             return
-        payload = data[1:]
-        if conn.mic_channels == 2:
-            samples = np.frombuffer(payload, dtype="<i2")
-            ch0, ch1 = samples[0::2].tobytes(), samples[1::2].tobytes()
-        else:
-            ch0, ch1 = payload, None
-        if conn.capture_buf is not None and not conn.session_open:
-            # A capture records the channel the pipeline would use. Frames of a running
-            # session (the device answers the capture with `busy`) stay with the session.
-            use_ch1 = self.rt.core.vad.mic_channel == 1 and ch1
-            conn.capture_buf.extend(ch1 if use_ch1 else ch0)
-            return
-        await self.pipeline.on_audio(ch0, ch1)
+        if data[0] == CAPTURE_AUDIO:
+            if self.capture is not None:
+                # A capture records the channel the pipeline would use.
+                ch0, ch1 = _channels(data[5:], conn.mic_channels)
+                use_ch1 = self.rt.core.vad.mic_channel == 1 and ch1
+                self.capture.write(int.from_bytes(data[1:5], "little"), ch1 if use_ch1 else ch0)
+        elif data[0] == MIC:
+            await self.pipeline.on_audio(*_channels(data[1:], conn.mic_channels))
 
     def versions(self) -> list[dict]:
         conn = self.conn
@@ -580,13 +557,69 @@ class Device:
         conn.send({"type": "reply", "text": text})
         await self.pipeline.speak(text)
 
-    async def capture(self, seconds: int) -> bytes:
+    def start_capture(self, seconds: int) -> captures.Capture:
+        """Create a capture on disk and send `capture` for it. Raises DeviceOfflineError or
+        CaptureBusyError."""
         conn = self.conn
         if conn is None:
-            raise RuntimeError(f"{self.name} is offline")
+            raise DeviceOfflineError(f"{self.name} is offline")
+        if self.capture is not None:
+            raise CaptureBusyError(f"{self.name} capture already in progress")
         seconds = max(1, min(int(seconds), CAPTURE_MAX_SECONDS))
-        logger.info(f"{self.name}: ⏺️ manual capture {seconds}s")
-        return await conn.capture(seconds)
+        cap = captures.Capture.create(self.name, seconds)
+        self._run_capture(cap)
+        conn.send({"type": "capture", "id": cap.id, "seconds": seconds})
+        logger.info(f"{self.name}: ⏺️ capture {cap.name} {seconds}s")
+        return cap
+
+    def _run_capture(self, cap: captures.Capture) -> None:
+        """Make `cap` the running capture; the watchdog finishes it with what came by
+        CAPTURE_WAIT_MARGIN past its end."""
+        self.capture = cap
+        delay = cap.started + cap.seconds + CAPTURE_WAIT_MARGIN - time.time()
+        self._capture_watchdog = asyncio.get_running_loop().call_later(delay, self.finish_capture)
+
+    def finish_capture(self, error: str | None = None) -> None:
+        cap, self.capture = self.capture, None
+        if cap is None:
+            return
+        self._capture_watchdog.cancel()
+        cap.finish(error)
+        logger.info(f"{self.name}: ⏹️ capture {cap.name} {cap.state}"
+                    + (f": {cap.error}" if cap.error else "")
+                    + (f", {len(cap.gaps)} gap(s)" if cap.gaps else ""))
+
+    def resume_capture(self, conn: Connection) -> None:
+        """After a hello: take up the capture the device holds, or record the time left of
+        one it lost by restarting (docs/device-protocol.md, "Capture"). The capture the
+        device holds may be one on disk only (the server restarted); every other unfinished
+        capture of the device on disk is finished as is."""
+        now = time.time()
+        running = self.capture.stem if self.capture is not None else None
+        for cap in captures.of_device(self.name):
+            if not cap.running or cap.stem == running:
+                continue
+            if (self.capture is None and cap.id == conn.held_capture
+                    and now < cap.started + cap.seconds + CAPTURE_WAIT_MARGIN):
+                self._run_capture(cap)
+                continue
+            cap.finish()
+            logger.info(f"{self.name}: capture {cap.name} found unfinished; finished as is ({cap.state})")
+        cap = self.capture
+        if cap is None:
+            return
+        if conn.held_capture == cap.id:
+            start = max(0, cap.end - cap.base)
+            conn.send({"type": "capture_resume", "id": cap.id, "from": start})
+            logger.info(f"{self.name}: capture {cap.name} resumed from frame {start}")
+            return
+        left = cap.started + cap.seconds - now
+        if left < 1:
+            self.finish_capture()
+            return
+        cap.segment(now)
+        conn.send({"type": "capture", "id": cap.id, "seconds": round(left, 3)})
+        logger.info(f"{self.name}: came back without capture {cap.name}; recording the {left:.1f}s left")
 
 
 class DeviceManager:
@@ -641,12 +674,35 @@ class DeviceManager:
             return
         await target.announce(text)
 
-    async def capture(self, device_name: str, seconds: int) -> bytes:
-        """Record a manual sample on the named device and return it as WAV bytes."""
-        target = self._find(device_name)
-        if not target.online:
-            raise RuntimeError(f"{device_name} is offline")
-        return await target.capture(seconds)
+    def capture_start(self, device_name: str, seconds: int) -> dict:
+        """Start a capture on the named device; return its snapshot (state `starting`).
+        Raises LookupError (unknown device), DeviceOfflineError or CaptureBusyError."""
+        return self._find(device_name).start_capture(seconds).snapshot()
+
+    async def capture(self, device_name: str, seconds: int) -> captures.Capture:
+        """Record a capture on the named device and return it once it is finished.
+        Raises like capture_start."""
+        cap = self._find(device_name).start_capture(seconds)
+        await cap.finished.wait()
+        return cap
+
+    def capture_status(self, device_name: str) -> dict:
+        """The device's running capture, else its newest one on disk, else idle."""
+        device = self._devices.get(device_name)
+        cap = (device.capture if device is not None else None) or captures.newest(device_name)
+        return cap.snapshot() if cap is not None else captures.idle(device_name)
+
+    def capture_delete(self, device_name: str, name: str) -> bool:
+        """Delete a capture from disk; False when there is no such capture. Raises
+        CaptureBusyError while it runs."""
+        device = self._devices.get(device_name)
+        if device is not None and device.capture is not None and device.capture.name == name:
+            raise CaptureBusyError(f"{device_name} capture {name} is running")
+        cap = captures.find(device_name, name)
+        if cap is None:
+            return False
+        cap.remove()
+        return True
 
     def device_controls(self, device_name: str) -> dict:
         target = self._find(device_name)
@@ -750,7 +806,8 @@ class DeviceManager:
 
     async def _hello(self, ws, hello: dict):
         """Admit a device: add an unknown id to the config, refuse a disabled one,
-        replace an older connection of the same id, then send `config` and both models."""
+        replace an older connection of the same id, then send `config`, both models and
+        what the device's capture needs."""
         name = hello["id"]
         cfg = next((d for d in self.rt.core.devices if d.name == name), None)
         if cfg is None:
@@ -769,6 +826,12 @@ class DeviceManager:
             old.close(CLOSE_REPLACED)
             await device.pipeline.on_disconnect()
         conn.send_config(cfg)
+        # Before the models: the device holds a capture's unsent audio only in its ~3 s tap.
+        # A capture file that cannot be read must not keep the device from connecting.
+        try:
+            device.resume_capture(conn)
+        except Exception as e:
+            logger.error(f"{name}: captures not taken up: {e}")
         for kind, (model, path) in _model_paths(cfg).items():
             conn.send_model(kind, model, path)
         logger.info(

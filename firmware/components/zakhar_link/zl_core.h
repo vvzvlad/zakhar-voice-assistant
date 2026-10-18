@@ -14,6 +14,9 @@
 #define ZL_KIND_MIC 0x01      // binary frame kinds: the first byte
 #define ZL_KIND_PLAY 0x02
 #define ZL_KIND_MODEL 0x03
+#define ZL_KIND_CAPTURE 0x04  // then the u32 LE offset of its first frame, then the samples
+// A held capture that cannot be sent is dropped this long after its last frame was recorded.
+#define ZL_CAPTURE_KEEP_FRAMES (ZL_MIC_RATE * 2)
 
 // ---------------------------------------------------------------- messages, server -> device
 
@@ -28,6 +31,7 @@ typedef enum {
     ZL_MSG_SET_VOLUME,
     ZL_MSG_WAKE_PEAK_STREAM,
     ZL_MSG_CAPTURE,
+    ZL_MSG_CAPTURE_RESUME,
     ZL_MSG_DETECT,
     ZL_MSG_MODEL,
 } zl_msg_type_t;
@@ -38,11 +42,12 @@ typedef struct {
     uint32_t session;
     zl_state_t state;     // STATE
     const char *text;     // STATE (NULL when absent), TRANSCRIPT and REPLY ("" when absent)
-    uint32_t id;          // PLAY_START, PLAY_END
+    uint32_t id;          // PLAY_START, PLAY_END, CAPTURE (> 0), CAPTURE_RESUME
     uint8_t wake, vad;    // CONFIG, as uint8 cutoffs
     int value;            // SET_VOLUME, percent
     bool on;              // WAKE_PEAK_STREAM, DETECT
     uint32_t capture_ms;  // CAPTURE
+    uint32_t from;        // CAPTURE_RESUME: the offset of the first frame the server lacks
     zl_model_t model;     // MODEL: its kind
     const char *name;     // MODEL
     uint32_t size;        // MODEL: the bytes its 0x03 frames carry, > 0
@@ -57,12 +62,13 @@ void zl_msg_free(zl_msg_t *m);
 // ---------------------------------------------------------------- messages, device -> server
 // Each returns a NUL-terminated JSON text (NULL when out of memory); release with zl_free().
 
-char *zl_encode_hello(const zl_config_t *cfg, int volume);
+// capture: the held capture's id, 0 when none is held.
+char *zl_encode_hello(const zl_config_t *cfg, int volume, uint32_t capture);
 char *zl_encode_wake(uint32_t session, const char *word);
 char *zl_encode_played(uint32_t id, bool dropped);
 char *zl_encode_volume(int percent);
 char *zl_encode_wake_peak(int percent);
-char *zl_encode_audio_end(const char *reason);
+char *zl_encode_audio_end(const char *reason, uint32_t id);
 char *zl_encode_model_loaded(zl_model_t kind, const char *name, bool ok);
 void zl_free(char *json);
 
@@ -79,6 +85,11 @@ bool zl_silent(uint32_t now, uint32_t heard, uint32_t limit);
 // Whether a capture that started at microphone position `start` has its `frames` frames by `pos`
 // (positions count frames written and wrap).
 bool zl_capture_done(uint32_t pos, uint32_t start, uint32_t frames);
+// Whether such a capture, held but not being sent, is to be dropped by `pos`: ZL_CAPTURE_KEEP_FRAMES
+// after its last frame was recorded, before that frame leaves the tap.
+bool zl_capture_expired(uint32_t pos, uint32_t start, uint32_t frames);
+// Writes v at p as 4 little-endian bytes (a capture frame's offset).
+void zl_put_u32le(uint8_t *p, uint32_t v);
 
 // ---------------------------------------------------------------- the voice session
 
@@ -86,7 +97,7 @@ typedef struct {
     uint32_t session;  // the last wake's number, 0 before the first
     bool open;         // from the wake to its idle or error
     bool mic;          // the session's audio streams: from the wake to its first state other than listening
-    bool capture;      // a capture streams
+    bool capture;      // a capture is held: from its `capture` until it ends; a lost link keeps it
     bool detect_off;   // a `detect` turned wake words off; zero, so on, with every connection
 } zl_sess_t;
 
@@ -113,12 +124,13 @@ bool zl_sess_accepts(const zl_sess_t *s, const zl_msg_t *m);
 // A `state` that passed the filter: anything but listening stops the mic, idle and error close.
 void zl_sess_state(zl_sess_t *s, zl_state_t state);
 
-// A `capture`: false (busy) while a session is open; otherwise the capture starts.
+// A `capture`: false (busy) while a session is open; otherwise the capture is held, in place of
+// one held already.
 bool zl_sess_capture(zl_sess_t *s);
 
-// The connection is gone: everything stops, and detection is on again for the next connection.
-// Reports whether a session was open and a capture ran.
-void zl_sess_lost(zl_sess_t *s, bool *was_open, bool *was_capture);
+// The connection is gone: the session ends, a held capture stays held, and detection is on again
+// for the next connection. Reports whether a session was open.
+void zl_sess_lost(zl_sess_t *s, bool *was_open);
 
 // ---------------------------------------------------------------- the playback queue
 

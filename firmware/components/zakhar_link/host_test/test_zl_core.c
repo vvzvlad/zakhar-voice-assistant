@@ -69,9 +69,18 @@ static void test_decode(void)
     assert(decode("{\"type\": \"detect\", \"on\": true}", &m) && m.type == ZL_MSG_DETECT && m.on);
     zl_msg_free(&m);
     assert(!decode("{\"type\": \"detect\", \"on\": 1}", &m));
-    assert(decode("{\"type\": \"capture\", \"seconds\": 5}", &m) && m.capture_ms == 5000);
+    assert(decode("{\"type\": \"capture\", \"id\": 7, \"seconds\": 5}", &m) && m.type == ZL_MSG_CAPTURE);
+    assert(m.id == 7 && m.capture_ms == 5000);
     zl_msg_free(&m);
-    assert(!decode("{\"type\": \"capture\", \"seconds\": 0}", &m));
+    assert(decode("{\"type\": \"capture\", \"id\": 7, \"seconds\": 1.5}", &m) && m.capture_ms == 1500);  // the time left
+    zl_msg_free(&m);
+    assert(!decode("{\"type\": \"capture\", \"id\": 7, \"seconds\": 0}", &m));
+    assert(!decode("{\"type\": \"capture\", \"seconds\": 5}", &m));  // the id is required
+    assert(!decode("{\"type\": \"capture\", \"id\": 0, \"seconds\": 5}", &m));
+    assert(decode("{\"type\": \"capture_resume\", \"id\": 7, \"from\": 24576}", &m));
+    assert(m.type == ZL_MSG_CAPTURE_RESUME && m.id == 7 && m.from == 24576);
+    zl_msg_free(&m);
+    assert(!decode("{\"type\": \"capture_resume\", \"id\": 7}", &m));
     assert(decode("{\"type\": \"model\", \"kind\": \"wake\", \"name\": \"zakhar.tflite\", \"size\": 61000}", &m));
     assert(m.type == ZL_MSG_MODEL && m.model == ZL_MODEL_WAKE && strcmp(m.name, "zakhar.tflite") == 0 &&
            m.size == 61000 && !m.has_session);
@@ -93,21 +102,26 @@ static void test_encode(void)
 {
     zl_config_t speaker = {.id = "main_room", .fw = "voicepe 0.1.0 (a1b2c3d)", .mic_channels = 2,
                            .play_rate = 48000, .play_buffer_ms = 4000};
-    encoded_is(zl_encode_hello(&speaker, 60),
+    encoded_is(zl_encode_hello(&speaker, 60, 0),
                "{\"type\":\"hello\",\"id\":\"main_room\",\"fw\":\"voicepe 0.1.0 (a1b2c3d)\","
                "\"caps\":{\"speaker\":true,\"screen\":false},\"mic\":{\"channels\":2},"
                "\"play\":{\"rate\":48000,\"buffer_ms\":4000},\"volume\":60}");
     zl_config_t panel = {.id = "a0b1c2d3e4f5", .fw = "espanel 0.2.0", .screen = true, .mic_channels = 1};
-    encoded_is(zl_encode_hello(&panel, 50),
+    encoded_is(zl_encode_hello(&panel, 50, 0),
                "{\"type\":\"hello\",\"id\":\"a0b1c2d3e4f5\",\"fw\":\"espanel 0.2.0\","
                "\"caps\":{\"speaker\":false,\"screen\":true},\"mic\":{\"channels\":1}}");
+    encoded_is(zl_encode_hello(&panel, 50, 7),  // a capture is held
+               "{\"type\":\"hello\",\"id\":\"a0b1c2d3e4f5\",\"fw\":\"espanel 0.2.0\","
+               "\"caps\":{\"speaker\":false,\"screen\":true},\"mic\":{\"channels\":1},\"capture\":7}");
     encoded_is(zl_encode_wake(17, "Захар"), "{\"type\":\"wake\",\"session\":17,\"word\":\"Захар\"}");
     encoded_is(zl_encode_wake(4294967295u, "x"), "{\"type\":\"wake\",\"session\":4294967295,\"word\":\"x\"}");
     encoded_is(zl_encode_played(9, false), "{\"type\":\"played\",\"id\":9}");
     encoded_is(zl_encode_played(9, true), "{\"type\":\"played\",\"id\":9,\"dropped\":true}");
     encoded_is(zl_encode_volume(60), "{\"type\":\"volume\",\"value\":60}");
     encoded_is(zl_encode_wake_peak(42), "{\"type\":\"wake_peak\",\"value\":42}");
-    encoded_is(zl_encode_audio_end("busy"), "{\"type\":\"audio_end\",\"reason\":\"busy\"}");
+    encoded_is(zl_encode_audio_end("busy", 7), "{\"type\":\"audio_end\",\"reason\":\"busy\",\"id\":7}");
+    encoded_is(zl_encode_audio_end("capture", 4294967295u),
+               "{\"type\":\"audio_end\",\"reason\":\"capture\",\"id\":4294967295}");
     encoded_is(zl_encode_model_loaded(ZL_MODEL_WAKE, "zakhar.tflite", true),
                "{\"type\":\"model_loaded\",\"kind\":\"wake\",\"name\":\"zakhar.tflite\",\"ok\":true}");
     encoded_is(zl_encode_model_loaded(ZL_MODEL_VAD, "vad.tflite", false),
@@ -127,6 +141,13 @@ static void test_numbers(void)
     assert(zl_silent(29998, UINT32_MAX - 1, 30000));  // across the tick counter wrap
     assert(!zl_capture_done(48999, 1000, 48000) && zl_capture_done(49000, 1000, 48000));
     assert(!zl_capture_done(47997, UINT32_MAX - 1, 48000) && zl_capture_done(47998, UINT32_MAX - 1, 48000));
+    // A capture that cannot be sent is dropped 2 s after its last frame, across the wrap too.
+    assert(!zl_capture_expired(49000, 1000, 48000) && !zl_capture_expired(80999, 1000, 48000));
+    assert(zl_capture_expired(81000, 1000, 48000));
+    assert(!zl_capture_expired(79997, UINT32_MAX - 1, 48000) && zl_capture_expired(79998, UINT32_MAX - 1, 48000));
+    uint8_t le[4];
+    zl_put_u32le(le, 0x12345678u);
+    assert(le[0] == 0x78 && le[1] == 0x56 && le[2] == 0x34 && le[3] == 0x12);
     printf("ok: numbers\n");
 }
 
@@ -160,12 +181,14 @@ static void test_session(void)
     assert(zl_sess_capture(&s) && s.capture);
     assert(zl_sess_wake_check(&s) == ZL_WAKE_CAPTURE);
     assert(zl_sess_wake(&s) == ZL_WAKE_CAPTURE && s.session == 2);  // wake words ignored during a capture
-    bool open, capture;
-    zl_sess_lost(&s, &open, &capture);
-    assert(!open && capture && !s.capture);
+    bool open;
+    zl_sess_lost(&s, &open);
+    assert(!open && s.capture);  // a lost link keeps the capture
+    assert(zl_sess_wake(&s) == ZL_WAKE_CAPTURE);
+    s.capture = false;  // the capture ended
     assert(zl_sess_wake(&s) == ZL_WAKE_START);
-    zl_sess_lost(&s, &open, &capture);
-    assert(open && !capture && !s.open && !s.mic);
+    zl_sess_lost(&s, &open);
+    assert(open && !s.open && !s.mic);
 
     // Detection off: wake words are refused and say why, a capture still starts; a lost
     // connection turns detection on again.
@@ -174,7 +197,9 @@ static void test_session(void)
     assert(zl_sess_wake_check(&s) == ZL_WAKE_DETECT_OFF);
     assert(zl_sess_wake(&s) == ZL_WAKE_DETECT_OFF && s.session == before && !s.open && !s.mic);
     assert(zl_sess_capture(&s) && s.capture);
-    zl_sess_lost(&s, &open, &capture);
+    zl_sess_lost(&s, &open);
+    assert(zl_sess_wake_check(&s) == ZL_WAKE_CAPTURE);  // detection is on again, the capture still runs
+    s.capture = false;
     assert(zl_sess_wake(&s) == ZL_WAKE_START && s.session == before + 1);
     zl_sess_detect(&s, false);
     zl_sess_detect(&s, true);

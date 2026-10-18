@@ -48,6 +48,13 @@ The owner's words:
 - «поставь транслятор» (instead of the container on the host network) — the server stays in the
   Docker bridge network `docker_main_net`, the mDNS repeater on its host relays that network to
   the LAN, and the address it advertises is set in `core.audio.advertise_host`.
+- «несколько раз были проблемы с записью захаров … предложи как поменять протокол/сервер чтобы
+  такого не было», then «го первые 4 и 5» — a capture is written to the server's disk as its
+  audio arrives and stays there until deleted through the panel API; a lost link does not end it;
+  a dataset take the link broke is recorded again; a capture on an offline device fails at once
+  and is "recording" only from its first audio; a capture has an id and its audio carries the
+  offset, the device keeps it across a lost link and the server tells it where to go on. The
+  proposed `capture_stop` (end a capture early) was not taken.
 
 ## Transport
 
@@ -67,9 +74,10 @@ The owner's words:
 - Text frames carry one JSON object each, with a `type` field. Unknown types and unknown fields
   are ignored by both sides.
 - Binary frames carry audio and models. The first byte is the kind, the rest is the payload:
-  - `0x01` — microphone audio, device → server;
+  - `0x01` — microphone audio of a voice session, device → server;
   - `0x02` — playback audio, server → device;
-  - `0x03` — model bytes, server → device (see [Models](#models)).
+  - `0x03` — model bytes, server → device (see [Models](#models));
+  - `0x04` — microphone audio of a capture, device → server (see [Capture](#capture)).
 - All audio is signed 16-bit little-endian PCM. No codec on either side. The microphone runs at
   16 kHz.
 - Liveness: the server sends a WebSocket ping every 10 s and drops the connection when the pong
@@ -92,6 +100,8 @@ The owner's words:
      `core.devices[].label` instead when one is set. An unknown `id` is added to the config as
      an enabled device.
    - `play` and `volume` are present only when `caps.speaker` is true.
+   - `capture` (the running capture's `id`) is present only while the device holds a capture,
+     see [Capture](#capture).
 2. The server closes the connection with code 4000 when the device is disabled in the config, and
    closes an older connection of the same `id` with code 4001 when a new one says `hello`.
 3. Server → `config`, right after `hello` and again whenever the values change:
@@ -195,9 +205,40 @@ device                                   server
 | `wake_peak_stream {on}` | server → device | start or stop the wake probability stream |
 | `wake_peak {value}` | device → server | once a second while the stream is on: the highest wake-word probability of that second, percent |
 | `detect {on}` | server → device | wake-word detection on or off; off: the models keep running (`wake_peak` too) but a detection starts no session. Every new connection starts with detection on |
-| `capture {seconds}` | server → device | record a sample, see below |
-| `audio_end {reason}` | device → server | the device stopped a stream on its own: `capture` (the sample is complete) or `busy` (refused, a session is running) |
+| `capture {id, seconds}` | server → device | record a sample, see [Capture](#capture) |
+| `capture_resume {id, from}` | server → device | go on with a capture the device kept across a lost link |
+| `audio_end {reason, id}` | device → server | a capture ended on the device: `capture` (all its audio is out) or `busy` (refused, a session is running) |
 
-`capture`: the device pauses wake-word detection, streams the microphone for `seconds` from the
-moment of the command (no pre-roll) as `0x01` frames, then sends `audio_end {reason: "capture"}`
-and detection returns to what `detect` set. It shows its own recording indication meanwhile.
+## Capture
+
+A capture records a sample of the microphone for the server (a dataset take, a manual recording),
+outside any voice session.
+
+1. Server → `capture {id, seconds}`. `id` (> 0) is the server's number for this capture, opaque to
+   the device. The device pauses wake-word detection and records `seconds` of the microphone from
+   the moment of the command, no pre-roll. A new `capture` replaces a running one. While a session
+   is open the device refuses with `audio_end {reason: "busy", id}`.
+2. Device → `0x04` frames: the kind byte, the offset of the frame's first sample as a u32
+   little-endian count of frames (one sample per channel) from the capture's first frame, then
+   32 ms of samples interleaved as in `0x01`. Offsets grow; a jump between two frames is audio
+   that is lost.
+3. Device → `audio_end {reason: "capture", id}` once its last frame is out. Detection returns to
+   what `detect` set. The device shows its own recording indication from the command until then.
+
+A lost link does not end a capture:
+
+- The device keeps the capture and its audio in the microphone tap (about 3 s on the Voice PE and
+  the panel) and sends nothing; its next `hello` carries `"capture": <id>`.
+- The server that knows the capture answers `capture_resume {id, from}`, `from` being the offset of
+  the first frame it lacks. The device goes on sending from there, or from its oldest frame still
+  in the tap when that one is overwritten already. A `capture_resume` for any other capture is
+  ignored.
+- A server that does not know the capture does not answer. A capture the device cannot send
+  ends 2 s after its last frame was recorded, without `audio_end`: past that its audio leaves the
+  tap.
+- When the device comes back without the capture (it restarted), the server sends a new `capture`
+  for the time that is left and puts its audio after the hole.
+
+The server writes a capture's audio to its disk as the frames arrive, so neither a lost link
+nor a restart of the server loses what already came, and a restarted server resumes a capture it
+finds there by the `id` in `hello`.

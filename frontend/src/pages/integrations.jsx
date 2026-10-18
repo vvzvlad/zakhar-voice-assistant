@@ -649,7 +649,7 @@ function CaptureControl({ device, online }) {
     await startCapture(device, seconds);
     for (;;) {
       const s = await getCaptureStatus(device);
-      if (s.state === "recording" || s.state === "cancelled") {
+      if (s.state === "starting" || s.state === "recording") {
         setPhase(`Recording ${idx}/${total}… ${s.remaining > 0 ? s.remaining + "s left" : "processing"}`);
         await sleep(1000);
         continue;

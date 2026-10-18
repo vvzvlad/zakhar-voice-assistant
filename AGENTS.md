@@ -33,7 +33,7 @@ configured under `core.mcp_servers` in `data/config.json`.
   device side of the protocol and is vendored into the espanel repo (esp-svgpanel); this copy
   is the source of truth.
 - `microWakeWord/` — wake-word model training research and the deployed models.
-- `data/` — runtime state: `config.json`, per-device context files, `prompts.db` (SQLite store of named system-prompt profiles) (gitignored, docker volume)
+- `data/` — runtime state: `config.json`, per-device context files, `prompts.db` (SQLite store of named system-prompt profiles), `captures/` and `datasets/` (device recordings, `src/captures.py`) (gitignored, docker volume)
 - `templates/` — committed reference assets seeded into `data/` on first boot (`default_prompt.md`, `default_config.json`)
 - `main.py` — thin entry point over `src/`
 

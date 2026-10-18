@@ -14,9 +14,11 @@ import numpy as np
 import pytest
 import soxr
 
-from src import device_server
+from src import captures, device_server
 from src.config_service import ConfigService
-from src.device_server import MIC, MODEL, PLAY, CaptureBusyError, CaptureEmptyError, DeviceManager
+from src.device_server import (
+    CAPTURE_AUDIO, MIC, MODEL, PLAY, CaptureBusyError, DeviceManager, DeviceOfflineError,
+)
 from src.plugins.base import Deps
 from src.plugins.vad.webrtc import WebRtcVadBackend
 from src.prompt_store import PromptStore
@@ -115,6 +117,9 @@ class FakeDevice:
     async def mic(self, payload: bytes):
         await self.ws.send_bytes(bytes([MIC]) + payload)
 
+    async def capture_audio(self, offset: int, payload: bytes):
+        await self.ws.send_bytes(bytes([CAPTURE_AUDIO]) + offset.to_bytes(4, "little") + payload)
+
     async def phrase(self, ch0=1000, ch1=-1000):
         """Speak a phrase the fake VAD end-points: three 60 ms mic frames."""
         for _ in range(3):
@@ -176,12 +181,15 @@ class Server:
         self.manager = self.rt.manager = DeviceManager(self.rt)
         self.http = aiohttp.ClientSession()
 
-    async def connect(self, id="kitchen", *, speaker=True, rate=16000, buffer_ms=4000) -> FakeDevice:
+    async def connect(self, id="kitchen", *, speaker=True, rate=16000, buffer_ms=4000,
+                      capture=None) -> FakeDevice:
         ws = await self.http.ws_connect(f"http://127.0.0.1:{self.manager.port}/device")
         hello = {"type": "hello", "id": id, "fw": "voicepe 0.1.0 (a1b2c3d)",
                  "caps": {"speaker": speaker, "screen": False}, "mic": {"channels": 2}}
         if speaker:
             hello.update(play={"rate": rate, "buffer_ms": buffer_ms}, volume=60)
+        if capture is not None:
+            hello["capture"] = capture
         await ws.send_str(json.dumps(hello))
         return FakeDevice(ws)
 
@@ -505,41 +513,174 @@ async def test_pcm_split_mid_sample_resamples_like_one_shot(srv):
     assert np.abs(out - ref).max() <= 4
 
 
-async def test_capture_returns_the_selected_channel_as_wav(srv):
-    dev = await srv.connect()
-    await dev.recv()  # config
-    for mic_channel, expected in ((0, 700), (1, -700)):
-        srv.svc.apply({"core": {"vad": {"mic_channel": mic_channel}}})
-        job = asyncio.create_task(srv.manager.capture("kitchen", 2))
-        assert await dev.recv() == {"type": "capture", "seconds": 2}
-        await dev.mic(stereo(700, -700, 100))
-        await dev.send(type="audio_end", reason="capture")
-        with wave.open(io.BytesIO(await asyncio.wait_for(job, 2))) as w:
-            assert (w.getnchannels(), w.getframerate()) == (1, 16000)
-            assert samples(w.readframes(w.getnframes())) == {expected}
+def capture_status(srv):
+    return srv.manager.capture_status("kitchen")
 
 
-async def test_capture_busy_empty_and_concurrent(srv):
+def capture_samples(name) -> np.ndarray:
+    """The samples of kitchen's capture `name` as its file holds them."""
+    return np.frombuffer(captures.wav_bytes(captures.find("kitchen", name))[44:], dtype="<i2")
+
+
+async def lose_link(srv, dev):
+    await dev.ws.close()
+    await until(lambda: not srv.device().online)
+
+
+async def test_capture_is_written_as_its_audio_arrives(srv):
+    srv.svc.apply({"core": {"vad": {"mic_channel": 1}}})
     dev = await srv.connect()
     await dev.recv()  # config
-    # During a session the device refuses with `busy`; its mic frames stay with the session.
-    await dev.wake(1)
-    job = asyncio.create_task(srv.manager.capture("kitchen", 2))
-    assert await dev.recv() == {"type": "capture", "seconds": 2}
+    name = srv.manager.capture_start("kitchen", 1)["name"]
+    msg = await dev.recv()
+    assert msg == {"type": "capture", "id": srv.device().capture.id, "seconds": 1}
+    # "recording" only from the first frame on.
+    assert capture_status(srv)["state"] == "starting"
+    # The channel the pipeline uses is on disk before the capture ends.
+    await dev.capture_audio(0, stereo(700, -700, 500))
+    await until(lambda: capture_status(srv)["duration"] == 0.5)
+    assert capture_status(srv)["state"] == "recording"
+    assert set(capture_samples(name)) == {-700}
+    await dev.capture_audio(8000, stereo(700, -700, 500))
+    await dev.send(type="audio_end", reason="capture", id=msg["id"])
+    await until(lambda: capture_status(srv)["state"] == "done")
+    assert capture_status(srv) == {"state": "done", "device": "kitchen", "name": name, "seconds": 1,
+                                   "remaining": 0, "duration": 1.0, "gaps": [], "error": None}
+    with wave.open(captures.find("kitchen", name).wav) as w:
+        assert (w.getnchannels(), w.getframerate(), w.getnframes()) == (1, 16000, 16000)
+
+
+async def test_capture_refusals(srv):
+    with pytest.raises(LookupError):
+        srv.manager.capture_start("nope", 1)
+    with pytest.raises(DeviceOfflineError):
+        srv.manager.capture_start("kitchen", 1)
+    assert capture_status(srv)["state"] == "idle"
+    dev = await srv.connect()
+    await dev.recv()  # config
+    name = srv.manager.capture_start("kitchen", 1)["name"]
+    cid = (await dev.recv())["id"]
     with pytest.raises(CaptureBusyError):
-        await srv.manager.capture("kitchen", 2)
-    await dev.phrase(ch0=1000)
-    await dev.send(type="audio_end", reason="busy")
-    with pytest.raises(RuntimeError, match="busy"):
-        await asyncio.wait_for(job, 2)
-    await dev.finish()
-    assert samples(srv.stt.pcm[0]) == {1000}
+        srv.manager.capture_start("kitchen", 1)
+    with pytest.raises(CaptureBusyError):
+        srv.manager.capture_delete("kitchen", name)
+    # A device in a voice session refuses with `busy`.
+    await dev.send(type="audio_end", reason="busy", id=cid)
+    await until(lambda: capture_status(srv)["state"] == "error")
+    assert "busy" in capture_status(srv)["error"]
+    assert srv.manager.capture_delete("kitchen", name) is True
+    assert capture_status(srv)["state"] == "idle"
 
-    job = asyncio.create_task(srv.manager.capture("kitchen", 2))
+
+async def test_capture_goes_on_after_a_lost_link(srv):
+    dev = await srv.connect()
+    await dev.recv()  # config
+    name = srv.manager.capture_start("kitchen", 1)["name"]
+    cid = (await dev.recv())["id"]
+    await dev.capture_audio(0, stereo(100, 0, 300))
+    await until(lambda: capture_status(srv)["duration"] == 0.3)
+    await lose_link(srv, dev)
+    assert capture_status(srv)["state"] == "recording"
+    # The device comes back holding the capture: it goes on from the first frame missing.
+    dev = await srv.connect(capture=cid)
+    await dev.recv()  # config
+    assert await dev.recv() == {"type": "capture_resume", "id": cid, "from": 4800}
+    await dev.capture_audio(4800, stereo(200, 0, 700))
+    await dev.send(type="audio_end", reason="capture", id=cid)
+    await until(lambda: capture_status(srv)["state"] == "done")
+    assert (capture_status(srv)["duration"], capture_status(srv)["gaps"]) == (1.0, [])
+    pcm = capture_samples(name)
+    assert set(pcm[:4800]) == {100} and set(pcm[4800:]) == {200}
+
+
+async def test_a_device_restarted_mid_capture_records_the_time_left(srv):
+    dev = await srv.connect()
+    await dev.recv()  # config
+    name = srv.manager.capture_start("kitchen", 3)["name"]
+    first = (await dev.recv())["id"]
+    await dev.capture_audio(0, stereo(100, 0, 200))
+    await until(lambda: capture_status(srv)["duration"] == 0.2)
+    await lose_link(srv, dev)
+    srv.device().capture.started -= 1.5  # the restart took 1.5 s
+    dev = await srv.connect()  # no capture in hello
+    await dev.recv()  # config
+    msg = await dev.recv()
+    assert msg["type"] == "capture" and msg["id"] != first and 1 < msg["seconds"] <= 1.5
+    await dev.capture_audio(0, stereo(200, 0, 1000))
+    await dev.send(type="audio_end", reason="capture", id=msg["id"])
+    await until(lambda: capture_status(srv)["state"] == "done")
+    # The new segment sits where the wall clock puts it, after a gap; the rest is a tail gap.
+    (at, hole), tail = captures.find("kitchen", name).gaps
+    base = at + hole
+    assert at == 3200 and 24000 <= base < 32000
+    assert tail == [base + 16000, 48000 - base - 16000]
+    pcm = capture_samples(name)
+    assert set(pcm[:at]) == {100} and set(pcm[at:base]) == {0} and set(pcm[base:]) == {200}
+
+
+async def test_a_capture_the_device_never_finishes_keeps_what_came(srv, monkeypatch):
+    monkeypatch.setattr(device_server, "CAPTURE_WAIT_MARGIN", 0.2)
+    dev = await srv.connect()
+    await dev.recv()  # config
+    srv.manager.capture_start("kitchen", 1)
     await dev.recv()  # capture
-    await dev.send(type="audio_end", reason="capture")
-    with pytest.raises(CaptureEmptyError):
-        await asyncio.wait_for(job, 2)
+    await dev.capture_audio(0, stereo(100, 0, 400))
+    await until(lambda: capture_status(srv)["duration"] == 0.4)
+    await lose_link(srv, dev)
+    # The device never comes back: the audio that came stays, the rest is a tail gap.
+    await until(lambda: capture_status(srv)["state"] == "done", timeout=3.0)
+    assert capture_status(srv)["gaps"] == [{"at": 0.4, "seconds": 0.6}]
+    # No audio at all ends as an error.
+    dev = await srv.connect()
+    await dev.recv()  # config
+    srv.manager.capture_start("kitchen", 1)
+    await dev.recv()  # capture
+    await until(lambda: capture_status(srv)["state"] == "error", timeout=3.0)
+    assert capture_status(srv)["error"] == "no audio"
+
+
+async def test_a_device_back_without_the_capture_after_its_end_gets_no_new_one(srv):
+    dev = await srv.connect()
+    await dev.recv()  # config
+    srv.manager.capture_start("kitchen", 1)
+    await dev.recv()  # capture
+    await dev.capture_audio(0, stereo(100, 0, 1000))
+    await lose_link(srv, dev)  # its audio_end went down with the link
+    srv.device().capture.started -= 1  # and its time is over
+    dev = await srv.connect()  # no capture in hello
+    await dev.recv()  # config
+    await until(lambda: capture_status(srv)["state"] == "done")
+    assert (capture_status(srv)["duration"], capture_status(srv)["gaps"]) == (1.0, [])
+    with pytest.raises(asyncio.TimeoutError):
+        await dev.recv(timeout=0.3)  # no new `capture`
+
+
+async def test_a_restarted_server_resumes_the_capture_from_disk(srv, tmp_path):
+    dev = await srv.connect()
+    await dev.recv()  # config
+    name = srv.manager.capture_start("kitchen", 1)["name"]
+    cid = (await dev.recv())["id"]
+    await dev.capture_audio(0, stereo(100, 0, 400))
+    await until(lambda: capture_status(srv)["duration"] == 0.4)
+    orphan = captures.Capture.create("kitchen", 5)  # an unfinished capture the device does not hold
+    # Another server process on the same data directory; the device reconnects to it.
+    other = Server(tmp_path)
+    await other.manager.start()
+    try:
+        dev = await other.connect(capture=cid)
+        await dev.recv()  # config
+        assert await dev.recv() == {"type": "capture_resume", "id": cid, "from": 6400}
+        assert captures.find("kitchen", orphan.name).state == "error"  # finished as is: no audio
+        await dev.capture_audio(6400, stereo(200, 0, 600))
+        await dev.send(type="audio_end", reason="capture", id=cid)
+        await until(lambda: other.device().capture is None)
+        cap = captures.find("kitchen", name)
+        assert (cap.state, cap.end, cap.gaps) == ("done", 16000, [])
+        pcm = capture_samples(name)
+        assert set(pcm[:6400]) == {100} and set(pcm[6400:]) == {200}
+    finally:
+        await other.http.close()
+        await other.manager.stop()
 
 
 async def test_controls(srv):

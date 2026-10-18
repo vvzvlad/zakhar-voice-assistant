@@ -33,12 +33,11 @@ from loguru import logger
 from multidict import CIMultiDict
 from pydantic import ValidationError
 
-from src import config_store, dataset_jobs
+from src import captures, config_store, dataset_jobs
 from src.audio_prep import pcm_to_wav_bytes
-from src.capture_jobs import CaptureJobManager
 from src.device_server import (
-    CAPTURE_MAX_SECONDS, RELEASE_WAKE_MODEL, UPLOADED_WAKE_PREFIX, CaptureBusyError, list_wake_models,
-    uploaded_wake_models_dir,
+    CAPTURE_MAX_SECONDS, RELEASE_WAKE_MODEL, UPLOADED_WAKE_PREFIX, CaptureBusyError, DeviceOfflineError,
+    list_wake_models, uploaded_wake_models_dir,
 )
 from src.plugins.base import get_provider
 from src.runs_store import db_file_size
@@ -191,7 +190,8 @@ async def _aclose_quietly(aiter) -> None:
 
 class PanelServer:
     def __init__(self, svc, host, port, *, version, started_at,
-                 device_status=None, device_capture=None, device_play=None,
+                 device_status=None, device_capture=None, device_capture_start=None,
+                 device_capture_status=None, device_capture_delete=None, device_play=None,
                  device_controls_get=None, device_controls_set=None,
                  device_wake_prob_get=None, device_wake_prob_set=None,
                  device_detect_set=None, device_model_reload=None,
@@ -200,11 +200,16 @@ class PanelServer:
                  heartbeat_interval: float = 1.0, reload_status=None):
         # svc: ConfigService; started_at: float (time.time())
         # device_status: optional callable -> list[dict]; static_dir: optional path to built frontend
-        # device_capture: optional async callable (device_name, seconds) -> bytes that records a
-        #   manual sample and returns it as WAV bytes (DeviceManager.capture). It is run by a
-        #   CaptureJobManager as a background task (so a browser disconnect can't cancel it);
-        #   the capture endpoints poll/download that job. None -> the
-        #   manager is not built and every /api/capture* endpoint returns 503.
+        # device_capture: optional async callable (device_name, seconds) -> Capture that records
+        #   a capture and returns it finished (DeviceManager.capture); dataset takes use it.
+        # device_capture_start: optional SYNC callable (device_name, seconds) -> snapshot that
+        #   starts a capture the device records on its own (DeviceManager.capture_start).
+        # device_capture_status: optional SYNC callable (device_name) -> snapshot of the
+        #   device's running or newest capture (DeviceManager.capture_status).
+        # device_capture_delete: optional SYNC callable (device_name, name) -> bool that deletes
+        #   a capture that is not running (DeviceManager.capture_delete).
+        #   None -> the endpoint that needs it returns 503. The captures on disk are listed and
+        #   downloaded without any of them.
         # runs_store: optional RunsStore for the observability endpoints (None -> empty/zeros)
         # tool_sources: optional zero-arg callable -> list[dict] (ToolHub.describe()), None -> []
         # run_events: optional RunEventsHub for the live WS run stream (None -> WS closes)
@@ -221,6 +226,9 @@ class PanelServer:
         self.started_at = started_at
         self.device_status = device_status
         self.device_capture = device_capture
+        self.device_capture_start = device_capture_start
+        self.device_capture_status = device_capture_status
+        self.device_capture_delete = device_capture_delete
         # device_play: optional async callable (sound_path, device_name=None) -> dict that
         #   plays the preview chime on the speaker(s) (DeviceManager.play_chime). None ->
         #   the /api/chimes/play endpoint returns 503.
@@ -251,9 +259,6 @@ class PanelServer:
         #   device its wake-word and VAD models again and returns {device, models}
         #   (DeviceManager.reload_model). None -> POST /api/device/model returns 503.
         self.device_model_reload = device_model_reload
-        # Background capture jobs: the recording runs as a server-side task so a
-        # browser disconnect cannot cancel it.
-        self._capture_jobs = CaptureJobManager(device_capture) if device_capture is not None else None
         # Wake-word dataset sessions (a beep, then a capture, per take) run server-side too;
         # they need both device callables, else every /api/datasets* endpoint returns 503.
         self._dataset_jobs = (
@@ -865,25 +870,26 @@ class PanelServer:
             return web.json_response({"error": str(e)}, status=409)
 
     async def _post_capture(self, request: web.Request) -> web.Response:
-        """Start a background capture of a manual sample on a speaker (non-blocking).
+        """Start a capture of a manual sample on a device (non-blocking).
 
-        Body: {"device": "<name>", "seconds": <int 1..300>}. The device records that
-        many seconds of mic audio (no STT/LLM/TTS). The recording runs as a
-        SERVER-SIDE background task and is NOT tied to this HTTP request, so closing
-        the browser does not cancel it. The browser
-        then polls GET /api/capture for the live countdown and downloads the result
-        via GET /api/capture/result.
+        Body: {"device": "<name>", "seconds": <int 1..300>}. The device records that many
+        seconds of mic audio (no STT/LLM/TTS) on its own, and the server writes it to
+        <DATA_DIR>/captures/<device>/<YYYYmmdd-HHMMSS>-<id>.wav as it arrives, so closing the
+        browser, a lost link or a server restart does not lose it (docs/device-protocol.md,
+        "Capture"). The browser polls GET /api/capture for the countdown and downloads the
+        result from GET /api/capture/result; GET /api/captures lists every capture kept.
 
         Status codes:
-          - 202 started (returns the initial status snapshot, state "recording")
+          - 202 started (returns the status snapshot, state "starting"; "recording" comes
+            with the first audio)
           - 400 bad input
-          - 409 a capture is already in progress on that device (CaptureBusyError)
+          - 404 unknown device
+          - 409 the device is offline, or a capture is already running on it
           - 503 capture not wired (no DeviceManager)
-        Capture failures (offline device, unknown device, empty recording, timeout)
-        do not fail this request — they surface on the status endpoint as state
-        "error" with the message.
+        A capture that fails later (the device is busy with a voice session, no audio came)
+        surfaces on the status endpoint as state "error" with the message.
         """
-        if self._capture_jobs is None:
+        if self.device_capture_start is None:
             return web.json_response({"error": "capture not available"}, status=503)
         body = await _read_json(request)
         if not isinstance(body, dict):
@@ -906,49 +912,88 @@ class PanelServer:
                 status=400,
             )
         try:
-            snap = self._capture_jobs.start(device, seconds)
-        except CaptureBusyError as e:
-            # A capture is already in-flight on this device -> conflict.
+            snap = self.device_capture_start(device, seconds)
+        except LookupError as e:
+            return web.json_response({"error": str(e)}, status=404)
+        except (DeviceOfflineError, CaptureBusyError) as e:
             return web.json_response({"error": str(e)}, status=409)
         return web.json_response(snap, status=202)
 
     async def _get_capture_status(self, request: web.Request) -> web.Response:
-        """Poll a device's background capture status (drives the live countdown)."""
-        if self._capture_jobs is None:
+        """A device's capture status (drives the live countdown): its running capture, else
+        its newest one on disk, else state "idle". The snapshot: {state (starting | recording
+        | done | error | idle), device, name, seconds, remaining, duration (seconds of audio
+        written), gaps ([{at, seconds}]: audio lost to a dropped link or a device restart,
+        zeros in the file), error}."""
+        if self.device_capture_status is None:
             return web.json_response({"error": "capture not available"}, status=503)
         device = request.query.get("device")
         if not device:
             return web.json_response(
                 {"error": 'query param "device" is required'}, status=400
             )
-        return web.json_response(self._capture_jobs.status(device))
+        return web.json_response(self.device_capture_status(device))
 
-    async def _get_capture_result(self, request: web.Request) -> web.Response:
-        """Download a completed capture's WAV (one-shot; consumed server-side)."""
-        if self._capture_jobs is None:
-            return web.json_response({"error": "capture not available"}, status=503)
-        device = request.query.get("device")
-        if not device:
-            return web.json_response(
-                {"error": 'query param "device" is required'}, status=400
-            )
-        res = self._capture_jobs.take_result(device)
-        if res is None:
-            return web.json_response({"error": "no capture result"}, status=404)
-        wav, seconds = res
+    @staticmethod
+    async def _capture_download(cap: captures.Capture) -> web.Response:
+        """The capture's WAV as an attachment named after its device, length and name."""
+        body = await asyncio.to_thread(captures.wav_bytes, cap)
         # Sanitize the device name for the download filename (ascii alnum/._- only).
         safe_device = "".join(
-            c if c.isascii() and (c.isalnum() or c in "._-") else "_" for c in device
+            c if c.isascii() and (c.isalnum() or c in "._-") else "_" for c in cap.device
         ) or "device"
-        # Timestamp the download (UTC) so successive captures of the same device
-        # don't collide on the filename and the moment of recording is visible.
-        stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-        filename = f"zakhar_{safe_device}_{seconds}s_{stamp}.wav"
+        filename = f"zakhar_{safe_device}_{cap.seconds}s_{cap.name}.wav"
         return web.Response(
-            body=wav,
+            body=body,
             content_type="audio/wav",
             headers={"Content-Disposition": f'attachment; filename="{filename}"'},
         )
+
+    async def _get_capture_result(self, request: web.Request) -> web.Response:
+        """Download the device's newest finished ("done") capture; 404 when it has none.
+        Nothing is consumed: the capture stays until DELETE /api/captures/{device}/{name}."""
+        device = request.query.get("device")
+        if not device:
+            return web.json_response(
+                {"error": 'query param "device" is required'}, status=400
+            )
+        cap = await asyncio.to_thread(captures.newest, device, "done")
+        if cap is None:
+            return web.json_response({"error": "no capture result"}, status=404)
+        return await self._capture_download(cap)
+
+    async def _get_captures(self, request: web.Request) -> web.Response:
+        """Every capture on disk, newest first: {"captures": [snapshot]} (the snapshot of
+        GET /api/capture)."""
+        caps = await asyncio.to_thread(captures.everything)
+        return web.json_response({"captures": [c.snapshot() for c in caps]})
+
+    async def _get_capture_wav(self, request: web.Request) -> web.Response:
+        """Download one capture by its device and name; a running one downloads as far as it
+        got. 400 for an invalid device or name, 404 when there is no such capture."""
+        device, name = request.match_info["device"], request.match_info["name"]
+        if not captures.valid(device, name):
+            return web.json_response({"error": "invalid device or capture name"}, status=400)
+        cap = await asyncio.to_thread(captures.find, device, name)
+        if cap is None:
+            return web.json_response({"error": "not found"}, status=404)
+        return await self._capture_download(cap)
+
+    async def _delete_capture(self, request: web.Request) -> web.Response:
+        """Delete one capture (its WAV and sidecar). 400 for an invalid device or name, 404
+        when there is no such capture, 409 while it runs, 503 not wired."""
+        if self.device_capture_delete is None:
+            return web.json_response({"error": "capture not available"}, status=503)
+        device, name = request.match_info["device"], request.match_info["name"]
+        if not captures.valid(device, name):
+            return web.json_response({"error": "invalid device or capture name"}, status=400)
+        try:
+            deleted = self.device_capture_delete(device, name)
+        except CaptureBusyError as e:
+            return web.json_response({"error": str(e)}, status=409)
+        if not deleted:
+            return web.json_response({"error": "not found"}, status=404)
+        return web.json_response({"ok": True})
 
     # --- wake-word dataset recording -------------------------------------------
     def _dataset_refusal(self, name: str) -> web.Response | None:
@@ -967,23 +1012,27 @@ class PanelServer:
         Path: the set name (1..64 letters, digits, "_" or "-"; Cyrillic is fine). Body:
         {"device": "<name>", "takes": <int 1..1000>, "seconds": <int 1..10, default 3>}.
         Each take: the device beeps (the synthesized chime; a device without a speaker
-        records without it), then records `seconds` of mic audio, saved as the set's next
-        <DATA_DIR>/datasets/<name>/<NNNN>.wav — numbering continues after the highest
-        existing clip, so a later session extends the set. Takes run back to back as a
-        SERVER-SIDE background task (a 200-take session runs ~15 minutes), so the request
-        returns at once; progress shows in GET /api/datasets.
+        records without it), then records a capture of `seconds` (see POST /api/capture),
+        which is moved into the set as its next <DATA_DIR>/datasets/<name>/<NNNN>.wav —
+        numbering continues after the highest existing clip, so a later session extends the
+        set. Takes run back to back as a SERVER-SIDE background task (a 200-take session
+        runs ~15 minutes), so the request returns at once; progress shows in
+        GET /api/datasets.
 
         Status codes:
           - 202 started (returns the job snapshot, state "recording")
           - 400 bad input or set name
           - 409 a dataset session is already running on that device
           - 503 dataset recording not wired (no DeviceManager)
-        A failing take (offline or unknown device, empty recording, timeout) does not fail
-        this request: it ends the session as state "error" with the message, and the clips
-        already written stay. There are no retries. Wake-word detection stays on between
-        takes, so a word said after the take's window can start a voice session and the
-        next take then fails as busy; POST /api/device/detect {"enabled": false} before the
-        session (and true after) keeps that from happening.
+        A take whose capture failed or has a gap (a lost link) is deleted and recorded
+        again; it never fails this request. A gap does not count, and while the device is
+        offline the session is in state "waiting" and tries again every second. Any other
+        failure (unknown device, busy with a voice session, no audio) counts and pauses the
+        session for 5 s, and the third failure in a row of one take ends the session as
+        state "error" with the message; the clips already written stay. Wake-word detection
+        stays on between takes, so a word said after the take's window can start a voice
+        session and the next take then fails as busy; POST /api/device/detect
+        {"enabled": false} before the session (and true after) keeps that from happening.
         """
         name = request.match_info["name"]
         refusal = self._dataset_refusal(name)
@@ -1335,6 +1384,9 @@ class PanelServer:
             web.post("/api/capture", self._post_capture),
             web.get("/api/capture", self._get_capture_status),
             web.get("/api/capture/result", self._get_capture_result),
+            web.get("/api/captures", self._get_captures),
+            web.get("/api/captures/{device}/{name}.wav", self._get_capture_wav),
+            web.delete("/api/captures/{device}/{name}", self._delete_capture),
             web.get("/api/datasets", self._get_datasets),
             web.post("/api/datasets/{name}", self._post_dataset),
             web.post("/api/datasets/{name}/stop", self._post_dataset_stop),
@@ -1387,14 +1439,12 @@ class PanelServer:
                 await self.run_events.close_all()
         app.on_shutdown.append(_close_ws_clients)
 
-        async def _close_capture_jobs(_app: web.Application) -> None:
-            # Cancel any in-flight background capture and dataset tasks on shutdown so cleanup()
-            # doesn't wait on them (and so they don't outlive the server).
-            if self._capture_jobs is not None:
-                await self._capture_jobs.close()
+        async def _close_dataset_jobs(_app: web.Application) -> None:
+            # Cancel any in-flight dataset tasks on shutdown so cleanup() doesn't wait on
+            # them (and so they don't outlive the server).
             if self._dataset_jobs is not None:
                 await self._dataset_jobs.close()
-        app.on_shutdown.append(_close_capture_jobs)
+        app.on_shutdown.append(_close_dataset_jobs)
         return app
 
     async def start(self) -> None:
