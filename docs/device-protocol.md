@@ -55,6 +55,10 @@ The owner's words:
   and is "recording" only from its first audio; a capture has an id and its audio carries the
   offset, the device keeps it across a lost link and the server tells it where to go on. The
   proposed `capture_stop` (end a capture early) was not taken.
+- On the loss that remains (a dropped link costs a capture 1–2 s: the speaker notices a dead
+  link after its 3 s send timeout, then waits the 1 s backoff and ~1 s to reconnect, against a
+  ~3 s tap), option chosen: «Оставить как есть» — no larger tap, no faster reconnect; the
+  hole shows in the capture's `gaps`.
 
 ## Transport
 
