@@ -1,12 +1,13 @@
 """Tests for the offline Simple NLU 'LLM' provider.
 
-The provider uses NO LLM and NO network. These tests exercise primarily the
-DETERMINISTIC path with an INJECTED identity lemmatizer (`lambda w: w.lower()`),
-so they do not depend on pymorphy3/sklearn being installed or on classifier
-quality. They cover registration, the pure helpers, the OpenAI-shaped envelope
-across both rounds, one end-to-end pass through the real LlmStage loop, and strict
-mode (a later chain exists). The production-catalog regression at the end runs
-with real pymorphy3 and is skipped without it.
+The provider uses NO LLM. These tests exercise primarily the DETERMINISTIC path
+with an INJECTED identity lemmatizer (`lambda w: w.lower()`), so they do not depend
+on pymorphy3/sklearn being installed or on classifier quality. They cover
+registration, the pure helpers, the OpenAI-shaped envelope across both rounds, one
+end-to-end pass through the real LlmStage loop, strict mode (a later chain exists),
+and the optional decision-model step against a fake Decisions endpoint. The
+production-catalog regression at the end runs with real pymorphy3 and is skipped
+without it.
 """
 
 import json
@@ -19,6 +20,7 @@ import src.plugins  # noqa: F401  triggers @register on all providers
 from src.llm import LlmRequest, LlmStage
 from src.plugins.base import Deps, get_provider
 from src.plugins.llm.simple_nlu import (
+    DECISIONS_API_URL,
     SimpleNluBackend,
     SimpleNluConfig,
     SimpleNluProvider,
@@ -113,9 +115,10 @@ _ALIASES = (
 )
 
 
-def _backend(*, lemmas=None, filler_text=None):
+def _backend(*, lemmas=None, filler_text=None, **decision):
     """Backend over FAKE_TOOLS. The lemmatizer is the identity, except for the words
-    `lemmas` maps (to stand in for pymorphy3 equating word forms)."""
+    `lemmas` maps (to stand in for pymorphy3 equating word forms). `decision` holds
+    the decision-model step's arguments (off without them)."""
     lemmas = lemmas or {}
     return SimpleNluBackend(
         aliases_text=_ALIASES,
@@ -129,6 +132,7 @@ def _backend(*, lemmas=None, filler_text=None):
         reply_done=SimpleNluConfig().reply_done,
         reply_error=SimpleNluConfig().reply_error,
         lemmatizer=lambda w: lemmas.get(w.lower(), w.lower()),
+        **decision,
     )
 
 
@@ -139,7 +143,7 @@ def test_provider_is_registered():
     assert prov.category == "llm"
     assert prov.id == "simple-nlu"
     assert prov.label == "Simple NLU (no LLM)"
-    assert prov.uses_http_cloud is False
+    assert prov.uses_http_cloud is True   # the decision-model step calls the cloud
 
 
 def test_describe():
@@ -342,9 +346,10 @@ async def test_training_is_cached(monkeypatch):
     monkeypatch.setattr(backend, "_train", counting_train)
 
     msgs = [{"role": "user", "content": "включи свет в зале"}]
+    await backend.warm_up(FAKE_TOOLS)
     await backend.complete(msgs, FAKE_TOOLS)
     await backend.complete(msgs, FAKE_TOOLS)
-    assert counter["n"] == 1  # same tools -> trained once
+    assert counter["n"] == 1  # same tools -> trained once, by the warm-up
     assert backend._fingerprint is not None
 
 
@@ -492,6 +497,144 @@ async def test_strict_round2_still_confirms():
     ]
     data = await _backend().complete(messages, FAKE_TOOLS, has_next=True)
     assert data["choices"][0]["message"]["content"] == SimpleNluConfig().reply_done
+
+
+# --- decision-model step (fake Decisions endpoint) --------------------------- #
+
+def _decision_backend(respond, **kw):
+    """(backend, requests): a backend with the decision step on whose calls go to
+    `respond(request) -> httpx.Response`; `requests` collects every call."""
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        return respond(request)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    return _backend(**{"decision_model": "typesafe/jev-1.14", "decision_api_key": "key",
+                       "client": client, **kw}), requests
+
+
+def _answers(kind="device_command", target="set_light.entity=bright_room_light", action="on",
+             compound=0.05, kind_conf=0.95, target_conf=0.9, action_conf=0.9, delayed=0.05):
+    """A Decisions response body answering the five questions."""
+    def reply(request):
+        return httpx.Response(200, json={"answers": {
+            "kind": {"type": "choice", "choice": kind, "confidence": kind_conf},
+            "target": {"type": "choice", "choice": target, "confidence": target_conf},
+            "action": {"type": "choice", "choice": action, "confidence": action_conf},
+            "compound": {"type": "noul", "noul": compound},
+            "delayed": {"type": "noul", "noul": delayed},
+        }})
+    return reply
+
+
+# «люстру», «ночничок»: word forms the identity lemmatizer does not match to an alias.
+@pytest.mark.parametrize("text, respond, name, args", [
+    ("Захар, зажги люстру", _answers(), "set_light",
+     {"entity": "bright_room_light", "state": "on"}),
+    ("ночничок погаси", _answers(target="set_dimmer.device_id=night_light", action="off"),
+     "set_dimmer", {"device_id": "night_light", "brightness": 0}),
+])
+async def test_decision_model_runs_a_confident_command(text, respond, name, args):
+    backend, _ = _decision_backend(respond)
+    data = await backend.complete([{"role": "user", "content": text}], FAKE_TOOLS, has_next=True)
+    msg = data["choices"][0]["message"]
+    assert msg["content"] == ""
+    assert msg["tool_calls"][0]["function"]["name"] == name
+    assert json.loads(msg["tool_calls"][0]["function"]["arguments"]) == args
+    assert data["model"] == f"simple-nlu/decision/{name}"
+
+
+async def test_decision_request_carries_the_alias_options():
+    backend, requests = _decision_backend(_answers())
+    await _strict(backend, "Захар, зажги люстру")
+    request = requests[0]
+    assert str(request.url) == DECISIONS_API_URL
+    assert request.headers["authorization"] == "Bearer key"
+    body = json.loads(request.content)
+    assert body["model"] == "typesafe/jev-1.14"
+    assert body["state"] == {"utterance": "Захар, зажги люстру"}
+    questions = body["questions"]
+    assert set(questions["kind"]["criteria"]) == {"device_command", "other", "noise"}
+    assert questions["target"]["criteria"] == {
+        "set_light.entity=bright_room_light": "свет в зале, люстра",
+        "set_scene.scene=night": "ночь, спать",
+        "set_dimmer.device_id=night_light": "ночник",
+        "set_climate.device_id=room_ac": "кондиционер",
+        "none": "No device or scene is named",
+    }
+    assert questions["action"]["criteria"] == {
+        "on": "включи, включай, зажги, зажги свет, вруби, врубай, запусти",
+        "off": "выключи, выключай, погаси, выруби, отключи, останови",
+        "none": "No action verb",
+    }
+    assert questions["compound"]["type"] == "noul"
+    assert questions["delayed"]["type"] == "noul"
+
+
+@pytest.mark.parametrize("respond, reason", [
+    (_answers(kind="other"), "decision model: kind other (0.95)"),
+    (_answers(kind_conf=0.6), "decision model: kind device_command (0.60)"),
+    (_answers(target="none"), "decision model: target none (0.90)"),
+    (_answers(target_conf=0.5),
+     "decision model: target set_light.entity=bright_room_light (0.50)"),
+    (_answers(compound=0.7), "decision model: compound (0.70)"),
+    (_answers(action="none"), "decision model: action none does not fit set_light"),
+    (_answers(action_conf=0.4), "decision model: action on (0.40)"),
+    (_answers(delayed=0.8), "decision model: delayed (0.80)"),
+])
+async def test_decision_model_declines_what_is_not_one_confident_command(respond, reason):
+    backend, _ = _decision_backend(respond)
+    with pytest.raises(Declined) as ei:
+        await _strict(backend, "Захар, зажги люстру")
+    assert ei.value.reason == reason
+
+
+async def test_decision_model_action_that_sets_a_level_needs_confidence():
+    backend, _ = _decision_backend(
+        _answers(target="set_dimmer.device_id=night_light", action="off", action_conf=0.4))
+    with pytest.raises(Declined) as ei:
+        await _strict(backend, "ночничок погаси")
+    assert ei.value.reason == "decision model: action off (0.40)"
+
+
+@pytest.mark.parametrize("text, tools, reason", [
+    # «на пять» may be a level, a delay or a step: no request, the next chain decides.
+    ("прибавь ночничок на пять", FAKE_TOOLS, "decision model: a number is left to the next chain"),
+    ("зажги лампу", [], "decision model: no device options"),
+])
+async def test_decision_model_is_not_asked_what_it_cannot_answer(text, tools, reason):
+    backend, requests = _decision_backend(_answers())
+    with pytest.raises(Declined) as ei:
+        await _strict(backend, text, tools)
+    assert ei.value.reason == reason
+    assert requests == []
+
+
+def _timeout(request):
+    raise httpx.ReadTimeout("timed out", request=request)
+
+
+@pytest.mark.parametrize("respond, error", [
+    (lambda request: httpx.Response(500, json={"error": "boom"}), "HTTPStatusError"),
+    (_timeout, "ReadTimeout"),
+    (lambda request: httpx.Response(200, json={"answers": {}}), "KeyError"),
+])
+async def test_decision_model_failure_declines_without_retry(respond, error):
+    backend, requests = _decision_backend(respond)
+    with pytest.raises(Declined) as ei:
+        await _strict(backend, "Захар, зажги люстру")
+    assert ei.value.reason.startswith(f"decision model error: {error}")
+    assert len(requests) == 1
+
+
+async def test_no_decision_model_makes_no_request():
+    backend, requests = _decision_backend(_answers(), decision_model="")
+    with pytest.raises(Declined) as ei:
+        await _strict(backend, "Захар, зажги люстру")
+    assert ei.value.reason == "no alias phrase matched"
+    assert requests == []
 
 
 # --- production catalog regression (real pymorphy3) -------------------------- #

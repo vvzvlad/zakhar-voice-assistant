@@ -176,7 +176,10 @@ docker compose pull && docker compose up -d
     захвата голоса) остаются в `core.vad`.
   - `stt`: `groq` (облачный Whisper) | `vosk` (офлайн) | `yandex` (SpeechKit v3, стриминг по gRPC).
   - `llm` (обработчики): `openrouter` | `groq` — model, api_key, temperature, max_tokens,
-    max_tool_rounds; `simple-nlu` — офлайн-движок команд (синонимы, глаголы действий).
+    max_tool_rounds; `simple-nlu` — офлайн-движок команд (синонимы, глаголы действий);
+    если задан `decision_model` (например, `typesafe/jev-1.14` на OpenRouter), фраза,
+    которую он не узнал и в которой нет числа, уходит этой модели решений, и она выбирает
+    цель из синонимов и глагол.
   - Какой STT кормит какой обработчик, задаёт `core.chains` — упорядоченный список
     `{name, enabled, stt, handler, narrow, parallel}`. Одна фраза проходит включённые
     цепочки по порядку на том же звуке, пока одна не ответит; следующая цепочка берётся,

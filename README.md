@@ -174,7 +174,10 @@ Shape (see `templates/default_config.json` for the full default):
     Voice-capture settings) stay in `core.vad`.
   - `stt`: `groq` (cloud Whisper) | `vosk` (offline) | `yandex` (SpeechKit v3 streaming, gRPC).
   - `llm` (handlers): `openrouter` | `groq` — model, api_key, temperature, max_tokens,
-    max_tool_rounds; `simple-nlu` — the offline command engine (aliases, action verbs).
+    max_tool_rounds; `simple-nlu` — the offline command engine (aliases, action verbs);
+    with `decision_model` set (e.g. `typesafe/jev-1.14` on OpenRouter) a phrase it does
+    not match and that has no number goes to that decision model, which picks the alias
+    target and the verb.
   - Which STT feeds which handler is set by `core.chains`: an ordered list of
     `{name, enabled, stt, handler, narrow, parallel}`. One utterance goes through the
     enabled chains in order on the same audio until one answers; the next chain is tried

@@ -230,6 +230,17 @@ class Reconfigurator:
             await self._rebuild_reminders()
         if do_http:
             await self._rebuild_http(paths)
+        # A job may have built a new handler backend or changed the tool catalog.
+        await self.warm_handlers()
+
+    async def warm_handlers(self) -> None:
+        """Prepare every handler backend that has warm_up() for the current tool
+        catalog (simple-nlu trains its model on it), so the next request does not pay
+        for it. Run after every job and once in the background at boot."""
+        for backend in list(self.rt.llm_backends.values()):
+            warm_up = getattr(backend, "warm_up", None)
+            if warm_up is not None:
+                await warm_up(self.rt.hub.tools or [])
 
     async def _rebuild_backends(self, paths) -> None:
         """Rebuild only the affected stage backends and swap them into the runtime.

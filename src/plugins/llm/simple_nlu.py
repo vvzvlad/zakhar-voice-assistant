@@ -1,13 +1,19 @@
-"""Offline, LLM-free NLU 'LLM' provider — intent classification + slot filling.
+"""LLM-free NLU 'LLM' provider — intent classification + slot filling.
 
 It slots into the pipeline's `llm` stage like any other provider, but uses NO
-LLM and NO network: an intent+slot NLU built on pymorphy3 + scikit-learn +
-rapidfuzz. A hybrid of deterministic phrase/verb matching and a small TF-IDF +
-LogisticRegression intent classifier turns a Russian utterance into a smart-home
-tool call. The OpenAI/Groq-shaped envelope and the LlmStage agentic loop are
-exactly the same as for the cloud LLM providers, so the backend emits
-`tool_calls` to drive the tools and, on the next round (tool results present),
-speaks a short confirmation.
+LLM: an intent+slot NLU built on pymorphy3 + scikit-learn + rapidfuzz. A hybrid
+of deterministic phrase/verb matching and a small TF-IDF + LogisticRegression
+intent classifier turns a Russian utterance into a smart-home tool call. The
+OpenAI/Groq-shaped envelope and the LlmStage agentic loop are exactly the same as
+for the cloud LLM providers, so the backend emits `tool_calls` to drive the tools
+and, on the next round (tool results present), speaks a short confirmation.
+
+The matching itself runs offline. One optional step uses the network: when a
+decision model is configured (an OpenRouter Decisions API model such as
+typesafe/jev-1.14) and the local matching finds no command, the utterance goes to
+that model in one request, with the alias phrases and action verbs as the answer
+options. Only a confident command to one device or scene becomes a tool call;
+anything else — and any failure of the call — is no command, as without the step.
 
 Design notes:
 - Heavy deps (pymorphy3, scikit-learn, rapidfuzz) are imported LAZILY inside the
@@ -26,12 +32,17 @@ import hashlib
 import json
 import re
 
+import httpx
 from loguru import logger
 from pydantic import BaseModel, Field
 
-from src.plugins.base import ADVANCED_FIELD_EXTRA, Deps, Provider, register
+from src.plugins.base import ADVANCED_FIELD_EXTRA, SECRET_FIELD_EXTRA, Deps, Provider, register
 from src.plugins.llm.base import LlmBackend
 from src.stage_errors import Declined
+
+# OpenRouter Decisions API: typed answers (choice / noul) with probabilities, shared by
+# every decision model OpenRouter serves.
+DECISIONS_API_URL = "https://openrouter.ai/api/alpha/decisions"
 
 # Default verbs are real (not commented) so the provider works out of the box.
 _DEFAULT_ACTIONS = (
@@ -125,6 +136,38 @@ class SimpleNluConfig(BaseModel):
     reply_done: str = Field(
         "Готово.",
         title="Reply after a tool ran",
+    )
+
+    # --- Optional decision-model step (the only network use; baked into the backend) ---
+    decision_model: str = Field(
+        "",
+        title="Decision model",
+        description=(
+            "OpenRouter decision model asked when the phrase matches no alias and has "
+            "no number, e.g. typesafe/jev-1.14. A confident command to one device or scene runs; "
+            "anything else counts as unmatched. Empty turns the step off."
+        ),
+    )
+    decision_api_key: str = Field(
+        "", title="Decision model API key", json_schema_extra=SECRET_FIELD_EXTRA,
+    )
+    decision_min_confidence: float = Field(
+        0.8,
+        ge=0.0,
+        le=1.0,
+        title="Decision confidence threshold",
+        description=(
+            "The decision model's answers about the request kind, the device and the "
+            "action (when it sets a slot) must each reach this confidence for the "
+            "command to run."
+        ),
+        json_schema_extra=ADVANCED_FIELD_EXTRA,
+    )
+    decision_timeout: float = Field(
+        2.0,
+        title="Decision model timeout",
+        description="Past this the step gives up and the phrase counts as unmatched.",
+        json_schema_extra={**ADVANCED_FIELD_EXTRA, "unit": "s"},
     )
 
     # --- Fields the LLM stage / orchestrator read live (mirror LlmConfig; see
@@ -327,6 +370,62 @@ def _warn_missing(dep: str) -> None:
         logger.warning(f"simple-nlu: optional dependency '{dep}' unavailable; degrading gracefully")
 
 
+def _no_match(reason: str) -> dict:
+    """The detection result for an utterance that is no command; `reason` says why."""
+    return {"is_command": False, "tool": None, "args": {}, "name": "none", "reason": reason}
+
+
+# The decision model's questions that do not depend on the catalog. The device and
+# action questions are built per request from the aliases and the action verbs.
+_KIND_QUESTION = {
+    "type": "choice",
+    "instructions": "What kind of request is this utterance to a home voice assistant?",
+    "criteria": {
+        "device_command": "A command to switch or adjust one smart-home device or scene",
+        "other": (
+            "A question, conversation, or a request for something else "
+            "(weather, reminders, search, several devices at once)"
+        ),
+        "noise": "Not addressed to the assistant: a fragment, thanks, or meaningless speech",
+    },
+}
+_COMPOUND_QUESTION = {
+    "type": "noul",
+    "instructions": (
+        "Does the utterance ask for more than one distinct action or more than one device?"
+    ),
+    "criteria": {"true": "", "false": ""},
+}
+# A delay or a set time without a number («попозже», «через полчаса») would be
+# dropped by the immediate tool call; phrases with a number never get here.
+_DELAYED_QUESTION = {
+    "type": "noul",
+    "instructions": (
+        "Does the utterance ask to do it later, after a delay, at a set time, "
+        "or only for a limited time?"
+    ),
+    "criteria": {"true": "", "false": ""},
+}
+
+
+def _choice_answer(answers: dict, key: str) -> tuple:
+    """(choice, confidence) of the choice answer `key`; raises KeyError, TypeError or
+    ValueError when the answer is missing or malformed."""
+    answer = answers[key]
+    choice = answer["choice"]
+    if answer["type"] != "choice" or not isinstance(choice, str):
+        raise ValueError(f"{key}: not a choice answer: {answer!r}")
+    return choice, float(answer["confidence"])
+
+
+def _noul_answer(answers: dict, key: str) -> float:
+    """The probability of the noul answer `key`; raises like _choice_answer."""
+    answer = answers[key]
+    if answer["type"] != "noul":
+        raise ValueError(f"{key}: not a noul answer: {answer!r}")
+    return float(answer["noul"])
+
+
 class SimpleNluBackend(LlmBackend):
     """LlmBackend contract WITHOUT any LLM: deterministic + TF-IDF intent NLU.
 
@@ -349,6 +448,11 @@ class SimpleNluBackend(LlmBackend):
         reply_done: str,
         reply_error: str,
         lemmatizer=None,
+        decision_model: str = "",
+        decision_api_key: str = "",
+        decision_min_confidence: float = 0.8,
+        decision_timeout: float = 2.0,
+        client: httpx.AsyncClient | None = None,
     ):
         self._aliases = parse_aliases(aliases_text)
         self._actions = parse_actions(actions_text)
@@ -364,6 +468,13 @@ class SimpleNluBackend(LlmBackend):
         # Injectable lemmatizer (str -> str, lemmatize ONE lowercased token). When
         # None, a pymorphy3-based one is built lazily on first train.
         self._lemmatizer = lemmatizer
+        # Decision-model step: off while decision_model is empty; `client` is the
+        # proxied cloud client.
+        self._decision_model = decision_model
+        self._decision_api_key = decision_api_key
+        self._decision_min_confidence = decision_min_confidence
+        self._decision_timeout = decision_timeout
+        self._client = client
         # Model cache, rebuilt when the advertised tools change.
         self._lock = asyncio.Lock()
         self._fingerprint: str | None = None
@@ -371,15 +482,21 @@ class SimpleNluBackend(LlmBackend):
 
     # --- public contract -------------------------------------------------- #
 
-    async def complete(self, messages: list, tools: list | None, *, has_next: bool = False) -> dict:
-        fingerprint = self._fingerprint_tools(tools or [])
+    async def warm_up(self, tools: list) -> dict:
+        """Build the model for this tool catalog unless it is already built, and
+        return it. The app calls it ahead of the first request (at boot and after
+        every reconfiguration), so that request does not pay for the training."""
+        fingerprint = self._fingerprint_tools(tools)
         # Rebuild the model only when the tool catalog changed. Training is
         # blocking (pymorphy3 + sklearn fit) so it runs in a worker thread.
         async with self._lock:
             if fingerprint != self._fingerprint:
-                self._model = await asyncio.to_thread(self._train, tools or [])
+                self._model = await asyncio.to_thread(self._train, tools)
                 self._fingerprint = fingerprint
-            model = self._model
+            return self._model
+
+    async def complete(self, messages: list, tools: list | None, *, has_next: bool = False) -> dict:
+        model = await self.warm_up(tools or [])
 
         # ROUND 2: tool results are present -> speak a confirmation (or error).
         if self._has_tool_result(messages):
@@ -391,6 +508,8 @@ class SimpleNluBackend(LlmBackend):
         # so that chain re-recognizes the audio and answers instead.
         user_text = self._last_user_text(messages)
         intent = self._detect(user_text, model, strict=has_next)
+        if not intent["is_command"] and self._decision_model:
+            intent = await self._decide(user_text, model)
         if intent["is_command"] and intent["tool"]:
             tool_calls = [{
                 "id": "call_0",
@@ -714,12 +833,8 @@ class SimpleNluBackend(LlmBackend):
         classifier), matches action verbs by exact word form instead of by lemma,
         and keeps a command only when every word of the utterance is explained
         (see _unexplained)."""
-        def no_match(reason: str) -> dict:
-            return {"is_command": False, "tool": None, "args": {}, "name": "none",
-                    "reason": reason}
-
         if not model or not user_text:
-            return no_match("")
+            return _no_match("")
         lemmatizer = model["lemmatizer"]
         tools_index = model["tools_index"]
         user_tokens = self._normalize(user_text)
@@ -788,8 +903,8 @@ class SimpleNluBackend(LlmBackend):
 
         if chosen is None:
             if verbless:
-                return no_match(f"no applicable verb for {', '.join(verbless)}")
-            return no_match("no alias phrase matched")
+                return _no_match(f"no applicable verb for {', '.join(verbless)}")
+            return _no_match("no alias phrase matched")
 
         # 3) FILL SLOTS for the chosen tool. The deterministic path already proved a
         # real alias-phrase match, so it may auto-fill required single-value enums;
@@ -804,15 +919,15 @@ class SimpleNluBackend(LlmBackend):
         # filled from the utterance, else it is an unsupported guess -> no command.
         if from_classifier and tinfo["enum_slots"]:
             if not any(slot in args for slot in tinfo["enum_slots"]):
-                return no_match(f"classifier guess {chosen} has no slot from the utterance")
+                return _no_match(f"classifier guess {chosen} has no slot from the utterance")
         # Required-slot validation is the main false-positive guard.
         missing = tinfo["required"] - set(args.keys())
         if missing:
-            return no_match(f"missing required slot for {chosen}: {', '.join(sorted(missing))}")
+            return _no_match(f"missing required slot for {chosen}: {', '.join(sorted(missing))}")
         if strict:
             unknown = self._unexplained(user_tokens, user_lemmas, evidence)
             if unknown:
-                return no_match(f"unknown words: {', '.join(unknown)}")
+                return _no_match(f"unknown words: {', '.join(unknown)}")
         return {"is_command": True, "tool": chosen, "args": args, "name": chosen, "reason": ""}
 
     def _unexplained(self, tokens: list[str], lemmas: list[str], evidence: dict) -> list[str]:
@@ -886,6 +1001,28 @@ class SimpleNluBackend(LlmBackend):
                 args[slot] = best_value
                 evidence["phrases"].append(best_phrase)
 
+        number_used, level_action = self._fill_numbers(tinfo, user_text, present_actions, args)
+        evidence["number"] = number_used
+        if level_action is not None:
+            evidence["verbs"].append(next(v for v, a in present_verbs if a == level_action))
+
+        # Required single-value enum slots left unfilled <- their only value. Only on
+        # the deterministic path (a real match already proved intent); skipped on the
+        # classifier path so an evidence-free prediction can't satisfy required slots.
+        if auto_fill_singletons:
+            self._fill_singletons(tinfo, args)
+
+        return args, evidence
+
+    def _fill_numbers(
+        self, tinfo: dict, user_text: str, actions: set, args: dict
+    ) -> tuple[bool, str | None]:
+        """Fill the tool's level slot and number slots into `args` from the utterance.
+        `actions` are the action names the utterance carries. Returns whether a
+        number filled a slot, and the action ("on"/"off") that filled the level slot
+        or None."""
+        number_used = False
+        level_action = None
         # Level slot <- an explicit number, else an on/off verb maps to a level.
         # Done BEFORE number_slots so the level slot wins (the loop below skips
         # slots already in args). Hardcoded "on"/"off" mirror the existing
@@ -896,13 +1033,13 @@ class SimpleNluBackend(LlmBackend):
             num = extract_number(user_text)
             if num is not None:
                 args[level_slot] = num if level_type == "number" else str(num)
-                evidence["number"] = True
-            elif "off" in present_actions:
+                number_used = True
+            elif "off" in actions:
                 args[level_slot] = 0 if level_type == "number" else self._off_token
-                evidence["verbs"].append(next(v for v, a in present_verbs if a == "off"))
-            elif "on" in present_actions and level_type == "number":
+                level_action = "off"
+            elif "on" in actions and level_type == "number":
                 args[level_slot] = self._level_on
-                evidence["verbs"].append(next(v for v, a in present_verbs if a == "on"))
+                level_action = "on"
             # string level slot + on-verb + no number -> leave UNFILLED, so the
             # required-slot validation correctly no-matches it.
 
@@ -913,20 +1050,133 @@ class SimpleNluBackend(LlmBackend):
             num = extract_number(user_text)
             if num is not None:
                 args[slot] = num
-                evidence["number"] = True
+                number_used = True
+        return number_used, level_action
 
-        # Required single-value enum slots left unfilled <- their only value. Only on
-        # the deterministic path (a real match already proved intent); skipped on the
-        # classifier path so an evidence-free prediction can't satisfy required slots.
-        if auto_fill_singletons:
-            for slot, info in tinfo["slots"].items():
-                if slot in args or not info["required"]:
-                    continue
-                enum = info["enum"]
-                if enum and len(enum) == 1:
-                    args[slot] = enum[0]
+    @staticmethod
+    def _fill_singletons(tinfo: dict, args: dict) -> None:
+        """Set each required enum slot that is still unset and has one value to it."""
+        for slot, info in tinfo["slots"].items():
+            if slot in args or not info["required"]:
+                continue
+            enum = info["enum"]
+            if enum and len(enum) == 1:
+                args[slot] = enum[0]
 
-        return args, evidence
+    # --- decision-model step --------------------------------------------- #
+
+    async def _decide(self, user_text: str, model: dict) -> dict:
+        """Ask the decision model about an utterance the local matching took for no
+        command, in one request. Returns the same shape as _detect: a command only
+        when the model is confident the utterance commands one device or scene."""
+        # A number may be a level, a delay or a step from the current level, and none
+        # of the questions tells which: leave such phrases to the next chain.
+        if extract_number(user_text) is not None:
+            return _no_match("decision model: a number is left to the next chain")
+        targets = self._decision_targets(model)
+        if not targets:
+            return _no_match("decision model: no device options")
+        payload = {
+            "model": self._decision_model,
+            "state": {"utterance": user_text},
+            "questions": self._decision_questions(targets),
+        }
+        try:
+            resp = await self._client.post(
+                DECISIONS_API_URL,
+                headers={"Authorization": f"Bearer {self._decision_api_key}"},
+                json=payload,
+                timeout=self._decision_timeout,
+            )
+            resp.raise_for_status()
+            answers = resp.json()["answers"]
+            kind, kind_conf = _choice_answer(answers, "kind")
+            target, target_conf = _choice_answer(answers, "target")
+            action, action_conf = _choice_answer(answers, "action")
+            compound = _noul_answer(answers, "compound")
+            delayed = _noul_answer(answers, "delayed")
+            entry = None if target == "none" else targets[target]
+        except (httpx.HTTPError, ValueError, KeyError, TypeError) as e:
+            logger.warning(f"simple-nlu: decision model call failed: {type(e).__name__}: {e}")
+            return _no_match(f"decision model error: {type(e).__name__}: {e}")
+        logger.info(
+            f"simple-nlu decision: kind={kind} ({kind_conf:.2f}), "
+            f"target={target} ({target_conf:.2f}), action={action} ({action_conf:.2f}), "
+            f"compound={compound:.2f}, delayed={delayed:.2f}"
+        )
+
+        min_conf = self._decision_min_confidence
+        if kind != "device_command" or kind_conf < min_conf:
+            return _no_match(f"decision model: kind {kind} ({kind_conf:.2f})")
+        if entry is None or target_conf < min_conf:
+            return _no_match(f"decision model: target {target} ({target_conf:.2f})")
+        if compound >= 0.5:
+            return _no_match(f"decision model: compound ({compound:.2f})")
+        if delayed >= 0.5:
+            return _no_match(f"decision model: delayed ({delayed:.2f})")
+
+        tool = entry["tool"]
+        tinfo = model["tools_index"][tool]
+        args = {entry["slot"]: entry["value"]}
+        state_slot = tinfo["state_slot"]
+        if state_slot is not None:
+            if action not in tinfo["slots"][state_slot]["enum"]:
+                return _no_match(f"decision model: action {action} does not fit {tool}")
+            args[state_slot] = action
+        _, level_action = self._fill_numbers(tinfo, user_text, {action}, args)
+        # The action decides on vs off, lock vs unlock: when it set a slot it must be
+        # as confident as the kind and the device.
+        if (state_slot is not None or level_action is not None) and action_conf < min_conf:
+            return _no_match(f"decision model: action {action} ({action_conf:.2f})")
+        self._fill_singletons(tinfo, args)
+        missing = tinfo["required"] - set(args)
+        if missing:
+            return _no_match(
+                f"decision model: missing required slot for {tool}: {', '.join(sorted(missing))}"
+            )
+        return {"is_command": True, "tool": tool, "args": args, "name": f"decision/{tool}",
+                "reason": ""}
+
+    @staticmethod
+    def _decision_targets(model: dict) -> dict[str, dict]:
+        """The device options: one per distinct (tool, slot, value) the aliases
+        resolve to, keyed "tool.slot=value", with every alias phrase mapped to it.
+        Only enum slots of advertised tools: an explicit alias may name a tool that is
+        not in the catalog or a free-form slot, and the args are built from the index."""
+        targets: dict[str, dict] = {}
+        for entry in model["aliases_resolved"]:
+            tinfo = model["tools_index"].get(entry["tool"])
+            if tinfo is None or entry["slot"] not in tinfo["enum_slots"]:
+                continue
+            key = f"{entry['tool']}.{entry['slot']}={entry['value']}"
+            target = targets.setdefault(key, {
+                "tool": entry["tool"], "slot": entry["slot"], "value": entry["value"],
+                "phrases": [],
+            })
+            target["phrases"].extend(entry["phrases"])
+        return targets
+
+    def _decision_questions(self, targets: dict[str, dict]) -> dict:
+        """The five questions of one decision request."""
+        target_criteria = {key: ", ".join(t["phrases"]) for key, t in targets.items()}
+        target_criteria["none"] = "No device or scene is named"
+        action_criteria = {name: ", ".join(verbs) for name, verbs in self._actions.items()}
+        action_criteria["none"] = "No action verb"
+        return {
+            "kind": _KIND_QUESTION,
+            "target": {
+                "type": "choice",
+                "instructions": "Which device does the utterance refer to?",
+                "criteria": target_criteria,
+            },
+            "action": {
+                "type": "choice",
+                "instructions": "What should be done with the device?",
+                "criteria": action_criteria,
+            },
+            "compound": _COMPOUND_QUESTION,
+            "delayed": _DELAYED_QUESTION,
+        }
 
 
 @register
@@ -935,7 +1185,8 @@ class SimpleNluProvider(Provider):
     id = "simple-nlu"
     label = "Simple NLU (no LLM)"
     ConfigModel = SimpleNluConfig
-    uses_http_cloud = False
+    # The optional decision-model step calls OpenRouter through deps.http_cloud.
+    uses_http_cloud = True
 
     def create(self, cfg: SimpleNluConfig, deps: Deps):
         return SimpleNluBackend(
@@ -949,6 +1200,11 @@ class SimpleNluProvider(Provider):
             reply_unmatched=cfg.reply_unmatched,
             reply_done=cfg.reply_done,
             reply_error=cfg.reply_error,
+            decision_model=cfg.decision_model,
+            decision_api_key=cfg.decision_api_key,
+            decision_min_confidence=cfg.decision_min_confidence,
+            decision_timeout=cfg.decision_timeout,
+            client=deps.http_cloud,
         )
 
     def describe(self, cfg: SimpleNluConfig) -> str:

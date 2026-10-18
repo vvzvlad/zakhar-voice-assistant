@@ -288,8 +288,8 @@ class _StubSvc:
 
     provider(cat) returns an object whose uses_http_cloud bool mirrors the selected
     provider's flag for the single-backend stages; `cloud_cats` marks which of them are
-    cloud. The STT/handler/TTS pools read the real registry flag (groq/openrouter/yandex
-    cloud, vosk/simple-nlu/piper offline). `variants` is the enabled TTS variant list.
+    cloud. The STT/handler/TTS pools read the real registry flag (groq/openrouter/
+    simple-nlu/yandex cloud, vosk/piper offline). `variants` is the enabled TTS variant list.
     """
 
     def __init__(self, fail_on=None, cloud_cats=(), variants=("yandex",)):
@@ -416,6 +416,29 @@ async def test_apply_job_chains_change_builds_new_and_drops_unreferenced():
     assert rt.stt_backends == {"groq": "old-stt", "vosk": ("backend", "stt", "vosk", 30)}
     assert rt.llm_backends == {"simple-nlu": ("backend", "llm", "simple-nlu", 30)}
     assert svc.calls == {("stt", "vosk"): 1, ("llm", "simple-nlu"): 1}
+
+
+class _WarmableBackend:
+    """Handler backend double recording the tool catalogs warm_up() was given."""
+
+    def __init__(self):
+        self.warmed = []
+
+    async def warm_up(self, tools):
+        self.warmed.append(tools)
+
+
+@pytest.mark.asyncio
+async def test_apply_job_warms_handlers_on_the_tool_catalog():
+    # Every job ends by warming each handler backend that has warm_up() on the hub's
+    # current tools; a backend without warm_up() is left alone.
+    reconf, rt, _deps = _make_job_reconf(_StubSvc())
+    rt.hub = types.SimpleNamespace(tools=[{"function": {"name": "set_light"}}])
+    nlu = _WarmableBackend()
+    rt.llm_backends["simple-nlu"] = nlu
+    await reconf.apply_job({"tts.instances.yandex.voice"})
+    assert nlu.warmed == [rt.hub.tools]
+    assert rt.llm_backends["openrouter"] == "old-llm"
 
 
 @pytest.mark.asyncio
@@ -676,6 +699,7 @@ def _audio_runtime(manager, *, host="0.0.0.0", port=8081, advertise_host=""):
         advert=_StubAdvert(),
         core=types.SimpleNamespace(audio=types.SimpleNamespace(
             host=host, port=port, advertise_host=advertise_host)),
+        llm_backends={},
     )
 
 
@@ -750,6 +774,7 @@ def _runs_runtime(*, enabled, retention_days=7, runs_store=None, panel=None):
         ),
         runs_store=runs_store,
         panel=panel,
+        llm_backends={},
     )
 
 
@@ -859,7 +884,7 @@ async def test_apply_job_rebuild_tools_swaps_into_hub(monkeypatch):
     hub = _FakeHub()
     core = types.SimpleNamespace()
     scheduler = object()
-    rt = types.SimpleNamespace(hub=hub, core=core, scheduler=scheduler)
+    rt = types.SimpleNamespace(hub=hub, core=core, scheduler=scheduler, llm_backends={})
     deps = types.SimpleNamespace(http_cloud="cloud-client", tts_timeout=30)
     reconf = Reconfigurator(rt, deps, asyncio.Queue())
 
@@ -874,7 +899,8 @@ async def test_apply_job_rebuild_tools_failure_logs_and_continues(monkeypatch):
     # A failing set_sources() is logged and the job continues (apply-what-you-can).
     monkeypatch.setattr("src.reconfig.build_sources", lambda c, h, s: ["x"])
     hub = _FakeHub(fail=True)
-    rt = types.SimpleNamespace(hub=hub, core=types.SimpleNamespace(), scheduler=None)
+    rt = types.SimpleNamespace(hub=hub, core=types.SimpleNamespace(), scheduler=None,
+                               llm_backends={})
     deps = types.SimpleNamespace(http_cloud="cloud-client", tts_timeout=30)
     reconf = Reconfigurator(rt, deps, asyncio.Queue())
 
@@ -1097,15 +1123,15 @@ async def test_apply_job_rebuild_http_also_rebuilds_vad_changed_in_job(monkeypat
 
 
 @pytest.mark.asyncio
-async def test_apply_job_rebuild_http_offline_only_reloads_no_model(monkeypatch):
-    # ALL providers in use are offline (uses_http_cloud False): a proxy change rebuilds
-    # NO backends (no svc.create calls -> no model reload), but tools are still rebuilt and
-    # the client is still swapped + the old one closed.
+async def test_apply_job_rebuild_http_reloads_no_offline_model(monkeypatch):
+    # vosk -> simple-nlu with piper TTS: a proxy change reloads neither offline model
+    # (vosk, piper) and rebuilds only simple-nlu, whose decision-model step uses the
+    # cloud client; tools are still rebuilt and the client swapped + the old one closed.
     monkeypatch.setattr("src.reconfig.build_sources", lambda c, h, s: ["new-src"])
     new_client = _FakeHttpClient("new")
     monkeypatch.setattr("src.reconfig.httpx.AsyncClient", lambda **kw: new_client)
     old_client = _FakeHttpClient("old")
-    svc = _StubSvc(variants=("piper",))   # every stage offline
+    svc = _StubSvc(variants=("piper",))   # STT and TTS offline
     hub = _FakeHub()
     rt = _http_runtime(svc, hub, chains=[_chain(stt="vosk", handler="simple-nlu")])
     deps = types.SimpleNamespace(http_cloud=old_client, tts_timeout=30)
@@ -1114,10 +1140,9 @@ async def test_apply_job_rebuild_http_offline_only_reloads_no_model(monkeypatch)
 
     await reconf.apply_job({"core.network.external_proxy"})
 
-    # No model reload at all: not a single create() call across the stages.
-    assert svc.calls == {}
+    assert svc.calls == {("llm", "simple-nlu"): 1}
     assert rt.stt_backends == {"vosk": "old-stt"}
-    assert rt.llm_backends == {"simple-nlu": "old-llm"}
+    assert rt.llm_backends == {"simple-nlu": ("backend", "llm", "simple-nlu", 30)}
     assert rt.tts_backends == {"piper": "old-tts"}
     assert deps.tts_timeout == 30          # no tts rebuild -> timeout push skipped
     assert hub.set_calls == [["new-src"]]  # tools still rebuilt (OpenWeatherMap uses http_cloud)
@@ -1143,7 +1168,7 @@ class _FakeManager:
 @pytest.mark.asyncio
 async def test_apply_job_rebuild_devices_invokes_manager_reconfigure():
     mgr = _FakeManager()
-    rt = types.SimpleNamespace(manager=mgr)
+    rt = types.SimpleNamespace(manager=mgr, llm_backends={})
     reconf = Reconfigurator(rt, types.SimpleNamespace(tts_timeout=30), asyncio.Queue())
     await reconf.apply_job({"core.devices"})
     assert mgr.reconfigures == 1
@@ -1152,7 +1177,7 @@ async def test_apply_job_rebuild_devices_invokes_manager_reconfigure():
 @pytest.mark.asyncio
 async def test_apply_job_rebuild_devices_failure_is_attempted():
     mgr = _FakeManager(fail=True)
-    rt = types.SimpleNamespace(manager=mgr)
+    rt = types.SimpleNamespace(manager=mgr, llm_backends={})
     reconf = Reconfigurator(rt, types.SimpleNamespace(tts_timeout=30), asyncio.Queue())
     await reconf.apply_job({"core.devices"})
     assert mgr.reconfigures == 1
@@ -1216,6 +1241,7 @@ def _reminders_runtime(*, enabled, scheduler, reminders_store):
         manager=types.SimpleNamespace(announce=_announce),
         scheduler=scheduler,
         reminders_store=reminders_store,
+        llm_backends={},
     )
 
 

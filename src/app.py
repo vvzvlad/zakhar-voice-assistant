@@ -165,6 +165,10 @@ async def main() -> None:
     reconfig_queue: asyncio.Queue = asyncio.Queue()
     reconf = Reconfigurator(rt, deps, reconfig_queue)
     svc.on_change(reconf.on_config_change)
+    # Prepare the chain handlers for the tool catalog in the background (simple-nlu
+    # trains its model on it), so neither boot nor the first request waits for it.
+    # The reference keeps the task from being garbage-collected.
+    warm_task = asyncio.create_task(reconf.warm_handlers())
 
     # Late-bind delivery now that the manager exists (resolves the circular dependency).
     if scheduler is not None:
