@@ -9,6 +9,8 @@ import zipfile
 
 import pytest
 
+from src import captures, dataset_jobs
+from src.device_server import DeviceOfflineError
 from tests.test_panel_api import _client, _wav_bytes
 
 
@@ -21,14 +23,17 @@ def _data_dir(tmp_path, monkeypatch):
 class FakeDevice:
     """Stands in for DeviceManager.play_chime/capture; logs the order of beeps and captures.
 
-    Capture N returns a WAV whose PCM is byte N, so every clip is distinguishable. A capture
-    raises `fail` once `fail_at` captures have succeeded; it waits for `gate` when set.
+    Every capture is a real one on disk whose PCM is the number of the clip it would become,
+    so every clip is distinguishable; `clips` holds the WAV of each whole one. `outcomes`
+    sets how the next captures end: "ok", "gap" (half of the audio lost), "busy" (refused,
+    no audio) or an exception to raise; past its end every capture is "ok". A capture waits
+    for `gate` when set.
     """
 
-    def __init__(self, fail_at=None, fail=None, gate=None):
+    def __init__(self, outcomes=(), gate=None):
         self.calls = []
         self.clips = []
-        self.fail_at, self.fail, self.gate = fail_at, fail, gate
+        self.outcomes, self.gate = list(outcomes), gate
 
     async def play(self, sound_path, device):
         self.calls.append(("beep", sound_path, device))
@@ -38,10 +43,18 @@ class FakeDevice:
         self.calls.append(("capture", device, seconds))
         if self.gate is not None:
             await self.gate.wait()
-        if self.fail_at is not None and len(self.clips) == self.fail_at:
-            raise self.fail
-        self.clips.append(_wav_bytes(pcm=bytes([len(self.clips) + 1]) * 32))
-        return self.clips[-1]
+        outcome = self.outcomes.pop(0) if self.outcomes else "ok"
+        if isinstance(outcome, Exception):
+            raise outcome
+        cap = captures.Capture.create(device, seconds)
+        frames = seconds * captures.RATE
+        pcm = bytes([len(self.clips) + 1, 0]) * frames
+        if outcome != "busy":
+            cap.write(0, pcm[:frames] if outcome == "gap" else pcm)
+        cap.finish("busy" if outcome == "busy" else None)
+        if outcome == "ok":
+            self.clips.append(captures.wav_header(frames) + pcm)
+        return cap
 
 
 async def _wired(tmp_path, fake):
@@ -91,6 +104,7 @@ async def test_session_records_numbered_clips_and_next_session_continues(tmp_pat
             "state": "done", "device": "hall", "takes": 2, "seconds": 5, "done": 2, "error": None}}
         assert sorted(_clips(_data_dir, "захар")) == [f"000{i}.wav" for i in range(1, 6)]
         assert _clips(_data_dir, "захар")["0005.wav"] == fake.clips[4]
+        assert captures.everything() == []  # each capture moved into the set, its sidecar gone
     finally:
         await client.close()
 
@@ -111,17 +125,37 @@ async def test_list_counts_sets_on_disk_without_a_job(tmp_path, _data_dir):
         await client.close()
 
 
-async def test_failing_take_ends_job_with_error_and_keeps_clips(tmp_path, _data_dir):
-    fake = FakeDevice(fail_at=2, fail=RuntimeError("hall is offline"))
+async def test_a_failed_take_is_recorded_again(tmp_path, _data_dir, monkeypatch):
+    monkeypatch.setattr(dataset_jobs, "OFFLINE_RETRY_S", 0)
+    monkeypatch.setattr(dataset_jobs, "FAILED_TAKE_PAUSE_S", 0)
+    # Take 2 loses audio (not counted), the device is busy twice (counted), then offline twice
+    # (not counted: counted, it would end the session), then the take is whole.
+    offline = DeviceOfflineError("hall is offline")
+    fake = FakeDevice(["ok", "gap", "busy", "busy", offline, offline, "ok"])
+    client, _ = await _wired(tmp_path, fake)
+    try:
+        await client.post("/api/datasets/zakhar", json={"device": "hall", "takes": 2})
+        s = await _poll(client, "zakhar", "done")
+        assert (s["clips"], s["job"]["error"]) == (2, None)
+        assert _clips(_data_dir, "zakhar") == {"0001.wav": fake.clips[0], "0002.wav": fake.clips[1]}
+        assert [c for c in fake.calls if c[0] == "capture"] == [("capture", "hall", 3)] * 7
+        assert captures.everything() == []  # failed takes are deleted
+    finally:
+        await client.close()
+
+
+async def test_three_failures_in_a_row_end_the_session(tmp_path, _data_dir, monkeypatch):
+    monkeypatch.setattr(dataset_jobs, "FAILED_TAKE_PAUSE_S", 0)
+    # Gaps are audio lost to the link: recorded again without counting, however many.
+    fake = FakeDevice(["ok", LookupError("unknown device 'hall'"), "gap", "busy", "gap", "gap", "busy"])
     client, _ = await _wired(tmp_path, fake)
     try:
         await client.post("/api/datasets/zakhar", json={"device": "hall", "takes": 5})
         s = await _poll(client, "zakhar", "error")
-        assert s["clips"] == 2
-        assert s["job"]["done"] == 2 and "offline" in s["job"]["error"]
-        assert sorted(_clips(_data_dir, "zakhar")) == ["0001.wav", "0002.wav"]
-        # No retries: the session stopped at the failing take.
-        assert [c for c in fake.calls if c[0] == "capture"] == [("capture", "hall", 3)] * 3
+        assert (s["clips"], s["job"]["done"], s["job"]["error"]) == (1, 1, "busy")
+        assert len([c for c in fake.calls if c[0] == "capture"]) == 7
+        assert sorted(_clips(_data_dir, "zakhar")) == ["0001.wav"]
+        assert captures.everything() == []
     finally:
         await client.close()
 

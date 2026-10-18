@@ -2,10 +2,13 @@
 
 A set is the directory `<DATA_DIR>/datasets/<name>/` of `<NNNN>.wav` clips. A recording
 session is a server-side background task (a 200-take session runs ~15 minutes, longer than
-an HTTP request should): per take the device beeps, then records `seconds` of mic audio, and
-the WAV is written as the set's next clip. Numbering continues after the highest existing
-index, so later sessions extend a set. Takes run back to back; the first failing take ends
-the session, the clips already written stay.
+an HTTP request should): per take the device beeps, then records a capture of `seconds`
+(src/captures.py), and a whole capture is moved into the set as its next clip. Numbering
+continues after the highest existing index, so later sessions extend a set. Takes run back
+to back. A take whose capture failed or has a gap is deleted and recorded again: a gap (audio
+lost to the link) does not count, while the device is offline the session waits for it, any
+other failure counts, and TAKE_ATTEMPTS failures in a row of one take end the session; the
+clips already written stay.
 """
 
 import asyncio
@@ -17,11 +20,16 @@ import zipfile
 from loguru import logger
 
 from src import config_store
-from src.device_server import CaptureBusyError
+from src.device_server import CaptureBusyError, DeviceOfflineError
 
 MAX_TAKES = 1000
 MAX_SECONDS = 10
 DEFAULT_SECONDS = 3
+TAKE_ATTEMPTS = 3
+# How often a session waiting for an offline device tries the take again.
+OFFLINE_RETRY_S = 1.0
+# The pause after a failed take before it is tried again.
+FAILED_TAKE_PAUSE_S = 5.0
 
 # Unicode \w (str pattern), so a Cyrillic set name is valid; no "." or "/" -> no traversal.
 _NAME_RE = re.compile(r"[\w-]{1,64}")
@@ -47,15 +55,14 @@ def next_index(path: str) -> int:
     return max(indices, default=0) + 1
 
 
-def write_clip(name: str, wav: bytes) -> None:
-    """Write `wav` as the set's next numbered clip.
+def add_clip(name: str, wav_path: str) -> None:
+    """Move the WAV at `wav_path` into the set as its next numbered clip.
 
-    Synchronous on purpose: picking the index and writing the file happen without an await
+    Synchronous on purpose: picking the index and moving the file happen without an await
     in between, so two sessions on the same set can never pick the same number.
     """
     path = set_dir(name)
-    with open(os.path.join(path, f"{next_index(path):04d}.wav"), "wb") as f:
-        f.write(wav)
+    os.replace(wav_path, os.path.join(path, f"{next_index(path):04d}.wav"))
 
 
 def list_sets() -> list[tuple[str, int]]:
@@ -80,15 +87,15 @@ def zip_set(name: str) -> bytes | None:
 
 
 class DatasetJob:
-    """One recording session. `state` walks recording -> done|stopped|error; `done` counts
-    the clips this session has written."""
+    """One recording session. `state` walks recording (waiting while the device is offline)
+    -> done|stopped|error; `done` counts the clips this session has written."""
 
     def __init__(self, name: str, device: str, takes: int, seconds: int):
         self.name = name
         self.device = device
         self.takes = takes
         self.seconds = seconds
-        self.state = "recording"  # recording | done | stopped | error
+        self.state = "recording"  # recording | waiting | done | stopped | error
         self.done = 0
         self.error: str | None = None
         self.stop_requested = False
@@ -108,8 +115,8 @@ class DatasetJob:
 class DatasetJobManager:
     """Runs recording sessions, at most one per device.
 
-    Construct with the async callables `capture_fn(device, seconds) -> wav bytes`
-    (DeviceManager.capture) and `play_fn(sound_path, device) -> dict`
+    Construct with the async callables `capture_fn(device, seconds) -> Capture` (a finished
+    one, DeviceManager.capture) and `play_fn(sound_path, device) -> dict`
     (DeviceManager.play_chime). Keeps the latest session of every set (running or finished)
     until the next session of that set starts.
     """
@@ -120,16 +127,51 @@ class DatasetJobManager:
         self._latest: dict[str, DatasetJob] = {}  # set name -> its latest session
         self._running: dict[str, DatasetJob] = {}  # device -> its in-flight session
 
+    async def _take(self, job: DatasetJob) -> None:
+        """Record one take into the set, again until its capture comes out whole or a stop
+        is asked. A take that lost audio (a gap) or found the device offline is recorded
+        again without counting; any other failure counts and pauses FAILED_TAKE_PAUSE_S (a
+        voice session that made the device busy gets to end), and TAKE_ATTEMPTS of them in a
+        row raise the last one."""
+        failures = 0
+        while not job.stop_requested:
+            try:
+                # The beep's result is ignored: a device without a speaker lands in
+                # "offline" there and just records without the cue.
+                await self._play_fn("", job.device)
+                cap = await self._capture_fn(job.device, job.seconds)
+            except DeviceOfflineError:
+                job.state = "waiting"
+                await asyncio.sleep(OFFLINE_RETRY_S)
+                continue
+            except Exception as e:
+                cap, error = None, str(e)
+            job.state = "recording"
+            if cap is not None:
+                if cap.state == "done" and not cap.gaps:
+                    # The sidecar goes first: a WAV left without one is not listed.
+                    os.remove(cap.stem + ".json")
+                    add_clip(job.name, cap.wav)
+                    job.done += 1
+                    return
+                cap.remove()
+                if cap.state == "done":
+                    logger.info(f"dataset {job.name!r} on {job.device!r}: take {job.done + 1} "
+                                f"lost audio ({len(cap.gaps)} gap(s)); recording it again")
+                    continue
+                error = cap.error
+            failures += 1
+            logger.warning(f"dataset {job.name!r} on {job.device!r}: take {job.done + 1} failed "
+                           f"({failures}/{TAKE_ATTEMPTS}): {error}")
+            if failures == TAKE_ATTEMPTS:
+                raise RuntimeError(error)
+            await asyncio.sleep(FAILED_TAKE_PAUSE_S)
+
     async def _run(self, job: DatasetJob) -> None:
         """Background task body: take after take until all are done or a stop is asked."""
         try:
             while job.done < job.takes and not job.stop_requested:
-                # The beep's result is ignored: a device without a speaker lands in
-                # "offline" there and just records without the cue.
-                await self._play_fn("", job.device)
-                wav = await self._capture_fn(job.device, job.seconds)
-                write_clip(job.name, wav)
-                job.done += 1
+                await self._take(job)
             job.state = "done" if job.done == job.takes else "stopped"
         except asyncio.CancelledError:
             # Shutdown cancellation: never swallow it, the task must be observed cancelled.

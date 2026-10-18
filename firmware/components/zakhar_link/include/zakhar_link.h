@@ -1,7 +1,8 @@
 // zakhar_link -- the device side of the zakhar WebSocket device protocol
 // (zakhar-voice-assistant docs/device-protocol.md): one connection to the server, the voice
-// session over a microphone tap, the settings and diagnostics messages and, on a device with a
-// speaker, the playback buffer. Shared by the espanel wall panel and the Voice PE firmware.
+// session and the captures over a microphone tap, the settings and diagnostics messages and, on a
+// device with a speaker, the playback buffer. Shared by the espanel wall panel and the Voice PE
+// firmware.
 #pragma once
 
 #include <stdbool.h>
@@ -63,7 +64,8 @@ typedef struct {
     // Apply and store the volume, then report it with zl_report_volume().
     void (*on_set_volume)(int percent);
     // A `capture` starts (true) or ends (false): show a recording indication; wake words are
-    // ignored meanwhile.
+    // ignored meanwhile. A lost link does not end it: it ends once all its audio is sent, or 2 s
+    // after its last frame was recorded when it cannot be sent.
     void (*on_capture)(bool active);
     // Asked on a wake word that would start a session (online, detection on, no capture); false
     // ignores it.

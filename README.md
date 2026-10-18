@@ -248,13 +248,24 @@ Debug and dataset calls of the panel API (`http://<host>:8201`), meant for an ag
 - `curl -F file=@zakhar.tflite http://<host>:8201/api/wake-models` — upload a wake-word model
   as `uploaded/<stem>` (here `uploaded/zakhar`); devices already using that name get the new
   file at once.
+- `POST /api/capture` `{"device": "<name>", "seconds": 60}` — record `seconds` (1–300) of
+  the device's microphone into `data/captures/<device>/<YYYYmmdd-HHMMSS>-<id>.wav`. The
+  server writes the audio as it arrives; a lost link or a server restart does not end the
+  capture (docs/device-protocol.md, «Capture»), and audio that did get lost shows in `gaps`.
+  An offline device answers 409 at once. `GET /api/capture?device=<name>` — its state
+  (`starting` until the first audio, `recording`, `done`, `error`), countdown and gaps;
+  `GET /api/capture/result?device=<name>` — its newest finished capture. Captures stay until
+  deleted: `GET /api/captures` lists them, `GET /api/captures/<device>/<name>.wav` downloads
+  one, `DELETE /api/captures/<device>/<name>` deletes it.
 - `POST /api/datasets/<set>` `{"device": "<name>", "takes": 200, "seconds": 3}` — record a
   wake-word dataset: for each take the speaker beeps, then records `seconds` (1–10, default
   3) into `data/datasets/<set>/NNNN.wav`; a new session on the same set continues the
-  numbering. `GET /api/datasets` lists the sets with their clip counts and the session
+  numbering. A take that failed or lost audio is recorded again; while the device is offline
+  the session waits for it (state `waiting`), and three failures in a row of one take end it.
+  `GET /api/datasets` lists the sets with their clip counts and the session
   state, `POST /api/datasets/<set>/stop` stops after the current take,
   `GET /api/datasets/<set>.zip` downloads the set. Detection stays on between takes, so a
-  word said after a take's window starts a voice session and ends the recording as busy —
+  word said after a take's window starts a voice session and the next take fails as busy —
   turn detection off for the session.
 
 The Voice PE speaker firmware lives in `firmware/` — plain ESP-IDF C. Its

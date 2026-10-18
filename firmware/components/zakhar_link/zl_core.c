@@ -118,10 +118,15 @@ static bool decode_fields(const cJSON *o, const char *type, zl_msg_t *m)
     }
     if (strcmp(type, "capture") == 0) {
         m->type = ZL_MSG_CAPTURE;
+        if (!get_u32(field(o, "id"), &m->id) || m->id == 0) return false;
         const cJSON *v = field(o, "seconds");
         if (!cJSON_IsNumber(v) || !(v->valuedouble > 0 && v->valuedouble * 1000 <= UINT32_MAX)) return false;
         m->capture_ms = (uint32_t)(v->valuedouble * 1000);
         return true;
+    }
+    if (strcmp(type, "capture_resume") == 0) {
+        m->type = ZL_MSG_CAPTURE_RESUME;
+        return get_u32(field(o, "id"), &m->id) && get_u32(field(o, "from"), &m->from);
     }
     if (strcmp(type, "model") == 0) {
         m->type = ZL_MSG_MODEL;
@@ -185,7 +190,7 @@ static char *finish(cJSON *o, bool ok)
     return s;
 }
 
-char *zl_encode_hello(const zl_config_t *cfg, int volume)
+char *zl_encode_hello(const zl_config_t *cfg, int volume, uint32_t capture)
 {
     const bool speaker = cfg->play_rate > 0;
     cJSON *o = message("hello");
@@ -203,6 +208,7 @@ char *zl_encode_hello(const zl_config_t *cfg, int volume)
              cJSON_AddNumberToObject(play, "buffer_ms", cfg->play_buffer_ms) != NULL &&
              cJSON_AddNumberToObject(o, "volume", volume) != NULL;
     }
+    if (ok && capture != 0) ok = cJSON_AddNumberToObject(o, "capture", capture) != NULL;
     return finish(o, ok);
 }
 
@@ -237,10 +243,11 @@ char *zl_encode_wake_peak(int percent)
     return value_message("wake_peak", percent);
 }
 
-char *zl_encode_audio_end(const char *reason)
+char *zl_encode_audio_end(const char *reason, uint32_t id)
 {
     cJSON *o = message("audio_end");
-    return finish(o, o != NULL && cJSON_AddStringToObject(o, "reason", reason) != NULL);
+    return finish(o, o != NULL && cJSON_AddStringToObject(o, "reason", reason) != NULL &&
+                         cJSON_AddNumberToObject(o, "id", id) != NULL);
 }
 
 char *zl_encode_model_loaded(zl_model_t kind, const char *name, bool ok)
@@ -293,6 +300,19 @@ bool zl_capture_done(uint32_t pos, uint32_t start, uint32_t frames)
     return pos - start >= frames;
 }
 
+bool zl_capture_expired(uint32_t pos, uint32_t start, uint32_t frames)
+{
+    return (uint64_t)(pos - start) >= (uint64_t)frames + ZL_CAPTURE_KEEP_FRAMES;
+}
+
+void zl_put_u32le(uint8_t *p, uint32_t v)
+{
+    p[0] = (uint8_t)v;
+    p[1] = (uint8_t)(v >> 8);
+    p[2] = (uint8_t)(v >> 16);
+    p[3] = (uint8_t)(v >> 24);
+}
+
 // ---------------------------------------------------------------- the voice session
 
 zl_wake_t zl_sess_wake_check(const zl_sess_t *s)
@@ -335,13 +355,11 @@ bool zl_sess_capture(zl_sess_t *s)
     return true;
 }
 
-void zl_sess_lost(zl_sess_t *s, bool *was_open, bool *was_capture)
+void zl_sess_lost(zl_sess_t *s, bool *was_open)
 {
     *was_open = s->open;
-    *was_capture = s->capture;
     s->open = false;
     s->mic = false;
-    s->capture = false;
     s->detect_off = false;
 }
 

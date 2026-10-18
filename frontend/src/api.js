@@ -116,16 +116,16 @@ export const getWakeProbability = (device) =>
 export const setWakeProbabilityStream = (device, enabled) =>
   request("/api/device/wake-probability", { method: "POST", body: { device, enabled } });
 
-// Background capture: the recording runs as a server-side task decoupled from the
-// browser request, so closing the browser does not cancel it. start kicks it off
-// (202 -> initial status), getCaptureStatus polls for the live countdown, and
+// Capture: the device records on its own and the server writes the audio to disk as it
+// arrives, so closing the browser does not cancel it. start kicks it off
+// (202 -> status "starting"), getCaptureStatus polls for the live countdown, and
 // downloadCaptureResult fetches the finished WAV.
 export const startCapture = (device, seconds) =>
   request("/api/capture", { method: "POST", body: { device, seconds } });
 export const getCaptureStatus = (device) =>
   request(`/api/capture?device=${encodeURIComponent(device)}`);
 
-// Download the already-recorded WAV held server-side (one-shot; consumed on read)
+// Download the device's newest finished capture (it stays on the server until deleted)
 // and trigger a browser download. The backend returns the WAV as an attachment; we
 // fetch it as a blob and click a temporary <a download>. On a non-OK response the
 // JSON/text error body is read and thrown as an ApiError, like request() does.

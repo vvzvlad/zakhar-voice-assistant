@@ -98,14 +98,14 @@ def record_one(panel, device, clip, seconds, pre_roll, player_argv):
         state = snap.get("state")
         if state == "done":
             break
-        if state in ("error", "cancelled"):
+        if state == "error":
             return None, (state, snap.get("error") or state)
         if state == "idle":
             return None, ("idle", "no live capture job")
         time.sleep(min(max(snap.get("remaining", 1), 1), 2))
     else:
         return None, ("timeout", f"no 'done' within {seconds + 25}s")
-    # 4) download the WAV (one-shot, consumed server-side)
+    # 4) download the WAV (the server keeps it in data/captures until it is deleted)
     rst, rbody = _request(base + "/api/capture/result?" + dev_q)
     if rst == 200 and rbody:
         return rbody, None
