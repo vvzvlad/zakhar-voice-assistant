@@ -203,7 +203,7 @@ docker compose pull && docker compose up -d
   `{name, url, token, transport, prompt, slow}` — пометка сервера как `slow`
   заставляет ассистента произнести короткую реплику-заполнитель перед вызовом его
   инструментов), `calendar` (url / username / password / calendar), `assistant_tasks`
-  (enabled / url / secret / task_suffix / prompt — долгие задачи для ассистента студии
+  (enabled / url / secret / task_suffix / prompt — долгие задачи для ассистента
   ZeroClaw через его канал webhook; его `send_url` должен указывать на
   `http://<host>:8201/api/assistant-tasks/reply`, там ответ сохраняется и звучит на колонке,
   с которой пришла задача),

@@ -1,4 +1,4 @@
-"""Jobs handed off to the studio assistant (ZeroClaw) and delivery of its replies.
+"""Jobs handed off to the ZeroClaw assistant and delivery of its replies.
 
 A job goes to ZeroClaw's webhook channel as a signed POST; ZeroClaw only queues it
 and runs the agent later, then posts every reply of that agent back to the panel

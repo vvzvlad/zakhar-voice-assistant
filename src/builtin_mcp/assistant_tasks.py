@@ -1,6 +1,6 @@
 """Built-in assistant-tasks MCP server (in-process FastMCP).
 
-Lets the model hand a long job to the studio assistant (ZeroClaw) and list the jobs
+Lets the model hand a long job to the ZeroClaw assistant and list the jobs
 handed off so far. The tools are thin: the originating speaker comes from the per-run
 ContextVar (never an LLM-visible argument), the work is done by the AssistantTasks
 service. Every tool catches its exceptions and returns a human-readable Russian string
@@ -21,8 +21,8 @@ def build_assistant_tasks_server(tasks) -> FastMCP:
     @mcp.tool(
         name="delegate_task",
         description=(
-            "Передать задачу ассистенту студии (ZeroClaw): долгое исследование, поиск в "
-            "интернете, вопросы по вики и таблицам студии. Ответ придёт позже и прозвучит "
+            "Передать задачу ассистенту (агенту ZeroClaw): долгое исследование, поиск, "
+            "вопрос, на который нужно время. Ответ придёт позже и прозвучит "
             "на этой же колонке. text — что нужно сделать или выяснить."
         ),
     )
@@ -36,7 +36,7 @@ def build_assistant_tasks_server(tasks) -> FastMCP:
     @mcp.tool(
         name="list_tasks",
         description=(
-            "Последние задачи, переданные ассистенту студии: номер, время, колонка, текст "
+            "Последние задачи, переданные ассистенту: номер, время, колонка, текст "
             "и ответ или «в работе». limit — сколько последних задач показать."
         ),
     )

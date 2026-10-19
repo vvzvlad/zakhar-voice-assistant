@@ -168,7 +168,7 @@ class CalendarConfig(BaseModel):
 
 
 class AssistantTasksConfig(BaseModel):
-    # Jobs handed off to the studio assistant (ZeroClaw) through its webhook channel;
+    # Jobs handed off to the ZeroClaw assistant through its webhook channel;
     # ZeroClaw posts each reply to POST /api/assistant-tasks/reply, which speaks it.
     # Master switch: a disabled source is removed from the ToolHub and its prompt block is dropped.
     enabled: bool = Field(True, title="Enabled", description=SOURCE_ENABLED_DESCRIPTION)

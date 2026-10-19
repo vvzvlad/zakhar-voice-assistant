@@ -129,7 +129,7 @@ async def main() -> None:
         reminders_store = RemindersStore(os.path.join(config_store.DATA_DIR, "reminders.db"))
         scheduler = ReminderScheduler(reminders_store)
 
-    # Jobs handed off to the studio assistant (ZeroClaw). Always built: the panel takes
+    # Jobs handed off to the ZeroClaw assistant. Always built: the panel takes
     # its replies even while the tool source is off. The service reads its config and the
     # speakers through `rt`, which is late-bound below (the tool source built off it
     # exists before the Runtime does).

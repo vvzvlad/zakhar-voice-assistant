@@ -1,4 +1,4 @@
-"""Tests for jobs handed off to the studio assistant (src.assistant_tasks) and its
+"""Tests for jobs handed off to the ZeroClaw assistant (src.assistant_tasks) and its
 built-in MCP tools: the signed webhook POST, the ledger, and speaking the replies."""
 
 import asyncio

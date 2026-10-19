@@ -273,7 +273,7 @@ class PanelServer:
         self.prompt_store = prompt_store
         self.agent_mcp = agent_mcp
         # assistant_task_reply: optional async callable (payload) -> (status, body) that
-        #   takes one reply of the studio assistant (AssistantTasks.on_reply). None ->
+        #   takes one reply of the ZeroClaw assistant (AssistantTasks.on_reply). None ->
         #   POST /api/assistant-tasks/reply returns 503.
         self.assistant_task_reply = assistant_task_reply
         # reload_status: optional zero-arg callable -> list[str] of backend categories
@@ -416,7 +416,7 @@ class PanelServer:
         return web.json_response(result)
 
     async def _post_assistant_task_reply(self, request: web.Request) -> web.Response:
-        """The send_url of ZeroClaw's webhook channel: every reply of the studio assistant
+        """The send_url of ZeroClaw's webhook channel: every reply of the ZeroClaw assistant
         lands here, {"content", "thread_id"?, "recipient"?}, and is stored on its task and
         spoken on the task's speaker. No auth, like the rest of the trusted-LAN panel.
 
