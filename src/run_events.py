@@ -6,6 +6,22 @@ import json
 
 from loguru import logger
 
+from src.runs_store import summary_row
+
+
+async def record_run(rt, record: dict) -> None:
+    """Insert a finished run into the run log and push it to live panel
+    subscribers; a failure is logged, never raised. No-op when the log is off."""
+    store, events = rt.runs_store, rt.run_events
+    if store is None:
+        return
+    try:
+        run_id = await asyncio.to_thread(store.insert, record)
+        if events is not None:
+            await events.broadcast({"type": "run", "run": summary_row(record, run_id)})
+    except Exception as e:
+        logger.error(f"run record failed: {e}")
+
 
 class RunEventsHub:
     """Fan-out of finalized runs to connected WebSocket panel clients.

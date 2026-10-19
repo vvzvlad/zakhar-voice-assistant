@@ -63,7 +63,9 @@ def build_agent_mcp(rt) -> FastMCP:
         description=(
             "List recent voice interactions (newest first): what the user said "
             "(stt_text), what the assistant replied (llm_text), result and stage "
-            "timings. Optional filters: device (exact speaker name), search "
+            "timings. Rows with reason say/reminder/assistant are the assistant's own "
+            "speech: llm_text is what was spoken, stt_text the task text or empty. "
+            "Optional filters: device (exact speaker name), search "
             "(substring match on request/reply text), limit (max rows)."
         ),
     )
@@ -151,7 +153,8 @@ def build_agent_mcp(rt) -> FastMCP:
         description=(
             "Speak arbitrary text out loud on a speaker (the text also goes to its "
             "screen, if any). device: speaker name from list_devices; "
-            "omitted = the first online speaker."
+            "omitted = the first online speaker. The phrase is recorded in the run "
+            "log and joins the speaker's conversation context."
         ),
     )
     async def say(text: str, device: str | None = None) -> dict:
@@ -165,7 +168,7 @@ def build_agent_mcp(rt) -> FastMCP:
                 client = _first_online(manager)
                 if client is None:
                     return {"error": "no online speakers"}
-            await client.announce(text)
+            await client.announce(text, "say")
             return {"ok": True, "device": client.cfg.name}
         except Exception as e:
             return {"error": f"say failed: {e}"}

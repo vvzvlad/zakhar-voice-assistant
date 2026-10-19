@@ -14,7 +14,7 @@ import numpy as np
 import pytest
 import soxr
 
-from src import captures, device_server
+from src import captures, context, device_server
 from src.config_service import ConfigService
 from src.device_server import (
     CAPTURE_AUDIO, MIC, MODEL, PLAY, CaptureBusyError, DeviceManager, DeviceOfflineError,
@@ -22,6 +22,7 @@ from src.device_server import (
 from src.plugins.base import Deps
 from src.plugins.vad.webrtc import WebRtcVadBackend
 from src.prompt_store import PromptStore
+from src.runs_store import RunsStore
 from src.runtime import Runtime
 from src.tts import TtsBackend, pcm_mime
 from tests.test_pipeline import FakeToolHub, FakeVad, patch_llm
@@ -422,18 +423,52 @@ async def test_wake_drops_an_announcement_already_on_the_wire(srv):
     )
 
 
-async def test_announce_reports_the_tts_attempts(srv):
+async def test_a_reminder_is_a_run_and_a_line_of_the_dialog(srv, tmp_path):
+    srv.rt.runs_store = RunsStore(str(tmp_path / "runs.db"))
     dev = await srv.connect()
     await dev.recv()  # config
-    kitchen = next(c for c in srv.manager.clients if c.name == "kitchen")
-    attempts = []
-    say = asyncio.create_task(kitchen.announce("молоко", attempts))
+    say = asyncio.create_task(srv.manager.announce("kitchen", "молоко"))
     assert await dev.recv() == {"type": "reply", "text": "молоко"}
     start = await dev.recv()
     assert (await dev.recv())["type"] == "play_end"
     await dev.send(type="played", id=start["id"])
     await asyncio.wait_for(say, 2)
-    assert [(a["kind"], a["outcome"]) for a in attempts] == [("tts", "spoke")]
+
+    [row] = srv.rt.runs_store.list()
+    run = srv.rt.runs_store.get(row["id"])
+    assert (run["device"], run["reason"], run["result"], run["stt_text"], run["llm_text"]) == (
+        "kitchen", "reminder", "ok", None, "молоко")
+    assert [(a["kind"], a["outcome"]) for a in run["attempts"]] == [("tts", "spoke")]
+    assert run["t_tts"] is not None
+    assert context.load_context(str(tmp_path / "context_kitchen.txt")) == [
+        {"role": "assistant", "content": "молоко"}]
+
+
+async def test_announce_on_an_offline_device_is_an_error_run(srv, tmp_path):
+    srv.rt.runs_store = RunsStore(str(tmp_path / "runs.db"))
+    with pytest.raises(RuntimeError, match="offline"):
+        await srv.device().announce("молоко", "say")
+    [row] = srv.rt.runs_store.list()
+    assert (row["reason"], row["result"]) == ("say", "error")
+    assert srv.rt.runs_store.get(row["id"])["error_stage"] == "device"
+    assert not (tmp_path / "context_kitchen.txt").exists()
+
+
+async def test_announce_whose_speech_fails_is_a_tts_error_run(srv, tmp_path, monkeypatch):
+    srv.rt.runs_store = RunsStore(str(tmp_path / "runs.db"))
+    dev = await srv.connect()
+    await dev.recv()  # config
+
+    async def down(text, lang="ru"):
+        raise RuntimeError("tts down")
+
+    monkeypatch.setattr(srv.tts, "synthesize", down)
+    with pytest.raises(Exception, match="tts down"):
+        await srv.device().announce("молоко", "say")
+    [row] = srv.rt.runs_store.list()
+    assert (row["reason"], row["result"]) == ("say", "error")
+    assert srv.rt.runs_store.get(row["id"])["error_stage"] == "TTS"
+    assert not (tmp_path / "context_kitchen.txt").exists()
 
 
 async def test_run_ends_when_played_never_comes(srv, monkeypatch):

@@ -58,12 +58,14 @@ class StubClient:
         self.cfg = SimpleNamespace(name=name)
         self.online = online
         self.announced = []
+        self.reasons = []
         self.pipeline = StubPipeline()
 
-    async def announce(self, text):
+    async def announce(self, text, reason, request=None):
         if not self.online:
             raise RuntimeError(f"{self.cfg.name} is offline")
         self.announced.append(text)
+        self.reasons.append(reason)
 
 
 def make_rt(clients=(), runs_store=None, svc=None):
@@ -189,6 +191,7 @@ async def test_say_on_named_device():
 
     assert out == {"ok": True, "device": "hall"}
     assert hall.announced == ["привет"]
+    assert hall.reasons == ["say"]
     assert kitchen.announced == []
 
 

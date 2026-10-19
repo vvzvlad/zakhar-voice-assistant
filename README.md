@@ -233,6 +233,7 @@ like the admin panel). Tools:
 - `update_config(patch)` — deep-merge a config patch; changes apply live (hot-reload).
 - `list_devices()` — configured speakers with live status.
 - `say(text, device?)` — speak arbitrary text on a speaker (TTS, played as an announcement).
+  The phrase is recorded in the run log and joins the speaker's conversation context.
 - `ask(text, device?, speak?)` — full assistant turn (LLM + smart-home tools +
   conversation context) as if the user spoke it; the reply is optionally spoken.
 

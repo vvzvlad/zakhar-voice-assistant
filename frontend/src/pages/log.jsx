@@ -6,7 +6,7 @@ import React, { useState, useEffect, useCallback, useRef } from "react";
 import { Ic } from "../components/icons.jsx";
 import { PageHeader, Waterfall, KV, Loading, ErrorBox, Select, fillerMarkerPct } from "../components/primitives.jsx";
 import { getRuns, getRun, openRunsStream, runAudioUrl, downloadRunAudio, runTtsAudioUrl, downloadRunTtsAudio } from "../api.js";
-import { RESULT_META, STAGE_COLOR, fmtSec, mapRun, totalMs, statusMeta, applyStreamedRun, pageWindow } from "../runsModel.js";
+import { RESULT_META, STAGE_COLOR, fmtSec, mapRun, totalMs, statusMeta, isAnnouncement, applyStreamedRun, pageWindow } from "../runsModel.js";
 import { FILLER_COLOR } from "../stageMeta.js";
 import { matchesFilters } from "../runsFilters.js";
 import { useDeviceList } from "../appData.jsx";
@@ -181,7 +181,7 @@ function Drawer({ r, loading, error, onClose }) {
           <div className="z-sl">Transcript</div>
           <div className="z-card"><div style={{ padding: "4px 17px" }}>
             <div className="z-f"><div className="z-fl"><b style={{ color: "var(--mut)", fontWeight: 600, fontSize: 11, textTransform: "uppercase", letterSpacing: ".04em" }}>Recognized (STT)</b></div>
-              <div style={{ fontSize: 14, color: r.stt ? "var(--ink)" : "var(--mut2)", fontStyle: r.stt ? "normal" : "italic" }}>{r.stt || "— silence, no speech detected —"}</div></div>
+              <div style={{ fontSize: 14, color: r.stt ? "var(--ink)" : "var(--mut2)", fontStyle: r.stt ? "normal" : "italic" }}>{r.stt || (isAnnouncement(r) ? "— no request —" : "— silence, no speech detected —")}</div></div>
             {r.filler_text && (
               <div className="z-f"><div className="z-fl">
                 <b style={{ color: "var(--mut)", fontWeight: 600, fontSize: 11, textTransform: "uppercase", letterSpacing: ".04em" }}>
@@ -442,7 +442,7 @@ function Log() {
                         <td className="tm">{r.time}</td>
                         <td style={{ fontWeight: 600 }}>{deviceLabel(devices, r.device)}</td>
                         <td className="mono" data-testid="run-chain" style={{ fontSize: 11.5, color: r.chain ? "var(--ink2)" : "var(--mut2)" }}>{r.chain || "—"}</td>
-                        <td><div className={"z-tx" + (r.stt ? "" : " mut")}>{r.stt || (r.live ? "…" : "(silence)")}</div></td>
+                        <td><div className={"z-tx" + (r.stt ? "" : " mut")}>{r.stt || (r.live ? "…" : isAnnouncement(r) ? "—" : "(silence)")}</div></td>
                         <td><div className={"z-tx" + (r.llm ? "" : " mut")}>{r.llm || (r.live ? "…" : "—")}</div></td>
                         <td className="num">{r.tokens || "—"}</td>
                         <td><Waterfall r={r} /></td>
