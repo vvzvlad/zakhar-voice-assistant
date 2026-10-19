@@ -228,8 +228,9 @@ device                                   server
   a server counter. The audio is mono at `hello.play.rate`; the server resamples to it.
 - The device plays streams back to back in arrival order (the end-of-phrase chime, a filler, the
   answer) and sends `played {id, dry, gap_ms}` when the last sample of a stream is out: `dry` is
-  how many times the stream ran dry after it had started and before its last sample, `gap_ms` the
-  silence the speaker played meanwhile, in ms. The wait before a stream's first sample is not
+  how many times the stream ran dry after it had started and before its `play_end` came (a
+  `play_end` that comes after the last sample is out counts too), `gap_ms` the silence the speaker
+  played meanwhile, in ms. The wait before a stream's first sample is not
   counted. Both are optional: a device that does not count them (an older firmware) sends
   `played {id}`, and the server then records nothing for the stream.
 - `play_stop` flushes everything queued and playing; the device answers `played {id, "dropped":

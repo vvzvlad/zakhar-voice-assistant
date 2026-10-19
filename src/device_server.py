@@ -207,7 +207,7 @@ class _Stream:
         self.sent_s = 0.0  # seconds of audio sent
         # Resolves to "played", "dropped" or "closed" (the connection went away).
         self.ended = asyncio.get_running_loop().create_future()
-        # From `played`: how many times the stream ran dry mid-way and the ms of silence
+        # From `played`: how many times the stream ran dry before its play_end and the ms of silence
         # played meanwhile. None when the device does not report them.
         self.dry = None
         self.gap_ms = None
