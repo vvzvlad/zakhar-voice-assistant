@@ -1,14 +1,15 @@
 // @vitest-environment jsdom
 // Render-level tests for the Prompt, Tools and Devices pages: the profile's
 // preferred voice is shown by name and flagged when it is not the voice speaking
-// now, each page saves with one Save, and deleting an MCP server or a speaker
-// asks first.
+// now, each page saves with one Save, deleting an MCP server or a speaker
+// asks first, and a switched-off one keeps its buttons unfaded.
 import React from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, cleanup, fireEvent, waitFor, within } from "@testing-library/react";
 import { MCP, Prompt, Devices } from "../pages/integrations.jsx";
 import { useAppData } from "../appData.jsx";
 import { getOptions, getPromptProfile, updatePromptProfile } from "../api.js";
+import { faded } from "./faded.js";
 
 vi.mock("../appData.jsx", () => ({ useAppData: vi.fn() }));
 vi.mock("../api.js", () => ({
@@ -123,5 +124,22 @@ describe("delete asks first", () => {
     expect(data.patch).not.toHaveBeenCalled();
     fireEvent.click(screen.getByText("Delete"));
     await waitFor(() => expect(data.patch).toHaveBeenCalledWith({ core: { devices: [] } }));
+  });
+});
+
+describe("a switched-off item fades its content, not its buttons", () => {
+  it("speaker", () => {
+    useAppData.mockReturnValue(appData({ devices: [{ name: "kitchen", enabled: false }] }));
+    render(<Devices />);
+    expect(faded(screen.getByText("kitchen"))).toBe(true);
+    for (const b of ["Enable", "Edit", "Delete"]) expect(faded(screen.getByRole("button", { name: b }))).toBe(false);
+  });
+
+  it("MCP server", async () => {
+    useAppData.mockReturnValue(appData({ mcp_servers: [{ name: "home", url: "http://h/mcp", enabled: false }] }));
+    render(<MCP />);
+    const card = (await screen.findByText("http://h/mcp")).closest(".z-card");
+    expect(faded(within(card).getByText("home"))).toBe(true);
+    for (const b of ["Enable", "Edit", "Delete"]) expect(faded(within(card).getByRole("button", { name: b }))).toBe(false);
   });
 });
