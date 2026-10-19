@@ -30,12 +30,13 @@ const config = { core: { chains, mcp_servers: [{ name: "home" }] } };
 
 const single = (id, selected, label, values) => ({ id, selected, providers: [{ id: selected, label, values }] });
 
-function catalog({ wake = true, stress = true } = {}) {
+function catalog({ wake = true, stress = true, followup = true } = {}) {
   return {
     categories: [
       single("vad", "webrtc", "WebRTC VAD", {}),
       single("wakeword", "vosk", "Vosk", { enabled: wake }),
       single("stress", "ruaccent", "RuAccent", { enabled: stress }),
+      single("followup", "jev", "Jev", { enabled: followup }),
       {
         id: "tts",
         variants: [
@@ -86,20 +87,22 @@ describe("Dashboard service map", () => {
     expect(speech.querySelector(".prov").textContent).toBe("Fish Audio");
     expect(within(speech).getByTestId("speech-voice").textContent).toBe("Anna · +1 fallback");
     expect(speech.textContent).toContain("stress on");
+    expect(speech.textContent).toContain("follow-up on");
     expect(speech.textContent).toContain("0.60s avg");
 
-    expect([capture, tile("logic"), speech].map(dots)).toEqual([["ok", "ok"], ["ok"], ["ok", "ok"]]);
+    expect([capture, tile("logic"), speech].map(dots)).toEqual([["ok", "ok"], ["ok"], ["ok", "ok", "ok"]]);
   });
 
   it("greys the dot of whatever is off", async () => {
     useAppData.mockReturnValue({
-      catalog: catalog({ wake: false, stress: false }),
+      catalog: catalog({ wake: false, stress: false, followup: false }),
       config: { core: { chains: chains.map((c) => ({ ...c, enabled: false })) } },
     });
     await renderDashboard();
     expect(tile("capture").textContent).toContain("wake-word verify off");
     expect(tile("speech").textContent).toContain("stress off");
-    expect([tile("capture"), tile("logic"), tile("speech")].map(dots)).toEqual([["ok", "off"], ["off"], ["ok", "off"]]);
+    expect(tile("speech").textContent).toContain("follow-up off");
+    expect([tile("capture"), tile("logic"), tile("speech")].map(dots)).toEqual([["ok", "off"], ["off"], ["ok", "off", "off"]]);
     expect(within(tile("logic")).getByText("no enabled chain")).toBeInTheDocument();
   });
 

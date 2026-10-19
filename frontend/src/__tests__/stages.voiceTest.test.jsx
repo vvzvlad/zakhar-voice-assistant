@@ -55,6 +55,7 @@ function makeCatalog() {
       cat("llm", "openrouter"),
       { ...cat("tts", "piper"), variants: [{ provider: "piper", enabled: true }] },
       { id: "stress", selected: "ruaccent", providers: [{ id: "ruaccent", label: "RuAccent", schema: { type: "object", properties: {} }, values: { enabled: true } }] },
+      { id: "followup", selected: "jev", providers: [{ id: "jev", label: "Jev", schema: { type: "object", properties: {} }, values: { enabled: false } }] },
     ],
     core: { schema: {}, values: {} },
   };

@@ -190,6 +190,28 @@ async def test_nothing_heard_runs_no_handler():
     assert outcomes(run) == [("a", "empty"), ("b", "empty")]
 
 
+@pytest.mark.parametrize("accept", [True, False])
+async def test_gate_is_asked_once_about_the_first_transcript_before_any_handler(accept):
+    first = Handler(Declined("не понял"))
+    rt = runtime([chain("a"), chain("b"), chain("c")],
+                 stt={"a": Stt(""), "b": Stt("а в спальне"), "c": Stt("а в спальне")},
+                 handlers={"a": Handler("x"), "b": first, "c": Handler("готово")})
+    asked, heard = [], []
+
+    async def gate(text):
+        asked.append((text, list(heard), list(first.calls)))
+        return accept
+
+    run = await voice(rt, on_text=lambda text, _t: heard.append(text), gate=gate)
+    assert asked == [("а в спальне", [], [])]
+    if accept:
+        assert heard == ["а в спальне"] and run.reply == "готово"
+    else:
+        assert heard == [] and first.calls == [] and run.reply is None
+        assert outcomes(run) == [("a", "empty"), ("b", "rejected")]
+        assert run.attempts[1]["text"] == "а в спальне"
+
+
 async def test_disabled_chain_is_skipped_and_last_enabled_has_no_next():
     off = Handler("x")
     rt = runtime([chain("a"), chain("off", enabled=False)],
