@@ -110,7 +110,7 @@ function Attempts({ attempts }) {
           </span>
           <span style={{ display: "flex", alignItems: "center", gap: 10 }}>
             <span className="mono" style={{ fontSize: 11, color: "var(--mut)" }}>
-              {followup ? `${a.probability != null ? `probability ${a.probability.toFixed(2)} · ` : ""}${fmtSec(a.t)}`
+              {followup ? `${a.probability != null ? `probability ${Math.round(a.probability * 100)}% · ` : ""}${fmtSec(a.t)}`
                 : tts ? fmtSec(a.t)
                 : a.stt ? `STT ${fmtSec(a.t_stt)} · handler ${fmtSec(a.t_handler)}`
                 : `handler ${fmtSec(a.t_handler)}`}
@@ -178,7 +178,7 @@ function Drawer({ r, loading, error, onClose }) {
             <Ic n="wakeword" w={15} />{duplicate
               ? <span><b>Dropped as a duplicate:</b> another device kept the phrase</span>
               : followupReject
-              ? <span><b>Not a continuation (follow-up check).</b> {followupCheck && followupCheck.probability != null ? `probability ${followupCheck.probability.toFixed(2)}` : "check failed"}</span>
+              ? <span><b>Not a continuation (follow-up check).</b> {followupCheck && followupCheck.probability != null ? `probability ${Math.round(followupCheck.probability * 100)}%` : "check failed"}</span>
               : <span><b>Rejected by wake-word verify.</b> {r.reason === "wakeword_error" ? "verifier error" : "wake word not confirmed"}{r.wakeword_score != null ? ` · score ${r.wakeword_score.toFixed(2)}` : ""}</span>}
           </div>}
 

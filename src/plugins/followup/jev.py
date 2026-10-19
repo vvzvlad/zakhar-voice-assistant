@@ -103,7 +103,7 @@ class JevFollowupGate(FollowupGate):
             return FollowupVerdict(accepted=False, probability=None)
         accepted = probability >= self._min_confidence
         logger.info(
-            f"jev follow-up: continuation={probability:.2f} "
+            f"jev follow-up: continuation={probability:.0%} "
             f"-> {'accept' if accepted else 'reject'}: {utterance!r}"
         )
         return FollowupVerdict(accepted=accepted, probability=probability)

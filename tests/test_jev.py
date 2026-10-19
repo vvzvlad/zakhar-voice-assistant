@@ -45,14 +45,24 @@ def _jev(respond):
     return get_provider("llm", "jev").create(JevConfig(api_key="key"), deps), requests
 
 
+def _choice(choice, confidence, rest, probabilities=None):
+    """A choice answer; by default `choice` at 0.9 and `rest` at 0.1, so the shown
+    probabilities differ from the confidence the gates read."""
+    return {"type": "choice", "choice": choice, "confidence": confidence,
+            "probabilities": {choice: 0.9, rest: 0.1} if probabilities is None else probabilities}
+
+
 def _answers(kind="device_command", target="set_light.entity=bright_room_light", action="on",
-             compound=0.05, kind_conf=0.95, target_conf=0.9, action_conf=0.9, delayed=0.05):
+             compound=0.05, kind_conf=0.95, target_conf=0.9, action_conf=0.9, delayed=0.05,
+             kind_probs=None, target_probs=None):
     """A Decisions response body answering the five questions."""
     def reply(request):
         return httpx.Response(200, json={"answers": {
-            "kind": {"type": "choice", "choice": kind, "confidence": kind_conf},
-            "target": {"type": "choice", "choice": target, "confidence": target_conf},
-            "action": {"type": "choice", "choice": action, "confidence": action_conf},
+            "kind": _choice(kind, kind_conf, "other" if kind != "other" else "device_command",
+                            kind_probs),
+            "target": _choice(target, target_conf, "none" if target != "none" else
+                              "set_scene.scene=night", target_probs),
+            "action": _choice(action, action_conf, "off" if action != "off" else "on"),
             "compound": {"type": "noul", "noul": compound},
             "delayed": {"type": "noul", "noul": delayed},
         }})
@@ -154,15 +164,37 @@ async def test_an_edited_commands_alias_reaches_the_next_request_without_a_rebui
 
 
 @pytest.mark.parametrize("respond, reason", [
-    (_answers(kind="other"), "decision model: kind other (0.95)"),
-    (_answers(kind_conf=0.6), "decision model: kind device_command (0.60)"),
-    (_answers(target="none"), "decision model: target none (0.90)"),
+    (_answers(kind="other"),
+     "decision model: kind other (other 90%, device_command 10%; confidence 95%)"),
+    (_answers(kind_conf=0.6),
+     "decision model: kind device_command (device_command 90%, other 10%; confidence 60%)"),
+    (_answers(target="none"),
+     "decision model: target none (none 90%, set_scene.scene=night 10%; confidence 90%)"),
     (_answers(target_conf=0.5),
-     "decision model: target set_light.entity=bright_room_light (0.50)"),
-    (_answers(compound=0.7), "decision model: compound (0.70)"),
+     "decision model: target set_light.entity=bright_room_light "
+     "(set_light.entity=bright_room_light 90%, none 10%; confidence 50%)"),
+    (_answers(compound=0.7), "decision model: compound (70%)"),
     (_answers(action="none"), "decision model: action none does not fit set_light"),
-    (_answers(action_conf=0.4), "decision model: action on (0.40)"),
-    (_answers(delayed=0.8), "decision model: delayed (0.80)"),
+    (_answers(action_conf=0.4), "decision model: action on (on 90%, off 10%; confidence 40%)"),
+    (_answers(delayed=0.8), "decision model: delayed (80%)"),
+    # The API rounds each probability: the shown percents are divided by their sum
+    # (0.99 here) and the lost percent goes to the largest remainder; options at 0%
+    # are left out.
+    (_answers(kind="other", kind_conf=0.48, kind_probs={"device_command": 0.26, "other": 0.73}),
+     "decision model: kind other (other 74%, device_command 26%; confidence 48%)"),
+    (_answers(target_conf=0.1, target_probs={
+        "set_light.entity=bright_room_light": 0.33, "set_scene.scene=night": 0.33,
+        "set_dimmer.device_id=night_light": 0, "set_climate.device_id=room_ac": 0, "none": 0.33}),
+     "decision model: target set_light.entity=bright_room_light "
+     "(set_light.entity=bright_room_light 34%, set_scene.scene=night 33%, none 33%; "
+     "confidence 10%)"),
+    # 50/26/25 sums to 101: the extra percent comes off the smallest remainder (0.50),
+    # not off the most likely option.
+    (_answers(target_conf=0.1, target_probs={
+        "set_light.entity=bright_room_light": 0.5, "set_scene.scene=night": 0.26, "none": 0.25}),
+     "decision model: target set_light.entity=bright_room_light "
+     "(set_light.entity=bright_room_light 49%, set_scene.scene=night 26%, none 25%; "
+     "confidence 10%)"),
 ])
 async def test_declines_what_is_not_one_confident_command(respond, reason):
     backend, _ = _jev(respond)
@@ -176,7 +208,7 @@ async def test_an_action_that_sets_a_level_needs_confidence():
         _answers(target="set_dimmer.device_id=night_light", action="off", action_conf=0.4))
     with pytest.raises(Declined) as ei:
         await _strict(backend, "ночничок погаси")
-    assert ei.value.reason == "decision model: action off (0.40)"
+    assert ei.value.reason == "decision model: action off (off 90%, on 10%; confidence 40%)"
 
 
 @pytest.mark.parametrize("text, tools, reason", [
@@ -236,6 +268,9 @@ def _timeout(request):
     (lambda request: httpx.Response(500, json={"error": "boom"}), "HTTPStatusError"),
     (_timeout, "ReadTimeout"),
     (lambda request: httpx.Response(200, json={"answers": {}}), "KeyError"),
+    (_answers(kind_probs={}), "ValueError"),
+    (_answers(kind_probs={"device_command": 0, "other": 0}), "ValueError"),
+    (_answers(kind_probs=[0.9, 0.1]), "ValueError"),
 ])
 async def test_failure_declines_without_retry(respond, error):
     backend, requests = _jev(respond)

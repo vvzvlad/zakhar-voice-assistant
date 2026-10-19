@@ -1190,9 +1190,10 @@ class Pipeline:
                             record["reason"] = ("followup_reject"
                                                 if followup_check["outcome"] == "rejected"
                                                 else "followup_error")
+                            p = followup_check["probability"]
                             logger.info(f"{self.name}: 🚫 follow-up dropped "
                                         f"({record['reason']}, "
-                                        f"probability={followup_check['probability']})")
+                                        f"probability={'—' if p is None else f'{p:.0%}'})")
                             self._emit(StageEvent.STT_END, {"text": ""})
                             self._emit(StageEvent.RUN_END, {})
                             return
