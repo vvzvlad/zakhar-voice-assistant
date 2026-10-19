@@ -226,6 +226,10 @@ static void test_session(void)
 
     assert(zl_sess_wake(&s) == ZL_WAKE_START && s.session == 2 && s.mic);  // a new wake replaces the session
     assert(!zl_sess_accepts(&s, &cur));
+    // The replaced session's playback still passes: only the server's play_stop drops it.
+    zl_msg_t play = msg_of("{\"type\": \"play_start\", \"session\": 1, \"id\": 7, \"rate\": 16000}");
+    zl_msg_t end = msg_of("{\"type\": \"play_end\", \"session\": 1, \"id\": 7}");
+    assert(zl_sess_accepts(&s, &play) && zl_sess_accepts(&s, &end));
     zl_sess_state(&s, ZL_STATE_IDLE);
     assert(!s.mic && !s.open);
     assert(!zl_sess_state(&s, ZL_STATE_LISTENING));  // a closed session reopens nothing
@@ -261,6 +265,8 @@ static void test_session(void)
     zl_msg_free(&cur);
     zl_msg_free(&old);
     zl_msg_free(&any);
+    zl_msg_free(&play);
+    zl_msg_free(&end);
     printf("ok: session\n");
 }
 
@@ -314,11 +320,6 @@ static void test_playq(void)
     write_samples(&q, a, 3);  // the dropped stream's frames and play_end still in flight
     zl_playq_end(&q, 5);
     assert(q.count == 0 && zl_playq_read(&q, out, 16) == 0 && zl_playq_take_done(&q, done) == 0);
-
-    // A wake flushed the queue, then a stream's play_start arrived: the server's play_stop drops it.
-    assert(zl_playq_start(&q, 50));
-    write_samples(&q, a, 3);
-    assert(zl_playq_flush(&q, ids) == 1 && ids[0] == 50);
 
     // An empty stream is done at play_end; a new play_start ends one still receiving.
     assert(zl_playq_start(&q, 6));

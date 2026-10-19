@@ -562,15 +562,13 @@ static void wake(void)
     // Counted back from the detection, not from now: this task may reach the event late.
     const uint32_t pos = atomic_load(&s_wake_pos);
     const uint32_t preroll = (uint32_t)s_cfg.preroll_ms * (ZL_MIC_RATE / 1000);
-    uint32_t dropped[ZL_PLAYQ_STREAMS];
-    size_t ndropped = 0;
+    // The playback is left alone: the detection may be the speaker's own voice. The server flushes
+    // it with play_stop once it takes the wake: at once when its wake-word check is off or nothing
+    // is going, otherwise once that check confirms the wake.
     lock();
     const zl_wake_t w = zl_sess_wake(&s_sess);
     const uint32_t session = s_sess.session;
-    if (w == ZL_WAKE_START) {
-        s_mic_pos = pos - (pos < preroll ? pos : preroll);
-        ndropped = zl_playq_flush(&s_playq, dropped);
-    }
+    if (w == ZL_WAKE_START) s_mic_pos = pos - (pos < preroll ? pos : preroll);
     unlock();
     if (w != ZL_WAKE_START) {  // a `detect` off came in while can_start was asked
         wake_refused(w);
@@ -578,7 +576,6 @@ static void wake(void)
     }
     ESP_LOGI(TAG, "wake word \"%s\": session %u", word, (unsigned)session);
     send_json(s_ws, zl_encode_wake(session, word));
-    send_dropped(s_ws, dropped, ndropped);
 }
 
 // The stop word: the playback is flushed, and the server stops the open session's run. The
