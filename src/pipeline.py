@@ -261,12 +261,26 @@ class Pipeline:
         if self.arbiter is not None:
             self.arbiter.run_event(self, event_type, payload)
 
-    async def on_start(self, conversation_id, wake_word_phrase) -> None:
+    def gates_wake(self, wake_word_phrase) -> bool:
+        """Whether a wake with this phrase goes through the server-side wake-word gate:
+        only a REAL wake-word run (non-empty phrase), and only when a real verifier is
+        loaded — a None backend (warm-up not done) or a PassthroughVerifier (stage
+        disabled) skips the gate entirely."""
+        wb = self.rt.wakeword_backend
+        return (
+            bool(wake_word_phrase)
+            and wb is not None
+            and not isinstance(wb, PassthroughVerifier)
+        )
+
+    async def on_start(self, conversation_id, wake_word_phrase, verified=None) -> None:
         """Handle a wake: cancel the older run, reset ALL per-run state, announce the run.
 
         Everything before the first await is synchronous, so the older run (its run
         task, a pending wake-word verify, its ack/filler plays) is cancelled before
-        any of it can run again."""
+        any of it can run again. `verified` is (score, t_ms) of a wake the device
+        server already confirmed with verify_wake: it is not gated again, and its run
+        record carries that verify."""
         if any(t is not None and not t.done() for t in (self._run_task, self._wakeword_task)):
             logger.info(f"{self.name}: new wake cancels the running run")
         # Also ends a follow-up window the previous answer opened.
@@ -277,20 +291,14 @@ class Pipeline:
             preroll_ms=PREROLL_MS if wake_word_phrase else 0,
             no_speech_timeout_ms=self.core.vad.no_speech_timeout_ms,
         )
+        if verified is not None:
+            self._wakeword_score, self._wakeword_t = verified
         logger.info(f"{self.name}: ▶️ run started (cid={conversation_id})")
         self._emit(StageEvent.RUN_START, {})
         self._emit(StageEvent.STT_START, {})
-        # Server-side wake-word gate decision. Gate only a REAL wake-word run
-        # (non-empty phrase), and only when a real verifier is
-        # loaded — a None backend (warm-up not done) or a PassthroughVerifier (stage
-        # disabled) skips the gate entirely so behavior is unchanged. RUN_START /
-        # STT_START above fire for BOTH paths (they don't light the LED).
-        wb = self.rt.wakeword_backend
-        gate = (
-            bool(wake_word_phrase)
-            and wb is not None
-            and not isinstance(wb, PassthroughVerifier)
-        )
+        # Server-side wake-word gate decision (gates_wake). RUN_START / STT_START above
+        # fire for BOTH paths (they don't light the LED).
+        gate = verified is None and self.gates_wake(wake_word_phrase)
         if gate:
             # Hold the run: do NOT emit STT_VAD_START and do NOT open the STT stream
             # until the verdict lands. The VAD session opened above still tracks the
@@ -605,49 +613,50 @@ class Pipeline:
         self._buffer2.clear()
         return pcm, pcm2
 
-    async def _run_wakeword_verify(self, pcm: bytes) -> None:
-        """Run the second-stage wake-word verifier on the pre-roll head, then gate.
-
-        Spawned exactly once per gated run (from on_audio). All the awaits live here,
-        so the on_audio gating branch that schedules this stays synchronous and the
-        eager-on_audio atomicity invariant holds. verify() never raises, but we still
-        bound it with the backend's timeout and treat a timeout/None as the configured
-        fail policy (fail_open accepts, fail_closed rejects). Decides confirm vs reject.
-        """
+    async def verify_wake(self, pcm: bytes) -> tuple[bool, float | None, int, bool]:
+        """Run the second-stage wake-word verifier on a pre-roll head: (accepted,
+        score, t_ms, error). verify() never raises, but we still bound it with the
+        backend's timeout and treat a timeout/None as the configured fail policy
+        (fail_open accepts, fail_closed rejects); `error` tells that case (no verdict,
+        score None) from a genuine verdict."""
         t0 = time.perf_counter()
         wb = self.rt.wakeword_backend
-        if wb is None or self._finalized:
-            return  # backend vanished, or the run is already gone.
         try:
             verdict = await asyncio.wait_for(wb.verify(pcm), timeout=wb.timeout_ms / 1000)
         except (asyncio.TimeoutError, Exception):  # noqa: BLE001 - timeout/error -> fail policy
             verdict = None
-        self._wakeword_t = int((time.perf_counter() - t0) * 1000)
-        self._wakeword_score = verdict.score if verdict is not None else None
+        t_ms = int((time.perf_counter() - t0) * 1000)
+        score = verdict.score if verdict is not None else None
         # A timeout / internal error has no verdict -> apply the fail policy.
         accepted = verdict.accepted if verdict is not None else wb.fail_open
         if verdict is None:
             logger.warning(
                 f"{self.name}: 🛡️ wake-word verify timed out/errored "
                 f"(fail_open={wb.fail_open}) -> {'accept' if accepted else 'reject'} "
-                f"({self._wakeword_t} ms)"
+                f"({t_ms} ms)"
             )
         elif accepted:
-            logger.info(
-                f"{self.name}: ✅ wake word confirmed (score={self._wakeword_score}, "
-                f"{self._wakeword_t} ms)"
-            )
+            logger.info(f"{self.name}: ✅ wake word confirmed (score={score}, {t_ms} ms)")
         else:
-            logger.info(
-                f"{self.name}: 🚫 wake word rejected (score={self._wakeword_score}, "
-                f"{self._wakeword_t} ms)"
-            )
+            logger.info(f"{self.name}: 🚫 wake word rejected (score={score}, {t_ms} ms)")
+        return accepted, score, t_ms, verdict is None
+
+    async def _run_wakeword_verify(self, pcm: bytes) -> None:
+        """Run verify_wake on the pre-roll head, then gate.
+
+        Spawned exactly once per gated run (from on_audio). All the awaits live here,
+        so the on_audio gating branch that schedules this stays synchronous and the
+        eager-on_audio atomicity invariant holds. Decides confirm vs reject.
+        """
+        if self.rt.wakeword_backend is None or self._finalized:
+            return  # backend vanished, or the run is already gone.
+        accepted, self._wakeword_score, self._wakeword_t, error = await self.verify_wake(pcm)
         if self._finalized:
             return  # the run was finalized while we were verifying.
         if accepted:
             await self._wakeword_confirm()
         else:
-            await self._wakeword_reject(error=(verdict is None))
+            await self._wakeword_reject(error=error)
 
     async def _wakeword_confirm(self) -> None:
         """Accept verdict: the verifier lets the run through.
@@ -935,42 +944,10 @@ class Pipeline:
                 if reason not in REJECT_REASONS and followup is None:
                     self._schedule_ack()
 
-                # Trim the configured lead-in (wake-word tail / button-press click) off the
-                # start of the captured sample. The trim is applied ONCE here, so every
-                # downstream consumer in this run uses the trimmed sample: STT, the t_vad
-                # metric, the capture-session WAV and the stored diagnostic audio. Read live
-                # off core.vad so it hot-applies. trim_start_pcm never returns empty audio,
-                # so the non-empty guard above still holds afterwards. A follow-up phrase
-                # has no lead-in: its audio starts at the `listening`, before the phrase.
-                trim_ms = self.core.vad.trim_start_ms
-                if trim_ms > 0 and followup is None:
-                    trimmed = trim_start_pcm(pcm, trim_ms)
-                    if len(trimmed) != len(pcm):
-                        logger.info(
-                            f"{self.name}: ✂️ trimmed {len(pcm) - len(trimmed)} bytes "
-                            f"(~{trim_ms} ms) off sample start"
-                        )
-                    pcm = trimmed
-                    # Trim the other (non-selected) channel by the same amount so
-                    # the two channels of the stored stereo WAV stay time-aligned.
-                    if pcm2:
-                        pcm2 = trim_start_pcm(pcm2, trim_ms)
-
-                # Optional pre-STT conditioning of the FULL utterance (read live off
-                # core.vad, so the toggles hot-apply). High-pass first to strip
-                # DC/rumble, then peak-normalize so the quieter less-processed channel
-                # reaches a consistent level without clipping. Applied ONCE to the whole
-                # sample (never per chunk), so the capture WAV, the stored diagnostic
-                # audio and STT all get the exact audio Whisper sees.
-                # `pcm2` (the other channel) is deliberately kept raw here, so the
-                # stored stereo WAV allows comparing conditioned vs raw channels.
-                # NOTE: mic_normalize gates ONLY this pre-STT normalization; the
-                # decision-only VAD boost applied per chunk in on_audio is gated by
-                # `core.vad.mic_auto_gain`.
-                if self.core.vad.mic_highpass:
-                    pcm = highpass(pcm)
-                if self.core.vad.mic_normalize:
-                    pcm = normalize_peak(pcm)
+                # A follow-up phrase has no lead-in: its audio starts at the
+                # `listening`, before the phrase. The non-empty guard above still holds
+                # afterwards (trim_start_pcm never returns empty audio).
+                pcm, pcm2 = self._condition_audio(pcm, pcm2, trim=followup is None)
 
                 # Optional raw audio capture: save the finalized utterance PCM (already
                 # trimmed by core.vad.trim_start_ms above) as a 16 kHz / mono / 16-bit WAV.
@@ -1001,14 +978,9 @@ class Pipeline:
                     except Exception as e:
                         logger.error(f"{self.name}: raw audio capture failed: {e}")
 
-                # Observability record for this run. Accumulated across all terminal
-                # paths below and inserted exactly once in the finally; the rest of
-                # the timings fill in as stages complete.
-                # t_vad is the captured-utterance duration in ms (the "VAD capture"
-                # segment shown in the UI waterfall), derived from the PCM length —
-                # NOT the CPU time spent running the VAD.
-                # audio_ms is intentionally left None for now: the reply's playback
-                # duration is not measured yet.
+                # Observability record for this run (_new_record). Accumulated across
+                # all terminal paths below and inserted exactly once in the finally;
+                # the rest of the timings fill in as stages complete.
                 # Native TTS reply audio captured during synthesis (see the TTS section) and
                 # stored after the run is inserted, mirroring the utterance-audio store. Stays
                 # None unless synthesis produced bytes, so a failed/empty TTS stores nothing.
@@ -1017,32 +989,7 @@ class Pipeline:
                 # False only for a follow-up window that heard no speech: no request,
                 # so no run in the log.
                 keep_record = True
-                record = {
-                    "ts": time.time(),
-                    "device": self.name,
-                    "reason": reason,
-                    "result": "empty",
-                    "t_vad": int(len(pcm) / (SAMPLE_RATE * 2) * 1000),
-                    "t_stt": 0, "t_llm": 0, "t_stress": 0, "t_tts": 0,
-                    "stt_text": "", "llm_text": "", "stress_text": "",
-                    "filler_text": "", "t_filler": None,
-                    "model": None, "tokens": None,
-                    "audio_ms": None, "audio_bytes": None, "audio_fmt": None,
-                    "error_stage": None, "error_text": None,
-                    "rounds": [],
-                    "request": None,
-                    # Recognition chains: the one that served the request and every
-                    # chain tried (see chains.ChainRun).
-                    "chain": None,
-                    "attempts": [],
-                    # Second-stage wake-word gate: verify latency + score. Stay 0/None
-                    # for ungated (non-wake / disabled / passthrough) runs.
-                    "t_wakeword": self._wakeword_t,
-                    "wakeword_score": self._wakeword_score,
-                    # The reply's playback as the device reports it: times it ran dry
-                    # and the ms of silence played meanwhile. None when it does not count.
-                    "play_dry": None, "play_gap_ms": None,
-                }
+                record = self._new_record(reason, pcm, self._wakeword_t, self._wakeword_score)
                 try:
                     # REJECT: the second-stage verifier did not confirm the wake word,
                     # or another device's wake of the same phrase won the arbitration.
@@ -1353,57 +1300,13 @@ class Pipeline:
                     # actually closes the session.
                     await self._close_stt_streams(stt_streams)
                     # Record the run on every non-empty-pcm path (empty-STT return,
-                    # success, TTS-fail, exception) but a silent follow-up window. A
-                    # recording failure must never break the run or swallow RUN_END,
-                    # so it is fully wrapped.
-                    if self.runs_store is not None and keep_record:
-                        record["t_total"] = int((time.perf_counter() - t0) * 1000)
-                        try:
-                            run_id = await asyncio.to_thread(self.runs_store.insert, record)
-                        except Exception as e:
-                            logger.error(f"{self.name}: run record failed: {e}")
-                        else:
-                            # Store the finalized utterance audio in a rolling window of
-                            # the last runs.audio_keep, so it can be downloaded/played from
-                            # the log to diagnose mis-triggers (e.g. a wake-word tail
-                            # reaching STT). When the device streamed both mic channels the
-                            # WAV is STEREO: left = the pipeline/STT channel (trimmed +
-                            # conditioned — exactly what STT received), right = the other
-                            # raw channel (same trim, no conditioning); mono when the
-                            # device streams a single channel. Best-effort: a storage
-                            # failure must never break the run or swallow the broadcast.
-                            stored_audio = False
-                            if self.core.runs.store_audio and pcm:
-                                try:
-                                    wav = pcm_to_wav_bytes(pcm, pcm2)
-                                    await asyncio.to_thread(
-                                        self.runs_store.put_audio,
-                                        run_id, wav, self.core.runs.audio_keep,
-                                    )
-                                    stored_audio = True
-                                except Exception as e:
-                                    logger.error(
-                                        f"{self.name}: utterance audio store failed: {e}"
-                                    )
-                            # Store the generated TTS reply audio (native backend format) in the same
-                            # rolling window as the utterance audio (runs.audio_keep) so operators can play
-                            # back exactly what the assistant spoke — shown right after the Accents text in
-                            # the log detail view. Best-effort: a storage failure must never break the run.
-                            # tts_audio is set only when synthesis produced bytes (see the TTS section).
-                            if self.core.runs.store_audio and tts_audio:
-                                try:
-                                    await asyncio.to_thread(
-                                        self.runs_store.put_tts_audio,
-                                        run_id, tts_audio, tts_mime, self.core.runs.audio_keep,
-                                    )
-                                except Exception as e:
-                                    logger.error(f"{self.name}: TTS audio store failed: {e}")
-                            # Defer the live broadcast until the lock is released so a slow
-                            # WebSocket consumer can't backpressure the next run on this speaker.
-                            if self.run_events is not None:
-                                pending_run = summary_row(
-                                    record, run_id, has_audio=stored_audio
-                                )
+                    # success, TTS-fail, exception) but a silent follow-up window.
+                    # Defer the live broadcast until the lock is released so a slow
+                    # WebSocket consumer can't backpressure the next run on this speaker.
+                    if keep_record:
+                        pending_run = await self._store_run(
+                            record, t0, pcm, pcm2, tts_audio, tts_mime
+                        )
         finally:
             # Outside the lock: first drain any in-flight live stage broadcasts, then
             # push the finalized run. The live partials are scheduled as background
@@ -1427,11 +1330,154 @@ class Pipeline:
                     await tail
                 except Exception as e:  # noqa: BLE001 - draining must never break the run
                     logger.debug(f"{self.name}: live run update drain failed: {e}")
-            if pending_run is not None:
-                try:
-                    await self.run_events.broadcast({"type": "run", "run": pending_run})
-                except Exception as e:
-                    logger.error(f"{self.name}: run broadcast failed: {e}")
+            await self._broadcast_run(pending_run)
+
+    def _condition_audio(self, pcm: bytes, pcm2: bytes, trim: bool) -> tuple[bytes, bytes]:
+        """The captured sample as STT gets it and the run log stores it: the lead-in
+        trimmed off (when `trim`) and the selected channel conditioned.
+
+        Trim the configured lead-in (wake-word tail / button-press click) off the
+        start of the captured sample. The trim is applied ONCE, so every downstream
+        consumer in this run uses the trimmed sample: STT, the t_vad metric, the
+        capture-session WAV and the stored diagnostic audio. Read live off core.vad
+        so it hot-applies. trim_start_pcm never returns empty audio.
+
+        Optional pre-STT conditioning of the FULL utterance (read live off core.vad,
+        so the toggles hot-apply). High-pass first to strip DC/rumble, then
+        peak-normalize so the quieter less-processed channel reaches a consistent
+        level without clipping. Applied ONCE to the whole sample (never per chunk),
+        so the capture WAV, the stored diagnostic audio and STT all get the exact
+        audio Whisper sees. `pcm2` (the other channel) is deliberately kept raw, so
+        the stored stereo WAV allows comparing conditioned vs raw channels.
+        NOTE: mic_normalize gates ONLY this pre-STT normalization; the decision-only
+        VAD boost applied per chunk in on_audio is gated by `core.vad.mic_auto_gain`.
+        """
+        trim_ms = self.core.vad.trim_start_ms
+        if trim_ms > 0 and trim:
+            trimmed = trim_start_pcm(pcm, trim_ms)
+            if len(trimmed) != len(pcm):
+                logger.info(
+                    f"{self.name}: ✂️ trimmed {len(pcm) - len(trimmed)} bytes "
+                    f"(~{trim_ms} ms) off sample start"
+                )
+            pcm = trimmed
+            # Trim the other (non-selected) channel by the same amount so
+            # the two channels of the stored stereo WAV stay time-aligned.
+            if pcm2:
+                pcm2 = trim_start_pcm(pcm2, trim_ms)
+        if self.core.vad.mic_highpass:
+            pcm = highpass(pcm)
+        if self.core.vad.mic_normalize:
+            pcm = normalize_peak(pcm)
+        return pcm, pcm2
+
+    def _new_record(self, reason, pcm: bytes, t_wakeword: int,
+                    wakeword_score: float | None) -> dict:
+        """A run record before its stages fill it in.
+
+        t_vad is the captured-utterance duration in ms (the "VAD capture" segment
+        shown in the UI waterfall), derived from the PCM length — NOT the CPU time
+        spent running the VAD. audio_ms is intentionally left None for now: the
+        reply's playback duration is not measured yet."""
+        return {
+            "ts": time.time(),
+            "device": self.name,
+            "reason": reason,
+            "result": "empty",
+            "t_vad": int(len(pcm) / (SAMPLE_RATE * 2) * 1000),
+            "t_stt": 0, "t_llm": 0, "t_stress": 0, "t_tts": 0,
+            "stt_text": "", "llm_text": "", "stress_text": "",
+            "filler_text": "", "t_filler": None,
+            "model": None, "tokens": None,
+            "audio_ms": None, "audio_bytes": None, "audio_fmt": None,
+            "error_stage": None, "error_text": None,
+            "rounds": [],
+            "request": None,
+            # Recognition chains: the one that served the request and every
+            # chain tried (see chains.ChainRun).
+            "chain": None,
+            "attempts": [],
+            # Second-stage wake-word gate: verify latency + score. Stay 0/None
+            # for ungated (non-wake / disabled / passthrough) runs.
+            "t_wakeword": t_wakeword,
+            "wakeword_score": wakeword_score,
+            # The reply's playback as the device reports it: times it ran dry
+            # and the ms of silence played meanwhile. None when it does not count.
+            "play_dry": None, "play_gap_ms": None,
+        }
+
+    async def _store_run(self, record: dict, t0: float, pcm: bytes, pcm2: bytes,
+                         tts_audio=None, tts_mime=None) -> dict | None:
+        """Insert the run record and store its audio; returns the summary row to
+        broadcast (_broadcast_run), or None. A recording failure must never break the
+        run or swallow RUN_END, so it is fully wrapped."""
+        if self.runs_store is None:
+            return None
+        record["t_total"] = int((time.perf_counter() - t0) * 1000)
+        try:
+            run_id = await asyncio.to_thread(self.runs_store.insert, record)
+        except Exception as e:
+            logger.error(f"{self.name}: run record failed: {e}")
+            return None
+        # Store the finalized utterance audio in a rolling window of
+        # the last runs.audio_keep, so it can be downloaded/played from
+        # the log to diagnose mis-triggers (e.g. a wake-word tail
+        # reaching STT). When the device streamed both mic channels the
+        # WAV is STEREO: left = the pipeline/STT channel (trimmed +
+        # conditioned — exactly what STT received), right = the other
+        # raw channel (same trim, no conditioning); mono when the
+        # device streams a single channel. Best-effort: a storage
+        # failure must never break the run or swallow the broadcast.
+        stored_audio = False
+        if self.core.runs.store_audio and pcm:
+            try:
+                wav = pcm_to_wav_bytes(pcm, pcm2)
+                await asyncio.to_thread(
+                    self.runs_store.put_audio,
+                    run_id, wav, self.core.runs.audio_keep,
+                )
+                stored_audio = True
+            except Exception as e:
+                logger.error(
+                    f"{self.name}: utterance audio store failed: {e}"
+                )
+        # Store the generated TTS reply audio (native backend format) in the same
+        # rolling window as the utterance audio (runs.audio_keep) so operators can play
+        # back exactly what the assistant spoke — shown right after the Accents text in
+        # the log detail view. Best-effort: a storage failure must never break the run.
+        # tts_audio is set only when synthesis produced bytes (see the TTS section).
+        if self.core.runs.store_audio and tts_audio:
+            try:
+                await asyncio.to_thread(
+                    self.runs_store.put_tts_audio,
+                    run_id, tts_audio, tts_mime, self.core.runs.audio_keep,
+                )
+            except Exception as e:
+                logger.error(f"{self.name}: TTS audio store failed: {e}")
+        if self.run_events is None:
+            return None
+        return summary_row(record, run_id, has_audio=stored_audio)
+
+    async def _broadcast_run(self, row: dict | None) -> None:
+        """Push a finalized run row to the run-log clients; a failure is logged."""
+        if row is None:
+            return
+        try:
+            await self.run_events.broadcast({"type": "run", "run": row})
+        except Exception as e:
+            logger.error(f"{self.name}: run broadcast failed: {e}")
+
+    async def record_rejected_wake(self, reason, pcm: bytes, pcm2: bytes,
+                                   score: float | None, t_ms: int) -> None:
+        """Record a wake the device server rejected with verify_wake before it started
+        a run: the run-log record and stored audio of a wakeword_reject/wakeword_error
+        run (_run's REJECT path) and its finalized broadcast. Emits no events and takes
+        no run lock: the running run of this device goes on untouched."""
+        t0 = time.perf_counter()
+        pcm, pcm2 = self._condition_audio(pcm, pcm2, trim=True)
+        record = self._new_record(reason, pcm, t_ms, score)
+        record["result"] = "rejected"
+        await self._broadcast_run(await self._store_run(record, t0, pcm, pcm2))
 
     async def run_text(self, text: str, speak: bool = True) -> dict:
         """Public entry for TEXT requests (agent MCP `ask`): a full handler turn

@@ -405,6 +405,7 @@ void zl_sess_detect(zl_sess_t *s, bool on)
 
 bool zl_sess_accepts(const zl_sess_t *s, const zl_msg_t *m)
 {
+    if (m->type == ZL_MSG_PLAY_START || m->type == ZL_MSG_PLAY_END) return true;
     return !m->has_session || m->session == s->session;
 }
 
