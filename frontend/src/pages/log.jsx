@@ -143,6 +143,8 @@ function Collapsible({ summary, children }) {
 function Drawer({ r, loading, error, onClose }) {
   const m = RESULT_META[r && r.result] || { label: r && r.result, tone: "muted" };
   const device = deviceLabel(useDeviceList(), r && r.device);
+  // Another device heard the same phrase and kept it; the verifier did not reject it.
+  const duplicate = !!r && r.result === "rejected" && r.reason === "duplicate";
   // A phrase of the follow-up window that the follow-up check did not take for a
   // continuation of the dialog (followup_reject) or could not judge (followup_error).
   const followupReject = !!r && r.result === "rejected" && (r.reason || "").startsWith("followup_");
@@ -166,12 +168,16 @@ function Drawer({ r, loading, error, onClose }) {
             <Ic n="restart" w={15} /><span><b>{r.error.stage} error.</b> {r.error.text}</span>
           </div>}
 
-          {/* The server-side wake-word verifier blocked this run before STT (a false
-              trigger). Mirrors the error banner, but muted — it is an expected reject,
-              not a failure. reason is wakeword_reject (low score) or wakeword_error, or
-              followup_reject / followup_error for a dropped follow-up phrase. */}
+          {/* A run ended before STT. Mirrors the error banner, but muted — it is an
+              expected reject, not a failure: the server-side wake-word verifier blocked
+              a false trigger (reason wakeword_reject, low score, or wakeword_error),
+              another device heard the same phrase and kept it (reason duplicate), or
+              the follow-up check dropped a follow-up phrase (followup_reject /
+              followup_error). */}
           {r.result === "rejected" && <div className="z-banner" style={{ background: "var(--panel2)", border: "1px solid var(--line)", color: "var(--mut)", marginBottom: 16 }}>
-            <Ic n="wakeword" w={15} />{followupReject
+            <Ic n="wakeword" w={15} />{duplicate
+              ? <span><b>Dropped as a duplicate:</b> another device kept the phrase</span>
+              : followupReject
               ? <span><b>Not a continuation (follow-up check).</b> {followupCheck && followupCheck.probability != null ? `probability ${followupCheck.probability.toFixed(2)}` : "check failed"}</span>
               : <span><b>Rejected by wake-word verify.</b> {r.reason === "wakeword_error" ? "verifier error" : "wake word not confirmed"}{r.wakeword_score != null ? ` · score ${r.wakeword_score.toFixed(2)}` : ""}</span>}
           </div>}
@@ -180,8 +186,9 @@ function Drawer({ r, loading, error, onClose }) {
           <div className="z-card"><div style={{ padding: "15px 17px" }}><Gantt r={r} /></div></div>
 
           {/* Wake-word verifier confidence + time, shown whenever the stage produced a
-              score (a passed run) or actively rejected the phrase. */}
-          {(r.wakeword_score != null || (r.result === "rejected" && !followupReject)) && <>
+              score (a passed run) or actively rejected the phrase — not for a
+              duplicate, which the verifier did not reject. */}
+          {!duplicate && (r.wakeword_score != null || (r.result === "rejected" && !followupReject)) && <>
             <div className="z-sl">Wake-word verify<div className="ln" />{r.t && r.t.wakeword ? <span style={{ fontFamily: "var(--mono)", fontSize: 10.5, color: "var(--mut2)", textTransform: "none", letterSpacing: 0 }}>{fmtSec(r.t.wakeword)}</span> : null}</div>
             <div className="z-card"><div style={{ padding: "6px 17px" }}>
               <KV k="Score" v={r.wakeword_score != null ? r.wakeword_score.toFixed(3) : "—"} />
@@ -193,7 +200,7 @@ function Drawer({ r, loading, error, onClose }) {
           <div className="z-sl">Transcript</div>
           <div className="z-card"><div style={{ padding: "4px 17px" }}>
             <div className="z-f"><div className="z-fl"><b style={{ color: "var(--mut)", fontWeight: 600, fontSize: 11, textTransform: "uppercase", letterSpacing: ".04em" }}>Recognized (STT)</b></div>
-              <div style={{ fontSize: 14, color: r.stt ? "var(--ink)" : "var(--mut2)", fontStyle: r.stt ? "normal" : "italic" }}>{r.stt || (isAnnouncement(r) ? "— no request —" : "— silence, no speech detected —")}</div></div>
+              <div style={{ fontSize: 14, color: r.stt ? "var(--ink)" : "var(--mut2)", fontStyle: r.stt ? "normal" : "italic" }}>{r.stt || (isAnnouncement(r) ? "— no request —" : duplicate ? "—" : "— silence, no speech detected —")}</div></div>
             {r.filler_text && (
               <div className="z-f"><div className="z-fl">
                 <b style={{ color: "var(--mut)", fontWeight: 600, fontSize: 11, textTransform: "uppercase", letterSpacing: ".04em" }}>
@@ -454,7 +461,7 @@ function Log() {
                         <td className="tm">{r.time}</td>
                         <td style={{ fontWeight: 600 }}>{deviceLabel(devices, r.device)}</td>
                         <td className="mono" data-testid="run-chain" style={{ fontSize: 11.5, color: r.chain ? "var(--ink2)" : "var(--mut2)" }}>{r.chain || "—"}</td>
-                        <td><div className={"z-tx" + (r.stt ? "" : " mut")}>{r.stt || (r.live ? "…" : isAnnouncement(r) ? "—" : "(silence)")}</div></td>
+                        <td><div className={"z-tx" + (r.stt ? "" : " mut")}>{r.stt || (r.live ? "…" : isAnnouncement(r) ? "—" : r.reason === "duplicate" ? "(duplicate)" : "(silence)")}</div></td>
                         <td><div className={"z-tx" + (r.llm ? "" : " mut")}>{r.llm || (r.live ? "…" : "—")}</div></td>
                         <td className="num">{r.tokens || "—"}</td>
                         <td><Waterfall r={r} /></td>

@@ -28,7 +28,8 @@ export function toastFromRun(run) {
     device,
     label: meta.label,
     tone: meta.tone,
-    text: run.stt_text || (live ? "(in progress)" : isAnnouncement(run) ? run.llm_text : "(silence)"),
+    text: run.stt_text || (live ? "(in progress)" : isAnnouncement(run) ? run.llm_text
+      : run.reason === "duplicate" ? "(duplicate)" : "(silence)"),
     totalMs: run.t_total ?? null,
   };
 }

@@ -69,6 +69,8 @@ def action_for(path: str) -> str:
         return "live"          # capture.enabled/dir are read per-run via the Runtime read-through
     if path.startswith("core.ack"):
         return "live"          # ack.enabled/sound_path are read per-run via the Runtime read-through
+    if path.startswith("core.arbitration"):
+        return "live"          # window_ms/cooldown_ms are read by the wake arbiter on every wake
     if path.startswith("core.audio"):            # host/port -> rebind; all -> advert restart
         return "rebuild_audio"
     if path.startswith("core.prompt"):           # system_prompt_path read live

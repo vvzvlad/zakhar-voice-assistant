@@ -28,6 +28,7 @@ from src.pipeline import Pipeline
 from src.pipeline_events import StageEvent
 from src.run_events import record_run
 from src.tts import pcm_rate
+from src.wake_arbiter import WakeArbiter
 
 # Binary frame kinds (first byte).
 MIC = 0x01
@@ -720,11 +721,14 @@ class DeviceManager:
         self.port = runtime.core.audio.port
         self._devices: dict[str, Device] = {}
         self._runner: web.AppRunner | None = None
+        # One phrase heard by several devices keeps one session (docs/device-protocol.md).
+        self.arbiter = WakeArbiter(runtime, online_count=lambda: sum(1 for d in self.clients if d.online))
 
     def _device(self, name: str) -> Device:
         device = self._devices.get(name)
         if device is None:
             device = self._devices[name] = Device(name, self.rt)
+            device.pipeline.arbiter = self.arbiter
         return device
 
     @property
