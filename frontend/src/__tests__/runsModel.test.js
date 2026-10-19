@@ -72,6 +72,10 @@ describe("statusMeta", () => {
   it("maps a wake-word-rejected result to a muted 'Rejected' pill", () => {
     expect(statusMeta({ result: "rejected" })).toEqual({ label: "Rejected", tone: "muted" });
   });
+
+  it("names a wake another device kept a 'Duplicate'", () => {
+    expect(statusMeta({ result: "rejected", reason: "duplicate" })).toEqual({ label: "Duplicate", tone: "muted" });
+  });
 });
 
 describe("applyStreamedRun", () => {

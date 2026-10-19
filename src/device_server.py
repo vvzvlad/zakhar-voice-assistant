@@ -722,7 +722,8 @@ class DeviceManager:
         self._devices: dict[str, Device] = {}
         self._runner: web.AppRunner | None = None
         # One phrase heard by several devices keeps one session (docs/device-protocol.md).
-        self.arbiter = WakeArbiter(runtime, online_count=lambda: sum(1 for d in self.clients if d.online))
+        self.arbiter = WakeArbiter(runtime, online_count=lambda: sum(1 for d in self.clients if d.online),
+                                   send_reply=self._send_reply)
 
     def _device(self, name: str) -> Device:
         device = self._devices.get(name)
@@ -730,6 +731,13 @@ class DeviceManager:
             device = self._devices[name] = Device(name, self.rt)
             device.pipeline.arbiter = self.arbiter
         return device
+
+    def _send_reply(self, pipeline, text: str) -> None:
+        """The arbiter's hook: show `text` on the device of `pipeline` as an
+        announcement — a `reply` without `session`. An offline device is skipped."""
+        device = self._devices.get(pipeline.name)
+        if device is not None and device.conn is not None:
+            device.conn.send({"type": "reply", "text": text})
 
     @property
     def clients(self) -> list[Device]:

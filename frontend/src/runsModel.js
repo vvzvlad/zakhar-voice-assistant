@@ -86,10 +86,12 @@ export function mapRun(row) {
   };
 }
 
-// Status pill meta for a run row: an in-progress (live) row shows "Running";
-// otherwise it maps result -> RESULT_META (falling back to a muted label).
+// Status pill meta for a run row: an in-progress (live) row shows "Running", a wake
+// another device kept shows "Duplicate"; otherwise it maps result -> RESULT_META
+// (falling back to a muted label).
 export function statusMeta(r) {
   if (r && r.live) return { label: "Running", tone: "muted" };
+  if (r && r.result === "rejected" && r.reason === "duplicate") return { label: "Duplicate", tone: "muted" };
   return RESULT_META[r && r.result] || { label: r && r.result, tone: "muted" };
 }
 

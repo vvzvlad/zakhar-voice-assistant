@@ -991,29 +991,49 @@ async def test_text_only_device_gets_no_tts(srv):
     assert dev.plays == {}
 
 
-async def test_one_phrase_heard_by_the_panel_and_the_speaker_runs_on_the_speaker(srv, tmp_path):
-    # The panel (no speaker) hears the phrase first and the speaker a moment later:
-    # only the speaker's session goes on, the panel's ends as a duplicate.
+async def test_one_phrase_heard_by_three_devices_runs_on_the_first_speaker(srv, tmp_path):
+    # The panel (no speaker) hears the phrase first, then the kitchen speaker, then the
+    # hall speaker: only the kitchen's session goes on. The others stream their phrase
+    # on silently, are let go at its end and are logged as duplicates with what they
+    # heard; the panel is then shown the kitchen's answer, once — not its follow-up.
     srv.rt.runs_store = RunsStore(str(tmp_path / "runs.db"))
-    speaker = await srv.connect()
-    await speaker.recv()  # config
+    srv.rt.followup_backend = FakeGate(accepted=True)
+    speaker = await srv.connect(follow_up=True)
+    hall = await srv.connect("hall")
     panel = await srv.connect("panel", speaker=False)
-    await panel.recv()  # config
+    for dev in (speaker, hall, panel):
+        await dev.recv()  # config
 
-    await panel.send(type="wake", session=3, word="Захар")
-    assert await panel.recv() == {"type": "play_stop"}
-    await panel.mic(stereo(500, -500, 60))  # the start of its pre-roll
-    await until(lambda: srv.device("panel").pipeline.preroll_pcm)
-    await speaker.send(type="wake", session=8, word="Захар")
-    assert await speaker.recv() == {"type": "play_stop"}
+    for dev, name, session in ((panel, "panel", 3), (speaker, "kitchen", 8), (hall, "hall", 5)):
+        await dev.send(type="wake", session=session, word="Захар")
+        assert await dev.recv() == {"type": "play_stop"}
+        if dev is not hall:
+            await dev.mic(stereo(500, -500, 60))  # the start of its pre-roll
+            await until(lambda: srv.device(name).pipeline.preroll_pcm)
     assert await speaker.recv() == state(8, "listening")
-    assert await panel.recv() == state(3, "idle")
+    for dev, session in ((panel, 3), (hall, 5)):
+        await dev.phrase()
+        assert await dev.recv() == state(session, "idle")  # no `listening`, no `transcript`
 
     await speaker.phrase()
     got = [await speaker.recv() for _ in range(7)]
     await speaker.send(type="played", id=got[5]["id"])
+    assert await speaker.recv() == state(8, "listening")  # the follow-up window
+    await speaker.phrase()
+    got = []
+    while not got or got[-1]["type"] != "play_end":
+        got.append(await speaker.recv())
+    assert {"type": "reply", "session": 8, "text": "готово"} in got
+    await speaker.send(type="played", id=got[-1]["id"], dropped=True)
     assert await speaker.recv() == state(8, "idle")
-    assert len(srv.stt.pcm) == 1
+
+    assert await panel.recv() == {"type": "reply", "text": "готово"}
+    for dev in (panel, hall):
+        with pytest.raises(asyncio.TimeoutError):
+            await dev.recv(timeout=0.3)
+    assert len(srv.stt.pcm) == 4
     rows = {row["device"]: row for row in srv.rt.runs_store.list()}
-    assert (rows["panel"]["result"], rows["panel"]["reason"]) == ("rejected", "duplicate")
+    for name in ("panel", "hall"):
+        assert (rows[name]["result"], rows[name]["reason"], rows[name]["stt_text"]) == (
+            "rejected", "duplicate", "включи свет")
     assert rows["kitchen"]["result"] == "ok"

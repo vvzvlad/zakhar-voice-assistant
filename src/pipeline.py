@@ -58,10 +58,11 @@ HARD_CAP_BYTES = SAMPLE_RATE * 2 * 60
 PREROLL_MS = 2000
 PREROLL_BYTES = PREROLL_MS * SAMPLE_RATE * 2 // 1000
 
-# Run reasons that end a wake run before STT: the wake-word verifier rejected it
-# (or timed out under fail-closed), or another device's wake of the same phrase won
-# the cross-device arbitration. Such a run is recorded as "rejected", without the
-# ack chime or a capture file.
+# Run reasons that end a wake run before its handler: the wake-word verifier rejected
+# it (or timed out under fail-closed), or another device's wake of the same phrase won
+# the cross-device arbitration (only a duplicate's phrase is still recognized, for the
+# run log). Such a run is recorded as "rejected", without the ack chime or a capture
+# file.
 REJECT_REASONS = ("wakeword_reject", "wakeword_error", "duplicate")
 
 
@@ -143,6 +144,9 @@ class Pipeline:
         # run of this device is told apart and ignored.
         self._arbitration_pending = False
         self._arbitration_token = 0
+        # The run lost the arbitration: it stays held, silently, until its VAD
+        # end-points, and is then finalized as a "duplicate" (_finalize_duplicate).
+        self._duplicate = False
         # Running utterance peak driving the optional decision-only VAD boost
         # (core.vad.mic_auto_gain); reset per run in on_start.
         self._vad_peak = 0
@@ -248,11 +252,14 @@ class Pipeline:
         return os.path.join(config_store.DATA_DIR, f"context_{self.name}.txt")
 
     def _emit(self, event_type, data=None):
-        """Emit a transport-neutral StageEvent with a flat dict[str, str] payload."""
+        """Emit a transport-neutral StageEvent with a flat dict[str, str] payload. The
+        arbiter sees it too: it forwards a kept phrase's answer to the speakerless
+        devices that lost that phrase."""
+        payload = {str(k): str(v) for k, v in (data or {}).items()}
         if self.send_event is not None:
-            self.send_event(
-                event_type, {str(k): str(v) for k, v in (data or {}).items()}
-            )
+            self.send_event(event_type, payload)
+        if self.arbiter is not None:
+            self.arbiter.run_event(self, event_type, payload)
 
     async def on_start(self, conversation_id, wake_word_phrase) -> None:
         """Handle a wake: cancel the older run, reset ALL per-run state, announce the run.
@@ -328,6 +335,7 @@ class Pipeline:
         self._wakeword_t = 0
         self._wakeword_score = None
         self._vad_finalize_pending = None
+        self._duplicate = False
         self._vad_session = None
         self._vad_peak = 0
         self._finalized = False
@@ -465,17 +473,19 @@ class Pipeline:
             other = data2  # may be None when the device streams a single channel
 
         # Held: the wake-word verifier or the cross-device arbitration hasn't ruled
-        # yet. Keep accumulating the buffer (channel-select below feeds
-        # _buffer/_buffer2) but DON'T feed the STT streams (there are none yet) and
-        # DON'T finalize the utterance — if VAD end-points, stash the reason and stop
-        # feeding VAD; the finalize is deferred until the hold is lifted
-        # (_release_hold replays it). While the verifier gate is active, trigger the
-        # verify task EXACTLY once, when enough pre-roll is buffered (window_bytes) or
-        # the utterance already ended. While the arbitration is pending, tell the
-        # arbiter once when the whole pre-roll is in. This branch is fully SYNCHRONOUS
-        # (every await lives inside the task) so the eager-on_audio atomicity
-        # invariant holds.
-        if (self._wakeword_pending and not self._wakeword_confirmed) or self._arbitration_pending:
+        # yet, or the run lost the arbitration. Keep accumulating the buffer
+        # (channel-select below feeds _buffer/_buffer2) but DON'T feed the STT streams
+        # (there are none yet) and DON'T finalize the utterance — if VAD end-points,
+        # stash the reason and stop feeding VAD; the finalize is deferred until the
+        # hold is lifted (_release_hold replays it). A lost run is never lifted: its
+        # end-point finalizes it as a duplicate at once. While the verifier gate is
+        # active, trigger the verify task EXACTLY once, when enough pre-roll is
+        # buffered (window_bytes) or the utterance already ended. While the
+        # arbitration is pending, tell the arbiter once when the whole pre-roll is in.
+        # This branch is fully SYNCHRONOUS (every await lives inside the task) so the
+        # eager-on_audio atomicity invariant holds.
+        if ((self._wakeword_pending and not self._wakeword_confirmed)
+                or self._arbitration_pending or self._duplicate):
             if not self._audio_logged:
                 self._audio_logged = True
                 logger.info(f"{self.name}: 🎤 receiving audio (held)...")
@@ -495,6 +505,9 @@ class Pipeline:
                 reason = self._vad_session.feed(data)
                 if reason is not None:
                     self._vad_finalize_pending = reason
+            if self._duplicate and self._vad_finalize_pending is not None:
+                self._finalize_duplicate()
+                return
             wb = self.rt.wakeword_backend
             if self._wakeword_pending and self._wakeword_task is None and wb is not None:
                 window_bytes = wb.window_ms * SAMPLE_RATE * 2 // 1000
@@ -639,7 +652,8 @@ class Pipeline:
     async def _wakeword_confirm(self) -> None:
         """Accept verdict: the verifier lets the run through.
 
-        Synchronously flips the gate. While the cross-device arbitration is still
+        Synchronously flips the gate. A run that already lost the arbitration stays
+        held until its end-point. While the cross-device arbitration is still
         pending, the arbiter is told the verifier has ruled — it may rule inside the
         call, on this run too — and arbitration_verdict releases the run. Otherwise
         the hold is lifted here (_release_hold) and, if the utterance already ended
@@ -650,6 +664,8 @@ class Pipeline:
             return
         self._wakeword_pending = False
         self._wakeword_confirmed = True
+        if self._duplicate:
+            return
         if self._arbitration_pending:
             self.arbiter.run_changed(self, self._arbitration_token)
             return
@@ -712,18 +728,20 @@ class Pipeline:
         Synchronous, and possibly called inside a call this or another pipeline made
         to the arbiter, or from one of its timers — the module docstring of
         src/wake_arbiter.py lists them. A verdict the run no longer awaits is ignored.
-        Lost: the run is claimed and ended as a duplicate, its _run started as
-        _run_task like on_audio's finalize. Won: the arbitration hold is lifted and
-        the run released, unless the wake-word verifier is still pending — its
+        Lost: the run stays held — no STT_VAD_START, so the device gets no
+        `listening` and streams the rest of the phrase on silently — and on_audio
+        finalizes it as a duplicate at its VAD end-point, or it is finalized at once
+        when the end-point was already stashed. Won: the arbitration hold is lifted
+        and the run released, unless the wake-word verifier is still pending — its
         _wakeword_confirm then releases it.
         """
         if not self.awaits_arbitration(token):
             return
         if not won:
-            claimed = self._claim()
-            self._run_task = asyncio.create_task(
-                self._run("duplicate", claimed[0], self._conversation_id, pcm2=claimed[1])
-            )
+            self._arbitration_pending = False
+            self._duplicate = True
+            if self._vad_finalize_pending is not None:
+                self._finalize_duplicate()
             return
         self._arbitration_pending = False
         if self._wakeword_pending:
@@ -731,6 +749,18 @@ class Pipeline:
         finalize = self._release_hold()
         if finalize is not None:
             self._run_task = asyncio.create_task(finalize)
+
+    def _finalize_duplicate(self) -> None:
+        """Claim the lost run and start its _run as a duplicate (as _run_task, like
+        on_audio's finalize): its phrase is recognized for the run log only."""
+        claimed = self._claim()
+        if claimed is not None:
+            # A phrase the VAD found no speech in is not transcribed, as for any run:
+            # the STT would make up words for the noise.
+            self._run_task = asyncio.create_task(self._run(
+                "duplicate", claimed[0], self._conversation_id, pcm2=claimed[1],
+                transcribe=self._vad_finalize_pending != "no_speech",
+            ))
 
     async def _wakeword_reject(self, error: bool) -> None:
         """Reject verdict: abort the run silently and stop the device.
@@ -857,7 +887,8 @@ class Pipeline:
             streams, self._stt_streams = self._stt_streams, {}
             await self._close_stt_streams(streams)
 
-    async def _run(self, reason, pcm, conversation_id, pcm2: bytes = b"") -> None:
+    async def _run(self, reason, pcm, conversation_id, pcm2: bytes = b"",
+                   transcribe: bool = True) -> None:
         """Run the recognition chains -> TTS -> events on the already-claimed audio, once.
 
         The caller claims the run via _claim() (which sets _finalized, snapshots
@@ -866,6 +897,8 @@ class Pipeline:
         RUN_END is always sent, unless the played answer opens a follow-up window
         (_arm_followup). The run takes over the streaming STT sessions of the
         claimed utterance, so a cancelled run's cleanup never touches the next one.
+        `transcribe` is read for a duplicate only: whether its phrase is recognized for
+        the run log.
         """
         stt_streams, self._stt_streams = self._stt_streams, {}
         # The last turn when this utterance was heard in a follow-up window, else
@@ -881,9 +914,7 @@ class Pipeline:
                     f"(~{len(pcm) / (SAMPLE_RATE * 2):.1f}s), reason={reason}, "
                     f"vad={self._vad_desc}"
                 )
-                # A rejected run is recorded even without audio: a wake that loses the
-                # arbitration at once is ended before any of its pre-roll arrives.
-                if not pcm and reason not in REJECT_REASONS:
+                if not pcm:
                     # Truly-empty audio: nothing to transcribe and nothing to record.
                     logger.info(f"{self.name}: empty audio, ending run")
                     await self._close_stt_streams(stt_streams)
@@ -1015,11 +1046,13 @@ class Pipeline:
                 try:
                     # REJECT: the second-stage verifier did not confirm the wake word,
                     # or another device's wake of the same phrase won the arbitration.
-                    # Abort the run silently — NO STT/LLM/TTS, NO ack (guarded above),
+                    # Abort the run silently — NO handler/TTS, NO ack (guarded above),
                     # NO STT_VAD_END (that would trigger the thinking indicator). Emit
                     # an empty STT_END (to balance STT_START) and RUN_END (which stops
-                    # the device streaming mid-utterance). Placed INSIDE the inner try
-                    # so the finally still records the run + stores its audio.
+                    # the device streaming). A duplicate's phrase is then recognized by
+                    # the first enabled chain's STT for the run log only; the device
+                    # never gets that transcript. Placed INSIDE the inner try so the
+                    # finally still records the run + stores its audio.
                     if reason in REJECT_REASONS:
                         if reason == "duplicate":
                             logger.info(
@@ -1037,6 +1070,14 @@ class Pipeline:
                         stt_streams = {}
                         self._emit(StageEvent.STT_END, {"text": ""})
                         self._emit(StageEvent.RUN_END, {})
+                        if reason == "duplicate" and transcribe:
+                            stt_t = time.perf_counter()
+                            try:
+                                first = chains.enabled_chains(self.core.chains)[0]
+                                record["stt_text"] = await chains.transcribe(self.rt, first, pcm)
+                            except Exception as e:  # noqa: BLE001 - the run is recorded without it
+                                logger.error(f"{self.name}: duplicate STT failed: {e}")
+                            record["t_stt"] = int((time.perf_counter() - stt_t) * 1000)
                         return
                     # VAD found no speech in the whole window — this is silence/noise,
                     # not an utterance. Skip STT entirely: Whisper hallucinates stray

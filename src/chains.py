@@ -110,6 +110,12 @@ async def _recognize(rt, chain, pcm: bytes, stream) -> str:
     return await stt.transcribe(pcm)
 
 
+async def transcribe(rt, chain, pcm: bytes) -> str:
+    """A batch transcript of `pcm` by the chain's STT, narrowed as the chain is, with
+    no handler: a run that only records what was said. Raises like the STT."""
+    return await _recognize(rt, chain, pcm, None)
+
+
 def _ms(since: float) -> int:
     return int((time.perf_counter() - since) * 1000)
 
