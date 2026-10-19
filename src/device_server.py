@@ -207,6 +207,10 @@ class _Stream:
         self.sent_s = 0.0  # seconds of audio sent
         # Resolves to "played", "dropped" or "closed" (the connection went away).
         self.ended = asyncio.get_running_loop().create_future()
+        # From `played`: how many times the stream ran dry mid-way and the ms of silence
+        # played meanwhile. None when the device does not report them.
+        self.dry = None
+        self.gap_ms = None
 
     @property
     def live(self) -> bool:
@@ -322,9 +326,10 @@ class Connection:
         self._play_until = 0.0
         self.send({"type": "play_stop"})
 
-    def on_played(self, stream_id, dropped: bool) -> None:
+    def on_played(self, stream_id, dropped: bool, dry=None, gap_ms=None) -> None:
         stream = self._streams.pop(stream_id, None)
         if stream is not None:
+            stream.dry, stream.gap_ms = dry, gap_ms
             stream.end("dropped" if dropped else "played")
 
     def _stream_msg(self, kind: str, stream: _Stream) -> dict:
@@ -333,10 +338,14 @@ class Connection:
             msg["session"] = stream.session
         return msg
 
-    async def play(self, mime: str, audio) -> None:
+    async def play(self, mime: str, audio) -> dict | None:
         """Send one clip (bytes or an async chunk iterator) as a play stream, paced to
         the device's buffer, and return once the device reports it played (or dropped).
-        Streams go out back to back in call order. The iterator is always closed."""
+        Streams go out back to back in call order. The iterator is always closed.
+
+        Returns {"dry", "gap_ms"} of a stream the device reports played with them: how
+        many times it ran dry before its end and the ms of silence played meanwhile;
+        None for a dropped stream or a device that does not count them."""
         chunks = _one_chunk(audio) if isinstance(audio, (bytes, bytearray)) else audio
         try:
             out = _PcmOut(mime, self.play_rate)
@@ -368,6 +377,12 @@ class Connection:
             stream.end("dropped")
         if stream.ended.result() == "closed":
             raise ConnectionError(f"{self.name} disconnected during playback")
+        if stream.ended.result() != "played" or stream.dry is None:
+            return None
+        if stream.dry > 0:
+            logger.warning(f"{self.name}: stream {stream.id} ran dry {stream.dry} times, "
+                           f"{stream.gap_ms} ms of silence")
+        return {"dry": stream.dry, "gap_ms": stream.gap_ms}
 
     async def _send_pcm(self, stream: _Stream, pcm: bytes) -> None:
         """Queue PCM frames, keeping at most buffer_ms - PACING_MARGIN_MS of audio
@@ -464,14 +479,14 @@ class Device:
         if event in (StageEvent.RUN_END, StageEvent.ERROR):
             conn.session_open = False
 
-    async def play(self, mime: str, audio) -> None:
-        """The pipeline's play hook."""
+    async def play(self, mime: str, audio) -> dict | None:
+        """The pipeline's play hook; returns what Connection.play does."""
         conn = self.conn
         if conn is None or not conn.speaker:
             if not isinstance(audio, (bytes, bytearray)):
                 await _aclose(audio)
             raise RuntimeError(f"{self.name} cannot play: offline or no speaker")
-        await conn.play(mime, audio)
+        return await conn.play(mime, audio)
 
     async def on_text(self, conn: Connection, msg: dict) -> None:
         if conn is not self.conn:
@@ -493,7 +508,7 @@ class Device:
                 conn.session_open = False
             logger.info(f"{self.name}: stop word, playback{' and run' if in_session else ''} stopped")
         elif kind == "played":
-            conn.on_played(msg["id"], bool(msg.get("dropped")))
+            conn.on_played(msg["id"], bool(msg.get("dropped")), msg.get("dry"), msg.get("gap_ms"))
         elif kind == "volume":
             conn.volume = msg["value"]
         elif kind == "wake_peak":
@@ -585,7 +600,8 @@ class Device:
         t0 = time.perf_counter()
         record = {"ts": time.time(), "device": self.name, "reason": reason, "result": "ok",
                   "stt_text": request, "llm_text": text,
-                  "error_stage": None, "error_text": None, "attempts": []}
+                  "error_stage": None, "error_text": None, "attempts": [],
+                  "play_dry": None, "play_gap_ms": None}
         try:
             conn = self.conn
             if conn is None:
@@ -593,10 +609,12 @@ class Device:
                 raise RuntimeError(f"{self.name} is offline")
             conn.send({"type": "reply", "text": text})
             try:
-                await self.pipeline.speak(text, record["attempts"])
+                played = await self.pipeline.speak(text, record["attempts"])
             except Exception as e:
                 record.update(result="error", error_stage="TTS", error_text=str(e))
                 raise
+            if played is not None:
+                record.update(play_dry=played["dry"], play_gap_ms=played["gap_ms"])
             # Time to the start of the speech, as a text run counts it.
             record["t_tts"] = sum(a["t"] for a in record["attempts"] if a["kind"] == "tts")
             ctx = self.rt.core.context

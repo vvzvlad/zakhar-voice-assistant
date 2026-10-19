@@ -834,6 +834,9 @@ class Pipeline:
                     # for ungated (non-wake / disabled / passthrough) runs.
                     "t_wakeword": self._wakeword_t,
                     "wakeword_score": self._wakeword_score,
+                    # The reply's playback as the device reports it: times it ran dry
+                    # and the ms of silence played meanwhile. None when it does not count.
+                    "play_dry": None, "play_gap_ms": None,
                 }
                 try:
                     # Wake-word REJECT: the second-stage verifier did not confirm the
@@ -1019,10 +1022,13 @@ class Pipeline:
                             )
                             tts_chunks = []
                             try:
-                                await self.play(mime, self._tee_chunks(audio, tts_chunks))
+                                played = await self.play(mime, self._tee_chunks(audio, tts_chunks))
                             finally:
                                 # The tee only closes `audio` once it has started.
                                 await self._close_stream(audio)
+                            if played is not None:
+                                record["play_dry"] = played["dry"]
+                                record["play_gap_ms"] = played["gap_ms"]
                             clip = b"".join(tts_chunks)
                             record["audio_bytes"] = len(clip)
                             record["audio_fmt"] = mime.partition(";")[0].rpartition("/")[2]
@@ -1190,6 +1196,7 @@ class Pipeline:
                     "request": None,
                     "chain": None,
                     "attempts": [],
+                    "play_dry": None, "play_gap_ms": None,
                 }
                 try:
                     # The recognition chains, entered at the handler step (no STT): each
@@ -1247,11 +1254,14 @@ class Pipeline:
 
                     if speak and reply:
                         try:
-                            await self.speak(spoken, record["attempts"])
+                            played = await self.speak(spoken, record["attempts"])
                             # The variants were tried back to back, so their times add
                             # up to the time from the first attempt to the start.
                             record["t_tts"] = sum(
                                 a["t"] for a in record["attempts"] if a["kind"] == "tts")
+                            if played is not None:
+                                record["play_dry"] = played["dry"]
+                                record["play_gap_ms"] = played["gap_ms"]
                         except Exception as e:
                             # Same precedence rule as `_run`: a TTS failure must
                             # not overwrite an earlier (LLM) root cause. The reply
@@ -1375,20 +1385,23 @@ class Pipeline:
             return backend, mime, audio
         raise error
 
-    async def speak(self, text: str, attempts: list | None = None) -> None:
+    async def speak(self, text: str, attempts: list | None = None) -> dict | None:
         """Public entry for proactive speech (reminders, external callers) and the
         filler: synthesize via the first TTS variant that starts (see _start_tts) and
         play it on the device, returning once it has played. A device without a
         speaker gets no synthesis at all. `attempts` collects the variants tried (a
         text run records them). Raises on failure (callers decide isolation).
+
+        Returns what the play hook does: {"dry", "gap_ms"} of the stream when the
+        device reported them, else None.
         """
         if not self.has_speaker:
-            return
+            return None
         # The backend of the variant that started both synthesizes and labels the
         # log line, so they can never diverge.
         backend, mime, audio = await self._start_tts(text, attempts)
         logger.info(f"{self.name}: 🔔 speak [tts={self._backend_desc(backend)}]: {text!r}")
-        await self.play(mime, audio)
+        return await self.play(mime, audio)
 
     async def _deliver_filler(self, text: str) -> None:
         """Speak an early 'filler' line via speak().

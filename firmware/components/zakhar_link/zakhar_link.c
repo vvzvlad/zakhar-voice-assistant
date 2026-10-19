@@ -137,7 +137,7 @@ static void send_json(esp_websocket_client_handle_t ws, char *json)
 
 static void send_dropped(esp_websocket_client_handle_t ws, const uint32_t *ids, size_t n)
 {
-    for (size_t i = 0; i < n; i++) send_json(ws, zl_encode_played(ids[i], true));
+    for (size_t i = 0; i < n; i++) send_json(ws, zl_encode_played(ids[i], true, 0, 0));
 }
 
 // ---------------------------------------------------------------- the client's task
@@ -391,12 +391,13 @@ static uint32_t link_lost(void)
     esp_websocket_client_destroy(ws);
     bool was_open;
     uint32_t ids[ZL_PLAYQ_STREAMS];
+    zl_played_t done[ZL_PLAYQ_STREAMS];
     lock();
     zl_sess_lost(&s_sess, &was_open);
     s_capture_sending = false;
     s_peak_on = false;
     (void)zl_playq_flush(&s_playq, ids);
-    (void)zl_playq_take_done(&s_playq, ids);
+    (void)zl_playq_take_done(&s_playq, done);
     unlock();
     const uint32_t delay = backoff_take();
     ESP_LOGW(TAG, "link lost, reconnecting in %u s", (unsigned)delay);
@@ -674,14 +675,18 @@ static void peak_poll(void)
     if (on) send_json(s_ws, zl_encode_wake_peak(zl_peak_percent(s_cfg.wake_peak_take())));
 }
 
+// `played` of the finished streams; a stream's gap, counted in samples at play_rate, goes out in ms.
 static void send_played(void)
 {
-    uint32_t ids[ZL_PLAYQ_STREAMS];
+    zl_played_t done[ZL_PLAYQ_STREAMS];
     lock();
-    const size_t n = zl_playq_take_done(&s_playq, ids);
+    const size_t n = zl_playq_take_done(&s_playq, done);
     const bool online = s_online;
     unlock();
-    for (size_t i = 0; online && i < n; i++) send_json(s_ws, zl_encode_played(ids[i], false));
+    for (size_t i = 0; online && i < n; i++) {
+        const uint32_t gap_ms = (uint32_t)((uint64_t)done[i].gap * 1000 / (uint64_t)s_cfg.play_rate);
+        send_json(s_ws, zl_encode_played(done[i].id, false, done[i].dry, gap_ms));
+    }
 }
 
 static void send_volume(void)

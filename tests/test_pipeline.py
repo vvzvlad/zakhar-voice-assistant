@@ -82,15 +82,18 @@ class FakeTtsBackend(TtsBackend):
 
 class FakePlayer:
     """The device's play hook: drains each clip (bytes or async chunks) and records
-    (audio, mime), so tests can assert on what reached the device."""
+    (audio, mime), so tests can assert on what reached the device. Returns `stats`,
+    as the device's `played` reports them."""
 
     def __init__(self):
         self.calls = []
+        self.stats = None
 
     async def __call__(self, mime, audio):
         if not isinstance(audio, (bytes, bytearray)):
             audio = b"".join([c async for c in audio])
         self.calls.append((bytes(audio), mime))
+        return self.stats
 
 
 class FakeRunsStore:
@@ -2556,6 +2559,7 @@ async def test_run_text_happy_path(tmp_path, monkeypatch):
     pipeline, events = make_pipeline(
         tmp_path, monkeypatch, runs_store=store, run_events=hub,
     )
+    pipeline.play.stats = {"dry": 1, "gap_ms": 30}
 
     result = await pipeline.run_text("включи свет")
 
@@ -2572,6 +2576,7 @@ async def test_run_text_happy_path(tmp_path, monkeypatch):
     assert rec["t_vad"] == 0 and rec["t_stt"] == 0
     assert rec["t_total"] >= 0
     assert rec["error_stage"] is None
+    assert (rec["play_dry"], rec["play_gap_ms"]) == (1, 30)
     # Context appended like a normal conversation turn.
     assert context.load_context(pipeline._context_path) == [
         {"role": "user", "content": "включи свет"},

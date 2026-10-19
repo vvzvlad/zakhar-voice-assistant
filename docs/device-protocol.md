@@ -175,7 +175,7 @@ device                                   server
                                   ◄──    reply {text}
                                   ◄──    state speaking
                                   ◄──    play_start / 0x02 … / play_end
-  played {id}                     ──►
+  played {id, dry, gap_ms}        ──►
                                   ◄──    state idle             (or state error {text})
 ```
 
@@ -217,7 +217,11 @@ device                                   server
 - `play_start {id}`, then `0x02` frames of up to 4096 payload bytes, then `play_end {id}`. `id` is
   a server counter. The audio is mono at `hello.play.rate`; the server resamples to it.
 - The device plays streams back to back in arrival order (the end-of-phrase chime, a filler, the
-  answer) and sends `played {id}` when the last sample of a stream is out.
+  answer) and sends `played {id, dry, gap_ms}` when the last sample of a stream is out: `dry` is
+  how many times the stream ran dry after it had started and before its last sample, `gap_ms` the
+  silence the speaker played meanwhile, in ms. The wait before a stream's first sample is not
+  counted. Both are optional: a device that does not count them (an older firmware) sends
+  `played {id}`, and the server then records nothing for the stream.
 - `play_stop` flushes everything queued and playing; the device answers `played {id, "dropped":
   true}` for each stream it dropped. A new `wake` and the stop word flush the same way, and the
   server answers either with `play_stop`. `0x02` frames and `play_end` of a dropped stream that

@@ -340,7 +340,8 @@ def test_the_release_wake_model_is_a_model_of_the_repo():
     assert device_server.RELEASE_WAKE_MODEL in device_server.wake_model_files()
 
 
-async def test_wake_session_end_to_end(srv):
+async def test_wake_session_end_to_end(srv, tmp_path):
+    srv.rt.runs_store = RunsStore(str(tmp_path / "runs.db"))
     dev = await srv.connect()
     await dev.recv()  # config
     await dev.wake(17)
@@ -360,8 +361,12 @@ async def test_wake_session_end_to_end(srv):
     # The run waits for `played` before the session ends.
     with pytest.raises(asyncio.TimeoutError):
         await dev.recv(timeout=0.2)
-    await dev.send(type="played", id=stream)
+    await dev.send(type="played", id=stream, dry=1, gap_ms=40)
     assert await dev.recv() == {"type": "state", "session": 17, "value": "idle"}
+    # The run log keeps how the reply played.
+    await until(lambda: srv.rt.runs_store.list())
+    [row] = srv.rt.runs_store.list()
+    assert (row["play_dry"], row["play_gap_ms"]) == (1, 40)
 
 
 async def test_new_wake_drops_the_older_session(srv):
@@ -476,13 +481,14 @@ async def test_a_reminder_is_a_run_and_a_line_of_the_dialog(srv, tmp_path):
     assert await dev.recv() == {"type": "reply", "text": "молоко"}
     start = await dev.recv()
     assert (await dev.recv())["type"] == "play_end"
-    await dev.send(type="played", id=start["id"])
+    await dev.send(type="played", id=start["id"], dry=0, gap_ms=0)
     await asyncio.wait_for(say, 2)
 
     [row] = srv.rt.runs_store.list()
     run = srv.rt.runs_store.get(row["id"])
     assert (run["device"], run["reason"], run["result"], run["stt_text"], run["llm_text"]) == (
         "kitchen", "reminder", "ok", None, "молоко")
+    assert (run["play_dry"], run["play_gap_ms"]) == (0, 0)
     assert [(a["kind"], a["outcome"]) for a in run["attempts"]] == [("tts", "spoke")]
     assert run["t_tts"] is not None
     assert context.load_context(str(tmp_path / "context_kitchen.txt")) == [
@@ -559,6 +565,21 @@ async def test_playback_is_paced_to_the_device_buffer(srv):
     assert not play.done()  # still waiting for `played`
     await dev.send(type="played", id=start["id"])
     await asyncio.wait_for(play, 2)
+
+
+async def test_played_reports_how_the_stream_ran_dry(srv):
+    # A stream that played out returns the device's dry/gap_ms; a dropped one and a
+    # device that does not count them return None.
+    dev = await srv.connect()
+    await dev.recv()  # config
+    for reply, stats in (({"dry": 2, "gap_ms": 90}, {"dry": 2, "gap_ms": 90}),
+                         ({}, None),
+                         ({"dropped": True}, None)):
+        play = asyncio.create_task(srv.device().play(pcm_mime(16000), b"\x01\x00" * 1600))
+        start = await dev.recv()
+        await dev.recv()  # play_end
+        await dev.send(type="played", id=start["id"], **reply)
+        assert await asyncio.wait_for(play, 2) == stats
 
 
 async def test_audio_is_converted_to_the_device_rate(srv):

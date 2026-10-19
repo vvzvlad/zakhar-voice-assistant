@@ -118,8 +118,9 @@ static void test_encode(void)
                "\"caps\":{\"speaker\":false,\"screen\":true},\"mic\":{\"channels\":1},\"capture\":7}");
     encoded_is(zl_encode_wake(17, "Захар"), "{\"type\":\"wake\",\"session\":17,\"word\":\"Захар\"}");
     encoded_is(zl_encode_wake(4294967295u, "x"), "{\"type\":\"wake\",\"session\":4294967295,\"word\":\"x\"}");
-    encoded_is(zl_encode_played(9, false), "{\"type\":\"played\",\"id\":9}");
-    encoded_is(zl_encode_played(9, true), "{\"type\":\"played\",\"id\":9,\"dropped\":true}");
+    encoded_is(zl_encode_played(9, false, 2, 125), "{\"type\":\"played\",\"id\":9,\"dry\":2,\"gap_ms\":125}");
+    encoded_is(zl_encode_played(9, false, 0, 0), "{\"type\":\"played\",\"id\":9,\"dry\":0,\"gap_ms\":0}");
+    encoded_is(zl_encode_played(9, true, 0, 0), "{\"type\":\"played\",\"id\":9,\"dropped\":true}");
     encoded_is(zl_encode_volume(60), "{\"type\":\"volume\",\"value\":60}");
     encoded_is(zl_encode_wake_peak(42), "{\"type\":\"wake_peak\",\"value\":42}");
     encoded_is(zl_encode_audio_end("busy", 7), "{\"type\":\"audio_end\",\"reason\":\"busy\",\"id\":7}");
@@ -228,6 +229,7 @@ static void test_playq(void)
 {
     int16_t buf[8], out[16];
     uint32_t ids[ZL_PLAYQ_STREAMS];
+    zl_played_t done[ZL_PLAYQ_STREAMS];
     zl_playq_t q;
     zl_playq_init(&q, buf, 8, 0);
 
@@ -239,9 +241,9 @@ static void test_playq(void)
     zl_playq_write(&q, (const uint8_t *)"\x01", 1);
     assert(q.count == 2);
     assert(zl_playq_read(&q, out, 16) == 2 && out[0] == 1 && out[1] == 0x0102);
-    assert(zl_playq_take_done(&q, ids) == 0);  // out, but play_end has not come
+    assert(zl_playq_take_done(&q, done) == 0);  // out, but play_end has not come
     zl_playq_end(&q, 1);
-    assert(zl_playq_take_done(&q, ids) == 1 && ids[0] == 1);
+    assert(zl_playq_take_done(&q, done) == 1 && done[0].id == 1);
 
     // Two streams back to back: each is done when its last sample is out.
     const int16_t a[] = {10, 11, 12}, b[] = {20, 21};
@@ -251,11 +253,11 @@ static void test_playq(void)
     assert(zl_playq_start(&q, 3));
     write_samples(&q, b, 2);
     zl_playq_end(&q, 3);
-    assert(zl_playq_read(&q, out, 2) == 2 && zl_playq_take_done(&q, ids) == 0);
+    assert(zl_playq_read(&q, out, 2) == 2 && zl_playq_take_done(&q, done) == 0);
     assert(zl_playq_read(&q, out, 2) == 2 && out[0] == 12 && out[1] == 20);
-    assert(zl_playq_take_done(&q, ids) == 1 && ids[0] == 2);
+    assert(zl_playq_take_done(&q, done) == 1 && done[0].id == 2);
     assert(zl_playq_read(&q, out, 16) == 1 && out[0] == 21);
-    assert(zl_playq_take_done(&q, ids) == 1 && ids[0] == 3);
+    assert(zl_playq_take_done(&q, done) == 1 && done[0].id == 3);
 
     // A full buffer discards the rest; play_stop drops queued and receiving streams.
     const int16_t many[10] = {0};
@@ -267,7 +269,7 @@ static void test_playq(void)
     assert(zl_playq_flush(&q, ids) == 2 && ids[0] == 4 && ids[1] == 5);
     write_samples(&q, a, 3);  // the dropped stream's frames and play_end still in flight
     zl_playq_end(&q, 5);
-    assert(q.count == 0 && zl_playq_read(&q, out, 16) == 0 && zl_playq_take_done(&q, ids) == 0);
+    assert(q.count == 0 && zl_playq_read(&q, out, 16) == 0 && zl_playq_take_done(&q, done) == 0);
 
     // A wake flushed the queue, then a stream's play_start arrived: the server's play_stop drops it.
     assert(zl_playq_start(&q, 50));
@@ -278,9 +280,9 @@ static void test_playq(void)
     assert(zl_playq_start(&q, 6));
     zl_playq_end(&q, 99);  // not the receiving stream
     zl_playq_end(&q, 6);
-    assert(zl_playq_take_done(&q, ids) == 1 && ids[0] == 6);
+    assert(zl_playq_take_done(&q, done) == 1 && done[0].id == 6);
     assert(zl_playq_start(&q, 7) && zl_playq_start(&q, 8));
-    assert(zl_playq_take_done(&q, ids) == 1 && ids[0] == 7);
+    assert(zl_playq_take_done(&q, done) == 1 && done[0].id == 7);
 
     // Queued and done streams share the slots.
     size_t started = 1;  // 8 is receiving
@@ -288,27 +290,30 @@ static void test_playq(void)
     assert(started == ZL_PLAYQ_STREAMS);
 
     // Priming at 3 samples: a stream waits for 3 samples, plays, runs dry, waits for 3 again; a
-    // shorter one plays at its play_end.
+    // shorter one plays at its play_end. Reads of 4: the silence it ran into is the samples they
+    // came short by once it started, 1 then 4; the wait for its first prime is not.
     zl_playq_init(&q, buf, 8, 3);
     const int16_t c[] = {30, 31, 32, 33, 34};
     assert(zl_playq_start(&q, 9));
     write_samples(&q, c, 2);
-    assert(zl_playq_read(&q, out, 16) == 0);
+    assert(zl_playq_read(&q, out, 4) == 0);
     write_samples(&q, c + 2, 1);
-    assert(zl_playq_read(&q, out, 16) == 3 && out[0] == 30 && out[2] == 32);
+    assert(zl_playq_read(&q, out, 4) == 3 && out[0] == 30 && out[2] == 32);
     write_samples(&q, c + 3, 1);
-    assert(zl_playq_read(&q, out, 16) == 0);  // ran dry: one sample is not enough to resume
+    assert(zl_playq_read(&q, out, 4) == 0);  // ran dry: one sample is not enough to resume
     write_samples(&q, c + 4, 1);
     zl_playq_end(&q, 9);
-    assert(zl_playq_read(&q, out, 16) == 2 && out[0] == 33 && out[1] == 34);
-    assert(zl_playq_take_done(&q, ids) == 1 && ids[0] == 9);
+    assert(zl_playq_read(&q, out, 4) == 2 && out[0] == 33 && out[1] == 34);
+    assert(zl_playq_take_done(&q, done) == 1 && done[0].id == 9 && done[0].dry == 1 && done[0].gap == 1 + 4);
     // At a stream boundary the next stream primes on its own: 2 samples of it wait, 3 play on.
+    // The wait is a gap of neither: the first has played out, the next has not started.
     assert(zl_playq_start(&q, 10));
     write_samples(&q, c, 2);
     zl_playq_end(&q, 10);
     assert(zl_playq_start(&q, 11));
     write_samples(&q, c, 2);
-    assert(zl_playq_read(&q, out, 16) == 2 && zl_playq_take_done(&q, ids) == 1 && ids[0] == 10);
+    assert(zl_playq_read(&q, out, 16) == 2 && zl_playq_take_done(&q, done) == 1 && done[0].id == 10);
+    assert(done[0].dry == 0 && done[0].gap == 0);
     write_samples(&q, c + 2, 1);
     assert(zl_playq_read(&q, out, 16) == 3 && out[0] == 30);
     printf("ok: playback queue\n");
