@@ -25,7 +25,9 @@ class WakewordVerifier(ABC):
     window_ms: int = 1500
 
     @abstractmethod
-    async def verify(self, pcm: bytes) -> WakewordVerdict: ...
+    async def verify(self, pcm: bytes, over_answer: bool = False) -> WakewordVerdict:
+        """`over_answer`: the wake came while the device was answering, so its own
+        voice may be in `pcm`; a verifier may judge such a wake stricter."""
 
 
 class PassthroughVerifier(WakewordVerifier):
@@ -35,5 +37,5 @@ class PassthroughVerifier(WakewordVerifier):
     fail_open = True
     window_ms = 1500
 
-    async def verify(self, pcm: bytes) -> WakewordVerdict:
+    async def verify(self, pcm: bytes, over_answer: bool = False) -> WakewordVerdict:
         return WakewordVerdict(accepted=True, score=None)

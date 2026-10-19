@@ -704,7 +704,7 @@ class Device:
         wake (play_stop, the new session's run) and the audio held meanwhile goes to the
         run. Rejected: the running answer goes on under the new session number, so the
         device hears the rest of it, and the wake is recorded as a rejected run."""
-        accepted, score, t_ms, error = await self.pipeline.verify_wake(pcm)
+        accepted, score, t_ms, error = await self.pipeline.verify_wake(pcm, over_answer=True)
         if self.conn is not conn or self._pending_wake is not pending:
             return
         if accepted:

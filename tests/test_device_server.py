@@ -502,13 +502,15 @@ class HeldVerifier(WakewordVerifier):
 
     def __init__(self):
         self.calls = []
+        self.over_answer = []  # the over_answer of each verify()
         self._verdicts = {}
 
     def verdict(self, sample: int) -> asyncio.Future:
         return self._verdicts.setdefault(sample, asyncio.get_running_loop().create_future())
 
-    async def verify(self, pcm):
+    async def verify(self, pcm, over_answer=False):
         self.calls.append(pcm)
+        self.over_answer.append(over_answer)
         return await self.verdict(int(np.frombuffer(pcm[:2], dtype="<i2")[0]))
 
 
@@ -552,6 +554,7 @@ async def test_a_wake_over_the_answer_drops_it_only_once_confirmed(srv):
     with pytest.raises(asyncio.TimeoutError):
         await asyncio.wait_for(dev.recv(), 0.5)
     assert len(dev.plays[old]) > sent
+    assert verifier.over_answer == [True]  # judged as a wake over the answer
 
     verifier.verdict(11).set_result(WakewordVerdict(accepted=True, score=0.9))
     assert await dev.recv() == {"type": "play_stop"}
@@ -624,6 +627,7 @@ async def test_a_wake_with_nothing_to_protect_is_taken_at_once(srv):
     assert await dev.recv() == {"type": "play_stop"}
     await until(lambda: verifier.calls)
     assert srv.device()._pending_wake is None  # the run's own gate checks it
+    assert verifier.over_answer == [False]
     verifier.verdict(11).set_result(WakewordVerdict(accepted=True, score=0.9))
     assert await dev.recv() == state(1, "listening")
 
