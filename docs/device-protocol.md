@@ -61,9 +61,10 @@ The owner's words:
 - «у панели просралась часть аудио в центре. почему? мы фиксили чет такое у колонки» — a Wi-Fi
   stall longer than the room the tap had left after the 2 s pre-roll (about 1 s) made the device
   skip ahead and cut audio out of the phrase without a trace. Option chosen: «Буфер 8 с + TCP 32
-  КБ» — the microphone tap of the Voice PE and the panel holds 8.192 s, so a send stalled up to
-  the 3 s send timeout while the pre-roll goes out loses nothing, and the rectangular panel
-  (JC4880P443) gets the 32 KB TCP send buffer the speaker and the round panel have.
+  КБ» — the microphone tap of the Voice PE and the panel holds 8.192 s (7.2 s of it readable),
+  so a send stalled up to the 3 s send timeout while the pre-roll goes out loses nothing, and the
+  rectangular panel (JC4880P443) gets the 32 KB TCP send buffer the speaker and the round panel
+  have.
 - «надо еще некоторое время слушать после окончания фразы которую говорит колонка, если я хочу
   продолжить диалог без активационной фразы», «еще одна стадия в конце, которую можно включить?»,
   «через jev стоит оценивать, продолжение это диалога или нет», then «го делать» — after the

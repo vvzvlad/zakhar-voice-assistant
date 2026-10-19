@@ -1186,7 +1186,7 @@ class DeviceManager:
         if old is not None:
             old.close(CLOSE_REPLACED)
             await device.pipeline.on_disconnect()
-        # Before the models: the device holds a capture's unsent audio only in its ~3 s tap.
+        # Before the models: the device holds a capture's unsent audio only in its ~7 s tap.
         # A capture file that cannot be read must not keep the device from connecting.
         try:
             device.resume_capture(conn)

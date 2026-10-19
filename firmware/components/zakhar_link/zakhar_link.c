@@ -39,8 +39,9 @@ static const char *TAG = "zakhar_link";
 // frames waiting meanwhile still fit the device's tap (7.2 s on the Voice PE and the panel; 5.2 s
 // while a session's 2 s pre-roll is still going out): a longer wait would skip the oldest of them,
 // splicing a session's audio and leaving a hole in a capture's, instead of dropping the link, which
-// a capture outlives with its frames still in the tap to resume from. Both taps assert that they
-// hold the pre-roll plus this timeout (the Voice PE's audio.c, the panel's wake_word.cpp).
+// a capture outlives with its frames still in the tap to resume from. The Voice PE's audio.c and the
+// panel's wake_word.cpp assert their tap size against 2000 ms of pre-roll plus 3000 ms written there
+// as numbers: change them together with this value.
 #define SEND_TIMEOUT_MS 3000
 #define SILENCE_MS 30000       // nothing heard for this long drops the link
 #define RX_CAP 4096            // a text frame larger than this is skipped; fits a long reply
@@ -654,7 +655,7 @@ static void capture_resume(void)
 
 // The capture ends when its audio is sent, not by the clock: a pass that waited in a send must not
 // cut off the frames still in the tap. One that is not being sent (its link lost, no
-// `capture_resume`) is dropped without audio_end once its audio is leaving the tap.
+// `capture_resume`) is dropped without audio_end ZL_CAPTURE_KEEP_FRAMES after its last frame.
 static void capture_poll(void)
 {
     const uint32_t pos = s_cfg.mic_position();
