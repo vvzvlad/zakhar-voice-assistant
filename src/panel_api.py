@@ -33,7 +33,7 @@ from loguru import logger
 from multidict import CIMultiDict
 from pydantic import ValidationError
 
-from src import captures, config_store, dataset_jobs
+from src import captures, config_store, dataset_jobs, device_logs
 from src.audio_prep import pcm_to_wav_bytes
 from src.device_server import (
     CAPTURE_MAX_SECONDS, RELEASE_WAKE_MODEL, UPLOADED_WAKE_PREFIX, CaptureBusyError, DeviceOfflineError,
@@ -194,7 +194,7 @@ class PanelServer:
                  device_capture_status=None, device_capture_delete=None, device_play=None,
                  device_controls_get=None, device_controls_set=None,
                  device_wake_prob_get=None, device_wake_prob_set=None,
-                 device_detect_set=None, device_model_reload=None,
+                 device_detect_set=None, device_model_reload=None, device_say=None,
                  static_dir=None, runs_store=None, tool_sources=None,
                  run_events=None, prompt_store=None, agent_mcp=None,
                  assistant_task_reply=None,
@@ -260,6 +260,9 @@ class PanelServer:
         #   device its wake-word and VAD models again and returns {device, models}
         #   (DeviceManager.reload_model). None -> POST /api/device/model returns 503.
         self.device_model_reload = device_model_reload
+        # device_say: optional async callable (device_name, text) that speaks the text on
+        #   the device (DeviceManager.say). None -> POST /api/device/say returns 503.
+        self.device_say = device_say
         # Wake-word dataset sessions (a beep, then a capture, per take) run server-side too;
         # they need both device callables, else every /api/datasets* endpoint returns 503.
         self._dataset_jobs = (
@@ -888,6 +891,32 @@ class PanelServer:
         except RuntimeError as e:  # offline
             return web.json_response({"error": str(e)}, status=409)
 
+    async def _post_say(self, request: web.Request) -> web.Response:
+        """Speak text on a speaker through the TTS (the device modal's volume check).
+        Body: {device, text}. Answers once the speech has played. Status codes: 200 ok,
+        400 bad input, 404 unknown device, 409 offline, 502 the speech failed, 503 not
+        wired."""
+        if self.device_say is None:
+            return web.json_response({"error": "say not available"}, status=503)
+        body = await _read_json(request)
+        if not isinstance(body, dict):
+            return web.json_response({"error": "body must be a JSON object"}, status=400)
+        device = body.get("device")
+        if not isinstance(device, str) or not device:
+            return web.json_response({"error": 'field "device" (string) is required'}, status=400)
+        text = body.get("text")
+        if not isinstance(text, str) or not text.strip():
+            return web.json_response({"error": 'field "text" (non-empty string) is required'}, status=400)
+        try:
+            await self.device_say(device, text)
+        except LookupError as e:
+            return web.json_response({"error": str(e)}, status=404)
+        except DeviceOfflineError as e:
+            return web.json_response({"error": str(e)}, status=409)
+        except Exception as e:
+            return web.json_response({"error": str(e)}, status=502)
+        return web.json_response({"ok": True})
+
     async def _post_capture(self, request: web.Request) -> web.Response:
         """Start a capture of a manual sample on a device (non-blocking).
 
@@ -1013,6 +1042,26 @@ class PanelServer:
         if not deleted:
             return web.json_response({"error": "not found"}, status=404)
         return web.json_response({"ok": True})
+
+    # --- device logs (src/device_logs.py) ---------------------------------------
+    async def _get_device_logs(self, request: web.Request) -> web.Response:
+        """The device log days on disk: {"devices": {device: [YYYY-MM-DD, newest first]}}."""
+        return web.json_response({"devices": await asyncio.to_thread(device_logs.days)})
+
+    async def _get_device_log(self, request: web.Request) -> web.Response:
+        """One device log day from byte ?offset= (default 0) up to its last whole line:
+        {"text", "offset": the byte position to read on from}. 400 for a non-integer offset,
+        404 when the device has no such day."""
+        device, day = request.match_info["device"], request.match_info["day"]
+        try:
+            offset = int(request.query.get("offset", "0"))
+        except ValueError:
+            return web.json_response({"error": "offset must be an integer"}, status=400)
+        got = await asyncio.to_thread(device_logs.read, device, day, offset)
+        if got is None:
+            return web.json_response({"error": "not found"}, status=404)
+        text, offset = got
+        return web.json_response({"text": text, "offset": offset})
 
     # --- wake-word dataset recording -------------------------------------------
     def _dataset_refusal(self, name: str) -> web.Response | None:
@@ -1401,12 +1450,15 @@ class PanelServer:
             web.post("/api/device/wake-probability", self._post_wake_probability),
             web.post("/api/device/detect", self._post_detect),
             web.post("/api/device/model", self._post_model),
+            web.post("/api/device/say", self._post_say),
             web.post("/api/capture", self._post_capture),
             web.get("/api/capture", self._get_capture_status),
             web.get("/api/capture/result", self._get_capture_result),
             web.get("/api/captures", self._get_captures),
             web.get("/api/captures/{device}/{name}.wav", self._get_capture_wav),
             web.delete("/api/captures/{device}/{name}", self._delete_capture),
+            web.get("/api/device-logs", self._get_device_logs),
+            web.get("/api/device-logs/{device}/{day}", self._get_device_log),
             web.get("/api/datasets", self._get_datasets),
             web.post("/api/datasets/{name}", self._post_dataset),
             web.post("/api/datasets/{name}/stop", self._post_dataset_stop),

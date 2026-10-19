@@ -2,8 +2,9 @@
 
 Exposes the assistant ITSELF as an MCP server so an external agent (e.g. Claude)
 can read the voice run log, view/change the live config, speak arbitrary text on
-a speaker and send full text requests through the assistant pipeline. Runs in a
-TRUSTED zone — there is NO authentication, same posture as the admin panel.
+a speaker, read and change a speaker's volume and send full text requests through
+the assistant pipeline. Runs in a TRUSTED zone — there is NO authentication, same
+posture as the admin panel.
 
 There is no standalone server: the endpoint is SERVED BY THE ADMIN PANEL at /mcp
 on the panel port (PanelServer bridges aiohttp requests into the FastMCP
@@ -172,6 +173,57 @@ def build_agent_mcp(rt) -> FastMCP:
             return {"ok": True, "device": client.cfg.name}
         except Exception as e:
             return {"error": f"say failed: {e}"}
+
+    @mcp.tool(
+        name="get_volume",
+        description=(
+            "A speaker's current volume in percent (the last one the speaker reported or "
+            "the server set). "
+            "device: speaker name from list_devices; omitted = the first online speaker."
+        ),
+    )
+    async def get_volume(device: str | None = None) -> dict:
+        try:
+            manager = rt.manager
+            if device is not None:
+                client = _find_client(manager, device)
+                if client is None:
+                    return {"error": f"unknown device {device!r}"}
+            else:
+                client = _first_online(manager)
+                if client is None:
+                    return {"error": "no online speakers"}
+            return {"ok": True, "device": client.cfg.name, "volume": client.get_volume()}
+        except Exception as e:
+            return {"error": f"get_volume failed: {e}"}
+
+    @mcp.tool(
+        name="set_volume",
+        description=(
+            "Change a speaker's volume. Give exactly one of: level — the new volume "
+            "in percent (0-100); change — percent to add (positive, louder) or "
+            "subtract (negative, quieter) from the current volume. device: speaker "
+            "name from list_devices; omitted = the first online speaker. Returns the "
+            "resulting volume."
+        ),
+    )
+    async def set_volume(
+        level: int | None = None, change: int | None = None, device: str | None = None
+    ) -> dict:
+        try:
+            manager = rt.manager
+            if device is not None:
+                client = _find_client(manager, device)
+                if client is None:
+                    return {"error": f"unknown device {device!r}"}
+            else:
+                client = _first_online(manager)
+                if client is None:
+                    return {"error": "no online speakers"}
+            volume = client.set_volume(level=level, change=change)
+            return {"ok": True, "device": client.cfg.name, "volume": volume}
+        except Exception as e:
+            return {"error": f"set_volume failed: {e}"}
 
     @mcp.tool(
         name="ask",

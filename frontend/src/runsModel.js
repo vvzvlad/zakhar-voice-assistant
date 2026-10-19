@@ -9,9 +9,11 @@
 import { total } from "./components/primitives.jsx";
 
 // result -> { label, tone }; tone drives the pill/dot color (good|muted|bad).
-// "rejected" is a run the server-side wake-word verifier blocked before STT —
-// it produced no transcript on purpose, so it reads as muted (like "empty"),
-// not as a hard error.
+// "rejected" is a run ended before an answer — the server-side wake-word verifier
+// blocked it (reason wakeword_reject / wakeword_error), another device kept the same
+// phrase (reason duplicate), or the follow-up check dropped a follow-up phrase
+// (reason followup_*). It produced no answer on purpose, so it reads as muted (like
+// "empty"), not as a hard error.
 export const RESULT_META = {
   ok:       { label: "OK",        tone: "good" },
   tool:     { label: "OK · tool", tone: "good" },
@@ -84,10 +86,12 @@ export function mapRun(row) {
   };
 }
 
-// Status pill meta for a run row: an in-progress (live) row shows "Running";
-// otherwise it maps result -> RESULT_META (falling back to a muted label).
+// Status pill meta for a run row: an in-progress (live) row shows "Running", a wake
+// another device kept shows "Duplicate"; otherwise it maps result -> RESULT_META
+// (falling back to a muted label).
 export function statusMeta(r) {
   if (r && r.live) return { label: "Running", tone: "muted" };
+  if (r && r.result === "rejected" && r.reason === "duplicate") return { label: "Duplicate", tone: "muted" };
   return RESULT_META[r && r.result] || { label: r && r.result, tone: "muted" };
 }
 

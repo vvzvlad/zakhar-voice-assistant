@@ -3,8 +3,8 @@
 One aiohttp app on core.audio.host/port serves GET /device (the device protocol) and
 GET /health. DeviceManager keeps one Device per name; a Device keeps its Pipeline and its
 running capture across reconnects and binds the pipeline's transport hooks (send_event,
-play, has_speaker) to its live Connection. This module alone maps StageEvents onto wire
-messages and converts outgoing audio to what the device plays.
+play, has_speaker, has_follow_up) to its live Connection. This module alone maps
+StageEvents onto wire messages and converts outgoing audio to what the device plays.
 """
 
 import asyncio
@@ -22,12 +22,13 @@ import soxr
 from aiohttp import WSCloseCode, WSMsgType, web
 from loguru import logger
 
-from src import captures, config_store, context
+from src import captures, config_store, context, device_logs
 from src.chime import build_ack_clip
 from src.pipeline import Pipeline
 from src.pipeline_events import StageEvent
 from src.run_events import record_run
 from src.tts import pcm_rate
+from src.wake_arbiter import WakeArbiter
 
 # Binary frame kinds (first byte).
 MIC = 0x01
@@ -222,6 +223,10 @@ class _Stream:
         self.sent_s = 0.0  # seconds of audio sent
         # Resolves to "played", "dropped" or "closed" (the connection went away).
         self.ended = asyncio.get_running_loop().create_future()
+        # From `played`: how many times the stream ran dry before its play_end and the ms of silence
+        # played meanwhile. None when the device does not report them.
+        self.dry = None
+        self.gap_ms = None
 
     @property
     def live(self) -> bool:
@@ -247,6 +252,8 @@ class Connection:
         # The wake model the device reported loaded; an older firmware names its own in hello.
         self.model = hello.get("model")
         self.speaker = bool(hello.get("caps", {}).get("speaker"))
+        # The device reopens its microphone on a follow-up `listening`.
+        self.follow_up = bool(hello.get("caps", {}).get("follow_up"))
         self.mic_channels = hello.get("mic", {}).get("channels", 1)
         play = hello.get("play", {})
         self.play_rate = play.get("rate")
@@ -258,6 +265,7 @@ class Connection:
         self.session = None
         self.session_open = False
         self.config_sent = None  # _config_fields() last sent in `config`
+        self.log_on = None  # `on` last sent in `log_stream`
         self.models: dict[str, str] = {}  # kind -> the name last sent in `model`
         self.closed = False
         self.held_capture = hello.get("capture")  # the id of the capture the device holds
@@ -302,6 +310,10 @@ class Connection:
         self.config_sent = _config_fields(cfg)
         self.send({"type": "config", **self.config_sent})
 
+    def send_log_stream(self, on: bool) -> None:
+        self.log_on = on
+        self.send({"type": "log_stream", "on": on})
+
     def send_model(self, kind: str, name: str, path: str) -> bool:
         """Send the .tflite file at `path` as the device's `kind` model named `name`: `model`,
         then its bytes in 0x03 frames. Queued as no play stream, so a wake does not purge them.
@@ -337,9 +349,10 @@ class Connection:
         self._play_until = 0.0
         self.send({"type": "play_stop"})
 
-    def on_played(self, stream_id, dropped: bool) -> None:
+    def on_played(self, stream_id, dropped: bool, dry=None, gap_ms=None) -> None:
         stream = self._streams.pop(stream_id, None)
         if stream is not None:
+            stream.dry, stream.gap_ms = dry, gap_ms
             stream.end("dropped" if dropped else "played")
 
     def _stream_msg(self, kind: str, stream: _Stream) -> dict:
@@ -348,10 +361,15 @@ class Connection:
             msg["session"] = stream.session
         return msg
 
-    async def play(self, mime: str, audio) -> None:
+    async def play(self, mime: str, audio) -> dict:
         """Send one clip (bytes or an async chunk iterator) as a play stream, paced to
-        the device's buffer, and return once the device reports it played (or dropped).
-        Streams go out back to back in call order. The iterator is always closed."""
+        the device's buffer, and return once the device reports it. Streams go out back
+        to back in call order. The iterator is always closed.
+
+        Returns {"outcome", "dry", "gap_ms"}: outcome "played" or "dropped"; dry how
+        many times a played stream ran dry before its play_end and gap_ms the ms of
+        silence played meanwhile, both None for a dropped stream or a device that does
+        not count them."""
         chunks = _one_chunk(audio) if isinstance(audio, (bytes, bytearray)) else audio
         try:
             out = _PcmOut(mime, self.play_rate)
@@ -383,6 +401,13 @@ class Connection:
             stream.end("dropped")
         if stream.ended.result() == "closed":
             raise ConnectionError(f"{self.name} disconnected during playback")
+        outcome = stream.ended.result()
+        if outcome != "played" or stream.dry is None:
+            return {"outcome": outcome, "dry": None, "gap_ms": None}
+        if stream.dry > 0:
+            logger.warning(f"{self.name}: stream {stream.id} ran dry {stream.dry} times, "
+                           f"{stream.gap_ms} ms of silence")
+        return {"outcome": outcome, "dry": stream.dry, "gap_ms": stream.gap_ms}
 
     async def _send_pcm(self, stream: _Stream, pcm: bytes) -> None:
         """Queue PCM frames, keeping at most buffer_ms - PACING_MARGIN_MS of audio
@@ -437,6 +462,8 @@ class Device:
         self.pipeline.play = self.play
         self.capture: captures.Capture | None = None
         self._capture_watchdog: asyncio.TimerHandle | None = None
+        # The device log could not be written last time: warned once until a write succeeds.
+        self._log_write_failed = False
 
     @property
     def cfg(self):
@@ -450,6 +477,7 @@ class Device:
         """Make `conn` the live connection; return the one it replaces, if any."""
         old, self.conn = self.conn, conn
         self.pipeline.has_speaker = conn.speaker
+        self.pipeline.has_follow_up = conn.speaker and conn.follow_up
         return old
 
     async def detach(self, conn: Connection) -> None:
@@ -479,14 +507,14 @@ class Device:
         if event in (StageEvent.RUN_END, StageEvent.ERROR):
             conn.session_open = False
 
-    async def play(self, mime: str, audio) -> None:
-        """The pipeline's play hook."""
+    async def play(self, mime: str, audio) -> dict:
+        """The pipeline's play hook; returns what Connection.play does."""
         conn = self.conn
         if conn is None or not conn.speaker:
             if not isinstance(audio, (bytes, bytearray)):
                 await _aclose(audio)
             raise RuntimeError(f"{self.name} cannot play: offline or no speaker")
-        await conn.play(mime, audio)
+        return await conn.play(mime, audio)
 
     async def on_text(self, conn: Connection, msg: dict) -> None:
         if conn is not self.conn:
@@ -508,11 +536,21 @@ class Device:
                 conn.session_open = False
             logger.info(f"{self.name}: stop word, playback{' and run' if in_session else ''} stopped")
         elif kind == "played":
-            conn.on_played(msg["id"], bool(msg.get("dropped")))
+            conn.on_played(msg["id"], bool(msg.get("dropped")), msg.get("dry"), msg.get("gap_ms"))
         elif kind == "volume":
             conn.volume = msg["value"]
         elif kind == "wake_peak":
             conn.wake_peak = msg["value"]
+        elif kind == "log":
+            # A log that cannot be written (a full or read-only volume) drops its lines, not the
+            # link: the device would resend its queued lines on every reconnect.
+            try:
+                device_logs.append(self.name, msg["text"], self.rt.core.device_log_days)
+                self._log_write_failed = False
+            except OSError as e:
+                if not self._log_write_failed:
+                    logger.warning(f"{self.name}: device log not written: {e}")
+                self._log_write_failed = True
         elif kind == "audio_end":
             if self.capture is not None and msg.get("id") == self.capture.id:
                 busy = msg.get("reason") == "busy"
@@ -595,6 +633,31 @@ class Device:
         conn.send({"type": "set_volume", "value": pct})
         conn.volume = pct
 
+    def get_volume(self) -> int:
+        """The speaker volume in percent: the last one the device reported or the server
+        set. Raises RuntimeError (offline, or the device has not reported its volume) or
+        LookupError (no speaker)."""
+        conn = self.conn
+        if conn is None:
+            raise RuntimeError(f"{self.name} is offline")
+        if not conn.speaker:
+            raise LookupError(f"{self.name} has no speaker")
+        if conn.volume is None:
+            raise RuntimeError(f"{self.name} has not reported its volume")
+        return conn.volume
+
+    def set_volume(self, level: int | None = None, change: int | None = None) -> int:
+        """Set the speaker volume to `level` percent, or move it by `change` percent from
+        the current volume (get_volume); exactly one of the two (else
+        ValueError). Goes through set_control: clamped to 0..100, raises LookupError (no
+        speaker) or RuntimeError (offline). Returns the new volume in percent."""
+        if (level is None) == (change is None):
+            raise ValueError("exactly one of level and change is required")
+        if change is not None:
+            level = self.get_volume() + change
+        self.set_control(SPEAKER_VOLUME, level)
+        return self.conn.volume
+
     async def announce(self, text: str, reason: str, request: str | None = None) -> None:
         """Proactively say `text`: the text to the device as an announcement and, on
         a device with a speaker, the synthesized speech.
@@ -609,7 +672,8 @@ class Device:
         t0 = time.perf_counter()
         record = {"ts": time.time(), "device": self.name, "reason": reason, "result": "ok",
                   "stt_text": request, "llm_text": text,
-                  "error_stage": None, "error_text": None, "attempts": []}
+                  "error_stage": None, "error_text": None, "attempts": [],
+                  "play_dry": None, "play_gap_ms": None}
         try:
             conn = self.conn
             if conn is None:
@@ -617,10 +681,12 @@ class Device:
                 raise RuntimeError(f"{self.name} is offline")
             conn.send({"type": "reply", "text": text})
             try:
-                await self.pipeline.speak(text, record["attempts"])
+                played = await self.pipeline.speak(text, record["attempts"])
             except Exception as e:
                 record.update(result="error", error_stage="TTS", error_text=str(e))
                 raise
+            if played is not None:
+                record.update(play_dry=played["dry"], play_gap_ms=played["gap_ms"])
             # Time to the start of the speech, as a text run counts it.
             record["t_tts"] = sum(a["t"] for a in record["attempts"] if a["kind"] == "tts")
             ctx = self.rt.core.context
@@ -704,12 +770,23 @@ class DeviceManager:
         self.port = runtime.core.audio.port
         self._devices: dict[str, Device] = {}
         self._runner: web.AppRunner | None = None
+        # One phrase heard by several devices keeps one session (docs/device-protocol.md).
+        self.arbiter = WakeArbiter(runtime, online_count=lambda: sum(1 for d in self.clients if d.online),
+                                   send_reply=self._send_reply)
 
     def _device(self, name: str) -> Device:
         device = self._devices.get(name)
         if device is None:
             device = self._devices[name] = Device(name, self.rt)
+            device.pipeline.arbiter = self.arbiter
         return device
+
+    def _send_reply(self, pipeline, text: str) -> None:
+        """The arbiter's hook: show `text` on the device of `pipeline` as an
+        announcement — a `reply` without `session`. An offline device is skipped."""
+        device = self._devices.get(pipeline.name)
+        if device is not None and device.conn is not None:
+            device.conn.send({"type": "reply", "text": text})
 
     @property
     def clients(self) -> list[Device]:
@@ -789,6 +866,23 @@ class DeviceManager:
     def set_device_control(self, device_name: str, control_id: str, value: float) -> dict:
         self._find(device_name).set_control(control_id, value)
         return self.device_controls(device_name)
+
+    def get_volume(self, device_name: str) -> int:
+        """Device.get_volume on the named device; LookupError for an unknown name."""
+        return self._find(device_name).get_volume()
+
+    def set_volume(self, device_name: str, level: int | None = None, change: int | None = None) -> int:
+        """Device.set_volume on the named device; LookupError for an unknown name."""
+        return self._find(device_name).set_volume(level, change)
+
+    async def say(self, device_name: str, text: str) -> None:
+        """Speak `text` on the named device (the panel's "Say on speaker"). Raises
+        LookupError (unknown device), DeviceOfflineError, or what announce raises when
+        the speech fails."""
+        device = self._find(device_name)
+        if not device.online:
+            raise DeviceOfflineError(f"{device_name} is offline")
+        await device.announce(text, "say")
 
     def set_wake_prob_stream(self, device_name: str, enabled: bool) -> dict:
         target = self._find(device_name)
@@ -879,8 +973,8 @@ class DeviceManager:
 
     async def _hello(self, ws, hello: dict):
         """Admit a device: add an unknown id to the config, refuse a disabled one,
-        replace an older connection of the same id, then send `config`, the models and
-        what the device's capture needs."""
+        replace an older connection of the same id, then send `config`, what the device's
+        capture needs, `log_stream` and the models."""
         name = hello["id"]
         cfg = next((d for d in self.rt.core.devices if d.name == name), None)
         if cfg is None:
@@ -905,6 +999,8 @@ class DeviceManager:
             device.resume_capture(conn)
         except Exception as e:
             logger.error(f"{name}: captures not taken up: {e}")
+        # Off too: the device keeps collecting its log across a lost link until told.
+        conn.send_log_stream(cfg.log)
         for kind, (model, path) in _model_paths(cfg, conn.speaker).items():
             conn.send_model(kind, model, path)
         logger.info(
@@ -915,8 +1011,8 @@ class DeviceManager:
 
     async def reconfigure(self) -> None:
         """Apply the device config to live connections: close a device that left the
-        config or got disabled, send `config` to one whose `config` values changed and a model
-        whose name changed."""
+        config or got disabled, send `config` to one whose `config` values changed, `log_stream`
+        to one whose log switch changed and a model whose name changed."""
         names = {cfg.name for cfg in self.rt.core.devices}
         for name, device in self._devices.items():
             if name not in names and device.conn is not None:
@@ -933,6 +1029,8 @@ class DeviceManager:
                 continue
             if conn.config_sent != _config_fields(cfg):
                 conn.send_config(cfg)
+            if conn.log_on != cfg.log:
+                conn.send_log_stream(cfg.log)
             for kind, (model, path) in _model_paths(cfg, conn.speaker).items():
                 if conn.models.get(kind) != model:
                     conn.send_model(kind, model, path)

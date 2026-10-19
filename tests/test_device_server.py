@@ -6,7 +6,9 @@ import asyncio
 import io
 import itertools
 import json
+import re
 import wave
+from datetime import date
 from pathlib import Path
 
 import aiohttp
@@ -26,6 +28,7 @@ from src.runs_store import RunsStore
 from src.runtime import Runtime
 from src.tts import TtsBackend, pcm_mime
 from tests.test_pipeline import FakeToolHub, FakeVad, patch_llm
+from tests.test_pipeline_followup import FakeGate
 
 # 3 speech frames then 6 silence frames (20 ms VAD frames) -> an end-point.
 PHRASE_VAD = [True, True, True, False, False, False, False, False, False]
@@ -70,6 +73,14 @@ def is_model(msg) -> bool:
     return msg.type == aiohttp.WSMsgType.TEXT and json.loads(msg.data)["type"] == "model"
 
 
+def log_switch(msg) -> bool | None:
+    """The `on` of a `log_stream` message, None for any other frame."""
+    if msg.type != aiohttp.WSMsgType.TEXT:
+        return None
+    data = json.loads(msg.data)
+    return data["on"] if data["type"] == "log_stream" else None
+
+
 class FakeDevice:
     """The device end of the protocol. Play frames are collected per stream id."""
 
@@ -80,11 +91,12 @@ class FakeDevice:
         self._stream = None
 
     async def recv(self, timeout=5.0) -> dict:
-        """The next text message other than `model`; play frames before it go into
-        self.plays, models are skipped (model() reads them)."""
+        """The next text message other than `model` and `log_stream`; play frames before it
+        go into self.plays, models and log switches are skipped (model() and log_switch()
+        read them)."""
         while True:
             msg = await asyncio.wait_for(self.ws.receive(), timeout)
-            if is_model(msg):
+            if is_model(msg) or log_switch(msg) is not None:
                 continue
             if msg.type == aiohttp.WSMsgType.BINARY:
                 assert msg.data[0] == PLAY
@@ -99,8 +111,11 @@ class FakeDevice:
             return data
 
     async def model(self, timeout=5.0) -> tuple[dict, bytes]:
-        """The next frame must start a `model`: it and the 0x03 payload that follows."""
+        """The next frame other than a `log_stream` must start a `model`: it and the 0x03
+        payload that follows."""
         msg = await asyncio.wait_for(self.ws.receive(), timeout)
+        while log_switch(msg) is not None:
+            msg = await asyncio.wait_for(self.ws.receive(), timeout)
         assert msg.type == aiohttp.WSMsgType.TEXT, (msg.type, msg.data)
         model = json.loads(msg.data)
         assert model["type"] == "model", model
@@ -140,9 +155,18 @@ class FakeDevice:
                 await self.send(type="played", id=got[-1]["id"])
         return got
 
+    async def log_switch(self, timeout=5.0) -> bool:
+        """The `on` of the next `log_stream`; only models may come before it."""
+        while True:
+            msg = await asyncio.wait_for(self.ws.receive(), timeout)
+            if not is_model(msg):
+                on = log_switch(msg)
+                assert on is not None, (msg.type, msg.data)
+                return on
+
     async def closed_with(self) -> int:
         msg = await asyncio.wait_for(self.ws.receive(), 5.0)
-        while is_model(msg):
+        while is_model(msg) or log_switch(msg) is not None:
             msg = await asyncio.wait_for(self.ws.receive(), 5.0)
         assert msg.type == aiohttp.WSMsgType.CLOSE, (msg.type, msg.data)
         return msg.data
@@ -183,10 +207,11 @@ class Server:
         self.http = aiohttp.ClientSession()
 
     async def connect(self, id="kitchen", *, speaker=True, rate=16000, buffer_ms=4000,
-                      capture=None) -> FakeDevice:
+                      capture=None, follow_up=False) -> FakeDevice:
         ws = await self.http.ws_connect(f"http://127.0.0.1:{self.manager.port}/device")
         hello = {"type": "hello", "id": id, "fw": "voicepe 0.1.0 (a1b2c3d)",
-                 "caps": {"speaker": speaker, "screen": False}, "mic": {"channels": 2}}
+                 "caps": {"speaker": speaker, "screen": False, "follow_up": follow_up},
+                 "mic": {"channels": 2}}
         if speaker:
             hello.update(play={"rate": rate, "buffer_ms": buffer_ms}, volume=60)
         if capture is not None:
@@ -341,7 +366,8 @@ def test_the_release_wake_model_is_a_model_of_the_repo():
     assert device_server.RELEASE_WAKE_MODEL in device_server.wake_model_files()
 
 
-async def test_wake_session_end_to_end(srv):
+async def test_wake_session_end_to_end(srv, tmp_path):
+    srv.rt.runs_store = RunsStore(str(tmp_path / "runs.db"))
     dev = await srv.connect()
     await dev.recv()  # config
     await dev.wake(17)
@@ -361,8 +387,12 @@ async def test_wake_session_end_to_end(srv):
     # The run waits for `played` before the session ends.
     with pytest.raises(asyncio.TimeoutError):
         await dev.recv(timeout=0.2)
-    await dev.send(type="played", id=stream)
+    await dev.send(type="played", id=stream, dry=1, gap_ms=40)
     assert await dev.recv() == {"type": "state", "session": 17, "value": "idle"}
+    # The run log keeps how the reply played.
+    await until(lambda: srv.rt.runs_store.list())
+    [row] = srv.rt.runs_store.list()
+    assert (row["play_dry"], row["play_gap_ms"]) == (1, 40)
 
 
 async def test_new_wake_drops_the_older_session(srv):
@@ -477,13 +507,14 @@ async def test_a_reminder_is_a_run_and_a_line_of_the_dialog(srv, tmp_path):
     assert await dev.recv() == {"type": "reply", "text": "молоко"}
     start = await dev.recv()
     assert (await dev.recv())["type"] == "play_end"
-    await dev.send(type="played", id=start["id"])
+    await dev.send(type="played", id=start["id"], dry=0, gap_ms=0)
     await asyncio.wait_for(say, 2)
 
     [row] = srv.rt.runs_store.list()
     run = srv.rt.runs_store.get(row["id"])
     assert (run["device"], run["reason"], run["result"], run["stt_text"], run["llm_text"]) == (
         "kitchen", "reminder", "ok", None, "молоко")
+    assert (run["play_dry"], run["play_gap_ms"]) == (0, 0)
     assert [(a["kind"], a["outcome"]) for a in run["attempts"]] == [("tts", "spoke")]
     assert run["t_tts"] is not None
     assert context.load_context(str(tmp_path / "context_kitchen.txt")) == [
@@ -515,6 +546,29 @@ async def test_announce_whose_speech_fails_is_a_tts_error_run(srv, tmp_path, mon
     assert (row["reason"], row["result"]) == ("say", "error")
     assert srv.rt.runs_store.get(row["id"])["error_stage"] == "TTS"
     assert not (tmp_path / "context_kitchen.txt").exists()
+
+
+async def test_follow_up_listens_after_a_played_answer_only(srv):
+    srv.rt.followup_backend = FakeGate(accepted=False, probability=0.1)
+    dev = await srv.connect(follow_up=True)
+    await dev.recv()  # config
+    await dev.wake(1)
+    await dev.phrase()
+    got = [await dev.recv() for _ in range(7)]
+    await dev.send(type="played", id=got[-1]["id"])
+    # The answer played out: the session stays open and the microphone reopens.
+    assert await dev.recv() == state(1, "listening")
+    # A phrase the follow-up check drops ends the session without a transcript.
+    await dev.phrase()
+    assert await dev.recv() == state(1, "transcribing")
+    assert await dev.recv() == state(1, "idle")
+
+    # An answer the device dropped opens no window.
+    await dev.wake(2)
+    await dev.phrase()
+    got = [await dev.recv() for _ in range(7)]
+    await dev.send(type="played", id=got[-1]["id"], dropped=True)
+    assert await dev.recv() == state(2, "idle")
 
 
 async def test_run_ends_when_played_never_comes(srv, monkeypatch):
@@ -560,6 +614,22 @@ async def test_playback_is_paced_to_the_device_buffer(srv):
     assert not play.done()  # still waiting for `played`
     await dev.send(type="played", id=start["id"])
     await asyncio.wait_for(play, 2)
+
+
+async def test_played_reports_how_the_stream_ran_dry(srv):
+    # A stream that played out returns the device's dry/gap_ms; a dropped one and a
+    # device that does not count them return None for both.
+    dev = await srv.connect()
+    await dev.recv()  # config
+    for reply, stats in (
+            ({"dry": 2, "gap_ms": 90}, {"outcome": "played", "dry": 2, "gap_ms": 90}),
+            ({}, {"outcome": "played", "dry": None, "gap_ms": None}),
+            ({"dropped": True}, {"outcome": "dropped", "dry": None, "gap_ms": None})):
+        play = asyncio.create_task(srv.device().play(pcm_mime(16000), b"\x01\x00" * 1600))
+        start = await dev.recv()
+        await dev.recv()  # play_end
+        await dev.send(type="played", id=start["id"], **reply)
+        assert await asyncio.wait_for(play, 2) == stats
 
 
 async def test_audio_is_converted_to_the_device_rate(srv):
@@ -813,6 +883,67 @@ async def test_controls(srv):
     await until(lambda: srv.manager.wake_prob("kitchen")["value"] == 42)
 
 
+async def test_set_volume_to_a_level_or_by_a_change(srv):
+    dev = await srv.connect()
+    await dev.recv()  # config
+    device = srv.device()
+    assert device.set_volume(level=30) == 30
+    assert await dev.recv() == {"type": "set_volume", "value": 30}
+    # A change counts from the volume the device reported last (e.g. turned on the dial).
+    await dev.send(type="volume", value=50)
+    await until(lambda: device.conn.volume == 50)
+    assert srv.manager.set_volume("kitchen", change=-10) == 40
+    assert await dev.recv() == {"type": "set_volume", "value": 40}
+    assert device.set_volume(change=100) == 100  # clamped
+    assert await dev.recv() == {"type": "set_volume", "value": 100}
+    for args in ({}, {"level": 10, "change": 5}):
+        with pytest.raises(ValueError):
+            device.set_volume(**args)
+    assert srv.manager.get_volume("kitchen") == 100
+    device.conn.volume = None
+    with pytest.raises(RuntimeError, match="has not reported its volume"):
+        device.set_volume(change=10)
+    with pytest.raises(RuntimeError, match="has not reported its volume"):
+        srv.manager.get_volume("kitchen")
+
+
+async def test_set_volume_refuses_offline_unknown_and_speakerless_devices(srv):
+    for args in ({"level": 30}, {"change": 10}):
+        with pytest.raises(RuntimeError, match="offline"):
+            srv.manager.set_volume("kitchen", **args)
+    with pytest.raises(RuntimeError, match="offline"):
+        srv.manager.get_volume("kitchen")
+    with pytest.raises(LookupError, match="unknown device"):
+        srv.manager.set_volume("nope", level=30)
+    with pytest.raises(LookupError, match="unknown device"):
+        srv.manager.get_volume("nope")
+    dev = await srv.connect("panel", speaker=False)
+    await dev.recv()  # config
+    for args in ({"level": 30}, {"change": 10}):
+        with pytest.raises(LookupError, match="no speaker"):
+            srv.manager.set_volume("panel", **args)
+    with pytest.raises(LookupError, match="no speaker"):
+        srv.manager.get_volume("panel")
+
+
+async def test_say_speaks_on_an_online_device_only(srv, tmp_path):
+    srv.rt.runs_store = RunsStore(str(tmp_path / "runs.db"))
+    with pytest.raises(DeviceOfflineError):
+        await srv.manager.say("kitchen", "проверка громкости")
+    assert srv.rt.runs_store.list() == []
+
+    dev = await srv.connect()
+    await dev.recv()  # config
+    say = asyncio.create_task(srv.manager.say("kitchen", "проверка громкости"))
+    assert await dev.recv() == {"type": "reply", "text": "проверка громкости"}
+    start = await dev.recv()
+    assert (await dev.recv())["type"] == "play_end"
+    await dev.send(type="played", id=start["id"])
+    await asyncio.wait_for(say, 2)
+    [row] = srv.rt.runs_store.list()
+    assert (row["reason"], row["result"], row["llm_text"]) == ("say", "ok", "проверка громкости")
+
+
 async def test_set_detect_sends_switch_and_refuses_offline(srv):
     with pytest.raises(RuntimeError, match="offline"):
         srv.manager.set_detect("kitchen", False)
@@ -822,6 +953,57 @@ async def test_set_detect_sends_switch_and_refuses_offline(srv):
     assert await dev.recv() == {"type": "detect", "on": False}
     srv.manager.set_detect("kitchen", True)
     assert await dev.recv() == {"type": "detect", "on": True}
+
+
+async def test_the_log_switch_reaches_the_device_and_its_log_the_disk(srv, tmp_path):
+    # Every hello gets `log_stream` with the device's setting, off as well, before the models.
+    dev = await srv.connect()
+    assert (await dev.recv())["type"] == "config"
+    assert await dev.log_switch() is False
+    # Switched on and off while connected: sent at once; a reconfigure that changes nothing
+    # else sends nothing.
+    srv.svc.apply({"core": {"devices": [{"name": "kitchen", "log": True}]}})
+    await srv.manager.reconfigure()
+    assert await dev.log_switch() is True
+    await srv.manager.reconfigure()
+    with pytest.raises(asyncio.TimeoutError):
+        await dev.log_switch(timeout=0.2)
+
+    # The device's lines land in today's file, each behind the server's time.
+    await dev.send(type="log", text="I (1200) zakhar_link: connected\nW (1300) x: тихо\n")
+    await dev.send(type="log", text="I (1400) y: z\n")
+    path = tmp_path / "device_logs" / "kitchen" / f"{date.today():%Y-%m-%d}.log"
+    await until(lambda: path.exists() and len(path.read_text(encoding="utf-8").splitlines()) == 3)
+    lines = path.read_text(encoding="utf-8").splitlines()
+    assert [line[13:] for line in lines] == [
+        "I (1200) zakhar_link: connected", "W (1300) x: тихо", "I (1400) y: z"]
+    assert all(re.fullmatch(r"\d\d:\d\d:\d\d\.\d{3} ", line[:13]) for line in lines)
+
+    # A new connection gets the setting as it is now.
+    again = await srv.connect()
+    assert (await again.recv())["type"] == "config"
+    assert await again.log_switch() is True
+    srv.svc.apply({"core": {"devices": [{"name": "kitchen", "log": False}]}})
+    await srv.manager.reconfigure()
+    assert await again.log_switch() is False
+
+
+async def test_an_unwritable_device_log_keeps_the_link(srv, monkeypatch):
+    tried = []
+
+    def full(*args):
+        tried.append(args)
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(device_server.device_logs, "append", full)
+    dev = await srv.connect()
+    assert (await dev.recv())["type"] == "config"
+    assert await dev.log_switch() is False
+    await dev.send(type="log", text="I (1200) x: y\n")
+    await until(lambda: tried)
+    srv.svc.apply({"core": {"devices": [{"name": "kitchen", "log": True}]}})
+    await srv.manager.reconfigure()
+    assert await dev.log_switch() is True
 
 
 async def test_unknown_disabled_and_replaced_ids(srv):
@@ -879,3 +1061,51 @@ async def test_text_only_device_gets_no_tts(srv):
     assert await dev.recv() == {"type": "reply", "text": "молоко"}
     assert srv.tts.calls == 0
     assert dev.plays == {}
+
+
+async def test_one_phrase_heard_by_three_devices_runs_on_the_first_speaker(srv, tmp_path):
+    # The panel (no speaker) hears the phrase first, then the kitchen speaker, then the
+    # hall speaker: only the kitchen's session goes on. The others stream their phrase
+    # on silently, are let go at its end and are logged as duplicates with what they
+    # heard; the panel is then shown the kitchen's answer, once — not its follow-up.
+    srv.rt.runs_store = RunsStore(str(tmp_path / "runs.db"))
+    srv.rt.followup_backend = FakeGate(accepted=True)
+    speaker = await srv.connect(follow_up=True)
+    hall = await srv.connect("hall")
+    panel = await srv.connect("panel", speaker=False)
+    for dev in (speaker, hall, panel):
+        await dev.recv()  # config
+
+    for dev, name, session in ((panel, "panel", 3), (speaker, "kitchen", 8), (hall, "hall", 5)):
+        await dev.send(type="wake", session=session, word="Захар")
+        assert await dev.recv() == {"type": "play_stop"}
+        if dev is not hall:
+            await dev.mic(stereo(500, -500, 60))  # the start of its pre-roll
+            await until(lambda: srv.device(name).pipeline.preroll_pcm)
+    assert await speaker.recv() == state(8, "listening")
+    for dev, session in ((panel, 3), (hall, 5)):
+        await dev.phrase()
+        assert await dev.recv() == state(session, "idle")  # no `listening`, no `transcript`
+
+    await speaker.phrase()
+    got = [await speaker.recv() for _ in range(7)]
+    await speaker.send(type="played", id=got[5]["id"])
+    assert await speaker.recv() == state(8, "listening")  # the follow-up window
+    await speaker.phrase()
+    got = []
+    while not got or got[-1]["type"] != "play_end":
+        got.append(await speaker.recv())
+    assert {"type": "reply", "session": 8, "text": "готово"} in got
+    await speaker.send(type="played", id=got[-1]["id"], dropped=True)
+    assert await speaker.recv() == state(8, "idle")
+
+    assert await panel.recv() == {"type": "reply", "text": "готово"}
+    for dev in (panel, hall):
+        with pytest.raises(asyncio.TimeoutError):
+            await dev.recv(timeout=0.3)
+    assert len(srv.stt.pcm) == 4
+    rows = {row["device"]: row for row in srv.rt.runs_store.list()}
+    for name in ("panel", "hall"):
+        assert (rows[name]["result"], rows[name]["reason"], rows[name]["stt_text"]) == (
+            "rejected", "duplicate", "включи свет")
+    assert rows["kitchen"]["result"] == "ok"

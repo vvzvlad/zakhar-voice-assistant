@@ -169,11 +169,17 @@ def test_migration_adds_filler_columns_to_old_db(tmp_path):
     assert "stress_text" in cols
 
     assert "chain" in cols and "attempts_json" in cols
+    assert "play_dry" in cols and "play_gap_ms" in cols
 
     rid = store.insert(_rec(filler_text="Ну, погуглю…", t_filler=77, stress_text="Гот+ово.",
                             request={"system_prompt": "p", "context": [], "user_text": "u", "tools": []},
-                            chain="main", attempts=[{"kind": "tts", "provider": "piper"}]))
+                            chain="main", attempts=[{"kind": "tts", "provider": "piper"}],
+                            play_dry=3, play_gap_ms=420))
     got = store.get(rid)
+    assert (got["play_dry"], got["play_gap_ms"]) == (3, 420)
+    # The run log list (the panel, the agent MCP list_runs) carries them too.
+    [row] = store.list()
+    assert (row["play_dry"], row["play_gap_ms"]) == (3, 420)
     assert got["chain"] == "main"
     assert got["attempts"] == [{"kind": "tts", "provider": "piper"}]
     assert got["filler_text"] == "Ну, погуглю…"
@@ -313,6 +319,17 @@ def test_metrics_over_window(tmp_path):
     store.close()
 
 
+def test_metrics_dropped_follow_ups_are_no_wake_word_rejects(tmp_path):
+    # rejected_24h audits wake-word false accepts; a follow-up phrase dropped as not a
+    # continuation is neither served nor such a reject.
+    store = _store(tmp_path)
+    now = time.time()
+    store.insert(_rec(ts=now, result="ok", t_total=100))
+    store.insert(_rec(ts=now, result="rejected", reason="followup_reject", t_total=None))
+    m = store.metrics(now=now)
+    assert (m["requests_24h"], m["rejected_24h"]) == (1, 0)
+
+
 def test_metrics_rejected_runs_dont_skew_served_kpis(tmp_path):
     # Gated wake-word rejects must NOT distort served-request KPIs: they don't change
     # the request count, the latency percentiles, or the error_rate denominator — but
@@ -355,6 +372,11 @@ def test_metrics_rejected_runs_dont_skew_served_kpis(tmp_path):
     assert m["per_stage_avg_ms"]["stt"] == (20 + 24) / 2
     assert m["per_stage_avg_ms"]["llm"] == (30 + 34) / 2
     assert m["per_stage_avg_ms"]["tts"] == (40 + 44) / 2
+
+    # A duplicate (another device kept the phrase) is no false trigger and no request.
+    store.insert(_rec(result="rejected", reason="duplicate", ts=now, t_total=None))
+    m = store.metrics(now=now)
+    assert (m["rejected_24h"], m["requests_24h"]) == (1, 2)
     store.close()
 
 

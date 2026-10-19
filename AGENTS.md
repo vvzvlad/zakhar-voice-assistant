@@ -21,8 +21,8 @@ configured under `core.mcp_servers` in `data/config.json`.
   the running process (backends/tools/audio/devices/reminders) without a restart.
   `src/agent_mcp.py` — the agent-facing MCP SERVER (FastMCP over streamable HTTP,
   served by the admin panel at `/mcp` on the panel port): external agents read the
-  run log, view/patch the config, speak text and send full text requests through
-  the pipeline.
+  run log, view/patch the config, speak text, set a speaker's volume and send full
+  text requests through the pipeline.
 - `frontend/` — Vite/React admin panel (vitest tests in `frontend/src/__tests__/`).
 - `tests/` — pytest
 - `ci/smoke.py` — smoke gate run by CI against the built image; read its module docstring
@@ -33,7 +33,7 @@ configured under `core.mcp_servers` in `data/config.json`.
   device side of the protocol and is vendored into the espanel repo (esp-svgpanel); this copy
   is the source of truth.
 - `microWakeWord/` — wake-word model training research and the deployed models.
-- `data/` — runtime state: `config.json`, per-device context files, `prompts.db` (SQLite store of named system-prompt profiles), `captures/` and `datasets/` (device recordings, `src/captures.py`) (gitignored, docker volume)
+- `data/` — runtime state: `config.json`, per-device context files, `prompts.db` (SQLite store of named system-prompt profiles), `captures/` and `datasets/` (device recordings, `src/captures.py`), `device_logs/` (the speakers' own logs, `src/device_logs.py`) (gitignored, docker volume)
 - `templates/` — committed reference assets seeded into `data/` on first boot (`default_prompt.md`, `default_config.json`)
 - `main.py` — thin entry point over `src/`
 
@@ -82,7 +82,7 @@ the only env-tunable values are the bind host/port of the admin panel
 start. The agent MCP endpoint rides the panel server at `/mcp` (same port); its
 only setting is `core.agent_mcp.enabled`, panel-editable and read live per request.
 
-- `vad`/`wakeword`/`stress` hold `{selected, instances}`; `stt`/`llm` hold only `{instances}` —
+- `vad`/`wakeword`/`stress`/`followup` hold `{selected, instances}`; `stt`/`llm` hold only `{instances}` —
   which STT feeds which handler is `core.chains`, an ordered list of `{name, enabled, stt,
   handler, narrow, parallel}` tried in turn on the same audio (`src/chains.py`); `tts` holds
   `{variants, instances}`, an ordered fallback list. Each provider
@@ -91,8 +91,9 @@ only setting is `core.agent_mcp.enabled`, panel-editable and read live per reque
   provider's fields. Adding a provider = one new plugin file; zero changes to the core.
 - `core.*` holds non-provider settings (context, audio, vad — end-pointing thresholds +
   mic conditioning, network, openweathermap, mcp_servers,
-  calendar, assistant_tasks, agent_mcp, prompt, runs, reminders, capture, ack, devices, tts_timeout,
-  log_level) as plain `CoreConfig` pydantic sections.
+  calendar, assistant_tasks, agent_mcp, prompt, runs, reminders, capture, ack, devices,
+  arbitration — which device keeps a phrase several devices woke on, tts_timeout,
+  log_level, device_log_days) as plain `CoreConfig` pydantic sections.
 - API keys are plain string fields in the JSON (trusted-LAN service, no masking). `data/`
   is gitignored so `config.json` never gets committed.
 

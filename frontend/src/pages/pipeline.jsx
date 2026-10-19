@@ -9,7 +9,7 @@ import { usePageForm } from "../usePageForm.js";
 import { nav, navTab } from "../navStore.js";
 import { moveItem, voiceOf } from "../chains.js";
 
-// A stage's on/off switch: `enabled` of its selected provider (wakeword, stress).
+// A stage's on/off switch: `enabled` of its selected provider (wakeword, stress, followup).
 function enabledPart(category) {
   const prov = category.providers.find((p) => p.id === category.selected) || category.providers[0];
   return {
@@ -87,8 +87,9 @@ function TtsVariantsCard({ list, providers, onChange }) {
     {list.map((v, i) => {
       const prov = providers.find((p) => p.id === v.provider);
       const about = [prov?.label, prov && voiceOf(prov.values)].filter(Boolean).join(" · ");
-      return <div key={v.provider} className="z-f row" data-testid="tts-variant" style={{ opacity: v.enabled ? 1 : 0.55 }}>
-        <div style={{ display: "flex", alignItems: "baseline", gap: 10, minWidth: 0 }}>
+      // A switched-off variant dims its number, name and voice; its toggle and buttons stay as is.
+      return <div key={v.provider} className="z-f row" data-testid="tts-variant">
+        <div className={v.enabled ? "" : "z-dim"} style={{ display: "flex", alignItems: "baseline", gap: 10, minWidth: 0 }}>
           <span className="mono" style={{ color: "var(--mut2)", fontSize: 11 }}>{i + 1}</span>
           <b className="mono" style={{ fontSize: 12.5 }}>{v.provider}</b>
           {about && <span className="z-fh" style={{ marginTop: 0 }}>{about}</span>}
@@ -116,10 +117,12 @@ export function Speech() {
   const { catalog, patch } = useAppData();
   const tts = catalog.categories.find((c) => c.id === "tts");
   const stress = enabledPart(catalog.categories.find((c) => c.id === "stress"));
+  const followup = enabledPart(catalog.categories.find((c) => c.id === "followup"));
   // PATCH replaces lists, so the variants go as the whole array.
   const form = usePageForm([
     { key: "variants", values: { variants: tts.variants || [] }, toPatch: (d) => ({ tts: { variants: d.variants } }) },
     stress.part,
+    followup.part,
   ], patch);
 
   return <FormPage form={form} narrow>
@@ -131,6 +134,9 @@ export function Speech() {
       <Card>
         <Item row label="Stress placement" hint={descriptionOf(stress.prov.schema, "enabled")} onConfigure={() => nav("tts")}>
           <Toggle on={!!form.draftOf(stress.part.key).enabled} onChange={(on) => form.onChangeOf(stress.part.key)("enabled", on)} />
+        </Item>
+        <Item row label="Follow-up" hint={descriptionOf(followup.prov.schema, "enabled")} onConfigure={() => nav("tts")}>
+          <Toggle on={!!form.draftOf(followup.part.key).enabled} onChange={(on) => form.onChangeOf(followup.part.key)("enabled", on)} />
         </Item>
       </Card>
     </div>

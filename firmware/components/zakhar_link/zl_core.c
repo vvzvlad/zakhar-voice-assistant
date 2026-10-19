@@ -2,6 +2,7 @@
 #include "zl_core.h"
 
 #include <math.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "cJSON.h"
@@ -129,6 +130,13 @@ static bool decode_fields(const cJSON *o, const char *type, zl_msg_t *m)
         m->on = cJSON_IsTrue(v);
         return true;
     }
+    if (strcmp(type, "log_stream") == 0) {
+        m->type = ZL_MSG_LOG_STREAM;
+        const cJSON *v = field(o, "on");
+        if (!cJSON_IsBool(v)) return false;
+        m->on = cJSON_IsTrue(v);
+        return true;
+    }
     if (strcmp(type, "capture") == 0) {
         m->type = ZL_MSG_CAPTURE;
         if (!get_u32(field(o, "id"), &m->id) || m->id == 0) return false;
@@ -213,6 +221,7 @@ char *zl_encode_hello(const zl_config_t *cfg, int volume, uint32_t capture)
               (caps = cJSON_AddObjectToObject(o, "caps")) != NULL &&
               cJSON_AddBoolToObject(caps, "speaker", speaker) != NULL &&
               cJSON_AddBoolToObject(caps, "screen", cfg->screen) != NULL &&
+              cJSON_AddTrueToObject(caps, "follow_up") != NULL &&
               (mic = cJSON_AddObjectToObject(o, "mic")) != NULL &&
               cJSON_AddNumberToObject(mic, "channels", cfg->mic_channels) != NULL;
     if (ok && speaker) {
@@ -232,11 +241,14 @@ char *zl_encode_wake(uint32_t session, const char *word)
                          cJSON_AddStringToObject(o, "word", word) != NULL);
 }
 
-char *zl_encode_played(uint32_t id, bool dropped)
+char *zl_encode_played(uint32_t id, bool dropped, uint32_t dry, uint32_t gap_ms)
 {
     cJSON *o = message("played");
     bool ok = o != NULL && cJSON_AddNumberToObject(o, "id", id) != NULL;
     if (ok && dropped) ok = cJSON_AddTrueToObject(o, "dropped") != NULL;
+    if (ok && !dropped) {
+        ok = cJSON_AddNumberToObject(o, "dry", dry) != NULL && cJSON_AddNumberToObject(o, "gap_ms", gap_ms) != NULL;
+    }
     return finish(o, ok);
 }
 
@@ -277,6 +289,18 @@ char *zl_encode_stop(bool has_session, uint32_t session)
     bool ok = o != NULL;
     if (ok && has_session) ok = cJSON_AddNumberToObject(o, "session", session) != NULL;
     return finish(o, ok);
+}
+
+char *zl_encode_log(const char *text, size_t len)
+{
+    char *s = malloc(len + 1);  // cJSON takes NUL-terminated strings
+    if (s == NULL) return NULL;
+    memcpy(s, text, len);
+    s[len] = '\0';
+    cJSON *o = message("log");
+    char *json = finish(o, o != NULL && cJSON_AddStringToObject(o, "text", s) != NULL);
+    free(s);
+    return json;
 }
 
 void zl_free(char *json)
@@ -364,10 +388,16 @@ bool zl_sess_accepts(const zl_sess_t *s, const zl_msg_t *m)
     return !m->has_session || m->session == s->session;
 }
 
-void zl_sess_state(zl_sess_t *s, zl_state_t state)
+bool zl_sess_state(zl_sess_t *s, zl_state_t state)
 {
-    if (state != ZL_STATE_LISTENING) s->mic = false;
+    if (state == ZL_STATE_LISTENING) {
+        const bool reopen = s->open && !s->mic;
+        if (reopen) s->mic = true;
+        return reopen;
+    }
+    s->mic = false;
     if (state == ZL_STATE_IDLE || state == ZL_STATE_ERROR) s->open = false;
+    return false;
 }
 
 bool zl_sess_capture(zl_sess_t *s)
@@ -399,7 +429,8 @@ void zl_playq_init(zl_playq_t *q, int16_t *buf, size_t cap, size_t prime)
 static void collect(zl_playq_t *q)
 {
     while (q->nstreams > 0 && q->streams[0].left == 0 && q->streams[0].ended) {
-        q->done[q->ndone++] = q->streams[0].id;
+        const zl_stream_t *s = &q->streams[0];
+        q->done[q->ndone++] = (zl_played_t){.id = s->id, .dry = s->dry, .gap = s->gap};
         q->nstreams--;
         memmove(&q->streams[0], &q->streams[1], q->nstreams * sizeof q->streams[0]);
     }
@@ -454,15 +485,19 @@ size_t zl_playq_read(zl_playq_t *q, int16_t *out, size_t max)
     while (n < max && q->nstreams > 0) {
         zl_stream_t *s = &q->streams[0];
         if (!s->playing && !s->ended && s->left < q->prime) break;  // not primed yet
-        s->playing = true;
         if (s->left == 0) {
             if (!s->ended) {
-                s->playing = false;  // ran dry while the rest is still arriving: prime again
+                // Ran dry while the rest is still arriving: prime again. Counted once, on the
+                // read that finds a playing stream empty.
+                if (s->playing) s->dry++;
+                s->playing = false;
                 break;
             }
             collect(q);
             continue;
         }
+        s->playing = true;
+        s->started = true;
         size_t take = s->left < max - n ? s->left : max - n;
         while (take > 0) {
             const size_t run = take < q->cap - q->head ? take : q->cap - q->head;
@@ -475,6 +510,9 @@ size_t zl_playq_read(zl_playq_t *q, int16_t *out, size_t max)
         }
     }
     collect(q);
+    // The caller plays silence for the samples it did not get. A head stream that has started
+    // is waiting mid-stream, so they are its gap; one still waiting for its first prime is not.
+    if (n < max && q->nstreams > 0 && q->streams[0].started) q->streams[0].gap += max - n;
     return n;
 }
 
@@ -490,10 +528,10 @@ size_t zl_playq_flush(zl_playq_t *q, uint32_t *dropped)
     return n;
 }
 
-size_t zl_playq_take_done(zl_playq_t *q, uint32_t *ids)
+size_t zl_playq_take_done(zl_playq_t *q, zl_played_t *out)
 {
     const size_t n = q->ndone;
-    memcpy(ids, q->done, n * sizeof *ids);
+    memcpy(out, q->done, n * sizeof *out);
     q->ndone = 0;
     return n;
 }

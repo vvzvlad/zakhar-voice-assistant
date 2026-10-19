@@ -14,7 +14,7 @@ import {
   getPromptProfiles, getPromptProfile, createPromptProfile, updatePromptProfile,
   deletePromptProfile, activatePromptProfile,
   getTools, getOptions, startCapture, getCaptureStatus, downloadCaptureResult, getDeviceControls, setDeviceControl,
-  getWakeProbability, setWakeProbabilityStream, getConfig, getWakeModels, uploadWakeModel,
+  sayOnDevice, getWakeProbability, setWakeProbabilityStream, getConfig, getWakeModels, uploadWakeModel,
 } from "../api.js";
 import { deviceLabel, deviceVersion } from "../format.js";
 
@@ -109,8 +109,8 @@ const BUILTIN_SOURCES = [
 // transport (Literal), prompt (describes the server's tools to the model).
 const TRANSPORTS = ["auto", "streamable_http", "sse"];
 // Built-in ToolHub source ids — an external server may not shadow them, or it
-// would hide the openweathermap/calendar/reminders/assistant_tasks status in /api/tools.
-const RESERVED_NAMES = ["openweathermap", "calendar", "reminders", "assistant_tasks"];
+// would hide the openweathermap/calendar/reminders/assistant_tasks/volume status in /api/tools.
+const RESERVED_NAMES = ["openweathermap", "calendar", "reminders", "assistant_tasks", "volume"];
 function McpServerModal({ initial, onSave, onClose, title, takenNames }) {
   const [name, setName] = useState(initial?.name || "");
   const [url, setUrl] = useState(initial?.url || "");
@@ -149,16 +149,18 @@ function McpServerModal({ initial, onSave, onClose, title, takenNames }) {
 // One external MCP server card: header (name + status pill), the
 // url in mono, and the live tool chips matched from /api/tools by source id ===
 // server name. Enable/Disable / Edit / Delete buttons drive the CRUD flow above;
-// a disabled server is dimmed and shows a "disabled" pill (missing flag = enabled).
+// a disabled server is dimmed except its buttons and shows a "disabled" pill (missing
+// flag = enabled).
 function McpServerCard({ server, live, onToggle, onEdit, onDelete }) {
   const enabled = server.enabled ?? true;
+  const dim = enabled ? "" : "z-dim";
   let pill;
   if (!enabled) pill = <Pill tone="muted">disabled</Pill>;
   else if (live) pill = <StatusPill status={live.online ? "online" : "offline"} />;
   else pill = <StatusPill status="offline" />;
-  return <div className="z-card" style={{ marginBottom: 14, opacity: enabled ? 1 : 0.55 }}>
+  return <div className="z-card" style={{ marginBottom: 14 }}>
     <div className="z-card-h">
-      <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
+      <div className={dim} style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
         <Ic n="mcp" w={17} />
         <div style={{ minWidth: 0 }}>
           <b style={{ display: "block" }}>{server.name}</b>
@@ -166,7 +168,7 @@ function McpServerCard({ server, live, onToggle, onEdit, onDelete }) {
         </div>
       </div>
       <div style={{ display: "flex", alignItems: "center", gap: 12, marginLeft: "auto" }}>
-        {pill}
+        <div className={dim} style={{ display: "flex" }}>{pill}</div>
         <div style={{ display: "flex", gap: 6 }}>
           <button className="z-mini" onClick={onToggle}>{enabled ? "Disable" : "Enable"}</button>
           <button className="z-mini" onClick={onEdit}>Edit</button>
@@ -174,7 +176,7 @@ function McpServerCard({ server, live, onToggle, onEdit, onDelete }) {
         </div>
       </div>
     </div>
-    <div className="z-card-b">
+    <div className={`z-card-b ${dim}`}>
       <ToolChips tools={live?.tools} />
     </div>
   </div>;
@@ -235,7 +237,7 @@ export function MCP() {
   })), patchAndRefresh);
 
   return <FormPage form={form} narrow>
-    <PageHeader title="Tools" desc="Tool sources the model calls: external smart-home MCP servers and built-in weather/calendar/reminders/assistant tasks. Sources are applied live — rebuilt on save, no restart needed."
+    <PageHeader title="Tools" desc="Tool sources the model calls: external smart-home MCP servers and built-in weather/calendar/reminders/assistant tasks/speaker volume. Sources are applied live — rebuilt on save, no restart needed."
       actions={<button className="z-btn p" onClick={() => setModal({ mode: "add" })}><Ic n="add" w={14} />Add server</button>} />
     {toolsErr && <div className="z-banner warn" style={{ margin: "0 0 14px" }}>
       <Ic n="restart" w={15} />
@@ -562,14 +564,16 @@ export function Prompt() {
 
 // ── Devices ───────────────────────────────────────────────────────────────
 // Add mode (`onSave({name, enabled})`) asks for a device id. Edit mode (`device`, the
-// saved id) edits the display label and the wake-word model (`onSave` gets only the
-// changed ones of {label, wake_model}; wake_model "" = the release default; an uploaded
-// .tflite becomes the selected model), shows the id read-only — it is what the firmware
-// sends in hello — and hosts the live controls; `online` says whether the device is reachable.
-function DeviceModal({ onSave, onClose, title, device, label: savedLabel = "", wakeModel: savedWakeModel = "", online }) {
+// saved id) edits the display label, the wake-word model and the device log switch (`onSave`
+// gets only the changed ones of {label, wake_model, log}; wake_model "" = the release default;
+// an uploaded .tflite becomes the selected model), shows the id read-only — it is what the
+// firmware sends in hello — and hosts the live controls; `online` says whether the device is
+// reachable, `logDays` how many days of device log the server keeps.
+function DeviceModal({ onSave, onClose, title, device, label: savedLabel = "", wakeModel: savedWakeModel = "", log: savedLog = false, logDays, online }) {
   const [name, setName] = useState("");
   const [label, setLabel] = useState(savedLabel);
   const [wakeModel, setWakeModel] = useState(savedWakeModel);
+  const [log, setLog] = useState(savedLog);
   const [wakeModels, setWakeModels] = useState(null); // {options, release} from GET /api/wake-models
   const [uploadErr, setUploadErr] = useState(null);
   const fileRef = useRef(null);
@@ -596,13 +600,14 @@ function DeviceModal({ onSave, onClose, title, device, label: savedLabel = "", w
     }
   }
   if (device) {
-    const unchanged = label.trim() === savedLabel && wakeModel === savedWakeModel;
+    const unchanged = label.trim() === savedLabel && wakeModel === savedWakeModel && log === savedLog;
     return <Modal title={title} onClose={onClose}
       footer={<><button className="z-btn g" onClick={onClose}>Close</button>
         <button className="z-btn p" disabled={unchanged} onClick={() => onSave({
           // Only the edited fields: the rest stays as in the server's fresh list (saveList).
           ...(label.trim() !== savedLabel && { label: label.trim() }),
           ...(wakeModel !== savedWakeModel && { wake_model: wakeModel }),
+          ...(log !== savedLog && { log }),
         })}>Save</button></>}>
       <Field label="Name" hint="Shown in the panel instead of the device id; empty shows the id."><div className="z-inp"><input value={label} placeholder={device} onChange={(e) => setLabel(e.target.value)} /></div></Field>
       <Field label="Device id" hint="Sent by the firmware when it connects — keys the device's settings and dialog context."><div className="z-inp"><input value={device} readOnly /></div></Field>
@@ -617,8 +622,12 @@ function DeviceModal({ onSave, onClose, title, device, label: savedLabel = "", w
         </div>
         {uploadErr && <div className="z-fh" style={{ color: "#b91c1c" }}>{uploadErr}</div>}
       </Field>}
+      <Field row label="Device log" hint={`On: the speaker streams its whole log to the server, which keeps the last ${logDays} days in data/device_logs/${device}/. Off: the speaker sends nothing. Applies on save, no reflash.`}>
+        <Toggle on={log} onChange={setLog} />
+      </Field>
       <CaptureControl device={device} online={online} />
       <DeviceControls device={device} />
+      <SayControl device={device} online={online} />
       <WakeProbabilityMeter device={device} online={online} />
     </Modal>;
   }
@@ -807,6 +816,36 @@ function DeviceControls({ device }) {
   </>;
 }
 
+// "Say on speaker" control shown inside the Edit-speaker modal, below the device controls:
+// speaks the typed text on the speaker through the TTS, so the volume can be checked by
+// ear. The request resolves once the speech has played. Disabled (tooltip) while offline.
+function SayControl({ device, online }) {
+  const [text, setText] = useState("Проверка громкости");
+  const [saying, setSaying] = useState(false);
+  const [err, setErr] = useState(null);
+
+  const say = async () => {
+    setErr(null);
+    setSaying(true);
+    try {
+      await sayOnDevice(device, text);
+    } catch (e) {
+      setErr(e.message || "failed");
+    } finally {
+      setSaying(false);
+    }
+  };
+
+  return <Field label="Say on speaker" hint="Speaks the text on the speaker through the TTS — to check the volume.">
+    <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+      <div className="z-inp" style={{ flex: 1 }}><input value={text} onChange={(e) => setText(e.target.value)} /></div>
+      <button className="z-btn p" disabled={!online || !text.trim() || saying} title={online ? "" : "Speaker offline"}
+        onClick={say}>{saying ? "Saying…" : "Say"}</button>
+    </div>
+    {err && <div className="z-fh" style={{ color: "#b91c1c" }}>{err}</div>}
+  </Field>;
+}
+
 // Live, read-only Wake Probability meter shown inside the Edit-speaker modal (only for
 // an EXISTING device). The stream is gated ON THE DEVICE: opening the modal enables it
 // (POST enabled=true), closing it disables it (POST enabled=false), so the firmware only
@@ -931,12 +970,13 @@ export function Devices() {
             ? <tr><td colSpan={5} style={{ color: "var(--mut)", padding: "14px 0" }}>No speakers configured.</td></tr>
             : devices.map((d, i) => {
               const enabled = d.enabled ?? true;
-              return <tr key={i} style={{ cursor: "default", opacity: enabled ? 1 : 0.55 }}>
-                <td style={{ fontWeight: 600 }}>{d.label || d.name}</td>
+              const dim = enabled ? "" : "z-dim";
+              return <tr key={i} style={{ cursor: "default" }}>
+                <td className={dim} style={{ fontWeight: 600 }}>{d.label || d.name}</td>
                 {/* Firmware/model versions come from the live WS snapshot; "—" while offline/disabled. */}
-                <td className="mono" style={{ fontSize: 11.5 }}>{deviceVersion(liveOf(d.name), "config_version") ?? "—"}</td>
-                <td className="mono" style={{ fontSize: 11.5 }}>{deviceVersion(liveOf(d.name), "model_version") ?? "—"}</td>
-                <td>{enabled ? <StatusPill status={statusOf(d.name)} /> : <Pill tone="muted">disabled</Pill>}</td>
+                <td className={`mono ${dim}`} style={{ fontSize: 11.5 }}>{deviceVersion(liveOf(d.name), "config_version") ?? "—"}</td>
+                <td className={`mono ${dim}`} style={{ fontSize: 11.5 }}>{deviceVersion(liveOf(d.name), "model_version") ?? "—"}</td>
+                <td className={dim}>{enabled ? <StatusPill status={statusOf(d.name)} /> : <Pill tone="muted">disabled</Pill>}</td>
                 <td style={{ textAlign: "right" }}><div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
                   <button className="z-mini" onClick={() => onToggle(d.name)}>{enabled ? "Disable" : "Enable"}</button>
                   {/* Re-read the config first: the dialog starts from the device's saved label and
@@ -954,6 +994,7 @@ export function Devices() {
     {modal?.mode === "edit" && <DeviceModal key={modal.name} title="Edit speaker" onClose={() => setModal(null)}
       device={modal.name} label={devices.find((d) => d.name === modal.name)?.label || ""}
       wakeModel={devices.find((d) => d.name === modal.name)?.wake_model || ""}
+      log={!!devices.find((d) => d.name === modal.name)?.log} logDays={catalog.core.values.device_log_days}
       onSave={(edit) => onEdit(modal.name, edit)} online={statusOf(modal.name) === "online"} />}
   </div>;
 }

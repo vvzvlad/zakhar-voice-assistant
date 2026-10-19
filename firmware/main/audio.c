@@ -5,8 +5,9 @@
 // The stop word hears the speaker's own playback cancelled out of a raw microphone: an AEC after
 // the XMOS's processing takes about 1 dB of the echo off its channels and 28 dB off a raw
 // microphone (docs/echo-cancellation.md). While the speaker plays, the XMOS puts the raw
-// microphone 0 (stage NONE) on channel 0, and ESP-SR's AEC runs on it against what the speaker
-// task wrote, decimated to 16 kHz and delayed by the echo's lag, which is measured on that raw
+// microphone 0 (stage NONE) on channel 0, and ESP-SR's AEC runs on it against what went to the
+// wire (what the speaker task wrote and the DMA buffers the driver sent as silence when it was
+// late), decimated to 16 kHz and delayed by the echo's lag, which is measured on that raw
 // channel while playback runs. Its output is channel 0 of the tap and, at the wake-word gain, the
 // stop word's input. Channel 1 and the wake word's input never change. While the speaker is
 // silent, echo_cancel is 0 or no AEC could be made for the settings, channel 0 is the XMOS AGC
@@ -44,6 +45,7 @@ static const char *TAG = "audio";
 
 #define SPK_RATE 48000
 #define SPK_BLOCK 720  // frames per write: 15 ms, the stock DMA buffer
+#define LATE_CHECK_BLOCKS 67  // the speaker task reports late buffers about once a second
 
 // The mic task's unit: 512 frames = 32 ms, the AEC's frame in its SR and FD modes at 16 kHz and
 // the protocol's microphone frame. It is two whole RX DMA buffers, so no read leaves one half
@@ -93,6 +95,19 @@ static _Atomic int s_echo_mode = ECHO_MODE_DEFAULT;
 static _Atomic int s_echo_filter = ECHO_FILTER_DEFAULT;
 // Microphone frames the RX driver dropped since the mic task last took them.
 static _Atomic uint32_t s_mic_dropped;
+// DMA buffers the speaker played as silence because the speaker task had not refilled them in
+// time: the driver's sending queue overflowed (i2s_common.c, i2s_dma_tx_callback). Each is 15 ms
+// of silence that no stream reported, the speaker task having been kept off the CPU.
+static _Atomic uint32_t s_late;
+
+static bool IRAM_ATTR on_late(i2s_chan_handle_t handle, i2s_event_data_t *event, void *ctx)
+{
+    (void)handle;
+    (void)event;
+    (void)ctx;
+    atomic_fetch_add_explicit(&s_late, 1, memory_order_relaxed);
+    return false;
+}
 
 // One playback's echo cancellation on channel 0, logged when channel 0 is back to AGC.
 typedef struct {
@@ -288,7 +303,25 @@ static void speaker_task(void *arg)
     static int16_t mono[SPK_BLOCK];
     static int16_t stereo[SPK_BLOCK * 2];
     static int16_t ref[SPK_BLOCK / 3];
-    for (;;) {
+    static const int16_t silence[SPK_BLOCK / 3];
+    // The buffers that went out before this task started are not late.
+    uint32_t seen = atomic_load_explicit(&s_late, memory_order_relaxed);
+    uint32_t ref_late = seen;
+    for (unsigned blocks = 1;; blocks++) {
+        // A buffer that went out as silence is on the wire but was never written here: its
+        // silence goes into the echo reference too, or the reference falls behind the wire. It
+        // lands after the block that was waiting for the buffer, which went out after it: one
+        // block out of place, the count right.
+        const uint32_t late_now = atomic_load_explicit(&s_late, memory_order_relaxed);
+        for (; ref_late != late_now; ref_late++) tap_write(&s_ref, silence, SPK_BLOCK / 3);
+        if (blocks % LATE_CHECK_BLOCKS == 0) {
+            const uint32_t late = atomic_load_explicit(&s_late, memory_order_relaxed);
+            if (late != seen) {
+                ESP_LOGW(TAG, "speaker task late: %u DMA buffers (%u ms) went out as silence", (unsigned)(late - seen),
+                         (unsigned)(late - seen) * SPK_BLOCK * 1000 / SPK_RATE);
+                seen = late;
+            }
+        }
         const size_t n = zl_play_read(mono, SPK_BLOCK);
         leds_set_playing(n > 0);
         memset(mono + n, 0, (SPK_BLOCK - n) * sizeof mono[0]);
@@ -323,8 +356,10 @@ esp_err_t audio_start(void)
     };
     tx_std.slot_cfg.slot_bit_width = I2S_SLOT_BIT_WIDTH_32BIT;
     tx_std.slot_cfg.ws_width = 32;
+    const i2s_event_callbacks_t tx_cb = {.on_send_q_ovf = on_late};
     esp_err_t err = i2s_new_channel(&tx_cc, &s_tx, NULL);
     if (err == ESP_OK) err = i2s_channel_init_std_mode(s_tx, &tx_std);
+    if (err == ESP_OK) err = i2s_channel_register_event_callback(s_tx, &tx_cb, NULL);
     if (err == ESP_OK) err = i2s_channel_enable(s_tx);
     if (err != ESP_OK) return err;
 

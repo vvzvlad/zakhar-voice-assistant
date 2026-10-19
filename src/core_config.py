@@ -226,6 +226,13 @@ class DeviceConfig(BaseModel):
     # into the stored config and outlive its file in a later release.
     wake_model: str = ""
     vad_model: str = ""
+    # Sent to the device in `log_stream` after every hello and whenever it changes.
+    log: bool = Field(
+        False,
+        title="Device log",
+        description="The speaker streams its whole log to the server, which keeps it "
+        "core.device_log_days days under data/device_logs/. Off: the speaker sends nothing.",
+    )
 
 
 class PromptConfig(BaseModel):
@@ -286,6 +293,27 @@ class AckConfig(BaseModel):
     )
 
 
+class ArbitrationConfig(BaseModel):
+    """Which device keeps a phrase several devices woke on: a device with a speaker
+    over one without, between equals the higher signal-to-noise ratio of the
+    pre-roll, then the earlier wake (src/wake_arbiter.py)."""
+
+    window_ms: int = Field(
+        500,
+        ge=0,
+        title="Wait for other devices",
+        json_schema_extra={"unit": "ms", "multipleOf": 100},
+        description="How long a wake waits for the wakes of the other online devices before one device keeps the phrase; shorter once every online device has woken, never for a lone online device. With several wakes the hold lasts until each one's pre-roll and wake-word verdict are in: the pre-roll at most this long after that wake, the verdict within the verifier's timeout.",
+    )
+    cooldown_ms: int = Field(
+        2000,
+        ge=0,
+        title="Duplicate cooldown",
+        json_schema_extra={"unit": "ms", "multipleOf": 100},
+        description="For this long after the first wake of a phrase, a wake from any device other than the one that kept the phrase is dropped as a duplicate.",
+    )
+
+
 class ChainConfig(BaseModel):
     """One recognition chain: an STT provider and the handler (llm provider) that
     takes its text. Each utterance goes through the enabled chains in list order
@@ -316,7 +344,10 @@ class CoreConfig(BaseModel):
     reminders: RemindersConfig = RemindersConfig()
     capture: CaptureConfig = CaptureConfig()
     ack: AckConfig = AckConfig()
+    arbitration: ArbitrationConfig = ArbitrationConfig()
     devices: list[DeviceConfig] = []
     chains: list[ChainConfig] = []
     tts_timeout: int = 30
     log_level: str = "INFO"
+    # How many days of device log files (core.devices[].log) are kept.
+    device_log_days: int = 7

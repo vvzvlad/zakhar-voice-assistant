@@ -10,7 +10,7 @@ import httpx
 from loguru import logger
 
 import src.plugins  # noqa: F401  triggers provider registration
-from src import config_store
+from src import config_store, device_logs
 from src.agent_mcp import AgentMcpEndpoint
 from src.assistant_tasks import AssistantTasks, AssistantTasksStore
 from src.chains import referenced_instances
@@ -81,6 +81,8 @@ async def main() -> None:
         pools[cat][pid] = svc.create_instance(cat, pid)
     # One TTS backend per enabled variant.
     tts_backends = {pid: svc.create_instance("tts", pid) for pid in svc.tts_variants()}
+    # The follow-up check loads no model, so it is built at boot, not deferred.
+    followup_backend = svc.create("followup")
     # Defer the accent (stress) backend: RuAccent loads an ONNX model from
     # disk/HuggingFace, which would block boot for seconds. Start with no stress
     # backend (the pipeline skips the stage) and load it in the background after the
@@ -96,6 +98,7 @@ async def main() -> None:
     stages = [("vad", vad_backend)]
     stages += [(cat, b) for cat in ("stt", "llm") for b in pools[cat].values()]
     stages += [("tts", b) for b in tts_backends.values()]
+    stages += [("followup", followup_backend)]
     for cat, b in stages:
         logger.info(f"{cat} backend: {getattr(b, 'backend_desc', type(b).__name__)}")
     logger.info("stress/wakeword backends: deferred — load in the background after boot (if enabled)")
@@ -106,6 +109,9 @@ async def main() -> None:
     if core.runs.enabled:
         runs_store = RunsStore(os.path.join(config_store.DATA_DIR, "runs.db"))
         runs_store.prune(now=time.time(), retention_days=core.runs.retention_days)
+    # A device's log files are pruned when its new day's file starts, and here for every device,
+    # so one that stopped sending does not keep its old days.
+    device_logs.prune(core.device_log_days)
 
     # Named system-prompt profiles (always on — the pipeline reads the active
     # profile's text as the LLM system prompt). On first boot the empty DB is
@@ -147,7 +153,8 @@ async def main() -> None:
     # gracefully inside ToolHub.start(). The weather tool is gated on an OWM api key;
     # built-in OpenWeatherMap uses the proxied client_ext for its OWM call. Each
     # external server's source id is its (unique) name.
-    sources = build_sources(core, client_ext, scheduler, assistant_tasks)
+    # The volume tool reads the manager at call time: `rt` is assigned further down.
+    sources = build_sources(core, client_ext, scheduler, assistant_tasks, lambda: rt.manager)
     hub = ToolHub(sources)
     await hub.start()
 
@@ -159,6 +166,7 @@ async def main() -> None:
         vad_backend=vad_backend,
         stt_backends=pools["stt"], llm_backends=pools["llm"], tts_backends=tts_backends,
         stress_backend=stress_backend, wakeword_backend=wakeword_backend,
+        followup_backend=followup_backend,
         hub=hub,
         runs_store=runs_store, run_events=run_events,
         prompt_store=prompt_store,
@@ -229,6 +237,7 @@ async def main() -> None:
             device_wake_prob_set=manager.set_wake_prob_stream,
             device_detect_set=manager.set_detect,
             device_model_reload=manager.reload_model,
+            device_say=manager.say,
             static_dir=static_dir if os.path.isdir(static_dir) else None,
             runs_store=runs_store,
             tool_sources=hub.describe,

@@ -2,8 +2,9 @@
 // Devices page: every write of the device list starts from the server's current
 // list (a cutoff set from a slider, a device that connected while the page was
 // open), the Edit dialog opens from the re-read config, shows the id read-only, saves a
-// display label and a wake-word model (a listed or an uploaded one), and shows why its controls cannot load, and a slider write or a
-// newly connected device refreshes the app's config snapshot.
+// display label, a wake-word model (a listed or an uploaded one) and the device log switch, and shows why its controls cannot load, and a slider write or a
+// newly connected device refreshes the app's config snapshot. The dialog also says a
+// typed text on the speaker to check the volume.
 import React from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
@@ -16,6 +17,7 @@ vi.mock("../api.js", () => ({
   getConfig: vi.fn(),
   getDeviceControls: vi.fn(),
   setDeviceControl: vi.fn(),
+  sayOnDevice: vi.fn(),
   getWakeProbability: vi.fn(async () => ({ online: true, value: null })),
   setWakeProbabilityStream: vi.fn(async () => ({})),
   getWakeModels: vi.fn(async () => ({
@@ -150,6 +152,25 @@ describe("Devices page", () => {
     ] } });
   });
 
+  it("edit switches the device log on and saves it onto the server's current list", async () => {
+    api.getDeviceControls.mockResolvedValue({ device: "kitchen", online: true, versions: [], controls: [] });
+    data.catalog.core.values.device_log_days = 7;
+    render(<Devices />);
+    fireEvent.click(screen.getByText("Edit"));
+    const sw = await screen.findByRole("switch");
+    expect(sw).toHaveAttribute("aria-checked", "false");
+    expect(screen.getByText(/keeps the last 7 days in data\/device_logs\/kitchen\//)).toBeInTheDocument();
+    expect(screen.getByText("Save")).toBeDisabled();
+    fireEvent.click(sw);
+    expect(sw).toHaveAttribute("aria-checked", "true");
+    fireEvent.click(screen.getByText("Save"));
+    await waitFor(() => expect(data.patch).toHaveBeenCalledTimes(1));
+    expect(data.patch).toHaveBeenCalledWith({ core: { devices: [
+      { ...FRESH[0], log: true },
+      FRESH[1],
+    ] } });
+  });
+
   it("edit opens with the label and model saved since the page loaded", async () => {
     api.getDeviceControls.mockResolvedValue({ device: "kitchen", online: true, versions: [], controls: [] });
     data.refreshConfig.mockImplementation(async () => {
@@ -181,5 +202,40 @@ describe("Devices page", () => {
     fireEvent(track, new MouseEvent("pointerdown", { bubbles: true, clientX: 55 }));
     await waitFor(() => expect(api.setDeviceControl).toHaveBeenCalledWith("kitchen", "wake_probability_cutoff", 55));
     await waitFor(() => expect(data.refreshConfig).toHaveBeenCalledTimes(1));
+  });
+
+  it("edit says the typed text on the speaker to check the volume", async () => {
+    api.getDeviceControls.mockResolvedValue({ device: "kitchen", online: true, versions: [], controls: [] });
+    let finish;
+    api.sayOnDevice.mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
+    render(<Devices />);
+    fireEvent.click(screen.getByText("Edit"));
+    const input = await screen.findByDisplayValue("Проверка громкости");
+    fireEvent.change(input, { target: { value: "" } });
+    expect(screen.getByText("Say")).toBeDisabled();
+    fireEvent.change(input, { target: { value: "раз два" } });
+    fireEvent.click(screen.getByText("Say"));
+    expect(api.sayOnDevice).toHaveBeenCalledWith("kitchen", "раз два");
+    expect(await screen.findByText("Saying…")).toBeDisabled();
+    finish({ ok: true });
+    expect(await screen.findByText("Say")).toBeEnabled();
+  });
+
+  it("edit shows why the speaker could not say the text, and an offline speaker cannot", async () => {
+    api.getDeviceControls.mockResolvedValue({ device: "kitchen", online: true, versions: [], controls: [] });
+    api.sayOnDevice.mockRejectedValue(new Error("tts down"));
+    const { unmount } = render(<Devices />);
+    fireEvent.click(screen.getByText("Edit"));
+    await screen.findByDisplayValue("Проверка громкости");
+    fireEvent.click(screen.getByText("Say"));
+    expect(await screen.findByText("tts down")).toBeInTheDocument();
+    unmount();
+
+    data.system = { devices: [{ name: "kitchen", online: false, versions: [] }] };
+    render(<Devices />);
+    fireEvent.click(screen.getByText("Edit"));
+    await screen.findByDisplayValue("Проверка громкости");
+    expect(screen.getByText("Say")).toBeDisabled();
+    expect(screen.getByText("Say")).toHaveAttribute("title", "Speaker offline");
   });
 });

@@ -82,15 +82,18 @@ class FakeTtsBackend(TtsBackend):
 
 class FakePlayer:
     """The device's play hook: drains each clip (bytes or async chunks) and records
-    (audio, mime), so tests can assert on what reached the device."""
+    (audio, mime), so tests can assert on what reached the device. Returns `stats`,
+    as Connection.play does."""
 
     def __init__(self):
         self.calls = []
+        self.stats = {"outcome": "played", "dry": None, "gap_ms": None}
 
     async def __call__(self, mime, audio):
         if not isinstance(audio, (bytes, bytearray)):
             audio = b"".join([c async for c in audio])
         self.calls.append((bytes(audio), mime))
+        return self.stats
 
 
 class FakeRunsStore:
@@ -2333,8 +2336,8 @@ async def test_run_completes_headless_when_send_event_is_none(tmp_path, monkeypa
 
 
 async def test_intent_end_payload_carries_conversation_id(tmp_path, monkeypatch):
-    # INTENT_END carries the run's conversation id and the continue flag as a flat
-    # str->str payload (the transport-neutral StageEvent contract).
+    # INTENT_END carries the run's conversation id as a flat str->str payload (the
+    # transport-neutral StageEvent contract).
     patch_llm(monkeypatch, reply="готово")
     pipeline, events = make_pipeline(tmp_path, monkeypatch, stt_text="включи свет")
 
@@ -2342,10 +2345,7 @@ async def test_intent_end_payload_carries_conversation_id(tmp_path, monkeypatch)
     await pipeline.on_audio(b"\x01\x02" * 100)
     await pipeline.on_stop(False)
 
-    assert dict(events)[StageEvent.INTENT_END] == {
-        "conversation_id": "cid",
-        "continue_conversation": "0",
-    }
+    assert dict(events)[StageEvent.INTENT_END] == {"conversation_id": "cid"}
     assert_all_str(events)
 
 
@@ -2404,10 +2404,7 @@ async def test_intent_end_keeps_conversation_id_snapshotted_at_claim(tmp_path, m
     assert pipeline._conversation_id == "cid2"
     # ...but the original run's INTENT_END still carries the snapshotted id.
     intent_ends = [data for et, data in events if et == StageEvent.INTENT_END]
-    assert intent_ends == [{
-        "conversation_id": "cid1",
-        "continue_conversation": "0",
-    }]
+    assert intent_ends == [{"conversation_id": "cid1"}]
     assert_all_str(events)
 
 
@@ -2556,6 +2553,7 @@ async def test_run_text_happy_path(tmp_path, monkeypatch):
     pipeline, events = make_pipeline(
         tmp_path, monkeypatch, runs_store=store, run_events=hub,
     )
+    pipeline.play.stats = {"outcome": "played", "dry": 1, "gap_ms": 30}
 
     result = await pipeline.run_text("включи свет")
 
@@ -2572,6 +2570,7 @@ async def test_run_text_happy_path(tmp_path, monkeypatch):
     assert rec["t_vad"] == 0 and rec["t_stt"] == 0
     assert rec["t_total"] >= 0
     assert rec["error_stage"] is None
+    assert (rec["play_dry"], rec["play_gap_ms"]) == (1, 30)
     # Context appended like a normal conversation turn.
     assert context.load_context(pipeline._context_path) == [
         {"role": "user", "content": "включи свет"},

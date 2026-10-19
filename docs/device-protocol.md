@@ -59,6 +59,15 @@ The owner's words:
   link after its 3 s send timeout, then waits the 1 s backoff and ~1 s to reconnect, against a
   ~3 s tap), option chosen: «Оставить как есть» — no larger tap, no faster reconnect; the
   hole shows in the capture's `gaps`.
+- «надо еще некоторое время слушать после окончания фразы которую говорит колонка, если я хочу
+  продолжить диалог без активационной фразы», «еще одна стадия в конце, которую можно включить?»,
+  «через jev стоит оценивать, продолжение это диалога или нет», then «го делать» — after the
+  spoken answer of a session the server sends `listening` again and the device reopens its
+  microphone without a wake word (see [Follow-up](#follow-up)); the server stage `followup`
+  turns it on and off. A phrase heard in that window goes on only when the jev decision model
+  takes it for a continuation of the dialog; otherwise it is dropped without a sound.
+- On the end-of-phrase chime of such a phrase, option chosen: «После «да» от jev» — it plays once
+  jev accepted the phrase, never on speech jev drops.
 - «давай ее добавим тож» (the stop word of the stock Voice PE firmware) — the speaker runs the
   stock «Stop» model (kahrendt/microWakeWord, release `stop`) from 1 s after its playback starts
   until the playback ends; a detection only stops: the playback and the device's run end, no new
@@ -84,6 +93,25 @@ The owner's words:
   canceller's mode and filter length, fixed when it is created) — `echo_cancel_mode` and
   `echo_cancel_filter` in `config` and among the device's controls; the device re-creates its
   canceller when either changes, without a restart.
+- «наверное надо на сервере сделать отдельную фичу, которая пишет непрерывно лог колонки за
+  последние сколько-то дней», option chosen: «Колонка шлёт лог сама» — the speaker sends its log
+  lines over this connection (`log`), port 23 stays free for watching by hand, and what it logs
+  before it reaches the server is not kept; the server keeps 7 days. Then «сделать тока
+  переключатель в прошивке, вкл дебаг или нет», option chosen: «В панели, без перепрошивки» — a
+  per-device switch in the panel's device dialog (`core.devices[].log`), applied on the fly
+  through `log_stream`; off, the device sends nothing.
+- «поисследуй, как можно отбрасывать копии с разных колонок», then «давай сделаем 3, да» — when
+  several devices wake on one phrase, the server keeps one session and ends the others with
+  `state idle` before `listening`. Of the rules offered (the first wake wins; the cleanest wake
+  word wins; device priority; compare the texts after recognition), option 3: a device with a
+  speaker beats one without, between equals the device that heard the wake word with the higher
+  signal-to-noise ratio, then the earlier wake. Then «пусть тоже распознается» — a dropped
+  duplicate's phrase is recognized for the run log too; «да пусть с индикацией, похуй, лишь бы
+  потом показало что дубликат» — the losing device may show its listening indication meanwhile,
+  the run log must show the run as a duplicate. Then, of «только тем панелям, что услышали эту же
+  фразу и проиграли» and «всем устройствам без динамика — каждый ответ», «первый вариант наверное,
+  да» — the answer of the kept session is shown on the screens of the devices without a speaker
+  that lost that phrase.
 
 ## Transport
 
@@ -119,7 +147,7 @@ The owner's words:
 1. Device → `hello`:
    ```json
    {"type": "hello", "id": "fc012cd1e5ec", "fw": "voicepe 0.1.0 (a1b2c3d)",
-    "caps": {"speaker": true, "screen": false},
+    "caps": {"speaker": true, "screen": false, "follow_up": true},
     "mic": {"channels": 2},
     "play": {"rate": 48000, "buffer_ms": 4000},
     "volume": 60}
@@ -129,6 +157,8 @@ The owner's words:
      `core.devices[].label` instead when one is set. An unknown `id` is added to the config as
      an enabled device.
    - `play` and `volume` are present only when `caps.speaker` is true.
+   - `caps.follow_up` is true when the device reopens its microphone on a follow-up `listening`
+     (see [Follow-up](#follow-up)); the server listens for a follow-up only on such a device.
    - `capture` (the running capture's `id`) is present only while the device holds a capture,
      see [Capture](#capture).
 2. The server closes the connection with code 4000 when the device is disabled in the config, and
@@ -154,8 +184,11 @@ The owner's words:
    cancellation ignores them, and an absent field or one out of its range leaves the device's own.
    All these values live in the server config, not on the device; until the first `config` the
    device uses its compiled-in defaults.
-4. Server → the wake-word and VAD models, and to a device with a speaker the stop model, right
-   after `config`: see [Models](#models).
+4. Server → `log_stream {on}` with the device's `core.devices[].log`, on or off, after `config`
+   (and after what a capture the device holds needs, see [Capture](#capture)): see
+   [Settings and diagnostics](#settings-and-diagnostics).
+5. Server → the wake-word and VAD models, and to a device with a speaker the stop model, right
+   after `log_stream`: see [Models](#models).
 
 ## Models
 
@@ -204,8 +237,9 @@ device                                   server
                                   ◄──    reply {text}
                                   ◄──    state speaking
                                   ◄──    play_start / 0x02 … / play_end
-  played {id}                     ──►
+  played {id, dry, gap_ms}        ──►
                                   ◄──    state idle             (or state error {text})
+                                         or, with follow-up on, state listening (see Follow-up)
 ```
 
 - `wake`: `{"type": "wake", "session": 17, "word": "Захар"}`. `session` is a device counter, +1 for
@@ -227,12 +261,28 @@ device                                   server
 - `transcript` and `reply` carry the recognised phrase and the answer text, for devices with a
   screen. `reply` without `session` is an announcement (a reminder, an agent's `speak`).
 - Every server message of a session carries its `session`; the device drops messages whose
-  `session` is not its current one. While a session's microphone streams (from `wake` to its first
-  `state` other than `listening`) a wake word starts no new session: the phrase is still being said,
+  `session` is not its current one. While a session's microphone streams (from `wake` or a
+  follow-up `listening` to the next `state` other than `listening`) a wake word starts no new
+  session: the phrase is still being said,
   and a detection inside it must not cut it off. After that a new `wake` replaces the current
   session on both sides: the device flushes its playback, the server cancels the older run and,
   before anything else of the new session, sends `play_stop` — a stream the server started before
   it saw the `wake` is dropped on the device too.
+- One phrase heard by several devices: the server holds a `wake` for `core.arbitration.window_ms`
+  (default 500 ms) to collect the wakes of the other online devices, or less once every online
+  device has woken; a lone online device is not held. With several wakes it rules only once
+  each of them has its pre-roll in, or `window_ms` after that device's own `wake`, and the
+  server's second wake-word check has ruled on it; a wake that check rejects takes no part. It
+  keeps one session — a device with a speaker over one without, between equals the higher
+  signal-to-noise ratio of the pre-roll, then the earlier wake. The others get no `listening`:
+  their microphone streams on silently until the server's VAD finds the end of the phrase, and
+  then they get `state idle`. For `core.arbitration.cooldown_ms` (default 2000 ms) after the
+  first of those wakes, a `wake` from any other device is ended the same way. The ended runs
+  show in the run log as `rejected`, reason `duplicate`, with the phrase recognized by the STT
+  of the first enabled chain; the device gets no `transcript` of it. When the kept session
+  answers, each ended device without a speaker gets that answer as a `reply` without `session`,
+  so its screen shows it; a device with a speaker gets nothing, nor does a later answer of the
+  same session (a follow-up).
 - `stop`: `{"type": "stop", "session": 17}`, device → server: the stop word. The device runs the
   stop model from 1 s after its playback starts until the playback ends; a detection flushes the
   playback and sends `stop`, then `played {id, "dropped": true}` for each stream it dropped.
@@ -243,12 +293,45 @@ device                                   server
 - A device without a speaker (`caps.speaker: false`) never gets playback: the server skips TTS for
   it and sends the text only.
 
+### Follow-up
+
+With the server stage `followup` on, a device with `caps.follow_up` keeps the session open after
+the answer, so the next phrase needs no wake word:
+
+```
+  played {id, dry, gap_ms}        ──►    (the answer is out, not dropped)
+                                  ◄──    state listening
+  0x01 mic: live, no pre-roll     ─►
+                                  ◄──    state transcribing     (end of phrase)
+                                  ◄──    state thinking / reply / speaking … as above
+  or no speech in the window:     ◄──    state idle
+```
+
+- A `listening` of the open session whose microphone is off turns the microphone on again: the
+  device streams live audio from the moment the `listening` arrives, no pre-roll, in the frames of
+  a wake.
+- The server waits `followup` window for speech to start. Silence ends the session with
+  `state idle`, without a sound. A phrase goes to the jev decision model with the assistant's name
+  (the `word` of the session's `wake`), the last request and answer; one it does not take for a
+  continuation of the dialog also ends the session with `state idle`, without a sound and without
+  a transcript. One it takes gets the end-of-phrase chime and runs like any phrase, and its answer
+  opens the window again.
+- No follow-up after an answer that was dropped (`play_stop`, a new `wake`), outside a session (an
+  announcement), or on a device without `caps.follow_up`. An announcement while the window still
+  waits for speech ends the session with `state idle` before it plays; an answer with an
+  announcement queued behind it opens no window.
+
 ## Playback
 
 - `play_start {id}`, then `0x02` frames of up to 4096 payload bytes, then `play_end {id}`. `id` is
   a server counter. The audio is mono at `hello.play.rate`; the server resamples to it.
 - The device plays streams back to back in arrival order (the end-of-phrase chime, a filler, the
-  answer) and sends `played {id}` when the last sample of a stream is out.
+  answer) and sends `played {id, dry, gap_ms}` when the last sample of a stream is out: `dry` is
+  how many times the stream ran dry after it had started and before its `play_end` came (a
+  `play_end` that comes after the last sample is out counts too), `gap_ms` the silence the speaker
+  played meanwhile, in ms. The wait before a stream's first sample is not
+  counted. Both are optional: a device that does not count them (an older firmware) sends
+  `played {id}`, and the server then records nothing for the stream.
 - `play_stop` flushes everything queued and playing; the device answers `played {id, "dropped":
   true}` for each stream it dropped. A new `wake` and the stop word flush the same way, and the
   server answers either with `play_stop`. `0x02` frames and `play_end` of a dropped stream that
@@ -274,6 +357,8 @@ device                                   server
 | `capture {id, seconds}` | server → device | record a sample, see [Capture](#capture) |
 | `capture_resume {id, from}` | server → device | go on with a capture the device kept across a lost link |
 | `audio_end {reason, id}` | device → server | a capture ended on the device: `capture` (all its audio is out) or `busy` (refused, a session is running) |
+| `log_stream {on}` | server → device | send the device log in `log` messages or stop; after every `hello` and whenever `core.devices[].log` changes. Off from boot. A lost link does not turn it off on the device: the lines logged meanwhile wait (16 KB on the Voice PE, a line that does not fit is dropped) for the next connection's `log_stream`, and off drops them |
+| `log {text}` | device → server | one or more whole lines of the device's ESP log, each ending in `\n` (on the Voice PE up to 2 KB a message, a line cut at 512 bytes). The server appends them to `data/device_logs/<id>/<YYYY-MM-DD>.log` (its local day), each behind its own time of arrival `HH:MM:SS.mmm`, and deletes a day's file once that day ended more than `core.device_log_days` (7) days ago |
 
 ## Capture
 

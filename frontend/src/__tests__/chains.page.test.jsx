@@ -3,13 +3,15 @@
 // delete / field change) changes one draft, and Save sends ONE patch carrying
 // the whole core.chains array (PATCH replaces lists). Also pins which per-chain
 // controls appear (narrow checkbox, parallel toggle, the last-chain warning),
-// the server error banner and the "configure" links.
+// the server error banner, the "configure" links, and that a switched-off chain fades
+// none of its controls.
 import React from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, cleanup, waitFor, within } from "@testing-library/react";
 import Chains from "../pages/chains.jsx";
 import { useAppData } from "../appData.jsx";
 import { setNavigate, pendingTab, clearTab } from "../navStore.js";
+import { faded } from "./faded.js";
 
 vi.mock("../appData.jsx", () => ({ useAppData: vi.fn() }));
 
@@ -91,6 +93,14 @@ describe("Chains page — patch shape", () => {
 });
 
 describe("Chains page — per-chain controls", () => {
+  it("a switched-off chain fades none of its controls", () => {
+    useAppData.mockReturnValue({ catalog, config: { core: { chains: [FAST, { ...SMART, enabled: false }] } }, patch });
+    render(<Chains />);
+    const card = cards()[1];
+    const controls = [within(card).getByLabelText("Chain name"), ...within(card).getAllByRole("switch"), ...within(card).getAllByRole("button")];
+    for (const el of controls) expect(faded(el)).toBe(false);
+  });
+
   it("shows the narrow checkbox only for an STT with vocabulary support and a handler with a vocabulary", async () => {
     render(<Chains />);
     expect(within(cards()[0]).getByLabelText("Narrow STT to handler vocabulary")).toBeChecked();

@@ -11,7 +11,8 @@ rebuilding the pipelines.
 class Runtime:
     def __init__(self, svc, *, vad_backend, stt_backends, llm_backends, tts_backends,
                  hub, runs_store=None, run_events=None,
-                 prompt_store=None, stress_backend=None, wakeword_backend=None):
+                 prompt_store=None, stress_backend=None, wakeword_backend=None,
+                 followup_backend=None):
         self.svc = svc
         # Swappable runtime objects (rebuilt by the reconfigurator in later tiers).
         self.vad_backend = vad_backend
@@ -32,6 +33,10 @@ class Runtime:
         # The pipeline walks the variants in config order; the Reconfigurator adds,
         # rebuilds and drops entries as the variants and instances change.
         self.tts_backends = tts_backends
+        # Follow-up stage backend: whether a phrase heard after the answer continues
+        # the dialog. Defaults to None so test fixtures that don't pass it keep
+        # working (the pipeline then opens no follow-up window, as with NoFollowup).
+        self.followup_backend = followup_backend
         self.hub = hub
         self.runs_store = runs_store
         self.run_events = run_events

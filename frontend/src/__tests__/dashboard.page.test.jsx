@@ -1,14 +1,15 @@
 // @vitest-environment jsdom
 // Render-level tests for the Dashboard: the Capture → Logic → Speech service map
 // (what each tile shows, grey dots for what is off, where a click leads, an old
-// backend without categories) and the KPI tiles.
+// backend without categories), the KPI tiles and the devices card with its switches.
 import React from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, cleanup, fireEvent, within } from "@testing-library/react";
+import { render, screen, cleanup, fireEvent, within, waitFor } from "@testing-library/react";
 import Dashboard from "../pages/dashboard.jsx";
 import { useAppData } from "../appData.jsx";
-import { getMetrics } from "../api.js";
+import { getMetrics, getConfig } from "../api.js";
 import { nav } from "../navStore.js";
+import { faded } from "./faded.js";
 
 vi.mock("../appData.jsx", () => ({ useAppData: vi.fn() }));
 vi.mock("../navStore.js", () => ({ nav: vi.fn() }));
@@ -16,6 +17,7 @@ vi.mock("../api.js", () => ({
   getMetrics: vi.fn(async () => ({})),
   getRuns: vi.fn(async () => ({ runs: [] })),
   openRunsStream: vi.fn(() => () => {}),
+  getConfig: vi.fn(),
 }));
 
 afterEach(cleanup);
@@ -30,12 +32,13 @@ const config = { core: { chains, mcp_servers: [{ name: "home" }] } };
 
 const single = (id, selected, label, values) => ({ id, selected, providers: [{ id: selected, label, values }] });
 
-function catalog({ wake = true, stress = true } = {}) {
+function catalog({ wake = true, stress = true, followup = true } = {}) {
   return {
     categories: [
       single("vad", "webrtc", "WebRTC VAD", {}),
       single("wakeword", "vosk", "Vosk", { enabled: wake }),
       single("stress", "ruaccent", "RuAccent", { enabled: stress }),
+      single("followup", "jev", "Jev", { enabled: followup }),
       {
         id: "tts",
         variants: [
@@ -86,20 +89,22 @@ describe("Dashboard service map", () => {
     expect(speech.querySelector(".prov").textContent).toBe("Fish Audio");
     expect(within(speech).getByTestId("speech-voice").textContent).toBe("Anna · +1 fallback");
     expect(speech.textContent).toContain("stress on");
+    expect(speech.textContent).toContain("follow-up on");
     expect(speech.textContent).toContain("0.60s avg");
 
-    expect([capture, tile("logic"), speech].map(dots)).toEqual([["ok", "ok"], ["ok"], ["ok", "ok"]]);
+    expect([capture, tile("logic"), speech].map(dots)).toEqual([["ok", "ok"], ["ok"], ["ok", "ok", "ok"]]);
   });
 
   it("greys the dot of whatever is off", async () => {
     useAppData.mockReturnValue({
-      catalog: catalog({ wake: false, stress: false }),
+      catalog: catalog({ wake: false, stress: false, followup: false }),
       config: { core: { chains: chains.map((c) => ({ ...c, enabled: false })) } },
     });
     await renderDashboard();
     expect(tile("capture").textContent).toContain("wake-word verify off");
     expect(tile("speech").textContent).toContain("stress off");
-    expect([tile("capture"), tile("logic"), tile("speech")].map(dots)).toEqual([["ok", "off"], ["off"], ["ok", "off"]]);
+    expect(tile("speech").textContent).toContain("follow-up off");
+    expect([tile("capture"), tile("logic"), tile("speech")].map(dots)).toEqual([["ok", "off"], ["off"], ["ok", "off", "off"]]);
     expect(within(tile("logic")).getByText("no enabled chain")).toBeInTheDocument();
   });
 
@@ -130,5 +135,41 @@ describe("Dashboard service map", () => {
       (el) => el.querySelector(".k")?.textContent === "Rejected · 24h",
     );
     expect(tileEl.querySelector(".v").textContent).toBe("3");
+  });
+});
+
+describe("Dashboard devices", () => {
+  const live = [
+    { name: "kitchen", enabled: true, online: true },
+    { name: "hall", enabled: true, online: false },
+    { name: "porch", enabled: false, online: false },
+  ];
+  const labels = [{ name: "kitchen", label: "Kitchen" }];
+  const rows = () => screen.getAllByTestId("device-row");
+
+  it("lists every device with its label, status and switch", async () => {
+    useAppData.mockReturnValue({ catalog: { ...catalog(), core: { values: { devices: labels } } }, config, system: { devices: live } });
+    await renderDashboard();
+    expect(rows().map((r) => r.textContent)).toEqual(["KitchenOnline", "hallOffline", "porchdisabled"]);
+    expect(rows().map((r) => within(r).getByRole("switch").getAttribute("aria-checked"))).toEqual(["true", "true", "false"]);
+    // A disabled device fades its name, never its switch.
+    expect(faded(within(rows()[2]).getByText("porch"))).toBe(true);
+    expect(faded(within(rows()[2]).getByRole("switch"))).toBe(false);
+  });
+
+  it("switching a device off writes enabled:false onto the server's current list, for that device only", async () => {
+    // The server holds a cutoff and a device the page has not seen yet.
+    const fresh = [
+      { name: "kitchen", enabled: true, wake_cutoff: 55 },
+      { name: "hall", enabled: true, wake_cutoff: 80 },
+      { name: "attic", enabled: true, wake_cutoff: 80 },
+    ];
+    getConfig.mockResolvedValueOnce({ core: { devices: fresh } });
+    const patch = vi.fn(async () => {});
+    useAppData.mockReturnValue({ catalog: catalog(), config, system: { devices: live }, patch });
+    await renderDashboard();
+    fireEvent.click(within(rows()[1]).getByRole("switch"));
+    await waitFor(() => expect(patch).toHaveBeenCalledTimes(1));
+    expect(patch).toHaveBeenCalledWith({ core: { devices: [fresh[0], { ...fresh[1], enabled: false }, fresh[2]] } });
   });
 });

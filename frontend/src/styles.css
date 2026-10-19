@@ -122,6 +122,9 @@ button{font-family:inherit;}
 .z-pill.warn{background:var(--warn-bg);color:#b45309;border:1px solid #fde68a;}
 .z-pill.bad{background:var(--bad-bg);color:#b91c1c;}
 .z-pill.muted{background:var(--line2);color:var(--mut);}
+/* The content of a switched-off item (a speaker, an MCP server, a TTS variant). Its
+   controls sit outside it: they still work and must not look disabled. */
+.z-dim{opacity:.55;}
 .z-paramtag{font-family:var(--mono);font-size:9.5px;color:var(--mut2);background:var(--panel2);border:1px solid var(--line);border-radius:3px;padding:1px 6px;}
 
 /* ── Forms ──────────────────────────────────────────────── */

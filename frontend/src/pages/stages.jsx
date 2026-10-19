@@ -248,7 +248,7 @@ const providerParts = (cat, providers) => providers.map((p) => ({
 }));
 
 // The selected provider of a stage switched on and off on a Pipeline page
-// (wakeword, stress) and its page-form part: its settings without `enabled`.
+// (wakeword, stress, followup) and its page-form part: its settings without `enabled`.
 function selectedSettings(category) {
   const prov = category.providers.find((p) => p.id === category.selected) || category.providers[0];
   const { enabled: _enabled, ...values } = prov.values;
@@ -382,15 +382,17 @@ export function TTS() {
   const providers = category.providers;
   const variants = category.variants || [];
   const stress = selectedSettings(catalog.categories.find((c) => c.id === "stress"));
+  const followup = selectedSettings(catalog.categories.find((c) => c.id === "followup"));
   const [tab, setTab] = useProviderTab("tts", providers, variants.find((v) => v.enabled)?.provider);
-  const form = usePageForm([...providerParts("tts", providers), stress.part], patch);
+  const form = usePageForm([...providerParts("tts", providers), stress.part, followup.part], patch);
   const prov = providers.find((p) => p.id === tab);
 
   return <FormPage form={form} narrow>
     <PageHeader title="TTS · Text to speech"
-      desc="Settings of each speech synthesizer and of stress placement on the reply text. Which synthesizers run, and in what order, is set on the Speech page." />
+      desc="Settings of each speech synthesizer, of stress placement on the reply text and of listening for a follow-up after it. Which synthesizers run, and in what order, is set on the Speech page." />
     {prov && <ReloadingBanner cat="tts" label={prov.label} />}
     <ReloadingBanner cat="stress" label={stress.prov.label} />
+    <ReloadingBanner cat="followup" label={followup.prov.label} />
     <div className="z-grid">
       {prov && <div>
         <ProviderTabs cat="tts" providers={providers} tab={tab} onTab={setTab} form={form} />
@@ -408,6 +410,10 @@ export function TTS() {
       <Card title="Stress placement" sub={stress.prov.label}>
         <SchemaForm schema={stress.prov.schema} values={form.draftOf(stress.part.key)} onChange={form.onChangeOf(stress.part.key)}
           optionsFor={optionsLoader("stress", stress.prov.id)} skip={["enabled"]} />
+      </Card>
+      <Card title="Follow-up" sub={followup.prov.label}>
+        <SchemaForm schema={followup.prov.schema} values={form.draftOf(followup.part.key)} onChange={form.onChangeOf(followup.part.key)}
+          optionsFor={optionsLoader("followup", followup.prov.id)} skip={["enabled"]} />
       </Card>
     </div>
   </FormPage>;

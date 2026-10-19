@@ -35,7 +35,8 @@ CREATE TABLE IF NOT EXISTS runs (
   rounds_json TEXT,
   request_json TEXT,
   chain TEXT,
-  attempts_json TEXT
+  attempts_json TEXT,
+  play_dry INTEGER, play_gap_ms INTEGER
 );
 """
 
@@ -67,6 +68,7 @@ _INSERT_COLS = [
     "t_vad", "t_stt", "t_llm", "t_stress", "t_tts", "t_filler", "t_total",
     "audio_ms", "audio_bytes", "audio_fmt", "error_stage", "error_text",
     "chain",
+    "play_dry", "play_gap_ms",
 ]
 
 # Summary columns returned by list() (rounds_json is intentionally omitted).
@@ -76,9 +78,14 @@ _LIST_COLS = [
     "t_wakeword", "wakeword_score",
     "t_vad", "t_stt", "t_llm", "t_stress", "t_tts", "t_filler", "t_total",
     "chain",
+    "play_dry", "play_gap_ms",
 ]
 
 _DAY_SECONDS = 86400
+
+# Reasons of the runs the wake-word verifier rejected: the false triggers rejected_24h
+# counts (a "duplicate" reject is another device's copy of a real phrase).
+_VERIFIER_REJECTS = ("wakeword_reject", "wakeword_error")
 
 
 class RunsStore:
@@ -116,7 +123,8 @@ class RunsStore:
                           ("request_json", "TEXT"), ("t_stress", "INTEGER"),
                           ("stress_text", "TEXT"),
                           ("t_wakeword", "INTEGER"), ("wakeword_score", "REAL"),
-                          ("chain", "TEXT"), ("attempts_json", "TEXT")):
+                          ("chain", "TEXT"), ("attempts_json", "TEXT"),
+                          ("play_dry", "INTEGER"), ("play_gap_ms", "INTEGER")):
             if col not in existing:
                 self._conn.execute(f"ALTER TABLE runs ADD COLUMN {col} {decl}")
         self._conn.commit()
@@ -328,8 +336,8 @@ class RunsStore:
         # Same Connection as writes from a worker thread: hold the write lock.
         with self._lock:
             rows = self._conn.execute(
-                "SELECT result, chain, t_total, t_wakeword, t_vad, t_stt, t_llm, t_stress, "
-                "t_tts FROM runs WHERE ts >= ?",
+                "SELECT result, reason, chain, t_total, t_wakeword, t_vad, t_stt, t_llm, "
+                "t_stress, t_tts FROM runs WHERE ts >= ?",
                 (since,),
             ).fetchall()
         if len(rows) == 0:
@@ -343,14 +351,18 @@ class RunsStore:
                 "per_chain": {},
             }
 
-        # Gated wake-word rejects abort before STT/LLM/TTS. They must NOT distort the
+        # Rejected runs (a wake-word verifier reject, or a duplicate of another
+        # device's wake) abort before STT/LLM/TTS. They must NOT distort the
         # served-request KPIs (request count, latency percentiles, error rate) — those
-        # describe runs the pipeline actually served. They ARE still counted in
-        # rejected_24h for FAPH (false-accept-per-hour) auditing. The verifier (and the
-        # captured-utterance duration t_vad) DID run for rejected runs, so vad/wakeword
-        # averages span ALL rows; the never-run downstream stages span served only.
+        # describe runs the pipeline actually served. Only the verifier's rejects are
+        # counted in rejected_24h, for FAPH (false-accept-per-hour) auditing: neither a
+        # duplicate of another device's wake nor a follow-up phrase dropped as not a
+        # continuation (reason followup_*) is a wake-word false accept. The verifier (and
+        # the captured-utterance duration t_vad) DID run for rejected runs, so
+        # vad/wakeword averages span ALL rows; the never-run downstream stages span
+        # served only.
         served = [r for r in rows if r["result"] != "rejected"]
-        rejected = sum(1 for r in rows if r["result"] == "rejected")
+        rejected = sum(1 for r in rows if r["reason"] in _VERIFIER_REJECTS)
 
         if len(served) == 0:
             # Only rejected runs in the window: no served KPIs, but still report the

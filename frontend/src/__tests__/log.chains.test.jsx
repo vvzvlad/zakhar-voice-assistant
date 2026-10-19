@@ -2,8 +2,9 @@
 // Integration tests (jsdom) for the chain parts of the Request Log: the Chain
 // column, the chain filter forwarded to /api/runs, and the run detail listing
 // the chain and TTS attempts in the order they ran, with why a handler declined.
-// Also the device column, which shows a device's label and filters by it, and the
-// request of an announcement, which is no request rather than silence.
+// Also the device column, which shows a device's label and filters by it, the
+// request of an announcement, which is no request rather than silence, and the
+// detail of a duplicate, which is no verifier reject.
 import React from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
@@ -75,6 +76,25 @@ describe("Request log — chains", () => {
     expect(items[3].textContent).toContain("spoke");
   });
 
+  it("reads a dropped follow-up phrase as not a continuation, with the check's probability", async () => {
+    getRun.mockResolvedValue({
+      ...ROW, result: "rejected", reason: "followup_reject", stt_text: "ну и погодка", llm_text: "",
+      attempts: [
+        { kind: "followup", provider: "jev", text: "ну и погодка", outcome: "rejected", probability: 0.12, t: 640 },
+        { kind: "chain", chain: "smart", stt: "groq", handler: "openrouter", text: "ну и погодка", outcome: "rejected", error: null, detail: null, t_stt: 800, t_handler: 0 },
+      ],
+    });
+    render(<Log />);
+    fireEvent.click((await screen.findAllByText("Солнечно"))[0]);
+    expect((await screen.findByText("Not a continuation (follow-up check).")).parentElement.textContent)
+      .toContain("probability 12%");
+    expect(screen.queryByText("Wake-word verify")).toBeNull();
+    const items = screen.getAllByTestId("attempt");
+    expect(items[0].textContent).toContain("Follow-up check · jev");
+    expect(items[0].textContent).toContain("probability 12% · 0.64s");
+    expect(items[1].textContent).toContain("ну и погодка");
+  });
+
   it("shows a dash, not (silence), as the request of an announcement", async () => {
     getRuns.mockResolvedValue({ runs: [
       { ...ROW, reason: "reminder", stt_text: null, llm_text: "молоко" },
@@ -85,5 +105,18 @@ describe("Request log — chains", () => {
     const recognized = screen.getAllByRole("row").filter((tr) => tr.querySelector("td"))
       .map((tr) => tr.querySelectorAll("td")[3].textContent);
     expect(recognized).toEqual(["—", "(silence)"]);
+  });
+
+  it("shows a duplicate as dropped, without the verifier card or a silence caption", async () => {
+    const dup = { ...ROW, result: "rejected", reason: "duplicate", stt_text: "", llm_text: "", wakeword_score: 1 };
+    getRuns.mockResolvedValue({ runs: [dup], total: 1 });
+    getRun.mockResolvedValue(dup);
+    render(<Log />);
+    fireEvent.click(await screen.findByText("Кухня"));
+    const banner = await screen.findByText("Dropped as a duplicate:");
+    expect(banner.parentElement.textContent).toBe("Dropped as a duplicate: another device kept the phrase");
+    expect(screen.queryByText("Wake-word verify")).toBeNull();
+    expect(screen.queryByText(/Rejected by wake-word verify/)).toBeNull();
+    expect(screen.queryByText("— silence, no speech detected —")).toBeNull();
   });
 });

@@ -37,8 +37,9 @@ typedef struct {
     int mic_channels;   // 1 or 2, interleaved in the tap
     int preroll_ms;     // audio before the detection sent after a wake
     // The microphone tap: 16 kHz int16, mic_channels interleaved, positions counted in frames
-    // (one sample per channel). mic_position() is the count of frames written so far;
-    // mic_read() copies up to max_frames frames from *pos and advances *pos past them.
+    // (one sample per channel). mic_position() is the count of frames written so far, called from
+    // the detection, the component and the client's task; mic_read() copies up to max_frames
+    // frames from *pos and advances *pos past them.
     uint32_t (*mic_position)(void);
     size_t (*mic_read)(uint32_t *pos, int16_t *out, size_t max_frames);
     // The highest wake-word probability (0..255) since the previous call; resets it.
@@ -46,6 +47,10 @@ typedef struct {
     int play_rate;       // playback sample rate, Hz; 0: no speaker
     int play_buffer_ms;  // the playback buffer (PSRAM), hello.play.buffer_ms
     int volume;          // speaker volume at start, percent
+    // Optional: the device log for `log` messages. Copies whole log lines (each ending in '\n')
+    // into buf without blocking, up to max bytes, and returns the bytes copied. Called on the
+    // component task while the server asks for the log (see on_log_stream).
+    size_t (*log_read)(char *buf, size_t max);
 } zl_config_t;
 
 // Every callback may be NULL. They run on the component task or on the WebSocket client's task,
@@ -81,6 +86,10 @@ typedef struct {
     // high performance; filter (echo_cancel_filter) 1..8, the filter length. Each is -1 when its
     // field is absent or out of its range, for the device to keep its own; called when any is not.
     void (*on_echo_cancel)(int level, int mode, int filter);
+    // A `log_stream`: the server wants the device log (true) or no longer (false). A lost link
+    // does not call it: the device keeps collecting its lines meanwhile, and the next
+    // connection's `log_stream` decides.
+    void (*on_log_stream)(bool on);
 } zl_callbacks_t;
 
 // Copies cfg (its strings too) and cb, allocates the playback buffer, starts mDNS and the component

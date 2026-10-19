@@ -6,7 +6,7 @@ import React, { useState, useEffect, useCallback, useRef } from "react";
 import { Ic } from "../components/icons.jsx";
 import { PageHeader, Waterfall, KV, Loading, ErrorBox, Select, fillerMarkerPct } from "../components/primitives.jsx";
 import { getRuns, getRun, openRunsStream, runAudioUrl, downloadRunAudio, runTtsAudioUrl, downloadRunTtsAudio } from "../api.js";
-import { RESULT_META, STAGE_COLOR, fmtSec, mapRun, totalMs, statusMeta, isAnnouncement, applyStreamedRun, pageWindow } from "../runsModel.js";
+import { STAGE_COLOR, fmtSec, mapRun, totalMs, statusMeta, isAnnouncement, applyStreamedRun, pageWindow } from "../runsModel.js";
 import { FILLER_COLOR } from "../stageMeta.js";
 import { matchesFilters } from "../runsFilters.js";
 import { useDeviceList } from "../appData.jsx";
@@ -84,29 +84,34 @@ function Gantt({ r }) {
 // Attempt outcome -> pill tone: an answer or spoken audio is good, a failure is
 // bad, a decline / empty text / cancellation is an expected hand-off (muted).
 const ATTEMPT_TONE = {
-  answered: "good", spoke: "good",
+  answered: "good", spoke: "good", accepted: "good",
   stt_error: "bad", handler_error: "bad", error: "bad",
 };
 
 // The run's chain and TTS attempts in the order they ran. A chain attempt is
 // {kind:"chain", chain, stt, handler, text, outcome, error, detail, t_stt, t_handler}
 // (`detail`: why the handler declined, null when it gave no reason);
-// a TTS attempt is {kind:"tts", provider, outcome, error, t} (times in ms).
+// a TTS attempt is {kind:"tts", provider, outcome, error, t} (times in ms);
+// a follow-up check is {kind:"followup", provider, text, outcome, probability, t}.
 function Attempts({ attempts }) {
   return <div className="z-card"><div style={{ padding: "4px 17px" }}>
     {attempts.map((a, i) => {
       const tts = a.kind === "tts";
+      const followup = a.kind === "followup";
       return <div className="z-f" key={i} data-testid="attempt">
         <div className="z-fl">
           <span style={{ display: "flex", alignItems: "baseline", gap: 8, minWidth: 0 }}>
             <span className="mono" style={{ color: "var(--mut2)", fontSize: 11 }}>{i + 1}</span>
             {tts
               ? <b>TTS · <span className="mono">{a.provider}</span></b>
+              : followup
+              ? <b>Follow-up check · <span className="mono">{a.provider}</span></b>
               : <b>{a.chain} · <span className="mono" style={{ fontWeight: 500 }}>{a.stt ? `${a.stt} → ${a.handler}` : a.handler}</span></b>}
           </span>
           <span style={{ display: "flex", alignItems: "center", gap: 10 }}>
             <span className="mono" style={{ fontSize: 11, color: "var(--mut)" }}>
-              {tts ? fmtSec(a.t)
+              {followup ? `${a.probability != null ? `probability ${Math.round(a.probability * 100)}% · ` : ""}${fmtSec(a.t)}`
+                : tts ? fmtSec(a.t)
                 : a.stt ? `STT ${fmtSec(a.t_stt)} · handler ${fmtSec(a.t_handler)}`
                 : `handler ${fmtSec(a.t_handler)}`}
             </span>
@@ -136,8 +141,14 @@ function Collapsible({ summary, children }) {
 
 // Right-side drawer with the full run detail. `r` is the mapped detail row.
 function Drawer({ r, loading, error, onClose }) {
-  const m = RESULT_META[r && r.result] || { label: r && r.result, tone: "muted" };
+  const m = statusMeta(r);
   const device = deviceLabel(useDeviceList(), r && r.device);
+  // Another device heard the same phrase and kept it; the verifier did not reject it.
+  const duplicate = !!r && r.result === "rejected" && r.reason === "duplicate";
+  // A phrase of the follow-up window that the follow-up check did not take for a
+  // continuation of the dialog (followup_reject) or could not judge (followup_error).
+  const followupReject = !!r && r.result === "rejected" && (r.reason || "").startsWith("followup_");
+  const followupCheck = followupReject ? (r.attempts || []).find((a) => a.kind === "followup") : null;
   return <>
     <div className="z-scrim" onClick={onClose} />
     <div className="z-drawer" role="dialog">
@@ -157,19 +168,27 @@ function Drawer({ r, loading, error, onClose }) {
             <Ic n="restart" w={15} /><span><b>{r.error.stage} error.</b> {r.error.text}</span>
           </div>}
 
-          {/* The server-side wake-word verifier blocked this run before STT (a false
-              trigger). Mirrors the error banner, but muted — it is an expected reject,
-              not a failure. reason is wakeword_reject (low score) or wakeword_error. */}
+          {/* A run ended before STT. Mirrors the error banner, but muted — it is an
+              expected reject, not a failure: the server-side wake-word verifier blocked
+              a false trigger (reason wakeword_reject, low score, or wakeword_error),
+              another device heard the same phrase and kept it (reason duplicate), or
+              the follow-up check dropped a follow-up phrase (followup_reject /
+              followup_error). */}
           {r.result === "rejected" && <div className="z-banner" style={{ background: "var(--panel2)", border: "1px solid var(--line)", color: "var(--mut)", marginBottom: 16 }}>
-            <Ic n="wakeword" w={15} /><span><b>Rejected by wake-word verify.</b> {r.reason === "wakeword_error" ? "verifier error" : "wake word not confirmed"}{r.wakeword_score != null ? ` · score ${r.wakeword_score.toFixed(2)}` : ""}</span>
+            <Ic n="wakeword" w={15} />{duplicate
+              ? <span><b>Dropped as a duplicate:</b> another device kept the phrase</span>
+              : followupReject
+              ? <span><b>Not a continuation (follow-up check).</b> {followupCheck && followupCheck.probability != null ? `probability ${Math.round(followupCheck.probability * 100)}%` : "check failed"}</span>
+              : <span><b>Rejected by wake-word verify.</b> {r.reason === "wakeword_error" ? "verifier error" : "wake word not confirmed"}{r.wakeword_score != null ? ` · score ${r.wakeword_score.toFixed(2)}` : ""}</span>}
           </div>}
 
           <div className="z-sl" style={{ marginTop: 0 }}>Stage timeline</div>
           <div className="z-card"><div style={{ padding: "15px 17px" }}><Gantt r={r} /></div></div>
 
           {/* Wake-word verifier confidence + time, shown whenever the stage produced a
-              score (a passed run) or actively rejected the phrase. */}
-          {(r.wakeword_score != null || r.result === "rejected") && <>
+              score (a passed run) or actively rejected the phrase — not for a
+              duplicate, which the verifier did not reject. */}
+          {!duplicate && (r.wakeword_score != null || (r.result === "rejected" && !followupReject)) && <>
             <div className="z-sl">Wake-word verify<div className="ln" />{r.t && r.t.wakeword ? <span style={{ fontFamily: "var(--mono)", fontSize: 10.5, color: "var(--mut2)", textTransform: "none", letterSpacing: 0 }}>{fmtSec(r.t.wakeword)}</span> : null}</div>
             <div className="z-card"><div style={{ padding: "6px 17px" }}>
               <KV k="Score" v={r.wakeword_score != null ? r.wakeword_score.toFixed(3) : "—"} />
@@ -181,7 +200,7 @@ function Drawer({ r, loading, error, onClose }) {
           <div className="z-sl">Transcript</div>
           <div className="z-card"><div style={{ padding: "4px 17px" }}>
             <div className="z-f"><div className="z-fl"><b style={{ color: "var(--mut)", fontWeight: 600, fontSize: 11, textTransform: "uppercase", letterSpacing: ".04em" }}>Recognized (STT)</b></div>
-              <div style={{ fontSize: 14, color: r.stt ? "var(--ink)" : "var(--mut2)", fontStyle: r.stt ? "normal" : "italic" }}>{r.stt || (isAnnouncement(r) ? "— no request —" : "— silence, no speech detected —")}</div></div>
+              <div style={{ fontSize: 14, color: r.stt ? "var(--ink)" : "var(--mut2)", fontStyle: r.stt ? "normal" : "italic" }}>{r.stt || (isAnnouncement(r) ? "— no request —" : duplicate ? "—" : "— silence, no speech detected —")}</div></div>
             {r.filler_text && (
               <div className="z-f"><div className="z-fl">
                 <b style={{ color: "var(--mut)", fontWeight: 600, fontSize: 11, textTransform: "uppercase", letterSpacing: ".04em" }}>
@@ -442,7 +461,7 @@ function Log() {
                         <td className="tm">{r.time}</td>
                         <td style={{ fontWeight: 600 }}>{deviceLabel(devices, r.device)}</td>
                         <td className="mono" data-testid="run-chain" style={{ fontSize: 11.5, color: r.chain ? "var(--ink2)" : "var(--mut2)" }}>{r.chain || "—"}</td>
-                        <td><div className={"z-tx" + (r.stt ? "" : " mut")}>{r.stt || (r.live ? "…" : isAnnouncement(r) ? "—" : "(silence)")}</div></td>
+                        <td><div className={"z-tx" + (r.stt ? "" : " mut")}>{r.stt || (r.live ? "…" : isAnnouncement(r) ? "—" : r.reason === "duplicate" ? "(duplicate)" : "(silence)")}</div></td>
                         <td><div className={"z-tx" + (r.llm ? "" : " mut")}>{r.llm || (r.live ? "…" : "—")}</div></td>
                         <td className="num">{r.tokens || "—"}</td>
                         <td><Waterfall r={r} /></td>

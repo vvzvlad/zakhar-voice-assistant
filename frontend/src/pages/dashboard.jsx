@@ -1,12 +1,14 @@
 // Pipeline overview. KPIs + per-stage and per-chain stats from /api/metrics, the
-// Capture → Logic → Speech service map from the catalog/config, and a
-// recent-requests table from /api/runs (rows deep-link into the Log page).
+// devices with an on/off switch each, the Capture → Logic → Speech service map from
+// the catalog/config, and a recent-requests table from /api/runs (rows deep-link
+// into the Log page).
 import React, { useState, useEffect } from "react";
 import { nav } from "../navStore.js";
 import { Ic } from "../components/icons.jsx";
-import { PageHeader, Waterfall, Loading } from "../components/primitives.jsx";
+import { PageHeader, Waterfall, Loading, Toggle, StatusPill, Pill } from "../components/primitives.jsx";
 import { useAppData } from "../appData.jsx";
-import { getMetrics, getRuns, openRunsStream } from "../api.js";
+import { getMetrics, getRuns, openRunsStream, getConfig } from "../api.js";
+import { errorLines } from "../useStageForm.js";
 import { STAGE_COLOR, fmtSec, mapRun, totalMs, statusMeta, isAnnouncement, applyStreamedRun } from "../runsModel.js";
 import { chainsOf, chainRows, ttsVariantsOf, voiceOf } from "../chains.js";
 import { deviceLabel } from "../format.js";
@@ -74,6 +76,7 @@ function ServiceMap({ catalog, config, stageAvg, perChain, reloading }) {
   const vad = selectedOf(catalog, "vad");
   const wake = selectedOf(catalog, "wakeword");
   const stress = selectedOf(catalog, "stress");
+  const followup = selectedOf(catalog, "followup");
   const speech = speechOf(catalog);
   const rows = chainRows(chainsOf(config), perChain);
   const busy = (...cats) => cats.some((c) => reloading.has(c));
@@ -97,13 +100,48 @@ function ServiceMap({ catalog, config, stageAvg, perChain, reloading }) {
     <Tile title="Speech" page="speech" on={!!speech.provider} loading={busy("tts", "stress")} prov={speech.provider || "—"}>
       <div className="mdl" data-testid="speech-voice">{speech.voice || "—"}{speech.fallbacks > 0 ? ` · +${speech.fallbacks} fallback` : ""}</div>
       <Mark label="stress" on={!!stress.values.enabled} />
+      <Mark label="follow-up" on={!!followup.values.enabled} />
       <Avg ms={stageAvg.tts} color={SC.tts} role="Text → speech" />
     </Tile>
   </div></div>;
 }
 
+// Every configured device, from the heartbeat (system.devices, refreshed every
+// second), with its connection status and a switch for its persisted `enabled` flag:
+// off closes the device's connection and refuses it from then on, on admits it again.
+function DevicesCard({ catalog, system, patch }) {
+  const [err, setErr] = useState(null);
+  const devices = system?.devices || [];
+  // Written onto the server's CURRENT device list, fetched right before the patch, so
+  // a cutoff or a device added since the last refresh is not rolled back.
+  const setEnabled = async (name, on) => {
+    setErr(null);
+    try {
+      const fresh = await getConfig();
+      const list = (fresh.core?.devices || []).map((x) => (x.name === name ? { ...x, enabled: on } : x));
+      await patch({ core: { devices: list } });
+    } catch (e) { setErr(e); }
+  };
+  return <div className="z-card">
+    {err && <div className="z-banner warn" style={{ margin: 12 }}><Ic n="restart" w={15} /><span>{errorLines(err).join(" · ")}</span></div>}
+    {devices.length === 0
+      ? <div className="z-empty" style={{ padding: "24px 20px" }}><b>No speakers</b>A device appears here after its first connection.</div>
+      : <table className="z-tbl">
+        <thead><tr><th style={{ width: 56 }}>On</th><th>Device</th><th style={{ width: 120 }}>Status</th></tr></thead>
+        <tbody>
+          {devices.map((d) => <tr key={d.name} data-testid="device-row" style={{ cursor: "default" }}>
+            {/* .z-toggle is an inline span sized by width/height: it needs a flex parent to take its size. */}
+            <td><div style={{ display: "flex" }}><Toggle sm on={d.enabled} onChange={(on) => setEnabled(d.name, on)} /></div></td>
+            <td className={d.enabled ? "" : "z-dim"} style={{ fontWeight: 600 }}>{deviceLabel(catalog?.core?.values?.devices, d.name)}</td>
+            <td className={d.enabled ? "" : "z-dim"}>{d.enabled ? <StatusPill status={d.online ? "online" : "offline"} /> : <Pill tone="muted">disabled</Pill>}</td>
+          </tr>)}
+        </tbody>
+      </table>}
+  </div>;
+}
+
 function Dashboard() {
-  const { catalog, config, system } = useAppData();
+  const { catalog, config, system, patch } = useAppData();
 
   const [metrics, setMetrics] = useState(null);
   const [recent, setRecent] = useState([]);
@@ -156,6 +194,9 @@ function Dashboard() {
       </div>)}
     </div>
 
+    <div className="z-sl">Devices<div className="ln" /><a onClick={() => nav("devices")}>Manage devices →</a></div>
+    <DevicesCard catalog={catalog} system={system} patch={patch} />
+
     <div className="z-sl">Pipeline service map<div className="ln" /></div>
     <ServiceMap catalog={catalog} config={config} stageAvg={stageAvg} perChain={m.per_chain} reloading={reloading} />
 
@@ -173,7 +214,7 @@ function Dashboard() {
                     return <tr key={r.key} onClick={() => { if (r.id == null) return; try { localStorage.setItem("z-openreq", String(r.id)); } catch { /* ignore */ } nav("log"); }}>
                       <td className="tm">{r.time}</td>
                       <td style={{ fontWeight: 600 }}>{deviceLabel(catalog?.core?.values?.devices, r.device)}</td>
-                      <td><div className={"z-tx" + (r.stt ? "" : " mut")}>{r.stt || (r.live ? "…" : isAnnouncement(r) ? "—" : "(silence)")}</div></td>
+                      <td><div className={"z-tx" + (r.stt ? "" : " mut")}>{r.stt || (r.live ? "…" : isAnnouncement(r) ? "—" : r.reason === "duplicate" ? "(duplicate)" : "(silence)")}</div></td>
                       <td><div className={"z-tx wide" + (r.llm ? "" : " mut")}>{r.llm || (r.live ? "…" : "—")}</div></td>
                       <td className="num" style={{ fontWeight: 600 }}>{fmtSec(totalMs(r))}</td>
                       <td><Waterfall r={r} /></td>

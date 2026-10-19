@@ -96,6 +96,8 @@ def test_action_for_representative_paths():
         "core.runs.retention_days": "rebuild_runs",
         "core.devices": "rebuild_devices",
         "core.devices.0.wake_cutoff": "rebuild_devices",
+        "core.devices.0.log": "rebuild_devices",
+        "core.device_log_days": "live",
         "core.chains": "rebuild_backends",
         "llm.instances.openrouter.temperature": "rebuild_backends",
         "llm.instances.openrouter.reply_empty": "live",
@@ -174,6 +176,11 @@ def test_action_for_and_backend_categories_stress():
     # backend, and it maps into the rebuild set like the other stages.
     assert action_for("stress.instances.ruaccent.model_size") == "rebuild_backends"
     assert "stress" in backend_categories({"stress.instances.ruaccent.model_size"})
+
+
+def test_action_for_and_backend_categories_followup():
+    assert action_for("followup.instances.jev.window_ms") == "rebuild_backends"
+    assert backend_categories({"followup.instances.jev.enabled"}) == {"followup"}
 
 
 def test_request_initial_load_warmup_path_routes_to_stress_rebuild():
@@ -873,12 +880,14 @@ class _FakeHub:
 @pytest.mark.asyncio
 async def test_apply_job_rebuild_tools_swaps_into_hub(monkeypatch):
     # build_sources is monkeypatched to a sentinel; assert hub.set_sources gets exactly
-    # that list, built from rt.core/deps.http_cloud/rt.scheduler/rt.assistant_tasks.
+    # that list, built from rt.core/deps.http_cloud/rt.scheduler/rt.assistant_tasks and
+    # a get_manager that reads rt.manager.
     sentinel = ["src-a", "src-b"]
     seen = {}
 
-    def fake_build(core, http_cloud, scheduler, assistant_tasks):
+    def fake_build(core, http_cloud, scheduler, assistant_tasks, get_manager):
         seen["args"] = (core, http_cloud, scheduler, assistant_tasks)
+        seen["get_manager"] = get_manager
         return sentinel
 
     monkeypatch.setattr("src.reconfig.build_sources", fake_build)
@@ -887,7 +896,7 @@ async def test_apply_job_rebuild_tools_swaps_into_hub(monkeypatch):
     scheduler = object()
     tasks = object()
     rt = types.SimpleNamespace(hub=hub, core=core, scheduler=scheduler, assistant_tasks=tasks,
-                               llm_backends={})
+                               llm_backends={}, manager=object())
     deps = types.SimpleNamespace(http_cloud="cloud-client", tts_timeout=30)
     reconf = Reconfigurator(rt, deps, asyncio.Queue())
 
@@ -895,12 +904,13 @@ async def test_apply_job_rebuild_tools_swaps_into_hub(monkeypatch):
 
     assert hub.set_calls == [sentinel]
     assert seen["args"] == (core, "cloud-client", scheduler, tasks)
+    assert seen["get_manager"]() is rt.manager
 
 
 @pytest.mark.asyncio
 async def test_apply_job_rebuild_tools_failure_logs_and_continues(monkeypatch):
     # A failing set_sources() is logged and the job continues (apply-what-you-can).
-    monkeypatch.setattr("src.reconfig.build_sources", lambda c, h, s, t: ["x"])
+    monkeypatch.setattr("src.reconfig.build_sources", lambda c, h, s, t, m: ["x"])
     hub = _FakeHub(fail=True)
     rt = types.SimpleNamespace(hub=hub, core=types.SimpleNamespace(), scheduler=None,
                                assistant_tasks=None, llm_backends={})
@@ -952,7 +962,7 @@ def _http_runtime(svc, hub, *, external_proxy="", chains=None):
 async def test_apply_job_rebuild_http_swaps_client_rebuilds_deps_and_closes_old(monkeypatch):
     # rebuild_http: builds a new client, swaps deps.http_cloud, rebuilds all cloud
     # backends + the tool sources off the new client, then closes the OLD client.
-    monkeypatch.setattr("src.reconfig.build_sources", lambda c, h, s, t: ["new-src"])
+    monkeypatch.setattr("src.reconfig.build_sources", lambda c, h, s, t, m: ["new-src"])
     new_client = _FakeHttpClient("new")
     monkeypatch.setattr(
         "src.reconfig.httpx.AsyncClient", lambda **kw: new_client
@@ -985,7 +995,7 @@ async def test_apply_job_rebuild_http_build_failure_keeps_old_client(monkeypatch
         raise RuntimeError("bad proxy")
 
     monkeypatch.setattr("src.reconfig.httpx.AsyncClient", boom)
-    monkeypatch.setattr("src.reconfig.build_sources", lambda c, h, s, t: ["x"])
+    monkeypatch.setattr("src.reconfig.build_sources", lambda c, h, s, t, m: ["x"])
     old_client = _FakeHttpClient("old")
     svc = _StubSvc()
     hub = _FakeHub()
@@ -1007,7 +1017,7 @@ async def test_apply_job_http_covers_tools_and_backends_exactly_once(monkeypatch
     # A coalesced job containing rebuild_http AND rebuild_tools/rebuild_backends must
     # rebuild backends + tools EXACTLY once (the http path covers them; the standalone
     # branches are skipped).
-    monkeypatch.setattr("src.reconfig.build_sources", lambda c, h, s, t: ["new-src"])
+    monkeypatch.setattr("src.reconfig.build_sources", lambda c, h, s, t, m: ["new-src"])
     new_client = _FakeHttpClient("new")
     monkeypatch.setattr("src.reconfig.httpx.AsyncClient", lambda **kw: new_client)
     old_client = _FakeHttpClient("old")
@@ -1035,7 +1045,7 @@ async def test_apply_job_rebuild_http_skips_offline_stt(monkeypatch):
     # The chain's STT provider is OFFLINE (vosk, uses_http_cloud False) while its
     # handler and tts are cloud: a proxy change must rebuild ONLY the handler and tts
     # (NOT stt -> no model reload), rebuild tools, swap the client and close the old one.
-    monkeypatch.setattr("src.reconfig.build_sources", lambda c, h, s, t: ["new-src"])
+    monkeypatch.setattr("src.reconfig.build_sources", lambda c, h, s, t, m: ["new-src"])
     new_client = _FakeHttpClient("new")
     monkeypatch.setattr("src.reconfig.httpx.AsyncClient", lambda **kw: new_client)
     old_client = _FakeHttpClient("old")
@@ -1066,7 +1076,7 @@ async def test_apply_job_rebuild_http_also_rebuilds_offline_backend_changed_in_j
     # rebuild the UNION of the cloud stages (client changed) AND the offline stt (its
     # config changed) — so the offline change is NOT silently dropped — rebuild tools,
     # swap the client, and close the old one (nothing lost).
-    monkeypatch.setattr("src.reconfig.build_sources", lambda c, h, s, t: ["new-src"])
+    monkeypatch.setattr("src.reconfig.build_sources", lambda c, h, s, t, m: ["new-src"])
     new_client = _FakeHttpClient("new")
     monkeypatch.setattr("src.reconfig.httpx.AsyncClient", lambda **kw: new_client)
     old_client = _FakeHttpClient("old")
@@ -1092,13 +1102,29 @@ async def test_apply_job_rebuild_http_also_rebuilds_offline_backend_changed_in_j
 
 
 @pytest.mark.asyncio
+async def test_apply_job_rebuild_http_rebuilds_a_cloud_followup(monkeypatch):
+    # The follow-up check posts through http_cloud: a proxy change rebuilds it.
+    monkeypatch.setattr("src.reconfig.build_sources", lambda c, h, s, t, m: ["new-src"])
+    monkeypatch.setattr("src.reconfig.httpx.AsyncClient", lambda **kw: _FakeHttpClient("new"))
+    svc = _StubSvc(cloud_cats={"followup"})
+    rt = _http_runtime(svc, _FakeHub())
+    deps = types.SimpleNamespace(http_cloud=_FakeHttpClient("old"), tts_timeout=30)
+    svc.attach(deps)
+
+    await Reconfigurator(rt, deps, asyncio.Queue()).apply_job({"core.network.external_proxy"})
+
+    assert svc.calls["followup"] == 1
+    assert rt.followup_backend == ("backend", "followup", 30)
+
+
+@pytest.mark.asyncio
 async def test_apply_job_rebuild_http_also_rebuilds_vad_changed_in_job(monkeypatch):
     # Coalesced job touching BOTH core.network.* (rebuild_http) AND a vad instance
     # field. vad is OFFLINE (default _StubSvc cloud_cats is empty), so it enters the
     # http rebuild only through the backend_categories(paths) half of the union — and
     # must be rebuilt EXACTLY once (not dropped, not doubled), alongside the cloud
     # backends, with tools rebuilt and the client swapped/closed as usual.
-    monkeypatch.setattr("src.reconfig.build_sources", lambda c, h, s, t: ["new-src"])
+    monkeypatch.setattr("src.reconfig.build_sources", lambda c, h, s, t, m: ["new-src"])
     new_client = _FakeHttpClient("new")
     monkeypatch.setattr("src.reconfig.httpx.AsyncClient", lambda **kw: new_client)
     old_client = _FakeHttpClient("old")
@@ -1131,7 +1157,7 @@ async def test_apply_job_rebuild_http_offline_only_reloads_no_model(monkeypatch)
     # ALL providers in use are offline (uses_http_cloud False): a proxy change rebuilds
     # NO backends (no svc.create calls -> no model reload), but tools are still rebuilt and
     # the client is still swapped + the old one closed.
-    monkeypatch.setattr("src.reconfig.build_sources", lambda c, h, s, t: ["new-src"])
+    monkeypatch.setattr("src.reconfig.build_sources", lambda c, h, s, t, m: ["new-src"])
     new_client = _FakeHttpClient("new")
     monkeypatch.setattr("src.reconfig.httpx.AsyncClient", lambda **kw: new_client)
     old_client = _FakeHttpClient("old")

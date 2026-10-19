@@ -69,6 +69,8 @@ def action_for(path: str) -> str:
         return "live"          # capture.enabled/dir are read per-run via the Runtime read-through
     if path.startswith("core.ack"):
         return "live"          # ack.enabled/sound_path are read per-run via the Runtime read-through
+    if path.startswith("core.arbitration"):
+        return "live"          # window_ms/cooldown_ms are read by the wake arbiter on every wake
     if path.startswith("core.audio"):            # host/port -> rebind; all -> advert restart
         return "rebuild_audio"
     if path.startswith("core.prompt"):           # system_prompt_path read live
@@ -88,11 +90,14 @@ def action_for(path: str) -> str:
         return "rebuild_runs"
     if path.startswith("core.devices"):
         return "rebuild_devices"
+    if path == "core.device_log_days":
+        return "live"          # read at every prune (src/device_logs.py)
     if path == "core.chains":
         return "rebuild_backends"   # builds newly referenced STT/handler backends, drops unreferenced
     # stage providers
     if (path.startswith("vad") or path.startswith("wakeword") or path.startswith("stt")
-            or path.startswith("tts") or path.startswith("stress")):
+            or path.startswith("tts") or path.startswith("stress")
+            or path.startswith("followup")):
         return "rebuild_backends"
     if path.startswith("llm"):
         leaf = path.rsplit(".", 1)[-1]
@@ -110,14 +115,14 @@ ASYNC_ACTIONS = {"rebuild_backends", "rebuild_audio", "rebuild_runs",
 
 
 def backend_categories(paths) -> set[str]:
-    """Subset of the single-backend stages {'vad','wakeword','stress'} whose
+    """Subset of the single-backend stages {'vad','wakeword','stress','followup'} whose
     backend must be rebuilt for these paths."""
     cats = set()
     for p in paths:
         if action_for(p) != "rebuild_backends":
             continue
         top = p.split(".", 1)[0]
-        if top in ("vad", "wakeword", "stress"):
+        if top in ("vad", "wakeword", "stress", "followup"):
             cats.add(top)
     return cats
 
@@ -277,9 +282,10 @@ class Reconfigurator:
         return keys
 
     async def _rebuild_backend_cats(self, cats) -> None:
-        """Rebuild the given backend categories (subset of {'vad','wakeword','stress'}) and swap
-        them into the runtime. Shared by path-driven rebuilds (_rebuild_backends) and the
-        http rebuild (which rebuilds all cloud backends off the new client). Same
+        """Rebuild the given backend categories (subset of {'vad','wakeword','stress',
+        'followup'}) and swap them into the runtime. Shared by path-driven rebuilds
+        (_rebuild_backends) and the http rebuild (which rebuilds all cloud backends off
+        the new client). Same
         contracts as _rebuild_backends: per-category isolation, old backend kept on a
         failed create()."""
         if not cats:
@@ -451,7 +457,7 @@ class Reconfigurator:
         """Rebuild the tool source set from current config and hot-swap it into the hub."""
         try:
             sources = build_sources(self.rt.core, self.deps.http_cloud, self.rt.scheduler,
-                                    self.rt.assistant_tasks)
+                                    self.rt.assistant_tasks, lambda: self.rt.manager)
             await self.rt.hub.set_sources(sources)
             logger.info("tool sources rebuilt (hot)")
         except Exception as e:
@@ -485,7 +491,7 @@ class Reconfigurator:
         # offline (uses_http_cloud defaults False), so a proxy change never needs to
         # rebuild them. A coalesced patch that also touches their config is still
         # picked up via backend_categories(paths) below.
-        cloud_cats = {c for c in ("vad",) if svc.provider(c).uses_http_cloud}
+        cloud_cats = {c for c in ("vad", "followup") if svc.provider(c).uses_http_cloud}
         cats = cloud_cats | backend_categories(paths)
         await self._rebuild_backend_cats(cats)
         cloud_pool = {(c, p) for c, p in self._in_use() if get_provider(c, p).uses_http_cloud}
