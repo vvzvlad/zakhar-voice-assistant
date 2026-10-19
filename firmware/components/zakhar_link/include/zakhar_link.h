@@ -89,8 +89,8 @@ typedef struct {
     // The `config` auto_volume: the device measures the room's noise and reports it with
     // zl_report_ambient() (true) or not (false); called only when the field is present.
     void (*on_auto_volume)(bool on);
-    // A `volume_boost`: percent points the speaker adds to its own volume on the DAC (a volume of 0
-    // stays muted), not stored and not reported as `volume`.
+    // A `volume_boost`: percent points, -100..100, the speaker adds to its own volume on the DAC (a
+    // volume of 0 stays muted), not stored and not reported as `volume`.
     void (*on_volume_boost)(int points);
     // A `log_stream`: the server wants the device log (true) or no longer (false). A lost link
     // does not call it: the device keeps collecting its lines meanwhile, and the next

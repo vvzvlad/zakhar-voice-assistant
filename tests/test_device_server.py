@@ -1179,7 +1179,7 @@ async def test_controls(srv):
     await until(lambda: srv.manager.wake_prob("kitchen")["value"] == 42)
 
 
-async def test_auto_volume_boosts_by_the_median_noise_over_the_threshold(srv):
+async def test_auto_volume_moves_the_volume_by_the_median_noise_against_the_threshold(srv):
     dev = await srv.connect()
     await dev.recv()  # config
     assert await dev.boost() == 0
@@ -1225,6 +1225,14 @@ async def test_auto_volume_boosts_by_the_median_noise_over_the_threshold(srv):
     with pytest.raises(asyncio.TimeoutError):
         await dev.boost(timeout=0.2)
     assert readings() == [-15.0, 100]
+    # Below the threshold the boost is negative, down to -100: quiet lowers the volume.
+    for _ in range(3):
+        await dev.send(type="ambient", value=-60.0)  # the third: the median -60, (-60 - -40) x 10
+    assert await dev.boost() == -100
+    srv.manager.set_device_control("kitchen", "auto_volume_gain", 0.5)
+    await srv.manager.reconfigure()
+    assert await dev.boost() == -10
+    assert readings() == [-60.0, -10]
     # Off again: the boost goes back to 0 and the stale noise is dropped.
     devices = [d.model_dump(mode="json") for d in srv.svc.core.devices]
     srv.svc.apply({"core": {"devices": [{**devices[0], "auto_volume": False}]}})

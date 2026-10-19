@@ -51,7 +51,7 @@ typedef struct {
     int echo_cancel, echo_mode, echo_filter;
     int play_prime_ms;    // CONFIG: 0..2000, the playback reserve; -1 when absent or out of range
     int auto_volume;      // CONFIG: 1 on, 0 off, -1 when absent or not a boolean (the device keeps its own)
-    int value;            // SET_VOLUME, percent; VOLUME_BOOST, percent points
+    int value;            // SET_VOLUME, percent; VOLUME_BOOST, percent points -100..100
     bool on;              // WAKE_PEAK_STREAM, DETECT, LOG_STREAM
     uint32_t capture_ms;  // CAPTURE
     uint32_t from;        // CAPTURE_RESUME: the offset of the first frame the server lacks

@@ -18,12 +18,13 @@ static nvs_handle_t s_nvs;
 static _Atomic int s_volume = INITIAL;
 static int s_boost;  // the controls task only: the server's volume_boost, 0 from boot
 
-// The DAC plays the volume plus the boost, at most 100 %; a volume of 0 stays muted.
+// The DAC plays the volume plus the boost, within 1..100 %; a volume of 0 stays muted. The floor
+// is 1, not 0: 0 mutes the DAC, so a quiet room would silence the reply instead of lowering it.
 static void dac_apply(void)
 {
     const int base = atomic_load(&s_volume);
-    const int v = base == 0 ? 0 : base + s_boost;
-    aic3204_set_volume(v > 100 ? 100 : v);
+    const int v = base + s_boost;
+    aic3204_set_volume(base == 0 ? 0 : v < 1 ? 1 : v > 100 ? 100 : v);
 }
 
 void volume_init(void)
@@ -55,5 +56,5 @@ void volume_set_boost(int points)
 {
     s_boost = points;
     dac_apply();
-    ESP_LOGI(TAG, "boost +%d %%", points);
+    ESP_LOGI(TAG, "boost %+d %%", points);
 }

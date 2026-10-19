@@ -104,7 +104,9 @@ static void test_decode(void)
     zl_msg_free(&m);
     assert(decode("{\"type\": \"volume_boost\", \"value\": 0}", &m) && m.value == 0);
     zl_msg_free(&m);
-    assert(!decode("{\"type\": \"volume_boost\", \"value\": -1}", &m));
+    assert(decode("{\"type\": \"volume_boost\", \"value\": -100}", &m) && m.value == -100);
+    zl_msg_free(&m);
+    assert(!decode("{\"type\": \"volume_boost\", \"value\": -101}", &m));
     assert(!decode("{\"type\": \"volume_boost\", \"value\": 101}", &m));
     assert(!decode("{\"type\": \"volume_boost\"}", &m));
     assert(decode("{\"type\": \"wake_peak_stream\", \"on\": true}", &m) && m.on);
