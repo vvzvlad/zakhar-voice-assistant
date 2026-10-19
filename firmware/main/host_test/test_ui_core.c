@@ -1,6 +1,7 @@
 // Host test of the Voice PE firmware's pure indication, dial and button decisions (ui_core.c): the
-// stock control_leds priority, the error hold, the stock dial decoder with one volume step per
-// tick, and the center button's hold that forgets the Wi-Fi network.
+// stock control_leds priority under a firmware update, the error hold, the update's fill of the
+// ring, the stock dial decoder with one volume step per tick, and the center button's hold that
+// forgets the Wi-Fi network.
 // `make fw-voicepe-host-test` builds it.
 #include <assert.h>
 #include <stdint.h>
@@ -47,6 +48,21 @@ static void test_priority(void)
     assert(ind_choose(&s, 0) == IND_OFF);
     s.volume = 0;
     assert(ind_choose(&s, 0) == IND_MUTED);      // volume 0 shows as silent
+    s.provisioning = s.capture = true;
+    s.network = false;
+    s.ota = true;
+    assert(ind_choose(&s, 0) == IND_OTA);        // a firmware update beats everything
+}
+
+static void test_fill(void)
+{
+    assert(ind_fill(0, 12) == 0);
+    assert(ind_fill(1, 12) == 1);    // the first percent shows
+    assert(ind_fill(8, 12) == 1);
+    assert(ind_fill(9, 12) == 2);
+    assert(ind_fill(50, 12) == 6);
+    assert(ind_fill(99, 12) == 12);
+    assert(ind_fill(100, 12) == 12);
 }
 
 static void test_error_hold(void)
@@ -147,6 +163,7 @@ int main(void)
 {
     test_priority();
     test_error_hold();
+    test_fill();
     test_dial();
     test_hold();
     printf("ui_core: all tests passed\n");

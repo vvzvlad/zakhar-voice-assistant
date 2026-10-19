@@ -1,6 +1,6 @@
 // The LED ring: the device's indication (ui_core's ind_choose), drawn from the Wi-Fi provisioning,
-// the network, the zakhar_link connection, the voice session, a capture, the playback and the mute
-// state. Every setter is safe from any task and does not block.
+// the network, the zakhar_link connection, the voice session, a capture, the playback, the mute
+// state and a firmware update. Every setter is safe from any task and does not block.
 #pragma once
 
 #include <stdbool.h>
@@ -16,3 +16,4 @@ void leds_set_capture(bool on);
 void leds_set_playing(bool on);  // playback audio is going out
 void leds_set_muted(bool on);    // the mute switch
 void leds_set_volume(int percent);
+void leds_set_ota(int percent);  // a firmware update's share received, 0..100; -1 when it fails
