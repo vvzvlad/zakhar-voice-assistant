@@ -45,3 +45,7 @@ CONFIG_ESP_PROTOCOMM_SUPPORT_SECURITY_VERSION_1=y
 # buffer holds under three frames: after one lost segment too little follows it for a fast
 # retransmit, and the stream waits out the retransmission timeout.
 CONFIG_LWIP_TCP_SND_BUF_DEFAULT=32768
+# Wi-Fi and lwIP buffers in PSRAM first. Next to the stop word's echo canceller the internal heap
+# fell to 127-307 B free and, while the speaker played, its largest block to 1.5 KB: frames larger
+# than that were dropped and the link to the server broke every ~15 s.
+CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
