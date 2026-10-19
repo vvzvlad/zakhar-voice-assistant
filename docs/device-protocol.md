@@ -168,7 +168,7 @@ The owner's words:
 
 1. Device → `hello`:
    ```json
-   {"type": "hello", "id": "fc012cd1e5ec", "fw": "voicepe 0.1.0 (a1b2c3d)",
+   {"type": "hello", "id": "fc012cd1e5ec", "fw": "voicepe 0.1.0 (a1b2c3d)", "uptime": 3725,
     "caps": {"speaker": true, "screen": false, "follow_up": true},
     "mic": {"channels": 2},
     "play": {"rate": 48000, "buffer_ms": 4000},
@@ -178,6 +178,8 @@ The owner's words:
      config (`core.devices[].name`) and keys its dialog context; the admin panel shows
      `core.devices[].label` instead when one is set. An unknown `id` is added to the config as
      an enabled device.
+   - `uptime` is the whole seconds since the device booted, taken when it sends the `hello`;
+     the server counts the device's uptime on from it.
    - `play` and `volume` are present only when `caps.speaker` is true.
    - `caps.follow_up` is true when the device reopens its microphone on a follow-up `listening`
      (see [Follow-up](#follow-up)); the server listens for a follow-up only on such a device.

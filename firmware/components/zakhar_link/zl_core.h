@@ -71,8 +71,8 @@ void zl_msg_free(zl_msg_t *m);
 // ---------------------------------------------------------------- messages, device -> server
 // Each returns a NUL-terminated JSON text (NULL when out of memory); release with zl_free().
 
-// capture: the held capture's id, 0 when none is held.
-char *zl_encode_hello(const zl_config_t *cfg, int volume, uint32_t capture);
+// capture: the held capture's id, 0 when none is held. uptime_s: seconds since the device booted.
+char *zl_encode_hello(const zl_config_t *cfg, int volume, uint32_t capture, uint32_t uptime_s);
 char *zl_encode_wake(uint32_t session, const char *word);
 // A stream that played out carries `dry` and `gap_ms`; a dropped one only `dropped`.
 char *zl_encode_played(uint32_t id, bool dropped, uint32_t dry, uint32_t gap_ms);

@@ -4,5 +4,5 @@
 idf_component_register(
     SRCS "zakhar_link.c" "zl_core.c"
     INCLUDE_DIRS "include"
-    PRIV_REQUIRES json
+    PRIV_REQUIRES json esp_timer
 )
