@@ -629,7 +629,7 @@ function DeviceModal({ onSave, onClose, title, device, label: savedLabel = "", w
       <Field row label="Device log" hint={`On: the speaker streams its whole log to the server, which keeps the last ${logDays} days in data/device_logs/${device}/. Off: the speaker sends nothing. Applies on save, no reflash.`}>
         <Toggle on={log} onChange={setLog} />
       </Field>
-      <Field row label="Auto volume" hint="On: every 15 s of quiet the speaker measures the room's noise on its raw microphone; noise above the threshold raises the reply over the dial's volume by (noise − threshold) × gain. Applies on save, no reflash.">
+      <Field row label="Auto volume" hint="On: every 15 s of quiet the speaker measures the room's noise on its raw microphone; the reply's volume is the dial's plus (noise − threshold) × gain: louder above the threshold, quieter below it. Applies on save, no reflash.">
         <Toggle on={autoVolume} onChange={setAutoVolume} />
       </Field>
       <CaptureControl device={device} online={online} />
@@ -732,8 +732,8 @@ const CONTROL_HINTS = {
   echo_cancel_mode: "0 SR low cost, 1 SR high performance, 2 FD low cost, 3 FD high performance; a change re-creates the canceller",
   echo_cancel_filter: "Filter length 1..8; a change re-creates the canceller",
   play_prime_ms: "Audio the speaker holds before it starts a phrase, and again after the stream runs dry; more = fewer stutters, the answer starts later",
-  auto_volume_threshold: "Room noise above this raises the volume, with Auto volume on",
-  auto_volume_gain: "Volume % added per dB of noise above the threshold; 2.5 %/dB raises the reply 1 dB per dB",
+  auto_volume_threshold: "The room noise at which the reply plays at the dial's volume, with Auto volume on: louder above it, quieter below",
+  auto_volume_gain: "Volume % per dB of noise away from the threshold; 2.5 %/dB moves the reply 1 dB per dB",
 };
 
 // A value with its unit: "%" sticks to the number, any other unit follows a space.

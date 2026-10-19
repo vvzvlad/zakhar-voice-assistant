@@ -120,13 +120,13 @@ def _config_fields(cfg) -> dict[str, int | bool]:
 
 
 def _boost(cfg, ambient) -> int:
-    """The volume boost, percent points 0..100: (the median of the `ambient` values - the
-    threshold) x the gain, rounded; 0 below the threshold, before any value and with auto volume
-    off."""
+    """The volume boost, percent points -100..100: (the median of the `ambient` values - the
+    threshold) x the gain, rounded: noise above the threshold raises the volume, below it lowers
+    it; 0 before any value and with auto volume off."""
     if not cfg.auto_volume or not ambient:
         return 0
-    over = max(0.0, statistics.median(ambient) - cfg.auto_volume_threshold)
-    return min(100, round(over * cfg.auto_volume_gain))
+    boost = round((statistics.median(ambient) - cfg.auto_volume_threshold) * cfg.auto_volume_gain)
+    return max(-100, min(100, boost))
 
 
 def _model_paths(cfg, speaker: bool) -> dict[str, tuple[str, str]]:

@@ -5,6 +5,7 @@
 // the controls task starts only once the board and zakhar_link are up, the button must work before.
 #include "controls.h"
 
+#include <limits.h>
 #include <stdatomic.h>
 
 #include "board.h"
@@ -24,7 +25,8 @@ static const char *TAG = "controls";
 static dial_t s_dial;               // the dial interrupt only
 static _Atomic int s_counts;        // dial counts since the last tick
 static _Atomic int s_request = -1;  // a set_volume not applied yet
-static _Atomic int s_boost = -1;    // a volume_boost not applied yet
+#define NO_BOOST INT_MIN            // s_boost holds nothing: a boost is -100..100
+static _Atomic int s_boost = NO_BOOST;  // a volume_boost not applied yet
 static void (*s_on_hold)(void);     // set before the button task starts
 
 static void dial_isr(void *arg)
@@ -43,8 +45,8 @@ static void controls_task(void *arg)
         leds_set_muted(gpio_get_level(PIN_MUTE) == 1);
         const int request = atomic_exchange(&s_request, -1);
         if (request >= 0) volume_set(request);
-        const int boost = atomic_exchange(&s_boost, -1);
-        if (boost >= 0) volume_set_boost(boost);
+        const int boost = atomic_exchange(&s_boost, NO_BOOST);
+        if (boost != NO_BOOST) volume_set_boost(boost);
         const int counts = atomic_exchange(&s_counts, 0);
         if (counts != 0) volume_set(dial_volume(volume_get(), counts));
     }

@@ -126,8 +126,9 @@ static bool decode_fields(const cJSON *o, const char *type, zl_msg_t *m)
     }
     if (strcmp(type, "volume_boost") == 0) {
         m->type = ZL_MSG_VOLUME_BOOST;
-        if (!get_percent(field(o, "value"), &a)) return false;
-        m->value = (int)a;
+        const cJSON *v = field(o, "value");
+        if (!cJSON_IsNumber(v) || !(v->valuedouble >= -100 && v->valuedouble <= 100)) return false;
+        m->value = (int)v->valuedouble;
         return true;
     }
     if (strcmp(type, "wake_peak_stream") == 0) {

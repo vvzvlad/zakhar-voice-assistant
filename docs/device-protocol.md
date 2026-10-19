@@ -130,10 +130,12 @@ The owner's words:
   `auto_volume` on, every 15 s of quiet (nothing playing, no session open) the speaker switches its
   channel 0 to the raw microphone for a second, measures the level and sends it (`ambient`); a wake
   word in that second switches the channel back at once. The server takes the median of the last
-  minute and, above a threshold, adds (noise − threshold) × gain to the dial's volume
-  (`volume_boost`), which the speaker adds without storing it. The panel's device dialog has the
-  switch, the threshold, the gain and the live noise and boost. Channel 0, not channel 1: channel 1
-  is the wake word's input and does not change. See [Auto volume](#auto-volume).
+  minute and adds (noise − threshold) × gain to the dial's volume (`volume_boost`), which the
+  speaker adds without storing it. The panel's device dialog has the switch, the threshold, the
+  gain and the live noise and boost. Channel 0, not channel 1: channel 1 is the wake word's input
+  and does not change. Then, against the dial being the floor: «зачем ты сделал так, что оно не
+  опускается само?» — below the threshold the boost is negative and the reply is quieter than the
+  dial. See [Auto volume](#auto-volume).
 
 ## Transport
 
@@ -409,7 +411,7 @@ the answer, so the next phrase needs no wake word:
 | `set_volume {value}` | server → device | speaker volume, percent; the device stores it itself |
 | `volume {value}` | device → server | the volume changed on the device (the dial) or after `set_volume` |
 | `ambient {value}` | device → server | the room's noise after an auto volume measurement, dBFS of the 32-bit microphone slot, one decimal: see [Auto volume](#auto-volume) |
-| `volume_boost {value}` | server → device | percent points, 0..100, the speaker adds to its volume on the DAC: see [Auto volume](#auto-volume) |
+| `volume_boost {value}` | server → device | percent points, −100..100, the speaker adds to its volume on the DAC: see [Auto volume](#auto-volume) |
 | `wake_peak_stream {on}` | server → device | start or stop the wake probability stream |
 | `wake_peak {value}` | device → server | once a second while the stream is on: the highest wake-word probability of that second, percent |
 | `detect {on}` | server → device | wake-word detection on or off; off: the models keep running (`wake_peak` too) but a detection starts no session. Every new connection starts with detection on |
@@ -429,11 +431,13 @@ the answer, so the next phrase needs no wake word:
   starting ends a measurement at once and nothing is sent: channel 0 goes back to AGC, or stays
   raw for a playback's echo cancellation. Channel 1, the wake word's input, does not change.
 - The server keeps the connection's last 4 `ambient` values (a minute) and sends
-  `volume_boost {value}`, `round(max(0, median − threshold) × gain)` up to 100, whenever it
+  `volume_boost {value}`, `round((median − threshold) × gain)` within −100..100 (negative below
+  the threshold), whenever it
   changes: after an `ambient`, and when `core.devices[].auto_volume`, `auto_volume_threshold`
   (dBFS, default −60) or `auto_volume_gain` (percent per dB, default 2.0) changes; 0 while
   `auto_volume` is off. The threshold and the gain stay on the server.
-- The device adds the boost to its own volume on the DAC, up to 100 %; a volume of 0 stays muted.
+- The device adds the boost to its own volume on the DAC, within 1..100 % (0 would mute the
+  reply); a volume of 0 stays muted.
   It does not store the boost, does not report it as `volume`, and shows its volume without it.
   It is 0 from boot until the server sends one.
 
