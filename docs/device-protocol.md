@@ -63,6 +63,11 @@ The owner's words:
   stock «Stop» model (kahrendt/microWakeWord, release `stop`) from 1 s after its playback starts
   until the playback ends; a detection only stops: the playback and the device's run end, no new
   session starts.
+- «надо бы сделать» (cancel the speaker's own playback in the microphone, to hear commands over
+  its reply), option chosen: «Не делать» — no echo cancellation on the device. Measured on the
+  Voice PE with ESP-SR's AEC against the exact playback: the echo drops by 28 dB on a raw
+  microphone (XMOS stage NONE) and by about 1 dB on the XMOS-processed channels the wake word and
+  the server use; hearing over the reply would mean taking a raw microphone from the XMOS.
 
 ## Transport
 
