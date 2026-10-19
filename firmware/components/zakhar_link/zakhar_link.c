@@ -560,8 +560,9 @@ static void wake(void)
     // Counted back from the detection, not from now: this task may reach the event late.
     const uint32_t pos = atomic_load(&s_wake_pos);
     const uint32_t preroll = (uint32_t)s_cfg.preroll_ms * (ZL_MIC_RATE / 1000);
-    // The playback is left alone: the detection may be the speaker's own voice, and the server
-    // flushes it with play_stop only once its own wake-word check confirms the wake.
+    // The playback is left alone: the detection may be the speaker's own voice. The server flushes
+    // it with play_stop once it takes the wake: at once when its wake-word check is off or nothing
+    // is going, otherwise once that check confirms the wake.
     lock();
     const zl_wake_t w = zl_sess_wake(&s_sess);
     const uint32_t session = s_sess.session;

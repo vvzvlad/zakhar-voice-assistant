@@ -277,21 +277,24 @@ device                                   server
   flushes the device's playback, a stream the server started before it saw the `wake` included.
   Otherwise the server holds the `wake`, and the older run goes on until the check rules on the
   new session's microphone audio. A confirmed wake is taken as above, and the audio held
-  meanwhile goes to its run. A rejected one gets the older run's last `state` stamped with the
-  new `session` (`state idle` when no run is going): the microphone stops, the playback goes on
-  to its end, and the older run carries on under the new number. The run log shows the rejected
-  wake as `rejected`, reason `wakeword_reject` (`wakeword_error` when the check timed out or
-  failed and its policy rejects).
+  meanwhile goes to its run. A rejected one gets the older run's last `transcript`, `reply` and
+  `state`, those it has, stamped with the new `session` (`state idle` when no run is going), and
+  the device follows that `state` as it would have: the microphone stops, unless the `state` is a
+  follow-up `listening` (the older run opened its follow-up window while the wake was held), which
+  keeps it streaming into that window. The playback goes on to its end, and the older run carries
+  on under the new number. The run log shows the rejected wake as `rejected`, reason
+  `wakeword_reject` (`wakeword_error` when the check timed out or failed and its policy rejects).
 - One phrase heard by several devices: the server holds a `wake` for `core.arbitration.window_ms`
   (default 500 ms) to collect the wakes of the other online devices, or less once every online
   device has woken; a lone online device is not held. With several wakes it rules only once
   each of them has its pre-roll in, or `window_ms` after that device's own `wake`, and the
-  server's second wake-word check has ruled on it; a wake that check rejects takes no part, and
-  a `wake` the server holds over a running answer (above) joins only once the check confirms it. It
-  keeps one session — a device with a speaker over one without, between equals the higher
-  signal-to-noise ratio of the pre-roll, then the earlier wake. The others get no `listening`:
-  their microphone streams on silently until the server's VAD finds the end of the phrase, and
-  then they get `state idle`. For `core.arbitration.cooldown_ms` (default 2000 ms) after the
+  server's second wake-word check has ruled on it; a wake that check rejects takes no part. A
+  `wake` the server holds over a running answer (above) joins only once the check confirms it,
+  and until the check rules on it no open group is ruled: the held wake may be the same phrase.
+  The server keeps one session — a device with a speaker over one without, between equals the
+  higher signal-to-noise ratio of the pre-roll, then the earlier wake. The others get no
+  `listening`: their microphone streams on silently until the server's VAD finds the end of the
+  phrase, and then they get `state idle`. For `core.arbitration.cooldown_ms` (default 2000 ms) after the
   first of those wakes, a `wake` from any other device is ended the same way. The ended runs
   show in the run log as `rejected`, reason `duplicate`, with the phrase recognized by the STT
   of the first enabled chain; the device gets no `transcript` of it. When the kept session

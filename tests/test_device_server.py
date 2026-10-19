@@ -459,7 +459,8 @@ async def test_wake_drops_an_announcement_already_on_the_wire(srv):
 
 
 class HeldVerifier(WakewordVerifier):
-    """A wake-word verifier with a 100 ms window that rules once the test resolves `verdict`."""
+    """A wake-word verifier with a 100 ms window: it rules on audio whose first sample is
+    `sample` once the test resolves verdict(sample)."""
 
     timeout_ms = 10000
     fail_open = True
@@ -467,11 +468,14 @@ class HeldVerifier(WakewordVerifier):
 
     def __init__(self):
         self.calls = []
-        self.verdict = asyncio.get_running_loop().create_future()
+        self._verdicts = {}
+
+    def verdict(self, sample: int) -> asyncio.Future:
+        return self._verdicts.setdefault(sample, asyncio.get_running_loop().create_future())
 
     async def verify(self, pcm):
         self.calls.append(pcm)
-        return await self.verdict
+        return await self.verdict(int(np.frombuffer(pcm[:2], dtype="<i2")[0]))
 
 
 async def answer_playing(srv, dev, seconds: int) -> int:
@@ -515,16 +519,17 @@ async def test_a_wake_over_the_answer_drops_it_only_once_confirmed(srv):
         await asyncio.wait_for(dev.recv(), 0.5)
     assert len(dev.plays[old]) > sent
 
-    verifier.verdict.set_result(WakewordVerdict(accepted=True, score=0.9))
+    verifier.verdict(11).set_result(WakewordVerdict(accepted=True, score=0.9))
     assert await dev.recv() == {"type": "play_stop"}
     await dev.send(type="played", id=old, dropped=True)
-    assert await dev.recv() == state(2, "listening")
     await until(lambda: starts)
     assert starts[0]["verified"][0] == 0.9
     # A frame that comes while on_start runs is held too and reaches the run after the others.
     await dev.mic(stereo(13, -13, 60))
     await until(lambda: len(srv.device()._pending_wake.frames) == 3)
     release.set()
+    # The arbitration rules once on_start returned and the held wake counts as registered.
+    assert await dev.recv() == state(2, "listening")
     got = await dev.finish()
     stream = got[5]["id"]
     assert got == session_msgs(
@@ -542,11 +547,15 @@ async def test_a_rejected_wake_leaves_the_answer_playing_under_the_new_session(s
     dev = await srv.connect(buffer_ms=700)
     old = await answer_playing(srv, dev, 1)
     verifier = srv.rt.wakeword_backend = HeldVerifier()
-    verifier.verdict.set_result(WakewordVerdict(accepted=False, score=0.0))
+    verifier.verdict(11).set_result(WakewordVerdict(accepted=False, score=0.0))
     await wake_over(dev, 2)
-    # No play_stop: the answer's last state, stamped with session 2, stops the mic; the answer
-    # plays to its end and its run then ends session 2.
-    assert await dev.recv() == state(2, "speaking")
+    # No play_stop: the answer's text and last state, stamped with session 2, reach the device
+    # (its mic stops); the answer plays to its end and its run then ends session 2.
+    assert [await dev.recv() for _ in range(3)] == [
+        {"type": "transcript", "session": 2, "text": "включи свет"},
+        {"type": "reply", "session": 2, "text": "готово"},
+        state(2, "speaking"),
+    ]
     assert await dev.recv() == {"type": "play_end", "id": old, "session": 1}
     assert len(dev.plays[old]) == 32000
     await dev.send(type="played", id=old)
@@ -558,7 +567,7 @@ async def test_a_rejected_wake_leaves_the_answer_playing_under_the_new_session(s
 
 async def test_a_rejected_wake_over_an_announcement_ends_its_session(srv):
     verifier = srv.rt.wakeword_backend = HeldVerifier()
-    verifier.verdict.set_result(WakewordVerdict(accepted=False, score=0.1))
+    verifier.verdict(11).set_result(WakewordVerdict(accepted=False, score=0.1))
     srv.tts.clips.append(b"\x02\x00" * 16000)  # 1 s
     dev = await srv.connect(buffer_ms=700)
     await dev.recv()  # config
@@ -581,8 +590,90 @@ async def test_a_wake_with_nothing_to_protect_is_taken_at_once(srv):
     assert await dev.recv() == {"type": "play_stop"}
     await until(lambda: verifier.calls)
     assert srv.device()._pending_wake is None  # the run's own gate checks it
-    verifier.verdict.set_result(WakewordVerdict(accepted=True, score=0.9))
+    verifier.verdict(11).set_result(WakewordVerdict(accepted=True, score=0.9))
     assert await dev.recv() == state(1, "listening")
+
+
+@pytest.mark.parametrize("outcome", ["confirmed", "rejected", "dropped"])
+async def test_a_held_wake_keeps_the_arbitration_open_until_its_check_rules(srv, outcome):
+    # The kitchen speaker answers and holds a wake when the panel (no speaker) wakes too and
+    # its check rules first: no device keeps the phrase until the speaker's check rules.
+    srv.svc.apply({"core": {"arbitration": {"window_ms": 100, "cooldown_ms": 300}}})
+    speaker = await srv.connect(buffer_ms=700)
+    panel = await srv.connect("panel", speaker=False)
+    await panel.recv()  # config
+    old = await answer_playing(srv, speaker, 10)
+    await asyncio.sleep(0.3)  # past the cooldown of session 1's phrase
+    verifier = srv.rt.wakeword_backend = HeldVerifier()
+    verifier.verdict(500).set_result(WakewordVerdict(accepted=True, score=0.9))
+    await wake_over(speaker, 2)
+    await until(lambda: verifier.calls)
+    await panel.send(type="wake", session=3, word="Захар")
+    assert await panel.recv() == {"type": "play_stop"}
+    await panel.mic(stereo(500, -500, 60))
+    await panel.mic(stereo(500, -500, 60))
+    await until(lambda: len(verifier.calls) == 2)
+    with pytest.raises(asyncio.TimeoutError):  # the panel's window runs out, the group stays open
+        await panel.recv(timeout=0.3)
+
+    if outcome == "dropped":
+        # The speaker's link goes before its check rules: the held wake is dropped and
+        # the re-check rules the panel's group without it.
+        await lose_link(srv, speaker)
+        assert await panel.recv() == state(3, "listening")
+        return
+    confirmed = outcome == "confirmed"
+    verifier.verdict(11).set_result(WakewordVerdict(accepted=confirmed, score=0.9 if confirmed else 0.0))
+    if confirmed:
+        # The speaker wins; the panel streams its phrase on silently and is let go.
+        assert await speaker.recv() == {"type": "play_stop"}
+        await speaker.send(type="played", id=old, dropped=True)
+        assert await speaker.recv() == state(2, "listening")
+        await panel.phrase()
+        assert await panel.recv() == state(3, "idle")
+    else:
+        # The re-check rules the panel's group without it: the panel keeps the phrase.
+        assert await panel.recv() == state(3, "listening")
+        assert await speaker.recv() == {"type": "transcript", "session": 2, "text": "включи свет"}
+
+
+async def test_a_confirmed_wake_holds_the_arbitration_until_its_run_is_registered(srv):
+    # The speaker's held wake is confirmed and the panel's check rules while the speaker's
+    # run is still starting: the panel's group waits for the speaker, which then wins.
+    srv.svc.apply({"core": {"arbitration": {"window_ms": 100, "cooldown_ms": 300}}})
+    speaker = await srv.connect(buffer_ms=700)
+    panel = await srv.connect("panel", speaker=False)
+    await panel.recv()  # config
+    old = await answer_playing(srv, speaker, 10)
+    await asyncio.sleep(0.3)  # past the cooldown of session 1's phrase
+    verifier = srv.rt.wakeword_backend = HeldVerifier()
+    pipeline = srv.device().pipeline
+    reset_run, release = pipeline._reset_run, asyncio.Event()
+
+    async def slow_reset_run(*args, **kw):
+        # An await inside on_start after it cancelled the older run, before the new run
+        # registers with the arbiter (closing a stale streaming STT session).
+        await release.wait()
+        await reset_run(*args, **kw)
+
+    pipeline._reset_run = slow_reset_run
+    await wake_over(speaker, 2)
+    await until(lambda: verifier.calls)
+    await panel.send(type="wake", session=3, word="Захар")
+    assert await panel.recv() == {"type": "play_stop"}
+    await panel.mic(stereo(500, -500, 60))
+    await panel.mic(stereo(500, -500, 60))
+    await until(lambda: len(verifier.calls) == 2)
+    verifier.verdict(11).set_result(WakewordVerdict(accepted=True, score=0.9))
+    assert await speaker.recv() == {"type": "play_stop"}
+    verifier.verdict(500).set_result(WakewordVerdict(accepted=True, score=0.9))
+    with pytest.raises(asyncio.TimeoutError):  # the speaker's run is not registered yet
+        await panel.recv(timeout=0.3)
+    release.set()
+    await speaker.send(type="played", id=old, dropped=True)
+    assert await speaker.recv() == state(2, "listening")
+    await panel.phrase()
+    assert await panel.recv() == state(3, "idle")
 
 
 async def test_stop_word_in_a_session_ends_it(srv):

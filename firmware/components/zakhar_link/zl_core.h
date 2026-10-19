@@ -133,7 +133,8 @@ void zl_sess_detect(zl_sess_t *s, bool on);
 
 // The session filter: a message without `session` passes, one with it only for the current one.
 // play_start and play_end pass whatever their `session`: the playback of the session a wake
-// replaced keeps playing until the server's play_stop, which it sends once it confirms the wake.
+// replaced keeps playing until the server's play_stop, which it sends once it takes the wake: at
+// once when its wake-word check is off or nothing is going, otherwise once that check confirms it.
 bool zl_sess_accepts(const zl_sess_t *s, const zl_msg_t *m);
 
 // A `state` that passed the filter: anything but listening stops the mic, idle and error close. A

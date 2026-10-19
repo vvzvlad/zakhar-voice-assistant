@@ -25,12 +25,20 @@ So the winner is always a wake the verifier accepted, and a group whose candidat
 all dropped out leaves no cooldown. The group is ruled once every candidate is ready
 and either every online device has woken or the group's window has run out.
 
+A device answering when its wake word fires holds that wake until its verifier rules
+(the device server's pending wake) and registers only once the verifier confirms it.
+While any online device holds a wake, the open group is not ruled: the held wake may
+be the same phrase, and ruling without it would leave it, once confirmed, to the
+cooldown after its answer was already stopped.
+
 Everything here is synchronous on the event loop. The group is re-checked, and a
 verdict delivered by calling `pipeline.arbitration_verdict(token, won)`, from
 inside `register()` (a pipeline's on_start), `preroll_in()` (a pipeline's on_audio,
 or the candidate's own window timer), `run_changed()` (a pipeline whose verifier
-ruled, or whose run stopped waiting) or the group's window timer — so a verdict for
-one pipeline may arrive inside a call made by another.
+ruled, or whose run stopped waiting), `recheck()` (the device server, once a held
+wake is rejected, dropped with its connection, or confirmed and its run registered)
+or the group's window timer — so a verdict for one pipeline
+may arrive inside a call made by another.
 """
 
 import asyncio
@@ -76,10 +84,15 @@ class WakeArbiter:
     """Decides which of the devices that woke on one phrase keeps its session."""
 
     def __init__(self, runtime, online_count: Callable[[], int],
+                 held_wakes: Callable[[], bool] = lambda: False,
                  send_reply: Callable | None = None):
         # Window and cooldown are read live off runtime.core.arbitration on every wake.
         self.rt = runtime
         self._online_count = online_count
+        # Whether an online device holds a wake over its running answer until its
+        # wake-word check rules (the device server's pending wake); the open group is
+        # not ruled meanwhile.
+        self._held_wakes = held_wakes
         # send_reply(pipeline, text) shows text on that pipeline's device as an
         # announcement; the winner's answer goes to the speakerless devices that lost
         # its phrase (run_event).
@@ -147,6 +160,13 @@ class WakeArbiter:
         if candidate is not None and candidate.token == token:
             self._maybe_close()
 
+    def recheck(self) -> None:
+        """A held wake was rejected, dropped with its connection, or confirmed and its run
+        registered: re-check the open group it kept from being ruled. Without an open group there is nothing to rule
+        (and ruling an empty one would end the latest group's cooldown)."""
+        if self._open:
+            self._maybe_close()
+
     def run_event(self, pipeline, event, data) -> None:
         """A stage event of `pipeline`. The latest winner's first answer (TTS_START) is
         sent to the speakerless devices that lost its phrase, once; that answer, or its
@@ -168,15 +188,16 @@ class WakeArbiter:
 
     def _maybe_close(self) -> None:
         """Rule once every candidate is ready and either every online device has
-        woken or the window has run out. A lone candidate needs no SNR, so it does
-        not wait for its pre-roll; every candidate waits for its verifier."""
+        woken or the window has run out, and no device holds a wake. A lone candidate
+        needs no SNR, so it does not wait for its pre-roll; every candidate waits for
+        its verifier."""
         n = len(self._candidates)
         ready = all(
             not p.awaits_arbitration(c.token)
             or ((c.settled or n == 1) and not p.verifier_pending)
             for p, c in self._candidates.items()
         ) and (n >= self._online_count() or self._window_fired)
-        if ready:
+        if ready and not self._held_wakes():
             self._close()
 
     def _close(self) -> None:
