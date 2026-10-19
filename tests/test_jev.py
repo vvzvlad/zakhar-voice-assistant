@@ -105,7 +105,7 @@ async def test_request_carries_the_alias_options():
     assert body["model"] == "typesafe/jev-1.14"
     assert body["state"] == {"utterance": "Захар, зажги люстру"}
     questions = body["questions"]
-    assert set(questions["kind"]["criteria"]) == {"device_command", "other", "noise"}
+    assert set(questions["kind"]["criteria"]) == {"device_command", "other"}
     assert questions["target"]["criteria"] == {
         "set_light.entity=bright_room_light": "свет в зале, люстра",
         "set_scene.scene=night": "ночь, спать",
