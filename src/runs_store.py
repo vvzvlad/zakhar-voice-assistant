@@ -80,6 +80,10 @@ _LIST_COLS = [
 
 _DAY_SECONDS = 86400
 
+# Reasons of the runs the wake-word verifier rejected: the false triggers rejected_24h
+# counts (a "duplicate" reject is another device's copy of a real phrase).
+_VERIFIER_REJECTS = ("wakeword_reject", "wakeword_error")
+
 
 class RunsStore:
     """Append-only run log over a single SQLite file."""
@@ -343,17 +347,18 @@ class RunsStore:
                 "per_chain": {},
             }
 
-        # Gated wake-word rejects abort before STT/LLM/TTS. They must NOT distort the
+        # Rejected runs (a wake-word verifier reject, or a duplicate of another
+        # device's wake) abort before STT/LLM/TTS. They must NOT distort the
         # served-request KPIs (request count, latency percentiles, error rate) — those
-        # describe runs the pipeline actually served. They ARE still counted in
-        # rejected_24h for FAPH (false-accept-per-hour) auditing. The verifier (and the
-        # captured-utterance duration t_vad) DID run for rejected runs, so vad/wakeword
-        # averages span ALL rows; the never-run downstream stages span served only.
-        # A follow-up phrase dropped as not a continuation (reason followup_*) is not
-        # served either, but it is no wake-word false accept: not in rejected_24h.
+        # describe runs the pipeline actually served. Only the verifier's rejects are
+        # counted in rejected_24h, for FAPH (false-accept-per-hour) auditing: neither a
+        # duplicate of another device's wake nor a follow-up phrase dropped as not a
+        # continuation (reason followup_*) is a wake-word false accept. The verifier (and
+        # the captured-utterance duration t_vad) DID run for rejected runs, so
+        # vad/wakeword averages span ALL rows; the never-run downstream stages span
+        # served only.
         served = [r for r in rows if r["result"] != "rejected"]
-        rejected = sum(1 for r in rows if r["result"] == "rejected"
-                       and not (r["reason"] or "").startswith("followup_"))
+        rejected = sum(1 for r in rows if r["reason"] in _VERIFIER_REJECTS)
 
         if len(served) == 0:
             # Only rejected runs in the window: no served KPIs, but still report the

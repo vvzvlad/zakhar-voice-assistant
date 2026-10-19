@@ -21,6 +21,7 @@
     "runs": {"enabled": true, "retention_days": 30},
     "reminders": {"enabled": true},
     "ack": {"enabled": true, "sound_path": ""},
+    "arbitration": {"window_ms": 500, "cooldown_ms": 2000},
     "devices": [],
     "chains": [{"name": "main", "enabled": true, "stt": "groq", "handler": "openrouter", "narrow": true, "parallel": false}],
     "tts_timeout": 30,

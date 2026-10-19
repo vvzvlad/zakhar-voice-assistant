@@ -893,3 +893,31 @@ async def test_text_only_device_gets_no_tts(srv):
     assert await dev.recv() == {"type": "reply", "text": "молоко"}
     assert srv.tts.calls == 0
     assert dev.plays == {}
+
+
+async def test_one_phrase_heard_by_the_panel_and_the_speaker_runs_on_the_speaker(srv, tmp_path):
+    # The panel (no speaker) hears the phrase first and the speaker a moment later:
+    # only the speaker's session goes on, the panel's ends as a duplicate.
+    srv.rt.runs_store = RunsStore(str(tmp_path / "runs.db"))
+    speaker = await srv.connect()
+    await speaker.recv()  # config
+    panel = await srv.connect("panel", speaker=False)
+    await panel.recv()  # config
+
+    await panel.send(type="wake", session=3, word="Захар")
+    assert await panel.recv() == {"type": "play_stop"}
+    await panel.mic(stereo(500, -500, 60))  # the start of its pre-roll
+    await until(lambda: srv.device("panel").pipeline.preroll_pcm)
+    await speaker.send(type="wake", session=8, word="Захар")
+    assert await speaker.recv() == {"type": "play_stop"}
+    assert await speaker.recv() == state(8, "listening")
+    assert await panel.recv() == state(3, "idle")
+
+    await speaker.phrase()
+    got = [await speaker.recv() for _ in range(7)]
+    await speaker.send(type="played", id=got[5]["id"])
+    assert await speaker.recv() == state(8, "idle")
+    assert len(srv.stt.pcm) == 1
+    rows = {row["device"]: row for row in srv.rt.runs_store.list()}
+    assert (rows["panel"]["result"], rows["panel"]["reason"]) == ("rejected", "duplicate")
+    assert rows["kitchen"]["result"] == "ok"

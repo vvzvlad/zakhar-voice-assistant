@@ -2,8 +2,9 @@
 // Integration tests (jsdom) for the chain parts of the Request Log: the Chain
 // column, the chain filter forwarded to /api/runs, and the run detail listing
 // the chain and TTS attempts in the order they ran, with why a handler declined.
-// Also the device column, which shows a device's label and filters by it, and the
-// request of an announcement, which is no request rather than silence.
+// Also the device column, which shows a device's label and filters by it, the
+// request of an announcement, which is no request rather than silence, and the
+// detail of a duplicate, which is no verifier reject.
 import React from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
@@ -104,5 +105,18 @@ describe("Request log — chains", () => {
     const recognized = screen.getAllByRole("row").filter((tr) => tr.querySelector("td"))
       .map((tr) => tr.querySelectorAll("td")[3].textContent);
     expect(recognized).toEqual(["—", "(silence)"]);
+  });
+
+  it("shows a duplicate as dropped, without the verifier card or a silence caption", async () => {
+    const dup = { ...ROW, result: "rejected", reason: "duplicate", stt_text: "", llm_text: "", wakeword_score: 1 };
+    getRuns.mockResolvedValue({ runs: [dup], total: 1 });
+    getRun.mockResolvedValue(dup);
+    render(<Log />);
+    fireEvent.click(await screen.findByText("Кухня"));
+    const banner = await screen.findByText("Dropped as a duplicate:");
+    expect(banner.parentElement.textContent).toBe("Dropped as a duplicate: another device kept the phrase");
+    expect(screen.queryByText("Wake-word verify")).toBeNull();
+    expect(screen.queryByText(/Rejected by wake-word verify/)).toBeNull();
+    expect(screen.queryByText("— silence, no speech detected —")).toBeNull();
   });
 });
