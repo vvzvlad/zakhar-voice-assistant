@@ -140,7 +140,8 @@ def build_agent_mcp(rt) -> FastMCP:
         name="list_devices",
         description=(
             "List the configured speakers with their live status "
-            "(name, enabled, online)."
+            "(name, enabled, online, firmware and model versions, uptime_seconds since "
+            "the device booted — null while offline or when its firmware does not report it)."
         ),
     )
     async def list_devices() -> dict:

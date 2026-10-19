@@ -275,6 +275,9 @@ class Connection:
         self.ws = ws
         self.name = hello["id"]
         self.fw = hello.get("fw")
+        # When the device booted, on the server clock: its hello `uptime` counted back from now.
+        # None for a firmware whose hello has no uptime.
+        self.booted_at = time.time() - hello["uptime"] if "uptime" in hello else None
         # The wake model the device reported loaded; an older firmware names its own in hello.
         self.model = hello.get("model")
         self.speaker = bool(hello.get("caps", {}).get("speaker"))
@@ -993,11 +996,14 @@ class DeviceManager:
         for cfg in self.rt.core.devices:
             device = self._devices.get(cfg.name)
             online = bool(device and device.online)
+            booted_at = device.conn.booted_at if online else None
             out.append({
                 "name": cfg.name,
                 "enabled": cfg.enabled,
                 "online": online,
                 "versions": device.versions() if online else [],
+                # Seconds since the device booted; None while offline or when its hello had none.
+                "uptime_seconds": int(time.time() - booted_at) if booted_at is not None else None,
             })
         return out
 

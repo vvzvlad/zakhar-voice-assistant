@@ -226,7 +226,7 @@ class Server:
         self.http = aiohttp.ClientSession()
 
     async def connect(self, id="kitchen", *, speaker=True, rate=16000, buffer_ms=4000,
-                      capture=None, follow_up=False) -> FakeDevice:
+                      capture=None, follow_up=False, uptime=None) -> FakeDevice:
         ws = await self.http.ws_connect(f"http://127.0.0.1:{self.manager.port}/device")
         hello = {"type": "hello", "id": id, "fw": "voicepe 0.1.0 (a1b2c3d)",
                  "caps": {"speaker": speaker, "screen": False, "follow_up": follow_up},
@@ -235,6 +235,8 @@ class Server:
             hello.update(play={"rate": rate, "buffer_ms": buffer_ms}, volume=60)
         if capture is not None:
             hello["capture"] = capture
+        if uptime is not None:
+            hello["uptime"] = uptime
         await ws.send_str(json.dumps(hello))
         return FakeDevice(ws)
 
@@ -304,6 +306,18 @@ async def test_hello_gets_config_and_the_models(srv):
     # A failed load leaves the device without a wake model, so the panel shows none.
     await dev.send(type="model_loaded", kind="wake", name="models/other.tflite", ok=False)
     await until(lambda: srv.manager.statuses()[0]["versions"][1]["value"] is None)
+
+
+async def test_status_counts_the_uptime_on_from_the_hello(srv, monkeypatch):
+    kitchen = await srv.connect(uptime=3725)
+    panel = await srv.connect(id="panel", speaker=False)  # a firmware whose hello has no uptime
+    await kitchen.recv()  # config: the hello is taken in
+    await panel.recv()
+    now = device_server.time.time()
+    monkeypatch.setattr(device_server.time, "time", lambda: now + 600)  # ten minutes on
+    uptimes = {s["name"]: s["uptime_seconds"] for s in srv.manager.statuses()}
+    assert 4325 <= uptimes["kitchen"] <= 4327
+    assert uptimes["panel"] is None
 
 
 async def test_models_follow_the_config_and_the_reload_command(srv, tmp_path):

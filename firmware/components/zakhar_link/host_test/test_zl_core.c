@@ -158,16 +158,16 @@ static void test_encode(void)
 {
     zl_config_t speaker = {.id = "main_room", .fw = "voicepe 0.1.0 (a1b2c3d)", .mic_channels = 2,
                            .play_rate = 48000, .play_buffer_ms = 4000};
-    encoded_is(zl_encode_hello(&speaker, 60, 0),
-               "{\"type\":\"hello\",\"id\":\"main_room\",\"fw\":\"voicepe 0.1.0 (a1b2c3d)\","
+    encoded_is(zl_encode_hello(&speaker, 60, 0, 4294967295u),
+               "{\"type\":\"hello\",\"id\":\"main_room\",\"fw\":\"voicepe 0.1.0 (a1b2c3d)\",\"uptime\":4294967295,"
                "\"caps\":{\"speaker\":true,\"screen\":false,\"follow_up\":true},\"mic\":{\"channels\":2},"
                "\"play\":{\"rate\":48000,\"buffer_ms\":4000},\"volume\":60}");
     zl_config_t panel = {.id = "a0b1c2d3e4f5", .fw = "espanel 0.2.0", .screen = true, .mic_channels = 1};
-    encoded_is(zl_encode_hello(&panel, 50, 0),
-               "{\"type\":\"hello\",\"id\":\"a0b1c2d3e4f5\",\"fw\":\"espanel 0.2.0\","
+    encoded_is(zl_encode_hello(&panel, 50, 0, 0),
+               "{\"type\":\"hello\",\"id\":\"a0b1c2d3e4f5\",\"fw\":\"espanel 0.2.0\",\"uptime\":0,"
                "\"caps\":{\"speaker\":false,\"screen\":true,\"follow_up\":true},\"mic\":{\"channels\":1}}");
-    encoded_is(zl_encode_hello(&panel, 50, 7),  // a capture is held
-               "{\"type\":\"hello\",\"id\":\"a0b1c2d3e4f5\",\"fw\":\"espanel 0.2.0\","
+    encoded_is(zl_encode_hello(&panel, 50, 7, 90),  // a capture is held
+               "{\"type\":\"hello\",\"id\":\"a0b1c2d3e4f5\",\"fw\":\"espanel 0.2.0\",\"uptime\":90,"
                "\"caps\":{\"speaker\":false,\"screen\":true,\"follow_up\":true},\"mic\":{\"channels\":1},\"capture\":7}");
     encoded_is(zl_encode_wake(17, "Захар"), "{\"type\":\"wake\",\"session\":17,\"word\":\"Захар\"}");
     encoded_is(zl_encode_wake(4294967295u, "x"), "{\"type\":\"wake\",\"session\":4294967295,\"word\":\"x\"}");

@@ -16,7 +16,7 @@ import {
   getTools, getOptions, startCapture, getCaptureStatus, downloadCaptureResult, getDeviceControls, setDeviceControl,
   sayOnDevice, getWakeProbability, setWakeProbabilityStream, getConfig, getWakeModels, uploadWakeModel,
 } from "../api.js";
-import { deviceLabel, deviceVersion } from "../format.js";
+import { deviceLabel, deviceVersion, fmtUptime } from "../format.js";
 
 function Card({ title, sub, children, foot, right }) {
   return <div className="z-card">
@@ -989,10 +989,10 @@ export function Devices() {
     {busyErr && <div className="z-banner warn" style={{ margin: "0 0 12px" }}><Ic n="restart" w={15} /><span>{errorLines(busyErr).join(" · ")}</span></div>}
     <Card>
       <table className="z-tbl">
-        <thead><tr><th>Name</th><th>Firmware</th><th>Model</th><th>Status</th><th></th></tr></thead>
+        <thead><tr><th>Name</th><th>Firmware</th><th>Model</th><th>Uptime</th><th>Status</th><th></th></tr></thead>
         <tbody>
           {devices.length === 0
-            ? <tr><td colSpan={5} style={{ color: "var(--mut)", padding: "14px 0" }}>No speakers configured.</td></tr>
+            ? <tr><td colSpan={6} style={{ color: "var(--mut)", padding: "14px 0" }}>No speakers configured.</td></tr>
             : devices.map((d, i) => {
               const enabled = d.enabled ?? true;
               const dim = enabled ? "" : "z-dim";
@@ -1001,6 +1001,7 @@ export function Devices() {
                 {/* Firmware/model versions come from the live WS snapshot; "—" while offline/disabled. */}
                 <td className={`mono ${dim}`} style={{ fontSize: 11.5 }}>{deviceVersion(liveOf(d.name), "config_version") ?? "—"}</td>
                 <td className={`mono ${dim}`} style={{ fontSize: 11.5 }}>{deviceVersion(liveOf(d.name), "model_version") ?? "—"}</td>
+                <td className={`mono ${dim}`} style={{ fontSize: 11.5 }}>{fmtUptime(liveOf(d.name)?.uptime_seconds)}</td>
                 <td className={dim}>{enabled ? <StatusPill status={statusOf(d.name)} /> : <Pill tone="muted">disabled</Pill>}</td>
                 <td style={{ textAlign: "right" }}><div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
                   <button className="z-mini" onClick={() => onToggle(d.name)}>{enabled ? "Disable" : "Enable"}</button>

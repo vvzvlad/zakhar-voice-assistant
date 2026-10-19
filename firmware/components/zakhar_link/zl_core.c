@@ -226,13 +226,14 @@ static char *finish(cJSON *o, bool ok)
     return s;
 }
 
-char *zl_encode_hello(const zl_config_t *cfg, int volume, uint32_t capture)
+char *zl_encode_hello(const zl_config_t *cfg, int volume, uint32_t capture, uint32_t uptime_s)
 {
     const bool speaker = cfg->play_rate > 0;
     cJSON *o = message("hello");
     cJSON *caps = NULL, *mic = NULL, *play = NULL;
     bool ok = o != NULL && cJSON_AddStringToObject(o, "id", cfg->id) != NULL &&
               cJSON_AddStringToObject(o, "fw", cfg->fw) != NULL &&
+              cJSON_AddNumberToObject(o, "uptime", uptime_s) != NULL &&
               (caps = cJSON_AddObjectToObject(o, "caps")) != NULL &&
               cJSON_AddBoolToObject(caps, "speaker", speaker) != NULL &&
               cJSON_AddBoolToObject(caps, "screen", cfg->screen) != NULL &&

@@ -23,6 +23,7 @@
 
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "esp_websocket_client.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
@@ -207,7 +208,7 @@ static void on_connected(esp_websocket_client_handle_t ws)
     const uint32_t capture = s_sess.capture ? s_capture_id : 0;
     unlock();
     ESP_LOGI(TAG, "connected to %s", s_url);
-    send_json(ws, zl_encode_hello(&s_cfg, volume, capture));
+    send_json(ws, zl_encode_hello(&s_cfg, volume, capture, (uint32_t)(esp_timer_get_time() / 1000000)));
     lock();
     s_online = true;
     unlock();
