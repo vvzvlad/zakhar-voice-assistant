@@ -58,7 +58,7 @@ class FakeWakewordVerifier(WakewordVerifier):
         self._hang = hang
         self.calls = []  # PCM handed to each verify()
 
-    async def verify(self, pcm: bytes) -> WakewordVerdict:
+    async def verify(self, pcm: bytes, over_answer: bool = False) -> WakewordVerdict:
         self.calls.append(pcm)
         if self._hang:
             # Sleep past the pipeline's timeout so wait_for cancels us.

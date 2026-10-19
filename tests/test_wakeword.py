@@ -59,7 +59,7 @@ def _stub_verifier(make_recognizer, *, keywords, on_error="open", timeout_ms=300
     exercises the stub instead of importing the real Vosk package. No real model
     is ever loaded (an injected sentinel stands in for it)."""
     class _StubbedVerifier(VoskWakewordVerifier):
-        def _make_recognizer(self):
+        def _make_recognizer(self, extra=()):
             return make_recognizer()
 
     return _StubbedVerifier(
@@ -125,6 +125,44 @@ async def test_verify_matches_case_insensitively():
     verdict = await v.verify(b"pcmbytes")
     assert verdict.accepted is True
     assert verdict.score == pytest.approx(0.77)
+
+
+async def test_config_sound_alikes_reach_the_grammar_of_a_wake_over_an_answer(monkeypatch):
+    # The speaker's own "завтра" over its answer: the configured sound-alikes (normalized
+    # like the keywords) go into the recognizer's grammar, so it decodes as itself and
+    # the wake is rejected; a wake outside an answer keeps the keyword-only grammar.
+    import sys
+    import types
+
+    grammars = []
+    fake = types.ModuleType("vosk")
+
+    class FakeKaldi:
+        def __init__(self, model, rate, grammar):
+            grammars.append(json.loads(grammar))
+
+        def SetWords(self, on):
+            pass
+
+        def AcceptWaveform(self, pcm):
+            return True
+
+        def FinalResult(self):
+            return json.dumps({"text": "завтра"}, ensure_ascii=False)
+
+    fake.KaldiRecognizer = FakeKaldi
+    fake.Model = lambda path: object()
+    fake.SetLogLevel = lambda level: None
+    monkeypatch.setitem(sys.modules, "vosk", fake)
+    cfg = VoskWakewordConfig(answer_sound_alikes=[" Завтра ", "сахар", ""])
+    v = VoskWakewordProvider().create(cfg, None)
+
+    grammars.clear()
+    assert (await v.verify(b"pcmbytes", over_answer=True)).accepted is False
+    assert grammars[0] == ["захар", "завтра", "сахар", "[unk]"]
+    grammars.clear()
+    await v.verify(b"pcmbytes")
+    assert grammars[0] == ["захар", "[unk]"]
 
 
 async def test_verify_rejects_when_no_keyword_present():

@@ -2,7 +2,8 @@
 
 Second-stage wake-word gate. The pre-roll PCM captured around the on-device wake
 trigger is decoded by a Vosk recognizer constrained to a tiny grammar (the wake
-keywords plus "[unk]"). Grammar mode keeps the decode fast (one decode of the
+keywords plus "[unk]"; for a wake over the device's own answer also the configured
+sound-alike words). Grammar mode keeps the decode fast (one decode of the
 default 2.5 s window takes ~45 ms in production), so it is required. The verdict
 gates the rest of the pipeline.
 """
@@ -32,7 +33,8 @@ class VoskWakewordVerifier(WakewordVerifier):
     verdict so the pipeline's gate stays well-defined.
     """
 
-    def __init__(self, *, model_path, keywords, window_ms, timeout_ms, on_error, model=None):
+    def __init__(self, *, model_path, keywords, window_ms, timeout_ms, on_error,
+                 sound_alikes=(), model=None):
         # The model is injectable for testing. When None (production path), it is
         # loaded lazily so the heavy dependency/model are only required when the
         # Vosk wakeword backend is actually selected at runtime (never in tests/CI).
@@ -51,6 +53,10 @@ class VoskWakewordVerifier(WakewordVerifier):
         # Defensive: the config field_validator already normalizes; this also covers
         # direct instantiation (e.g. in tests) that bypasses the config layer.
         self._keywords = [kw.strip().lower() for kw in keywords if kw.strip()]
+        # Words that sound like a keyword, added to the grammar for a wake over the
+        # device's own answer: there a grammar of only the keywords and "[unk]" turns
+        # the speaker's own "завтра" into "захар".
+        self._sound_alikes = [w.strip().lower() for w in sound_alikes if w.strip()]
         self._window_ms = window_ms
         # Read by the pipeline to size the pre-roll head it hands to verify()
         # (the config field flows in via the provider's create()).
@@ -60,7 +66,8 @@ class VoskWakewordVerifier(WakewordVerifier):
         self.fail_open = (on_error == "open")
         # One-time grammar probe (production path only): build a single throwaway
         # grammar recognizer now, inside the fd-2 capture window, so Kaldi's
-        # "Ignoring word missing in vocabulary" WARN for a misconfigured keyword is
+        # "Ignoring word missing in vocabulary" WARN for a misconfigured keyword or
+        # sound-alike is
         # surfaced to loguru ONCE here at creation/config-reload instead of being
         # emitted (and swallowed) per decode. Guarded so it never runs for an empty
         # keyword set, and wrapped defensively: a probe failure (e.g. a missing
@@ -69,18 +76,19 @@ class VoskWakewordVerifier(WakewordVerifier):
         if self._keywords:
             try:
                 with capture_native_stderr("vosk-wakeword"):
-                    self._make_recognizer()  # discard: built only to trip the WARN
+                    # discard: built only to trip the WARN
+                    self._make_recognizer(self._sound_alikes)
             except Exception as e:
                 logger.debug(f"Vosk wakeword grammar probe skipped: {e}")
 
-    def _make_recognizer(self):
+    def _make_recognizer(self, extra=()):
         """Build a grammar-restricted KaldiRecognizer for the shared model.
 
-        Constraining the recognizer to the keyword grammar (plus "[unk]") is what
-        keeps decode fast. Overridable in tests."""
+        Constraining the recognizer to the keyword grammar (plus the `extra` words and
+        "[unk]") is what keeps decode fast. Overridable in tests."""
         from vosk import KaldiRecognizer
 
-        grammar = json.dumps(self._keywords + ["[unk]"], ensure_ascii=False)
+        grammar = json.dumps(self._keywords + list(extra) + ["[unk]"], ensure_ascii=False)
         # NO fd-2 capture here: this runs per verify in a worker thread, and
         # redirecting process-global fd 2 around every decode would swallow loguru
         # lines emitted by other threads (an observability regression). The
@@ -91,7 +99,7 @@ class VoskWakewordVerifier(WakewordVerifier):
         # actionable warning is already routed to loguru at construction.
         return KaldiRecognizer(self._model, 16000, grammar)
 
-    def _decode(self, pcm: bytes) -> WakewordVerdict:
+    def _decode(self, pcm: bytes, extra=()) -> WakewordVerdict:
         """Decode the window at each frame alignment; accept on the first hit.
 
         A Kaldi chain model (vosk-model-small-ru included) scores audio on a 30 ms
@@ -103,13 +111,13 @@ class VoskWakewordVerifier(WakewordVerifier):
         """
         verdict = None
         for shift in _ALIGNMENT_SHIFTS_BYTES:
-            verdict = self._decode_once(pcm[shift:])
+            verdict = self._decode_once(pcm[shift:], extra)
             if verdict.accepted:
                 return verdict
         return verdict
 
-    def _decode_once(self, pcm: bytes) -> WakewordVerdict:
-        rec = self._make_recognizer()
+    def _decode_once(self, pcm: bytes, extra=()) -> WakewordVerdict:
+        rec = self._make_recognizer(extra)
         rec.SetWords(True)
         rec.AcceptWaveform(pcm)
         result = json.loads(rec.FinalResult())
@@ -142,7 +150,7 @@ class VoskWakewordVerifier(WakewordVerifier):
             score = 1.0 if accepted else 0.0
         return WakewordVerdict(accepted=accepted, score=score)
 
-    async def verify(self, pcm: bytes) -> WakewordVerdict:
+    async def verify(self, pcm: bytes, over_answer: bool = False) -> WakewordVerdict:
         if not self._keywords:
             # No keywords configured: an unconfigured gate must not silently reject
             # every wake (which would make the assistant deaf). Accept without even
@@ -153,7 +161,8 @@ class VoskWakewordVerifier(WakewordVerifier):
             return WakewordVerdict(self.fail_open, None)
         # Pre-roll PCM is already 16 kHz mono 16-bit — no resampling needed.
         try:
-            return await asyncio.to_thread(self._decode, pcm)
+            extra = self._sound_alikes if over_answer else ()
+            return await asyncio.to_thread(self._decode, pcm, extra)
         except Exception as e:
             # NEVER raise out of verify: a decode failure must not crash the gate.
             # Fall back to the configured fail policy so the pipeline stays defined.
@@ -184,10 +193,19 @@ class VoskWakewordConfig(BaseModel):
         "(the gate is disabled).",
     )
 
-    @field_validator("keywords")
+    answer_sound_alikes: list[str] = Field(
+        default_factory=lambda: ["завтра", "сахар", "захват", "заход", "захочет"],
+        title="Sound-alikes over an answer",
+        description="Words that sound like a keyword, added to the grammar for a wake "
+        "heard while the device answers: the speaker's own voice then reaches the "
+        "check, and a grammar of only the keywords turns e.g. its 'завтра' into "
+        "'захар'. A wake decoded as one of these words is rejected.",
+    )
+
+    @field_validator("keywords", "answer_sound_alikes")
     @classmethod
-    def _normalize_keywords(cls, v: list[str]) -> list[str]:
-        # Force keywords to stripped lowercase at the CONFIG layer so the stored
+    def _normalize_words(cls, v: list[str]) -> list[str]:
+        # Force the words to stripped lowercase at the CONFIG layer so the stored
         # value and the panel display are already normalized (not just the runtime
         # grammar). The Russian Vosk model emits lowercase, and matching is
         # case-insensitive, so a capitalized entry would never match otherwise.
@@ -235,6 +253,7 @@ class VoskWakewordProvider(Provider):
             window_ms=cfg.window_ms,
             timeout_ms=cfg.timeout_ms,
             on_error=cfg.on_error,
+            sound_alikes=cfg.answer_sound_alikes,
         )
 
     def describe(self, cfg: VoskWakewordConfig) -> str:

@@ -122,6 +122,10 @@ The owner's words:
 - «давай сбрасывать только если сервер подтвердил» — a wake word heard over the speaker's own
   playback no longer flushes it on the device; the playback is dropped only once the server's
   second wake-word check confirms the wake, and a rejected wake leaves it playing to the end.
+  Then the check let through the speaker's own «завтра» as «Захар» (its grammar was only the wake
+  word and "[unk]"); option chosen: «Похожие слова в проверку» — for a wake held over an answer the
+  check's grammar also holds sound-alike words («завтра», «сахар», «захват», «заход», «захочет»),
+  and a wake decoded as one of them is rejected.
 - «изучи возможность сделать адаптивную громкость в зависимости от уровня громкости звуков вокруг»,
   then «можно изредка мониторить второй канал сырых данных, смотреть на максимальную среднюю
   громкость и подстараивать громкость ответов, если автогромкость включена, с каким-то множителем
@@ -312,8 +316,9 @@ device                                   server
   it cancels the older run and, before anything else of the new session, sends `play_stop`, which
   flushes the device's playback, a stream the server started before it saw the `wake` included.
   Otherwise the server holds the `wake`, and the older run goes on until the check rules on the
-  new session's microphone audio. A confirmed wake is taken as above, and the audio held
-  meanwhile goes to its run. A rejected one gets the older run's last `transcript`, `reply` and
+  new session's microphone audio; for a held wake the check also tells apart words that sound like
+  the wake word (the Vosk check's `answer_sound_alikes`), since the device's own voice reaches it.
+  A confirmed wake is taken as above, and the audio held meanwhile goes to its run. A rejected one gets the older run's last `transcript`, `reply` and
   `state`, those it has, stamped with the new `session` (`state idle` when no run is going), and
   the device follows that `state` as it would have: the microphone stops, unless the `state` is a
   follow-up `listening` (the older run opened its follow-up window while the wake was held), which
@@ -324,7 +329,8 @@ device                                   server
   (default 500 ms) to collect the wakes of the other online devices, or less once every online
   device has woken; a lone online device is not held. With several wakes it rules only once
   each of them has its pre-roll in, or `window_ms` after that device's own `wake`, and the
-  server's second wake-word check has ruled on it; a wake that check rejects takes no part. A
+  server's second wake-word check has ruled on it; a wake that check rejects takes no part. Once
+  a device with a speaker is ready, a device without one is not waited for: it cannot win. A
   `wake` the server holds over a running answer (above) joins only once the check confirms it,
   and until the check rules on it no open group is ruled: the held wake may be the same phrase.
   The server keeps one session — a device with a speaker over one without, between equals the
@@ -335,7 +341,9 @@ device                                   server
   the server's VAD finds the end of the phrase, and then they get `state idle`. For `core.arbitration.cooldown_ms` (default 2000 ms) after the
   first of those wakes, a `wake` from any other device is ended the same way. The ended runs
   show in the run log as `rejected`, reason `duplicate`, with the phrase recognized by the STT
-  of the first enabled chain; the device gets no `transcript` of it. When the kept session
+  of the first enabled chain; the device gets no `transcript` of it. A device ended before the
+  check ruled on it gets `state idle` as soon as the check rejects it instead, and its run shows
+  as `rejected`, reason `wakeword_reject`, untranscribed. When the kept session
   answers, each ended device without a speaker gets that answer as a `reply` without `session`,
   so its screen shows it; a device with a speaker gets nothing, nor does a later answer of the
   same session (a follow-up).

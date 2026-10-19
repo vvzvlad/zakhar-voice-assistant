@@ -120,6 +120,32 @@ async def test_the_cooldown_drops_another_devices_wake_but_not_the_winners():
     assert speaker.verdicts == [True, True]
 
 
+async def test_a_ready_speaker_does_not_wait_for_panels_whose_check_is_pending():
+    # The panels' audio lags, so their wake-word check has not ruled: neither can
+    # outrank the speaker, which keeps the phrase without waiting for them.
+    arbiter = make_arbiter([3], window_ms=10000)
+    speaker = FakePipeline("speaker", speaker=True, pcm=preroll(100, 1000))
+    panels = [FakePipeline(f"panel{i}", speaker=False) for i in (1, 2)]
+    for panel in panels:
+        panel.verifier_pending = True
+        panel.wake(arbiter, preroll_in=False)
+    speaker.wake(arbiter)
+    assert (speaker.verdicts, [p.verdicts for p in panels]) == ([True], [[False], [False]])
+
+
+async def test_a_speaker_whose_check_is_pending_is_still_waited_for():
+    arbiter = make_arbiter([2], window_ms=10000)
+    pending = FakePipeline("pending", speaker=True, pcm=preroll(100, 3162))
+    ready = FakePipeline("ready", speaker=True, pcm=preroll(100, 1000))
+    pending.verifier_pending = True
+    pending.wake(arbiter)
+    ready.wake(arbiter)
+    assert pending.verdicts == ready.verdicts == []
+    pending.verifier_pending = False
+    arbiter.run_changed(pending, pending.token)
+    assert (pending.verdicts, ready.verdicts) == ([True], [False])
+
+
 async def test_a_candidate_whose_run_moved_on_is_skipped():
     arbiter = make_arbiter([3])
     speaker = FakePipeline("speaker", speaker=True)

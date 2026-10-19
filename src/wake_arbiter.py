@@ -23,7 +23,11 @@ candidates — its pre-roll is in or `window_ms` has passed since its own wake (
 SNR is then taken on what it has): the pre-roll streams in only after the `wake`.
 So the winner is always a wake the verifier accepted, and a group whose candidates
 all dropped out leaves no cooldown. The group is ruled once every candidate is ready
-and either every online device has woken or the group's window has run out.
+and either every online device has woken or the group's window has run out. A
+candidate without a speaker is not waited for once a ready candidate has one: it
+cannot outrank it, so it loses as it is. Its verifier still rules on it later: a
+reject ends its run there and then (logged as wakeword_reject, untranscribed), not
+at its end-point as a duplicate; either way it is shown the winner's answer.
 
 A device answering when its wake word fires holds that wake until its verifier rules
 (the device server's pending wake) and registers only once the verifier confirms it.
@@ -187,17 +191,22 @@ class WakeArbiter:
         self._maybe_close()
 
     def _maybe_close(self) -> None:
-        """Rule once every candidate is ready and either every online device has
-        woken or the window has run out, and no device holds a wake. A lone candidate
-        needs no SNR, so it does not wait for its pre-roll; every candidate waits for
-        its verifier."""
+        """Rule once the verdict is settled and either every online device has woken
+        or the window has run out, and no device holds a wake. A lone candidate needs
+        no SNR, so it does not wait for its pre-roll; every candidate waits for its
+        verifier — except a speakerless one once a ready candidate has a speaker: it
+        cannot outrank that one, so it loses without being waited for (a panel whose
+        audio lags would otherwise hold the speaker's phrase for seconds)."""
         n = len(self._candidates)
-        ready = all(
-            not p.awaits_arbitration(c.token)
-            or ((c.settled or n == 1) and not p.verifier_pending)
-            for p, c in self._candidates.items()
-        ) and (n >= self._online_count() or self._window_fired)
-        if ready and not self._held_wakes():
+        waiting = [(p, c) for p, c in self._candidates.items()
+                   if p.awaits_arbitration(c.token)]
+        ready = [(c.settled or n == 1) and not p.verifier_pending for p, c in waiting]
+        unready = [p for (p, _), r in zip(waiting, ready) if not r]
+        can_rule = not unready or (
+            not any(p.has_speaker for p in unready)
+            and any(p.has_speaker and r for (p, _), r in zip(waiting, ready)))
+        if (can_rule and (n >= self._online_count() or self._window_fired)
+                and not self._held_wakes()):
             self._close()
 
     def _close(self) -> None:
