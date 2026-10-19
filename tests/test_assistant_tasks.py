@@ -12,10 +12,12 @@ import httpx
 import pytest
 import respx
 
+from src import context
 from src.assistant_tasks import AssistantTasks, AssistantTasksStore
 from src.builtin_mcp.assistant_tasks import build_assistant_tasks_server
-from src.core_config import AssistantTasksConfig
+from src.core_config import AssistantTasksConfig, ContextConfig
 from src.run_context import current_device
+from src.runs_store import RunsStore
 from src.tool_hub import BuiltinMcpSource
 
 URL = "http://zeroclaw.lan/webhook"
@@ -31,17 +33,24 @@ class _FakeDevice:
         self.fail = fail
         self.announced = []
 
-    async def announce(self, text):
+    async def announce(self, text, attempts=None):
         if self.fail:
             raise RuntimeError("tts down")
         self.announced.append(text)
+        if attempts is not None:
+            attempts.append({"kind": "tts", "provider": "fake", "outcome": "spoke",
+                             "error": None, "t": 120})
 
 
 def _tasks(tmp_path, devices=()):
     tasks = AssistantTasks(AssistantTasksStore(str(tmp_path / "assistant_tasks.db")))
     cfg = AssistantTasksConfig(url=URL, secret="s3cret", task_suffix="Коротко.")
-    tasks.rt = types.SimpleNamespace(core=types.SimpleNamespace(assistant_tasks=cfg),
-                                     manager=types.SimpleNamespace(clients=list(devices)))
+    for d in devices:
+        d.pipeline._context_path = str(tmp_path / f"context_{d.name}.txt")
+    tasks.rt = types.SimpleNamespace(
+        core=types.SimpleNamespace(assistant_tasks=cfg, context=ContextConfig()),
+        manager=types.SimpleNamespace(clients=list(devices)),
+        runs_store=RunsStore(str(tmp_path / "runs.db")), run_events=None)
     return tasks
 
 
@@ -94,6 +103,13 @@ def test_reply_is_stored_and_spoken_on_the_task_speaker(tmp_path):
     kitchen, bedroom = _FakeDevice("kitchen"), _FakeDevice("bedroom")
     tasks = _tasks(tmp_path, [kitchen, bedroom])
     task_id = tasks.store.insert("погода в Токио", "bedroom")
+    sent = []
+
+    class _Events:
+        async def broadcast(self, payload):
+            sent.append(payload)
+
+    tasks.rt.run_events = _Events()
 
     async def main():
         first = await _reply_and_speak(tasks, {"content": "В Токио +20.", "thread_id": f"zakhar-{task_id}"})
@@ -107,11 +123,25 @@ def test_reply_is_stored_and_spoken_on_the_task_speaker(tmp_path):
     assert row["answer"] == "В Токио +20.\n\nИ дождь."
     assert row["delivered"] == 1
     assert row["answered_ts"] is not None
+    # Each reply is a run in the log, newest first, and a line of the speaker's dialog.
+    runs = tasks.rt.runs_store.list()
+    assert [(r["device"], r["reason"], r["result"], r["stt_text"], r["llm_text"], r["t_tts"])
+            for r in runs] == [("bedroom", "assistant", "ok", "погода в Токио", "И дождь.", 120),
+                               ("bedroom", "assistant", "ok", "погода в Токио", "В Токио +20.", 120)]
+    # ...and reaches an open panel at once.
+    assert [(e["type"], e["run"]["id"], e["run"]["llm_text"]) for e in sent] == [
+        ("run", runs[1]["id"], "В Токио +20."), ("run", runs[0]["id"], "И дождь.")]
+    assert context.load_context(bedroom.pipeline._context_path) == [
+        {"role": "assistant", "content": "В Токио +20."},
+        {"role": "assistant", "content": "И дождь."}]
 
 
-@pytest.mark.parametrize("device,shown", [({"online": False}, []), ({"speaker": False}, ["ответ"]),
-                                          ({"fail": True}, [])])
-def test_reply_that_cannot_be_spoken_is_kept_undelivered(tmp_path, device, shown):
+@pytest.mark.parametrize("device,shown,run", [
+    ({"online": False}, [], ("error", "device")),
+    ({"speaker": False}, ["ответ"], ("ok", None)),
+    ({"fail": True}, [], ("error", "TTS")),
+])
+def test_reply_that_cannot_be_spoken_is_kept_undelivered(tmp_path, device, shown, run):
     kitchen = _FakeDevice("kitchen", **device)
     tasks = _tasks(tmp_path, [kitchen])
     task_id = tasks.store.insert("x", "kitchen")
@@ -122,6 +152,12 @@ def test_reply_that_cannot_be_spoken_is_kept_undelivered(tmp_path, device, shown
     assert kitchen.announced == shown  # a device without a speaker still shows the text
     row = tasks.store.get(task_id)
     assert (row["answer"], row["delivered"]) == ("ответ", 0)
+    # The log keeps the reply either way; only a reply the device got joins the dialog.
+    [logged] = tasks.rt.runs_store.list()
+    assert (logged["result"], logged["llm_text"]) == (run[0], "ответ")
+    assert tasks.rt.runs_store.get(logged["id"])["error_stage"] == run[1]
+    assert context.load_context(kitchen.pipeline._context_path) == (
+        [{"role": "assistant", "content": "ответ"}] if shown else [])
 
 
 def test_reply_is_answered_before_it_is_spoken(tmp_path):
@@ -134,9 +170,9 @@ def test_reply_is_answered_before_it_is_spoken(tmp_path):
         release = asyncio.Event()
         original = kitchen.announce
 
-        async def slow_announce(text):
+        async def slow_announce(text, attempts=None):
             await release.wait()
-            await original(text)
+            await original(text, attempts)
 
         kitchen.announce = slow_announce
         result = await asyncio.wait_for(tasks.on_reply({"content": "ответ", "thread_id": f"zakhar-{task_id}"}), 1)
@@ -160,9 +196,9 @@ def test_an_unspoken_newer_reply_keeps_the_task_undelivered(tmp_path, monkeypatc
     task_id = tasks.store.insert("x", "kitchen")
     original = kitchen.announce
 
-    async def announce_once(text):
+    async def announce_once(text, attempts=None):
         kitchen.announce = _FakeDevice("kitchen", fail=True).announce
-        await original(text)
+        await original(text, attempts)
 
     kitchen.announce = announce_once
 
