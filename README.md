@@ -202,7 +202,10 @@ Shape (see `templates/default_config.json` for the full default):
   `openweathermap` (api_key / city), `mcp_servers` (list of
   `{name, url, token, transport, prompt, slow}` — marking a server `slow` makes the
   assistant speak a short filler line before calling its tools),
-  `calendar` (url / username / password / calendar), `prompt.system_prompt_path`
+  `calendar` (url / username / password / calendar), `assistant_tasks` (enabled / url /
+  secret / task_suffix / prompt — long jobs handed to the studio assistant ZeroClaw through
+  its webhook channel; its `send_url` must point at `http://<host>:8201/api/assistant-tasks/reply`,
+  where each reply is stored and spoken on the speaker the job came from), `prompt.system_prompt_path`
   (legacy seed only — prompts now live as named profiles in `data/prompts.db`),
   `agent_mcp` (enabled — the agent-facing MCP endpoint served by the panel at `/mcp`),
   `runs` (enabled / retention_days),

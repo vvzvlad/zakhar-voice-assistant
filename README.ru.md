@@ -205,7 +205,11 @@ docker compose pull && docker compose up -d
   `network.external_proxy`, `openweathermap` (api_key / city), `mcp_servers` (список
   `{name, url, token, transport, prompt, slow}` — пометка сервера как `slow`
   заставляет ассистента произнести короткую реплику-заполнитель перед вызовом его
-  инструментов), `calendar` (url / username / password / calendar),
+  инструментов), `calendar` (url / username / password / calendar), `assistant_tasks`
+  (enabled / url / secret / task_suffix / prompt — долгие задачи для ассистента студии
+  ZeroClaw через его канал webhook; его `send_url` должен указывать на
+  `http://<host>:8201/api/assistant-tasks/reply`, там ответ сохраняется и звучит на колонке,
+  с которой пришла задача),
   `prompt.system_prompt_path` (только legacy-сид — промпты теперь живут как
   именованные профили в `data/prompts.db`), `agent_mcp` (enabled — обращённый к
   агенту MCP-эндпоинт, отдаваемый панелью на `/mcp`), `runs` (enabled /
