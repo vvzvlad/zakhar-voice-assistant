@@ -52,6 +52,10 @@ from src.vad import SAMPLE_RATE, EndpointPolicy  # noqa: F401  (SAMPLE_RATE re-e
 # misbehaves, and also forces a finalize when reached.
 HARD_CAP_BYTES = SAMPLE_RATE * 2 * 60
 
+# A wake session's stream opens with this much pre-roll, ending where the device
+# detected the wake word (docs/device-protocol.md, "Voice session").
+PREROLL_MS = 2000
+
 
 class _PrefetchedChunks:
     """A TTS chunk stream whose first chunk was already pulled: iterating yields that
@@ -260,6 +264,8 @@ class Pipeline:
             min_speech_ms=vad_cfg.min_speech_ms,
             max_utterance_ms=vad_cfg.max_utterance_ms,
             no_speech_timeout_ms=vad_cfg.no_speech_timeout_ms,
+            preroll_ms=PREROLL_MS if wake_word_phrase else 0,
+            wake_pause_ms=vad_cfg.wake_pause_ms,
         ))
         logger.info(f"{self.name}: ▶️ run started (cid={conversation_id})")
         self._emit(StageEvent.RUN_START, {})

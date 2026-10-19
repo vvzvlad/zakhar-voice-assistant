@@ -24,8 +24,7 @@ import time
 import httpx
 from loguru import logger
 
-from src import context
-from src.runs_store import summary_row
+from src.run_events import record_run
 
 _CREATE_TABLE = """
 CREATE TABLE IF NOT EXISTS tasks (
@@ -194,61 +193,33 @@ class AssistantTasks:
         A device without a speaker still gets the text on its screen (announce skips the
         speech there), but the reply stays undelivered: nobody heard it.
 
-        Every reply becomes a run in the run log (reason "assistant": the task text as
-        the request, the reply as the response, an error when it was not delivered), and
-        a reply that reached the device joins its conversation context, so a follow-up
-        question can refer to it."""
+        Device.announce records the reply as a run (reason "assistant", the task text as
+        the request) and adds it to the speaker's conversation context. A reply with no
+        speaker to announce on is recorded here as a "device" error run."""
         task_id, device = task["id"], task["device"]
         async with self._speak_lock:
-            t0 = time.perf_counter()
-            record = {
-                "ts": time.time(), "device": device, "reason": "assistant", "result": "ok",
-                "stt_text": task["text"], "llm_text": content,
-                "error_stage": None, "error_text": None, "attempts": [],
-            }
+            # The first online speaker when the task has none, as DeviceManager.announce does.
+            clients = self.rt.manager.clients
+            if device is not None:
+                client = next((c for c in clients if c.name == device), None)
+            else:
+                client = next((c for c in clients if c.online), None)
+            if client is None:
+                logger.warning(f"assistant task №{task_id}: speaker {device!r} unavailable; "
+                               f"reply stored, not spoken")
+                await record_run(self.rt, {
+                    "ts": time.time(), "device": device, "reason": "assistant",
+                    "result": "error", "stt_text": task["text"], "llm_text": content,
+                    "error_stage": "device", "error_text": "speaker unavailable", "t_total": 0,
+                })
+                return
             try:
-                # The first online speaker when the task has none, as DeviceManager.announce does.
-                clients = self.rt.manager.clients
-                if device is not None:
-                    client = next((c for c in clients if c.name == device), None)
-                else:
-                    client = next((c for c in clients if c.online), None)
-                if client is None or not client.online:
-                    logger.warning(f"assistant task №{task_id}: speaker {device!r} unavailable; "
-                                   f"reply stored, not spoken")
-                    record.update(result="error", error_stage="device",
-                                  error_text="speaker unavailable")
-                    return
-                record["device"] = client.name
-                try:
-                    await client.announce(content, record["attempts"])
-                except Exception as e:
-                    logger.error(f"assistant task №{task_id}: speaking the reply on {client.name} failed: {e}")
-                    record.update(result="error", error_stage="TTS", error_text=str(e))
-                    return
-                # Time to the start of the speech, as a text run counts it.
-                record["t_tts"] = sum(a["t"] for a in record["attempts"] if a["kind"] == "tts")
-                if client.pipeline.has_speaker:
-                    self.store.mark_delivered(task_id, answered_ts)
-                ctx = self.rt.core.context
-                context.append_reply(client.pipeline._context_path, content,
-                                     max_turns=ctx.max_turns, ttl_seconds=ctx.ttl_seconds)
-            finally:
-                record["t_total"] = int((time.perf_counter() - t0) * 1000)
-                await self._record_run(record)
-
-    async def _record_run(self, record) -> None:
-        """Insert the run and push it to live panel subscribers; a failure is logged,
-        never raised."""
-        store, events = self.rt.runs_store, self.rt.run_events
-        if store is None:
-            return
-        try:
-            run_id = await asyncio.to_thread(store.insert, record)
-            if events is not None:
-                await events.broadcast({"type": "run", "run": summary_row(record, run_id)})
-        except Exception as e:
-            logger.error(f"assistant reply run record failed: {e}")
+                await client.announce(content, "assistant", task["text"])
+            except Exception as e:
+                logger.error(f"assistant task №{task_id}: speaking the reply on {client.name} failed: {e}")
+                return
+            if client.pipeline.has_speaker:
+                self.store.mark_delivered(task_id, answered_ts)
 
     def recent(self, limit) -> list[dict]:
         return self.store.recent(limit)

@@ -28,8 +28,12 @@ static void test_samples(void)
     const int32_t in[] = {0x11110000, 0x00010000, -0x22220000, 0x10000000};
     int16_t both[4], ch1[2];
     pcm_split(in, 2, both, ch1, 4);
-    assert(both[0] == 0x1111 && both[1] == 0x0001 && both[2] == -0x2222 && both[3] == 0x1000);
+    assert(both[0] == 0x1111 && both[1] == 4 && both[2] == -0x2222 && both[3] == 0x4000);
     assert(ch1[0] == 4 && ch1[1] == 0x4000);
+    // Below 16 bits at gain 1: the streamed channel 1 still carries it, as the wake word gets it.
+    const int32_t quiet[] = {0, 0x00004000};
+    pcm_split(quiet, 1, both, ch1, 4);
+    assert(both[1] == 1 && ch1[0] == 1);
 }
 
 // Frame f of the test stream: channel 0 = f, channel 1 = -f (low 15 bits).

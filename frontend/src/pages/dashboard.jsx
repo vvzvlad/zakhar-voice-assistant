@@ -7,7 +7,7 @@ import { Ic } from "../components/icons.jsx";
 import { PageHeader, Waterfall, Loading } from "../components/primitives.jsx";
 import { useAppData } from "../appData.jsx";
 import { getMetrics, getRuns, openRunsStream } from "../api.js";
-import { STAGE_COLOR, fmtSec, mapRun, totalMs, statusMeta, applyStreamedRun } from "../runsModel.js";
+import { STAGE_COLOR, fmtSec, mapRun, totalMs, statusMeta, isAnnouncement, applyStreamedRun } from "../runsModel.js";
 import { chainsOf, chainRows, ttsVariantsOf, voiceOf } from "../chains.js";
 import { deviceLabel } from "../format.js";
 
@@ -173,7 +173,7 @@ function Dashboard() {
                     return <tr key={r.key} onClick={() => { if (r.id == null) return; try { localStorage.setItem("z-openreq", String(r.id)); } catch { /* ignore */ } nav("log"); }}>
                       <td className="tm">{r.time}</td>
                       <td style={{ fontWeight: 600 }}>{deviceLabel(catalog?.core?.values?.devices, r.device)}</td>
-                      <td><div className={"z-tx" + (r.stt ? "" : " mut")}>{r.stt || (r.live ? "…" : "(silence)")}</div></td>
+                      <td><div className={"z-tx" + (r.stt ? "" : " mut")}>{r.stt || (r.live ? "…" : isAnnouncement(r) ? "—" : "(silence)")}</div></td>
                       <td><div className={"z-tx wide" + (r.llm ? "" : " mut")}>{r.llm || (r.live ? "…" : "—")}</div></td>
                       <td className="num" style={{ fontWeight: 600 }}>{fmtSec(totalMs(r))}</td>
                       <td><Waterfall r={r} /></td>

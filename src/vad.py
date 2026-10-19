@@ -23,6 +23,13 @@ class EndpointPolicy:
     min_speech_ms: int
     max_utterance_ms: int
     no_speech_timeout_ms: int
+    # A wake-word run opens with this much pre-roll, which ends where the wake word
+    # was detected; 0 = no pre-roll. Until speech follows it, the phrase ends only
+    # after max(silence_ms, wake_pause_ms) of silence, so a pause between the wake
+    # word and the command does not end the phrase. Any speech window counts, not
+    # min_speech_ms of it: a one-word command («ночь») can be shorter than that.
+    preroll_ms: int = 0
+    wake_pause_ms: int = 0
 
 
 class EndpointTracker:
@@ -40,6 +47,7 @@ class EndpointTracker:
         self._silence_ms = 0
         self._speech_detected = False
         self._elapsed_ms = 0
+        self._command = False  # speech heard after the pre-roll, i.e. after the wake word
 
     def update(self, speech: bool, window_ms: int) -> str | None:
         """Consume one classified window; return the finalize reason
@@ -47,6 +55,8 @@ class EndpointTracker:
         self._elapsed_ms += window_ms
         if speech:
             self._speech_ms += window_ms
+            if self._elapsed_ms > self._policy.preroll_ms:
+                self._command = True
             self._silence_ms = 0
             if self._speech_ms >= self._policy.min_speech_ms:
                 self._speech_detected = True
@@ -57,7 +67,10 @@ class EndpointTracker:
 
         # Decide end-of-utterance (reason or None) after the window,
         # in the same precedence order as before: endpoint, max length, no-speech.
-        if self._speech_detected and self._silence_ms >= self._policy.silence_ms:
+        pause_ms = self._policy.silence_ms
+        if not self._command:
+            pause_ms = max(pause_ms, self._policy.wake_pause_ms)
+        if self._speech_detected and self._silence_ms >= pause_ms:
             return "endpoint"
         if self._elapsed_ms >= self._policy.max_utterance_ms:
             return "maxlen"

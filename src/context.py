@@ -5,8 +5,9 @@ The pipeline loads the recent window to feed it back to the model so it remember
 the last few turns, and appends the new exchange after each run. A conversation
 idle longer than ttl_seconds is considered finished and reset to empty, so an
 unrelated later request starts fresh. Only the last max_turns * 2 messages are
-kept: user+assistant exchanges, plus lone assistant replies that arrived later
-(append_reply), so the window may start with an assistant message.
+kept: user+assistant exchanges, plus notes of what the device said unprompted
+(append_spoken), so two user-role messages may follow each other and the trimmed
+window may start with an assistant message.
 """
 
 import json
@@ -79,11 +80,16 @@ def append_context(
             max_turns, ttl_seconds)
 
 
-def append_reply(context_path: str, text: str, max_turns: int = 5, ttl_seconds: int = 300) -> None:
-    """Append one assistant message that has no user turn of its own: a reply that
-    arrived later and was spoken unprompted (a handed-off task's answer), so a
-    follow-up question sees it. Failures are logged and never raised."""
-    _append(context_path, [{"role": "assistant", "content": text}], max_turns, ttl_seconds)
+def append_spoken(context_path: str, text: str, max_turns: int = 5, ttl_seconds: int = 300) -> None:
+    """Append a note that the device said `text` unprompted (an agent's say, a
+    reminder, a handed-off task's answer), so a follow-up question sees it. Failures
+    are logged and never raised.
+
+    The note is a user-role message in the third person, not an assistant message:
+    given a lone assistant message, the model answers "what was that?" with its
+    previous reply and ignores the phrase."""
+    note = f"[На колонке была произнесена фраза: «{text}»]"
+    _append(context_path, [{"role": "user", "content": note}], max_turns, ttl_seconds)
 
 
 def _append(context_path: str, new: list[dict], max_turns: int, ttl_seconds: int) -> None:
