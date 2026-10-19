@@ -344,9 +344,11 @@ export function ErrorBox({ error, onRetry }) {
     {onRetry && <button className="z-btn g sm" style={{ marginTop: 12 }} onClick={onRetry}>Retry</button>}
   </div>;
 }
-export function Modal({ title, children, footer, onClose }) {
+// `top` pins the dialog near the top of the window instead of centring it, so a dialog whose
+// height changes (tabs) does not jump.
+export function Modal({ title, children, footer, onClose, top }) {
   return <div className="z-modal" onClick={onClose}>
-    <div className="z-modal-c" onClick={(e) => e.stopPropagation()}>
+    <div className={"z-modal-c" + (top ? " top" : "")} onClick={(e) => e.stopPropagation()}>
       <div className="z-modal-h"><b>{title}</b><button className="z-x" aria-label="Close" style={{ marginLeft: "auto" }} onClick={onClose}><svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" /></svg></button></div>
       <div className="z-modal-b">{children}</div>
       {footer && <div className="z-modal-f">{footer}</div>}
