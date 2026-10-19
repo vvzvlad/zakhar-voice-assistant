@@ -246,8 +246,8 @@ the answer, so the next phrase needs no wake word:
   `state idle`, without a sound. A phrase goes to the jev decision model with the assistant's name
   (the `word` of the session's `wake`), the last request and answer; one it does not take for a
   continuation of the dialog also ends the session with `state idle`, without a sound and without
-  a transcript. One it takes gets the end-of-phrase chime
-  and runs like any phrase, and its answer opens the window again.
+  a transcript. One it takes gets the end-of-phrase chime and runs like any phrase, and its answer
+  opens the window again.
 - No follow-up after an answer that was dropped (`play_stop`, a new `wake`), outside a session (an
   announcement), or on a device without `caps.follow_up`. An announcement while the window still
   waits for speech ends the session with `state idle` before it plays; an answer with an

@@ -9,10 +9,9 @@
 // client's task, under the mutex, together with turning the mic on. A capture outlives a lost
 // link: the next hello names it, and a `capture_resume` sends it on from the frame the server
 // asks for. The client's own task runs the event handler: the hello on connect and every
-// received frame in arrival order, so a
-// play_start, its 0x02 frames and its play_end reach the playback queue in the order sent; a model
-// is assembled from its 0x03 frames and handed to on_model there too. One mutex guards the shared
-// state.
+// received frame in arrival order, so a play_start, its 0x02 frames and its play_end reach the
+// playback queue in the order sent; a model is assembled from its 0x03 frames and handed to
+// on_model there too. One mutex guards the shared state.
 // Nothing sends or calls back while holding it: the client's task holds the client lock around
 // the handler, and a send from the component task takes that lock.
 #include "zakhar_link.h"

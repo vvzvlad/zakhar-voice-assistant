@@ -198,25 +198,32 @@ async def test_proactive_speech_closes_the_window_first(tmp_path, monkeypatch):
 
 
 async def test_no_window_while_proactive_speech_is_queued(tmp_path, monkeypatch):
-    # A reminder synthesized while the answer still plays is queued behind it on the
-    # device: the window must not open into it.
+    # A reminder queued on the device behind the answer (its play() still waits for
+    # `played`): the window must not open into it. Once it has played, the next
+    # answer opens the window again.
     pipeline, events = _make(tmp_path, monkeypatch)
     release = asyncio.Event()
-    start_tts = pipeline._start_tts
+    play = pipeline.play
+    held = []
 
-    async def slow_reminder_tts(text, attempts=None):
-        if text == "напоминаю":
+    async def hold_first(mime, audio):
+        if not held:
+            held.append(1)
             await release.wait()
-        return await start_tts(text, attempts)
+        return await play(mime, audio)
 
-    pipeline._start_tts = slow_reminder_tts
+    pipeline.play = hold_first
     reminder = asyncio.create_task(pipeline.speak("напоминаю"))
-    await asyncio.sleep(0)
+    while not held and not reminder.done():
+        await asyncio.sleep(0)
     await _answer(pipeline)
-    release.set()
-    await reminder
     assert types_of(events) == [*ANSWERED, StageEvent.RUN_END]
     assert pipeline._followup is None
+    release.set()
+    await reminder
+    events.clear()
+    await _answer(pipeline)
+    assert types_of(events) == [*ANSWERED, StageEvent.STT_VAD_START]
 
 
 async def test_a_cancelled_run_ends_the_window(tmp_path, monkeypatch):
