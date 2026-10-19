@@ -149,14 +149,38 @@ _DELAYED_QUESTION = {
 }
 
 
-def _choice_answer(answers: dict, key: str) -> tuple:
-    """(choice, confidence) of the choice answer `key`; raises KeyError, TypeError or
-    ValueError when the answer is missing or malformed."""
+def _percents(probabilities: dict) -> dict[str, int]:
+    """The options' probabilities in whole percents summing to exactly 100, highest
+    first. The API rounds each probability, so their sum drifts off 1: they are
+    divided by their sum, and the percents lost to rounding go to the largest
+    remainders."""
+    total = sum(float(p) for p in probabilities.values())
+    if not total > 0:
+        raise ValueError(f"probabilities sum to {total}")
+    exact = {k: float(p) * 100 / total for k, p in probabilities.items()}
+    pct = {k: int(v) for k, v in exact.items()}
+    short = 100 - sum(pct.values())
+    for k in sorted(exact, key=lambda k: exact[k] - pct[k], reverse=True)[:short]:
+        pct[k] += 1
+    return dict(sorted(pct.items(), key=lambda kv: kv[1], reverse=True))
+
+
+def _choice_answer(answers: dict, key: str) -> tuple[str, float, str]:
+    """(choice, confidence, summary) of the choice answer `key`. The summary reads
+    «other (other 74%, device_command 26%; confidence 48%)»: every option's normalized
+    probability, options at 0% left out, then the confidence, which measures how
+    concentrated the distribution is and is not the chosen option's probability.
+    Raises KeyError, TypeError or ValueError when the answer is missing or malformed."""
     answer = answers[key]
     choice = answer["choice"]
     if answer["type"] != "choice" or not isinstance(choice, str):
         raise ValueError(f"{key}: not a choice answer: {answer!r}")
-    return choice, float(answer["confidence"])
+    probabilities = answer["probabilities"]
+    if not isinstance(probabilities, dict):
+        raise ValueError(f"{key}: no probabilities: {answer!r}")
+    confidence = float(answer["confidence"])
+    shown = ", ".join(f"{k} {v}%" for k, v in _percents(probabilities).items() if v)
+    return choice, confidence, f"{choice} ({shown}; confidence {confidence:.0%})"
 
 
 def _noul_answer(answers: dict, key: str) -> float:
@@ -323,9 +347,9 @@ class JevBackend(LlmBackend):
             )
             resp.raise_for_status()
             answers = resp.json()["answers"]
-            kind, kind_conf = _choice_answer(answers, "kind")
-            target, target_conf = _choice_answer(answers, "target")
-            action, action_conf = _choice_answer(answers, "action")
+            kind, kind_conf, kind_said = _choice_answer(answers, "kind")
+            target, target_conf, target_said = _choice_answer(answers, "target")
+            action, action_conf, action_said = _choice_answer(answers, "action")
             compound = _noul_answer(answers, "compound")
             delayed = _noul_answer(answers, "delayed")
             entry = None if target == "none" else targets[target]
@@ -333,20 +357,19 @@ class JevBackend(LlmBackend):
             logger.warning(f"jev: decision model call failed: {type(e).__name__}: {e}")
             return None, f"decision model error: {type(e).__name__}: {e}"
         logger.info(
-            f"jev decision: kind={kind} ({kind_conf:.2f}), "
-            f"target={target} ({target_conf:.2f}), action={action} ({action_conf:.2f}), "
-            f"compound={compound:.2f}, delayed={delayed:.2f}"
+            f"jev decision: kind={kind_said}, target={target_said}, action={action_said}, "
+            f"compound={compound:.0%}, delayed={delayed:.0%}"
         )
 
         min_conf = self._min_confidence
         if kind != "device_command" or kind_conf < min_conf:
-            return None, f"decision model: kind {kind} ({kind_conf:.2f})"
+            return None, f"decision model: kind {kind_said}"
         if entry is None or target_conf < min_conf:
-            return None, f"decision model: target {target} ({target_conf:.2f})"
+            return None, f"decision model: target {target_said}"
         if compound >= 0.5:
-            return None, f"decision model: compound ({compound:.2f})"
+            return None, f"decision model: compound ({compound:.0%})"
         if delayed >= 0.5:
-            return None, f"decision model: delayed ({delayed:.2f})"
+            return None, f"decision model: delayed ({delayed:.0%})"
 
         tool = entry["tool"]
         tinfo = tools_index[tool]
@@ -362,7 +385,7 @@ class JevBackend(LlmBackend):
         # The action decides on vs off, lock vs unlock: when it set a slot it must be
         # as confident as the kind and the device.
         if (state_slot is not None or level_action is not None) and action_conf < min_conf:
-            return None, f"decision model: action {action} ({action_conf:.2f})"
+            return None, f"decision model: action {action_said}"
         fill_singletons(tinfo, args)
         missing = tinfo["required"] - set(args)
         if missing:

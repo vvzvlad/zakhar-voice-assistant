@@ -87,11 +87,11 @@ describe("Request log — chains", () => {
     render(<Log />);
     fireEvent.click((await screen.findAllByText("Солнечно"))[0]);
     expect((await screen.findByText("Not a continuation (follow-up check).")).parentElement.textContent)
-      .toContain("probability 0.12");
+      .toContain("probability 12%");
     expect(screen.queryByText("Wake-word verify")).toBeNull();
     const items = screen.getAllByTestId("attempt");
     expect(items[0].textContent).toContain("Follow-up check · jev");
-    expect(items[0].textContent).toContain("probability 0.12 · 0.64s");
+    expect(items[0].textContent).toContain("probability 12% · 0.64s");
     expect(items[1].textContent).toContain("ну и погодка");
   });
 
