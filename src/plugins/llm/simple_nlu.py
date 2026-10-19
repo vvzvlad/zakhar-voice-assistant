@@ -11,7 +11,8 @@ speaks a short confirmation.
 
 Design notes:
 - Heavy deps (pymorphy3, scikit-learn, rapidfuzz) are imported LAZILY inside the
-  training thread / fuzzy helper, never at module top level: importing this
+  training thread / fuzzy helper / build_lemmatizer() (which the jev backend also
+  calls from its constructor), never at module top level: importing this
   module for the registry stays light and must not fail if those libs are absent.
   Each missing dep degrades gracefully (see _train / _fuzzy_ratio).
 - The backend is STATELESS across rounds: nothing per-request is stashed on self
@@ -495,6 +496,42 @@ def _warn_missing(dep: str) -> None:
         logger.warning(f"simple-nlu: optional dependency '{dep}' unavailable; degrading gracefully")
 
 
+def tokenize(text: str) -> list[str]:
+    """Lowercase, fold ё->е, and tokenize on non-letters (Cyrillic + Latin +
+    digits)."""
+    low = (text or "").lower().replace("ё", "е")
+    return re.findall(r"[a-zа-я0-9]+", low)
+
+
+def lemmas(text: str, lemmatize) -> list[str]:
+    """The lemma of every token of `text`, lowercased with ё folded to е."""
+    return [lemmatize(tok).lower().replace("ё", "е") for tok in tokenize(text)]
+
+
+def build_lemmatizer():
+    """A memoized pymorphy3 lemmatizer of ONE lowercased token, or an
+    identity-lowercase fallback if pymorphy3 is unavailable."""
+    try:
+        import pymorphy3
+
+        morph = pymorphy3.MorphAnalyzer()
+        cache: dict[str, str] = {}
+
+        def lemmatize(word: str) -> str:
+            w = word.lower()
+            hit = cache.get(w)
+            if hit is not None:
+                return hit
+            normal = morph.parse(w)[0].normal_form
+            cache[w] = normal
+            return normal
+
+        return lemmatize
+    except ImportError:
+        _warn_missing("pymorphy3")
+        return lambda w: w.lower()
+
+
 def _no_match(reason: str) -> dict:
     """The detection result for an utterance that is no command; `reason` says why."""
     return {"is_command": False, "tool": None, "args": {}, "name": "none", "reason": reason}
@@ -594,17 +631,10 @@ class SimpleNluBackend(LlmBackend):
 
     @staticmethod
     def _normalize(text: str) -> list[str]:
-        """Lowercase, fold ё->е, and tokenize on non-letters (Cyrillic + Latin +
-        digits)."""
-        low = (text or "").lower().replace("ё", "е")
-        return re.findall(r"[a-zа-я0-9]+", low)
+        return tokenize(text)
 
     def _lemmas(self, text: str, lemmatizer=None) -> list[str]:
-        lem = lemmatizer or self._lemmatizer or (lambda w: w.lower())
-        out = []
-        for tok in self._normalize(text):
-            out.append(lem(tok).lower().replace("ё", "е"))
-        return out
+        return lemmas(text, lemmatizer or self._lemmatizer or (lambda w: w.lower()))
 
     # --- fingerprint ----------------------------------------------------- #
 
@@ -624,25 +654,7 @@ class SimpleNluBackend(LlmBackend):
         an identity-lowercase fallback if pymorphy3 is unavailable."""
         if self._lemmatizer is not None:
             return self._lemmatizer
-        try:
-            import pymorphy3
-
-            morph = pymorphy3.MorphAnalyzer()
-            cache: dict[str, str] = {}
-
-            def lemmatize(word: str) -> str:
-                w = word.lower()
-                hit = cache.get(w)
-                if hit is not None:
-                    return hit
-                normal = morph.parse(w)[0].normal_form
-                cache[w] = normal
-                return normal
-
-            return lemmatize
-        except ImportError:
-            _warn_missing("pymorphy3")
-            return lambda w: w.lower()
+        return build_lemmatizer()
 
     def _train(self, tools: list) -> dict:
         """Build the immutable model dict from the advertised tools.

@@ -6,7 +6,8 @@ with five typed questions — the request kind, the device, the action, whether 
 asks for several things, whether it asks for later. Only a confident command to one
 device or scene becomes a tool call; anything else, and any failure of the call, is
 no command: it declines to the next chain, or the last chain speaks reply_unmatched.
-No local phrase matching runs here.
+The only local phrase matching: a phrase that names two devices or scenes by their
+aliases declines without a request (a dropped «и» reads as one place to the model).
 
 The device options and the action verbs are not its own settings: every request
 reads the aliases and action verbs of the simple-nlu instance (the Commands page)
@@ -25,6 +26,7 @@ from src.plugins.base import ADVANCED_FIELD_EXTRA, SECRET_FIELD_EXTRA, Deps, Pro
 from src.plugins.llm.base import LlmBackend
 from src.plugins.llm.simple_nlu import (
     SimpleNluProvider,
+    build_lemmatizer,
     envelope,
     extract_number,
     fill_numbers,
@@ -32,6 +34,7 @@ from src.plugins.llm.simple_nlu import (
     has_tool_result,
     index_tools,
     last_user_text,
+    lemmas,
     parse_actions,
     parse_aliases,
     resolve_alias,
@@ -184,6 +187,30 @@ def _targets(aliases: list[dict], tools_index: dict) -> dict[str, dict]:
     return targets
 
 
+def _named_targets(targets: dict[str, dict], text: str, lemmatize) -> list[str]:
+    """Keys of the targets the utterance names: every word of one of their phrases is
+    in it, by lemma, and that phrase has a word no other target's phrases use. A shared
+    word alone names nothing: «свет» of the room light in «свет в прихожей».
+
+    Words are matched without their role, so a place or time word that is another
+    target's own alias counts as that target: «тусклый свет в зале» names the dim and
+    the bright light, «закрой дверь на ночь» the lock and the night scene. Such a
+    command declines to the next chain, which still runs it, only slower. An alias
+    that reuses such a word («тусклый свет в зале») makes it shared, so it stops
+    naming the other target anywhere."""
+    phrases = {
+        key: [frozenset(lemmas(ph, lemmatize)) for ph in t["phrases"]]
+        for key, t in targets.items()
+    }
+    words = frozenset(lemmas(text, lemmatize))
+    named = []
+    for key, own in phrases.items():
+        others = frozenset().union(*(p for k, ps in phrases.items() if k != key for p in ps))
+        if any(p <= words and p - others for p in own):
+            named.append(key)
+    return named
+
+
 def _questions(targets: dict[str, dict], actions: dict[str, list[str]]) -> dict:
     """The five questions of one decision request."""
     target_criteria = {key: ", ".join(t["phrases"]) for key, t in targets.items()}
@@ -234,6 +261,7 @@ class JevBackend(LlmBackend):
         self._client = client
         # (category, provider id) -> that instance's live config (Deps.instance_config).
         self._instance_config = instance_config
+        self._lemmatize = build_lemmatizer()
 
     async def complete(self, messages: list, tools: list | None, *, has_next: bool = False) -> dict:
         # ROUND 2: tool results are present -> speak a confirmation (or error).
@@ -276,6 +304,9 @@ class JevBackend(LlmBackend):
         targets = _targets(parse_aliases(names.aliases), tools_index)
         if not targets:
             return None, "decision model: no device options"
+        named = _named_targets(targets, user_text, self._lemmatize)
+        if len(named) > 1:
+            return None, f"decision model: several devices named: {', '.join(named)}"
         payload = {
             "model": self._model,
             "state": {"utterance": user_text},

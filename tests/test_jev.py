@@ -13,10 +13,16 @@ import src.plugins  # noqa: F401  triggers @register on all providers
 from src.config_service import ConfigService
 from src.llm import LlmRequest, LlmStage
 from src.plugins.base import Deps, get_provider
-from src.plugins.llm.jev import DECISIONS_API_URL, JevConfig
-from src.plugins.llm.simple_nlu import SimpleNluConfig
+from src.plugins.llm.jev import DECISIONS_API_URL, JevConfig, _named_targets, _targets
+from src.plugins.llm.simple_nlu import (
+    SimpleNluConfig,
+    build_lemmatizer,
+    index_tools,
+    parse_actions,
+    parse_aliases,
+)
 from src.stage_errors import Declined
-from tests.test_simple_nlu import _ALIASES, FAKE_TOOLS, FakeHub, _strict
+from tests.test_simple_nlu import _ALIASES, _PROD, FAKE_TOOLS, FakeHub, _strict
 
 
 def _client(respond, requests):
@@ -177,6 +183,9 @@ async def test_an_action_that_sets_a_level_needs_confidence():
     # «на пять» may be a level, a delay or a step: no request, the next chain decides.
     ("прибавь ночничок на пять", FAKE_TOOLS, "decision model: a number is left to the next chain"),
     ("зажги лампу", [], "decision model: no device options"),
+    # Two devices by their aliases: the next chain does both, even when «и» is lost.
+    ("включи ночник люстру", FAKE_TOOLS, "decision model: several devices named: "
+     "set_light.entity=bright_room_light, set_dimmer.device_id=night_light"),
 ])
 async def test_is_not_asked_what_it_cannot_answer(text, tools, reason):
     backend, requests = _jev(_answers())
@@ -184,6 +193,39 @@ async def test_is_not_asked_what_it_cannot_answer(text, tools, reason):
         await _strict(backend, text, tools)
     assert ei.value.reason == reason
     assert requests == []
+
+
+@pytest.mark.parametrize("text, named", [
+    ("захар включи свет в туалете на кухне", ["kitchen_light", "toilet_light"]),
+    ("включи свет в ванной и в туалете", ["toilet_light", "bathroom_light"]),
+    ("выключи свет в прихожей", ["corridor_light"]),
+    ("включи свет на кухне", ["kitchen_light"]),
+    ("открой дверь", ["main_lock"]),
+    ("спокойной ночи", ["night"]),
+])
+def test_names_the_devices_of_the_production_list(text, named):
+    pytest.importorskip("pymorphy3")
+    tools_index = index_tools(_PROD["tools"], set(parse_actions(_PROD["nlu"]["actions"])))
+    targets = _targets(parse_aliases(_PROD["nlu"]["aliases"]), tools_index)
+    keys = _named_targets(targets, text, build_lemmatizer())
+    assert [key.split("=")[1] for key in keys] == named
+
+
+def test_a_word_other_devices_share_names_no_device():
+    pytest.importorskip("pymorphy3")
+    targets = {
+        "bright": {"phrases": ["свет", "люстра"]},
+        "kitchen": {"phrases": ["свет на кухне", "кухня"]},
+        "toilet": {"phrases": ["свет в туалете", "туалет"]},
+        "corridor": {"phrases": ["прихожая"]},
+    }
+    lemmatize = build_lemmatizer()
+    assert _named_targets(targets, "захар включи свет в туалете на кухне", lemmatize) == [
+        "kitchen", "toilet"]
+    assert _named_targets(targets, "Включи свет на кухне", lemmatize) == ["kitchen"]
+    assert _named_targets(targets, "выключи свет в прихожей", lemmatize) == ["corridor"]
+    assert _named_targets(targets, "включи люстру", lemmatize) == ["bright"]
+    assert _named_targets(targets, "включи свет", lemmatize) == []
 
 
 def _timeout(request):
