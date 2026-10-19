@@ -75,6 +75,25 @@ describe("Request log — chains", () => {
     expect(items[3].textContent).toContain("spoke");
   });
 
+  it("reads a dropped follow-up phrase as not a continuation, with the check's probability", async () => {
+    getRun.mockResolvedValue({
+      ...ROW, result: "rejected", reason: "followup_reject", stt_text: "ну и погодка", llm_text: "",
+      attempts: [
+        { kind: "followup", provider: "jev", text: "ну и погодка", outcome: "rejected", probability: 0.12, t: 640 },
+        { kind: "chain", chain: "smart", stt: "groq", handler: "openrouter", text: "ну и погодка", outcome: "rejected", error: null, detail: null, t_stt: 800, t_handler: 0 },
+      ],
+    });
+    render(<Log />);
+    fireEvent.click((await screen.findAllByText("Солнечно"))[0]);
+    expect((await screen.findByText("Not a continuation (follow-up check).")).parentElement.textContent)
+      .toContain("probability 0.12");
+    expect(screen.queryByText("Wake-word verify")).toBeNull();
+    const items = screen.getAllByTestId("attempt");
+    expect(items[0].textContent).toContain("Follow-up check · jev");
+    expect(items[0].textContent).toContain("probability 0.12 · 0.64s");
+    expect(items[1].textContent).toContain("ну и погодка");
+  });
+
   it("shows a dash, not (silence), as the request of an announcement", async () => {
     getRuns.mockResolvedValue({ runs: [
       { ...ROW, reason: "reminder", stt_text: null, llm_text: "молоко" },

@@ -3,8 +3,8 @@
 One aiohttp app on core.audio.host/port serves GET /device (the device protocol) and
 GET /health. DeviceManager keeps one Device per name; a Device keeps its Pipeline and its
 running capture across reconnects and binds the pipeline's transport hooks (send_event,
-play, has_speaker) to its live Connection. This module alone maps StageEvents onto wire
-messages and converts outgoing audio to what the device plays.
+play, has_speaker, has_follow_up) to its live Connection. This module alone maps
+StageEvents onto wire messages and converts outgoing audio to what the device plays.
 """
 
 import asyncio
@@ -236,6 +236,8 @@ class Connection:
         # The wake model the device reported loaded; an older firmware names its own in hello.
         self.model = hello.get("model")
         self.speaker = bool(hello.get("caps", {}).get("speaker"))
+        # The device reopens its microphone on a follow-up `listening`.
+        self.follow_up = bool(hello.get("caps", {}).get("follow_up"))
         self.mic_channels = hello.get("mic", {}).get("channels", 1)
         play = hello.get("play", {})
         self.play_rate = play.get("rate")
@@ -343,14 +345,15 @@ class Connection:
             msg["session"] = stream.session
         return msg
 
-    async def play(self, mime: str, audio) -> dict | None:
+    async def play(self, mime: str, audio) -> dict:
         """Send one clip (bytes or an async chunk iterator) as a play stream, paced to
-        the device's buffer, and return once the device reports it played (or dropped).
-        Streams go out back to back in call order. The iterator is always closed.
+        the device's buffer, and return once the device reports it. Streams go out back
+        to back in call order. The iterator is always closed.
 
-        Returns {"dry", "gap_ms"} of a stream the device reports played with them: how
-        many times it ran dry before its end and the ms of silence played meanwhile;
-        None for a dropped stream or a device that does not count them."""
+        Returns {"outcome", "dry", "gap_ms"}: outcome "played" or "dropped"; dry how
+        many times a played stream ran dry before its play_end and gap_ms the ms of
+        silence played meanwhile, both None for a dropped stream or a device that does
+        not count them."""
         chunks = _one_chunk(audio) if isinstance(audio, (bytes, bytearray)) else audio
         try:
             out = _PcmOut(mime, self.play_rate)
@@ -382,12 +385,13 @@ class Connection:
             stream.end("dropped")
         if stream.ended.result() == "closed":
             raise ConnectionError(f"{self.name} disconnected during playback")
-        if stream.ended.result() != "played" or stream.dry is None:
-            return None
+        outcome = stream.ended.result()
+        if outcome != "played" or stream.dry is None:
+            return {"outcome": outcome, "dry": None, "gap_ms": None}
         if stream.dry > 0:
             logger.warning(f"{self.name}: stream {stream.id} ran dry {stream.dry} times, "
                            f"{stream.gap_ms} ms of silence")
-        return {"dry": stream.dry, "gap_ms": stream.gap_ms}
+        return {"outcome": outcome, "dry": stream.dry, "gap_ms": stream.gap_ms}
 
     async def _send_pcm(self, stream: _Stream, pcm: bytes) -> None:
         """Queue PCM frames, keeping at most buffer_ms - PACING_MARGIN_MS of audio
@@ -457,6 +461,7 @@ class Device:
         """Make `conn` the live connection; return the one it replaces, if any."""
         old, self.conn = self.conn, conn
         self.pipeline.has_speaker = conn.speaker
+        self.pipeline.has_follow_up = conn.speaker and conn.follow_up
         return old
 
     async def detach(self, conn: Connection) -> None:
@@ -486,7 +491,7 @@ class Device:
         if event in (StageEvent.RUN_END, StageEvent.ERROR):
             conn.session_open = False
 
-    async def play(self, mime: str, audio) -> dict | None:
+    async def play(self, mime: str, audio) -> dict:
         """The pipeline's play hook; returns what Connection.play does."""
         conn = self.conn
         if conn is None or not conn.speaker:

@@ -113,15 +113,15 @@ static void test_encode(void)
                            .play_rate = 48000, .play_buffer_ms = 4000};
     encoded_is(zl_encode_hello(&speaker, 60, 0),
                "{\"type\":\"hello\",\"id\":\"main_room\",\"fw\":\"voicepe 0.1.0 (a1b2c3d)\","
-               "\"caps\":{\"speaker\":true,\"screen\":false},\"mic\":{\"channels\":2},"
+               "\"caps\":{\"speaker\":true,\"screen\":false,\"follow_up\":true},\"mic\":{\"channels\":2},"
                "\"play\":{\"rate\":48000,\"buffer_ms\":4000},\"volume\":60}");
     zl_config_t panel = {.id = "a0b1c2d3e4f5", .fw = "espanel 0.2.0", .screen = true, .mic_channels = 1};
     encoded_is(zl_encode_hello(&panel, 50, 0),
                "{\"type\":\"hello\",\"id\":\"a0b1c2d3e4f5\",\"fw\":\"espanel 0.2.0\","
-               "\"caps\":{\"speaker\":false,\"screen\":true},\"mic\":{\"channels\":1}}");
+               "\"caps\":{\"speaker\":false,\"screen\":true,\"follow_up\":true},\"mic\":{\"channels\":1}}");
     encoded_is(zl_encode_hello(&panel, 50, 7),  // a capture is held
                "{\"type\":\"hello\",\"id\":\"a0b1c2d3e4f5\",\"fw\":\"espanel 0.2.0\","
-               "\"caps\":{\"speaker\":false,\"screen\":true},\"mic\":{\"channels\":1},\"capture\":7}");
+               "\"caps\":{\"speaker\":false,\"screen\":true,\"follow_up\":true},\"mic\":{\"channels\":1},\"capture\":7}");
     encoded_is(zl_encode_wake(17, "Захар"), "{\"type\":\"wake\",\"session\":17,\"word\":\"Захар\"}");
     encoded_is(zl_encode_wake(4294967295u, "x"), "{\"type\":\"wake\",\"session\":4294967295,\"word\":\"x\"}");
     encoded_is(zl_encode_played(9, false, 2, 125), "{\"type\":\"played\",\"id\":9,\"dry\":2,\"gap_ms\":125}");
@@ -187,16 +187,22 @@ static void test_session(void)
     zl_msg_t any = msg_of("{\"type\": \"reply\", \"text\": \"a\"}");
     assert(zl_sess_accepts(&s, &cur) && !zl_sess_accepts(&s, &old) && zl_sess_accepts(&s, &any));
 
-    zl_sess_state(&s, ZL_STATE_LISTENING);
+    assert(!zl_sess_state(&s, ZL_STATE_LISTENING));  // the mic is on already: no reopen
     assert(s.mic && s.open);
     assert(zl_sess_wake(&s) == ZL_WAKE_MIC && s.session == 1);
     assert(!zl_sess_capture(&s));  // busy: a session is open
     zl_sess_state(&s, ZL_STATE_TRANSCRIBING);
     assert(!s.mic && s.open);
+    // A follow-up: a `listening` of the open session whose mic is off turns the mic on again.
+    assert(zl_sess_state(&s, ZL_STATE_LISTENING));
+    assert(s.mic && s.open);
+    zl_sess_state(&s, ZL_STATE_TRANSCRIBING);
 
     assert(zl_sess_wake(&s) == ZL_WAKE_START && s.session == 2 && s.mic);  // a new wake replaces the session
     assert(!zl_sess_accepts(&s, &cur));
     zl_sess_state(&s, ZL_STATE_IDLE);
+    assert(!s.mic && !s.open);
+    assert(!zl_sess_state(&s, ZL_STATE_LISTENING));  // a closed session reopens nothing
     assert(!s.mic && !s.open);
 
     assert(zl_sess_capture(&s) && s.capture);

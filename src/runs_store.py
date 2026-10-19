@@ -332,8 +332,8 @@ class RunsStore:
         # Same Connection as writes from a worker thread: hold the write lock.
         with self._lock:
             rows = self._conn.execute(
-                "SELECT result, chain, t_total, t_wakeword, t_vad, t_stt, t_llm, t_stress, "
-                "t_tts FROM runs WHERE ts >= ?",
+                "SELECT result, reason, chain, t_total, t_wakeword, t_vad, t_stt, t_llm, "
+                "t_stress, t_tts FROM runs WHERE ts >= ?",
                 (since,),
             ).fetchall()
         if len(rows) == 0:
@@ -353,8 +353,11 @@ class RunsStore:
         # rejected_24h for FAPH (false-accept-per-hour) auditing. The verifier (and the
         # captured-utterance duration t_vad) DID run for rejected runs, so vad/wakeword
         # averages span ALL rows; the never-run downstream stages span served only.
+        # A follow-up phrase dropped as not a continuation (reason followup_*) is not
+        # served either, but it is no wake-word false accept: not in rejected_24h.
         served = [r for r in rows if r["result"] != "rejected"]
-        rejected = sum(1 for r in rows if r["result"] == "rejected")
+        rejected = sum(1 for r in rows if r["result"] == "rejected"
+                       and not (r["reason"] or "").startswith("followup_"))
 
         if len(served) == 0:
             # Only rejected runs in the window: no served KPIs, but still report the

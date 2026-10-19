@@ -17,7 +17,7 @@ from src import config_store
 from src.core_config import CoreConfig
 from src.plugins.base import Deps, get_provider, providers
 
-STAGE_CATEGORIES = ("vad", "wakeword", "stt", "llm", "stress", "tts")
+STAGE_CATEGORIES = ("vad", "wakeword", "stt", "llm", "stress", "tts", "followup")
 # Categories whose providers are chosen per recognition chain (core.chains), not by
 # one `selected` id: the slot is a pool of provider instances.
 POOL_CATEGORIES = ("stt", "llm")
@@ -60,6 +60,9 @@ class ConfigDoc(BaseModel):
     # stage existed still parse; the ruaccent provider's own defaults then apply.
     stress: StageSlot = StageSlot(selected="ruaccent")
     tts: TtsVariants
+    # followup has a default slot (like stress) so configs written before the
+    # follow-up stage existed still parse; the jev provider's own defaults (off) apply.
+    followup: StageSlot = StageSlot(selected="jev")
     core: CoreConfig = CoreConfig()
 
 

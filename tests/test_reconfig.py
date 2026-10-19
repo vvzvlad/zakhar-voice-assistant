@@ -178,6 +178,11 @@ def test_action_for_and_backend_categories_stress():
     assert "stress" in backend_categories({"stress.instances.ruaccent.model_size"})
 
 
+def test_action_for_and_backend_categories_followup():
+    assert action_for("followup.instances.jev.window_ms") == "rebuild_backends"
+    assert backend_categories({"followup.instances.jev.enabled"}) == {"followup"}
+
+
 def test_request_initial_load_warmup_path_routes_to_stress_rebuild():
     # The synthetic "stress.__warmup__" path used by request_initial_load() routes
     # through the SAME classifier as a real field change: it maps to a backend rebuild
@@ -1091,6 +1096,22 @@ async def test_apply_job_rebuild_http_also_rebuilds_offline_backend_changed_in_j
     assert hub.set_calls == [["new-src"]]              # tools rebuilt
     assert deps.http_cloud is new_client               # client swapped
     assert old_client.closed is True                   # old client closed
+
+
+@pytest.mark.asyncio
+async def test_apply_job_rebuild_http_rebuilds_a_cloud_followup(monkeypatch):
+    # The follow-up check posts through http_cloud: a proxy change rebuilds it.
+    monkeypatch.setattr("src.reconfig.build_sources", lambda c, h, s, t: ["new-src"])
+    monkeypatch.setattr("src.reconfig.httpx.AsyncClient", lambda **kw: _FakeHttpClient("new"))
+    svc = _StubSvc(cloud_cats={"followup"})
+    rt = _http_runtime(svc, _FakeHub())
+    deps = types.SimpleNamespace(http_cloud=_FakeHttpClient("old"), tts_timeout=30)
+    svc.attach(deps)
+
+    await Reconfigurator(rt, deps, asyncio.Queue()).apply_job({"core.network.external_proxy"})
+
+    assert svc.calls["followup"] == 1
+    assert rt.followup_backend == ("backend", "followup", 30)
 
 
 @pytest.mark.asyncio

@@ -28,6 +28,7 @@ from src.runs_store import RunsStore
 from src.runtime import Runtime
 from src.tts import TtsBackend, pcm_mime
 from tests.test_pipeline import FakeToolHub, FakeVad, patch_llm
+from tests.test_pipeline_followup import FakeGate
 
 # 3 speech frames then 6 silence frames (20 ms VAD frames) -> an end-point.
 PHRASE_VAD = [True, True, True, False, False, False, False, False, False]
@@ -206,10 +207,11 @@ class Server:
         self.http = aiohttp.ClientSession()
 
     async def connect(self, id="kitchen", *, speaker=True, rate=16000, buffer_ms=4000,
-                      capture=None) -> FakeDevice:
+                      capture=None, follow_up=False) -> FakeDevice:
         ws = await self.http.ws_connect(f"http://127.0.0.1:{self.manager.port}/device")
         hello = {"type": "hello", "id": id, "fw": "voicepe 0.1.0 (a1b2c3d)",
-                 "caps": {"speaker": speaker, "screen": False}, "mic": {"channels": 2}}
+                 "caps": {"speaker": speaker, "screen": False, "follow_up": follow_up},
+                 "mic": {"channels": 2}}
         if speaker:
             hello.update(play={"rate": rate, "buffer_ms": buffer_ms}, volume=60)
         if capture is not None:
@@ -545,6 +547,29 @@ async def test_announce_whose_speech_fails_is_a_tts_error_run(srv, tmp_path, mon
     assert not (tmp_path / "context_kitchen.txt").exists()
 
 
+async def test_follow_up_listens_after_a_played_answer_only(srv):
+    srv.rt.followup_backend = FakeGate(accepted=False, probability=0.1)
+    dev = await srv.connect(follow_up=True)
+    await dev.recv()  # config
+    await dev.wake(1)
+    await dev.phrase()
+    got = [await dev.recv() for _ in range(7)]
+    await dev.send(type="played", id=got[-1]["id"])
+    # The answer played out: the session stays open and the microphone reopens.
+    assert await dev.recv() == state(1, "listening")
+    # A phrase the follow-up check drops ends the session without a transcript.
+    await dev.phrase()
+    assert await dev.recv() == state(1, "transcribing")
+    assert await dev.recv() == state(1, "idle")
+
+    # An answer the device dropped opens no window.
+    await dev.wake(2)
+    await dev.phrase()
+    got = [await dev.recv() for _ in range(7)]
+    await dev.send(type="played", id=got[-1]["id"], dropped=True)
+    assert await dev.recv() == state(2, "idle")
+
+
 async def test_run_ends_when_played_never_comes(srv, monkeypatch):
     monkeypatch.setattr(device_server, "PLAYED_WAIT_MARGIN_S", 0.2)
     dev = await srv.connect(buffer_ms=700)
@@ -592,12 +617,13 @@ async def test_playback_is_paced_to_the_device_buffer(srv):
 
 async def test_played_reports_how_the_stream_ran_dry(srv):
     # A stream that played out returns the device's dry/gap_ms; a dropped one and a
-    # device that does not count them return None.
+    # device that does not count them return None for both.
     dev = await srv.connect()
     await dev.recv()  # config
-    for reply, stats in (({"dry": 2, "gap_ms": 90}, {"dry": 2, "gap_ms": 90}),
-                         ({}, None),
-                         ({"dropped": True}, None)):
+    for reply, stats in (
+            ({"dry": 2, "gap_ms": 90}, {"outcome": "played", "dry": 2, "gap_ms": 90}),
+            ({}, {"outcome": "played", "dry": None, "gap_ms": None}),
+            ({"dropped": True}, {"outcome": "dropped", "dry": None, "gap_ms": None})):
         play = asyncio.create_task(srv.device().play(pcm_mime(16000), b"\x01\x00" * 1600))
         start = await dev.recv()
         await dev.recv()  # play_end
