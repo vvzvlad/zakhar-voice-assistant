@@ -227,6 +227,8 @@ device                                   server
 - Pacing: the server keeps at most `buffer_ms − 500` ms of audio ahead of the device's playback,
   estimating that playback runs at real time from the first frame it sends. The device buffer
   holds `buffer_ms`.
+- The device starts a stream, and resumes one that ran dry before its `play_end`, once it holds
+  300 ms of it or its `play_end` has come; the 500 ms pacing margin covers that wait.
 - Indication while playing outside a session (an announcement) is the device's own choice.
 
 ## Settings and diagnostics

@@ -42,6 +42,11 @@ static const char *TAG = "zakhar_link";
 #define SILENCE_MS 30000       // nothing heard for this long drops the link
 #define RX_CAP 4096            // a text frame larger than this is skipped; fits a long reply
 #define PEAK_MS 1000           // wake_peak period
+// Audio a stream holds before it plays, and again after it runs dry. A TTS stream arrives in
+// bursts with pauses between them; played with no reserve, each pause longer than what is queued
+// is a gap of silence mid-word, heard as a click. The wait stays inside the server's 500 ms pacing
+// margin (docs/device-protocol.md), so the buffer does not overflow.
+#define PLAY_PRIME_MS 300
 // Core 0, priority 3, for both tasks: next to the wake-word task, away from the UI on core 1.
 #define TASK_STACK (6 * 1024)
 #define TASK_PRIO 3
@@ -740,7 +745,7 @@ void zl_start(const zl_config_t *cfg, const zl_callbacks_t *cb)
             ESP_LOGE(TAG, "playback buffer of %u samples: out of PSRAM", (unsigned)cap);
             return;
         }
-        zl_playq_init(&s_playq, buf, cap);
+        zl_playq_init(&s_playq, buf, cap, (size_t)cfg->play_rate * PLAY_PRIME_MS / 1000);
     }
     const esp_err_t err = mdns_init();
     if (err != ESP_OK) ESP_LOGE(TAG, "mDNS init failed: %s", esp_err_to_name(err));
