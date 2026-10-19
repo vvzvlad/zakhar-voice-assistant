@@ -250,7 +250,10 @@ device                                   server
   then they get `state idle`. For `core.arbitration.cooldown_ms` (default 2000 ms) after the
   first of those wakes, a `wake` from any other device is ended the same way. The ended runs
   show in the run log as `rejected`, reason `duplicate`, with the phrase recognized by the STT
-  of the first enabled chain; the device gets no `transcript` of it.
+  of the first enabled chain; the device gets no `transcript` of it. When the kept session
+  answers, each ended device without a speaker gets that answer as a `reply` without `session`,
+  so its screen shows it; a device with a speaker gets nothing, nor does a later answer of the
+  same session (a follow-up).
 - `stop`: `{"type": "stop", "session": 17}`, device → server: the stop word. The device runs the
   stop model from 1 s after its playback starts until the playback ends; a detection flushes the
   playback and sends `stop`, then `played {id, "dropped": true}` for each stream it dropped.

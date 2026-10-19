@@ -39,6 +39,9 @@ class RecordingArbiter:
     def run_changed(self, pipeline, token):
         pass
 
+    def run_event(self, pipeline, event, data):
+        pass
+
 
 def make_arbitrated(tmp_path, monkeypatch, *, verifier=None, **kw):
     pipeline, events = make_pipeline(tmp_path, monkeypatch, **kw)
@@ -151,6 +154,27 @@ async def test_a_lost_run_streams_on_to_its_end_point_and_is_logged_with_its_tra
     rec = store.records[-1]
     assert (rec["result"], rec["reason"], rec["stt_text"], rec["llm_text"]) == (
         "rejected", "duplicate", "включи свет", "")
+
+
+async def test_a_speakerless_device_the_cooldown_dropped_is_shown_the_winners_answer(
+        tmp_path, monkeypatch):
+    patch_llm(monkeypatch, reply="готово")
+    sent = []
+    speaker, _ = make_pipeline(tmp_path, monkeypatch, name="speaker", stt_text="свет")
+    panel, _ = make_pipeline(tmp_path, monkeypatch, name="panel", stt_text="свет")
+    panel.has_speaker = False
+    speaker.arbiter = panel.arbiter = WakeArbiter(
+        speaker.rt, online_count=lambda: 1,
+        send_reply=lambda p, text: sent.append((p.name, text)))
+    for p in (speaker, panel):
+        held_phrase(p)
+
+    await speaker.on_start("a", WAKE)  # the lone online device wins at once
+    await panel.on_start("b", WAKE)  # in the cooldown: dropped
+    for p in (panel, speaker):
+        await p.on_audio(FRAME * 9)
+        await settle(p)
+    assert sent == [("panel", "готово")]
 
 
 async def test_a_duplicate_whose_stt_fails_is_still_logged(tmp_path, monkeypatch):

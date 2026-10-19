@@ -5,7 +5,11 @@ phrase, the server keeps exactly one session; the others never get `listening`. 
 wake run registers here and is held by its pipeline until the verdict. A lost run
 stays held — its device streams the rest of the phrase on silently — until its VAD
 end-points; it then ends with `state idle` and is recorded as a duplicate, its
-phrase recognized for the run log only (Pipeline.arbitration_verdict). A group of wakes is collected for `core.arbitration.window_ms` (less
+phrase recognized for the run log only (Pipeline.arbitration_verdict). A device
+without a speaker that lost the phrase (in the group or in its cooldown) is shown the
+winner's answer as an announcement, a `reply` without `session` (run_event).
+
+A group of wakes is collected for `core.arbitration.window_ms` (less
 once every online device has woken; a lone online device is not held) and ruled on:
 a device with a speaker over one without, between equals the higher signal-to-noise
 ratio of the pre-roll, then the earlier wake. For `core.arbitration.cooldown_ms`
@@ -37,6 +41,7 @@ from typing import Callable
 import numpy as np
 from loguru import logger
 
+from src.pipeline_events import StageEvent
 from src.vad import SAMPLE_RATE
 
 # The SNR's analysis window: 100 ms of 16 kHz samples.
@@ -70,10 +75,19 @@ class _Candidate:
 class WakeArbiter:
     """Decides which of the devices that woke on one phrase keeps its session."""
 
-    def __init__(self, runtime, online_count: Callable[[], int]):
+    def __init__(self, runtime, online_count: Callable[[], int],
+                 send_reply: Callable | None = None):
         # Window and cooldown are read live off runtime.core.arbitration on every wake.
         self.rt = runtime
         self._online_count = online_count
+        # send_reply(pipeline, text) shows text on that pipeline's device as an
+        # announcement; the winner's answer goes to the speakerless devices that lost
+        # its phrase (run_event).
+        self._send_reply = send_reply
+        # While the latest group's winner has not answered yet: the speakerless
+        # pipelines that lost its phrase, in the group or in its cooldown.
+        self._awaiting_answer = False
+        self._answer_to: list = []
         # The open group's candidates, pipeline -> _Candidate, in arrival order.
         self._candidates: dict = {}
         self._open = False
@@ -95,10 +109,14 @@ class WakeArbiter:
             if (self._group_start is not None
                     and (now - self._group_start) * 1000 < cfg.cooldown_ms
                     and pipeline is not self._winner):
+                if self._awaiting_answer and not pipeline.has_speaker:
+                    self._answer_to.append(pipeline)
                 pipeline.arbitration_verdict(token, False)
                 return
             self._group_start = now
             self._winner = None
+            self._awaiting_answer = False
+            self._answer_to = []
             self._open = True
             self._window_fired = False
             self._timer = loop.call_later(cfg.window_ms / 1000, self._window_end)
@@ -128,6 +146,20 @@ class WakeArbiter:
         candidate = self._candidates.get(pipeline)
         if candidate is not None and candidate.token == token:
             self._maybe_close()
+
+    def run_event(self, pipeline, event, data) -> None:
+        """A stage event of `pipeline`. The latest winner's first answer (TTS_START) is
+        sent to the speakerless devices that lost its phrase, once; that answer, or its
+        run ending without one (RUN_END, ERROR), ends the wait, so a later run of the
+        winner (a follow-up) is never forwarded."""
+        if pipeline is not self._winner or not self._awaiting_answer:
+            return
+        if event is StageEvent.TTS_START and self._send_reply is not None:
+            for loser in self._answer_to:
+                self._send_reply(loser, data.get("text", ""))
+        if event in (StageEvent.TTS_START, StageEvent.RUN_END, StageEvent.ERROR):
+            self._awaiting_answer = False
+            self._answer_to = []
 
     def _window_end(self) -> None:
         self._timer = None
@@ -168,6 +200,8 @@ class WakeArbiter:
             return
         _, winner, _ = max(scored, key=lambda s: s[0])
         self._winner = winner
+        self._awaiting_answer = True
+        self._answer_to = [p for _, p, _ in scored if p is not winner and not p.has_speaker]
         logger.info(
             "wake arbitration: "
             + ", ".join(

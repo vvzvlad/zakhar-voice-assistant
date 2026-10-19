@@ -252,11 +252,14 @@ class Pipeline:
         return os.path.join(config_store.DATA_DIR, f"context_{self.name}.txt")
 
     def _emit(self, event_type, data=None):
-        """Emit a transport-neutral StageEvent with a flat dict[str, str] payload."""
+        """Emit a transport-neutral StageEvent with a flat dict[str, str] payload. The
+        arbiter sees it too: it forwards a kept phrase's answer to the speakerless
+        devices that lost that phrase."""
+        payload = {str(k): str(v) for k, v in (data or {}).items()}
         if self.send_event is not None:
-            self.send_event(
-                event_type, {str(k): str(v) for k, v in (data or {}).items()}
-            )
+            self.send_event(event_type, payload)
+        if self.arbiter is not None:
+            self.arbiter.run_event(self, event_type, payload)
 
     async def on_start(self, conversation_id, wake_word_phrase) -> None:
         """Handle a wake: cancel the older run, reset ALL per-run state, announce the run.
