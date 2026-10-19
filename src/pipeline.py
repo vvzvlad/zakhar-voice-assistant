@@ -144,9 +144,13 @@ class Pipeline:
         # run of this device is told apart and ignored.
         self._arbitration_pending = False
         self._arbitration_token = 0
-        # The run lost the arbitration: it stays held, silently, until its VAD
-        # end-points, and is then finalized as a "duplicate" (_finalize_duplicate).
+        # The run lost the arbitration: it stays held until its VAD end-points (no
+        # transcript, no ack), and is then finalized as a "duplicate" (_finalize_duplicate).
         self._duplicate = False
+        # STT_VAD_START (the device's `listening`) went out for this run (_show_listening):
+        # a confirmed wake shows it while the arbitration still holds the run, and the
+        # release does not send it again.
+        self._listening_shown = False
         # Running utterance peak driving the optional decision-only VAD boost
         # (core.vad.mic_auto_gain); reset per run in on_start.
         self._vad_peak = 0
@@ -313,17 +317,20 @@ class Pipeline:
             self._wakeword_confirmed = True
         if wake_word_phrase and self.arbiter is not None:
             # Cross-device arbitration holds a wake run the same way until its
-            # verdict (arbitration_verdict). Registering is the last synchronous
-            # step: the arbiter may rule inside the call.
+            # verdict (arbitration_verdict). The arbiter may rule inside register(),
+            # so what follows checks its outcome: _show_listening skips a run that
+            # lost, and one that won has shown it already.
             self._arbitration_pending = True
             self._arbitration_token += 1
             self.arbiter.register(self, self._arbitration_token)
+            if not gate:
+                self._show_listening()
         elif not gate:
             # Speech is already in-stream (pre-roll captured the command), so the
             # device should show the active "listening for command" LED right away;
             # the matching STT_VAD_END (thinking) is emitted in _run once VAD
             # finalizes the utterance.
-            self._emit(StageEvent.STT_VAD_START, {})
+            self._show_listening()
             self._open_stt_streams()
 
     async def _reset_run(self, conversation_id, *, preroll_ms: int,
@@ -344,6 +351,7 @@ class Pipeline:
         self._wakeword_score = None
         self._vad_finalize_pending = None
         self._duplicate = False
+        self._listening_shown = False
         self._vad_session = None
         self._vad_peak = 0
         self._finalized = False
@@ -380,7 +388,7 @@ class Pipeline:
         self._followup = (self._wake_word, request, reply)
         self._wakeword_confirmed = True
         logger.info(f"{self.name}: 👂 listening for a follow-up ({window_ms} ms)")
-        self._emit(StageEvent.STT_VAD_START, {})
+        self._show_listening()
         self._open_stt_streams()
 
     def cancel_run(self) -> None:
@@ -677,16 +685,29 @@ class Pipeline:
             return
         if self._arbitration_pending:
             self.arbiter.run_changed(self, self._arbitration_token)
+            self._show_listening()
             return
         finalize = self._release_hold()
         if finalize is not None:
             await finalize
 
+    def _show_listening(self) -> None:
+        """Send the device its `listening` (STT_VAD_START) once per run, as soon as the
+        wake word is confirmed: the arbitration may hold the run for seconds more, and the
+        device shows nothing until `listening`. A run that later loses may keep it
+        (docs/device-protocol.md, the decisions); one already known to have lost is not
+        shown it."""
+        if self._listening_shown or self._duplicate:
+            return
+        self._listening_shown = True
+        self._emit(StageEvent.STT_VAD_START, {})
+
     def _release_hold(self):
         """Lift the hold on a wake run once both the verifier and the arbitration let
         it through; shared by _wakeword_confirm and arbitration_verdict.
 
-        Synchronously emits the held-back STT_VAD_START, opens the STT streams and
+        Synchronously shows `listening` unless a confirmed wake already did, opens the
+        STT streams and
         replays the whole buffered backlog into each once — no await between the
         caller clearing its pending flag, opening, and feeding, so a concurrent
         on_audio can't double-feed or lose the chunk. If the utterance already ended
@@ -694,7 +715,7 @@ class Pipeline:
         the un-awaited coroutine of its _run is returned for the caller to await or
         schedule; otherwise None.
         """
-        self._emit(StageEvent.STT_VAD_START, {})
+        self._show_listening()
         self._open_stt_streams()
         # Feed the whole backlog buffered during the hold once, so streaming STT sees
         # the same audio the batch path would.
@@ -737,8 +758,8 @@ class Pipeline:
         Synchronous, and possibly called inside a call this or another pipeline made
         to the arbiter, or from one of its timers — the module docstring of
         src/wake_arbiter.py lists them. A verdict the run no longer awaits is ignored.
-        Lost: the run stays held — no STT_VAD_START, so the device gets no
-        `listening` and streams the rest of the phrase on silently — and on_audio
+        Lost: the run stays held — its device streams the rest of the phrase on,
+        keeping the `listening` a confirmed wake already showed it — and on_audio
         finalizes it as a duplicate at its VAD end-point, or it is finalized at once
         when the end-point was already stashed. Won: the arbitration hold is lifted
         and the run released, unless the wake-word verifier is still pending — its

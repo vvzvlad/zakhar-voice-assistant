@@ -1,8 +1,8 @@
 """Pipeline-level tests for the cross-device wake arbitration hold: a wake run with an
 arbiter hook waits for its verdict like the wake-word gate waits for the verifier —
-nothing reaches STT and the device sees no `listening` until it is let through; a lost
-run streams on silently to its end-point and is logged as a duplicate with its
-transcript. The arbiter itself is a recording double in most tests; the verdicts are
+nothing reaches STT until it is let through, while the device is shown `listening` as
+soon as its wake is confirmed; a lost run streams on to its end-point and is logged as a
+duplicate with its transcript. The arbiter itself is a recording double in most tests; the verdicts are
 delivered by the test."""
 
 import pytest
@@ -25,13 +25,18 @@ from tests.test_wake_arbiter import preroll
 
 
 class RecordingArbiter:
-    """The arbiter double: records each registered token, rules nothing by itself."""
+    """The arbiter double: records each registered token; rules nothing by itself, or,
+    with `rule_on_register`, rules that verdict inside register() as the real arbiter
+    does for a wake in a cooldown."""
 
-    def __init__(self):
+    def __init__(self, rule_on_register=None):
         self.tokens = []
+        self.rule_on_register = rule_on_register
 
     def register(self, pipeline, token):
         self.tokens.append(token)
+        if self.rule_on_register is not None:
+            pipeline.arbitration_verdict(token, self.rule_on_register)
 
     def preroll_in(self, pipeline, token):
         pass
@@ -63,8 +68,10 @@ async def test_the_cleaner_wake_wins_though_its_pre_roll_comes_after_its_wake(tm
     await second.on_start("b", WAKE)
     await second.on_audio(preroll(100, 1000))  # 20 dB
     assert StageEvent.STT_VAD_START in types_of(second_events)
-    # The loser stays held, silently, until its own phrase ends.
-    assert types_of(first_events) == [StageEvent.RUN_START, StageEvent.STT_START]
+    # The loser keeps the `listening` it was shown at its wake and stays held until its
+    # own phrase ends.
+    assert types_of(first_events) == [
+        StageEvent.RUN_START, StageEvent.STT_START, StageEvent.STT_VAD_START]
     await settle(second)
 
 
@@ -91,6 +98,30 @@ async def test_a_winner_the_verifier_rejects_leaves_the_phrase_to_the_other_devi
     assert (store.records[-1]["result"], store.records[-1]["reason"]) == ("rejected", "wakeword_reject")
 
 
+async def test_a_panel_that_loses_by_its_own_confirmation_is_not_shown_listening(
+        tmp_path, monkeypatch):
+    # The speaker's wake is confirmed first and shown at once; the panel's confirmation
+    # completes the group, which the speaker wins: the panel never lights up.
+    patch_llm(monkeypatch)
+    speaker, speaker_events = make_pipeline(tmp_path, monkeypatch, name="speaker")
+    panel, panel_events = make_pipeline(tmp_path, monkeypatch, name="panel")
+    for p in (speaker, panel):
+        p.rt.wakeword_backend = FakeWakewordVerifier(accepted=True, window_ms=2500)
+    panel.has_speaker = False
+    speaker.arbiter = panel.arbiter = WakeArbiter(speaker.rt, online_count=lambda: 2)
+
+    for p in (speaker, panel):
+        await p.on_start("cid", WAKE)
+        await p.on_audio(preroll(100, 1000))
+    await speaker.on_audio(bytes(16000))  # 500 ms of live audio fills the verify window
+    await _drain_verify(speaker)
+    assert StageEvent.STT_VAD_START in types_of(speaker_events)
+    await panel.on_audio(bytes(16000))
+    await _drain_verify(panel)
+    assert panel._duplicate
+    assert StageEvent.STT_VAD_START not in types_of(panel_events)
+
+
 async def test_a_lone_false_wake_leaves_no_cooldown_for_another_device(tmp_path, monkeypatch):
     patch_llm(monkeypatch)
     speaker, _ = make_pipeline(tmp_path, monkeypatch, name="speaker")
@@ -105,7 +136,10 @@ async def test_a_lone_false_wake_leaves_no_cooldown_for_another_device(tmp_path,
     assert StageEvent.STT_VAD_START in types_of(panel_events)
 
 
-async def test_a_held_run_starts_listening_only_once_it_won(tmp_path, monkeypatch):
+async def test_a_held_run_shows_listening_at_once_and_is_released_once_it_won(
+        tmp_path, monkeypatch):
+    # No verifier: the wake needs no check, so the device is shown `listening` at once,
+    # and only once, though the run waits for the arbitration.
     patch_llm(monkeypatch, reply="готово")
     store = FakeRunsStore()
     pipeline, events, arbiter = make_arbitrated(
@@ -113,10 +147,10 @@ async def test_a_held_run_starts_listening_only_once_it_won(tmp_path, monkeypatc
 
     await pipeline.on_start("cid", WAKE)
     await pipeline.on_audio(b"\x01\x02" * 1000)
-    assert types_of(events) == [StageEvent.RUN_START, StageEvent.STT_START]
+    assert types_of(events) == [StageEvent.RUN_START, StageEvent.STT_START, StageEvent.STT_VAD_START]
 
     pipeline.arbitration_verdict(arbiter.tokens[-1], True)
-    assert types_of(events)[-1] == StageEvent.STT_VAD_START
+    assert types_of(events).count(StageEvent.STT_VAD_START) == 1
     await pipeline.on_stop(False)
     assert store.records[-1]["stt_text"] == "включи свет"
 
@@ -130,18 +164,18 @@ def held_phrase(pipeline):
 
 async def test_a_lost_run_streams_on_to_its_end_point_and_is_logged_with_its_transcript(
         tmp_path, monkeypatch):
-    # Lost at its wake (as in the cooldown): no `listening`, no transcript to the
+    # Lost inside its registration (as in the cooldown): no `listening`, no transcript to the
     # device, no handler, no ack — the phrase is only recognized for the run log.
     patch_llm(monkeypatch, reply="готово")
     store = FakeRunsStore()
     pipeline, events, arbiter = make_arbitrated(
         tmp_path, monkeypatch, stt_text="включи свет", runs_store=store, ack=True)
+    pipeline.arbiter = RecordingArbiter(rule_on_register=False)
     ack_calls = []
     pipeline._schedule_ack = lambda: ack_calls.append(1)
     held_phrase(pipeline)
 
     await pipeline.on_start("cid", WAKE)
-    pipeline.arbitration_verdict(arbiter.tokens[-1], False)
     await pipeline.on_audio(FRAME * 3)  # the phrase goes on
     await settle(pipeline)
     assert types_of(events) == [StageEvent.RUN_START, StageEvent.STT_START]
@@ -225,7 +259,7 @@ async def test_a_duplicate_without_speech_is_not_transcribed(tmp_path, monkeypat
 
 
 @pytest.mark.parametrize("verifier_first", [True, False])
-async def test_a_won_run_with_a_verifier_is_released_only_after_both(
+async def test_a_won_run_with_a_verifier_shows_listening_once_the_verifier_confirms(
         tmp_path, monkeypatch, verifier_first):
     patch_llm(monkeypatch, reply="готово")
     pipeline, events, arbiter = make_arbitrated(
@@ -235,13 +269,13 @@ async def test_a_won_run_with_a_verifier_is_released_only_after_both(
     if verifier_first:
         await pipeline.on_audio(b"\x01\x02" * 30000)  # > the verify window
         await _drain_verify(pipeline)
-    else:
-        pipeline.arbitration_verdict(arbiter.tokens[-1], True)
-    assert StageEvent.STT_VAD_START not in types_of(events)
-
-    if verifier_first:
+        # Confirmed while the arbitration still holds the run: `listening` at once.
+        assert types_of(events).count(StageEvent.STT_VAD_START) == 1
         pipeline.arbitration_verdict(arbiter.tokens[-1], True)
     else:
+        pipeline.arbitration_verdict(arbiter.tokens[-1], True)
+        # Won, but the wake word is not confirmed yet: nothing shown.
+        assert StageEvent.STT_VAD_START not in types_of(events)
         await pipeline.on_audio(b"\x01\x02" * 30000)
         await _drain_verify(pipeline)
     assert types_of(events).count(StageEvent.STT_VAD_START) == 1

@@ -647,19 +647,21 @@ async def test_a_held_wake_keeps_the_arbitration_open_until_its_check_rules(srv,
     await panel.mic(stereo(500, -500, 60))
     await panel.mic(stereo(500, -500, 60))
     await until(lambda: len(verifier.calls) == 2)
-    with pytest.raises(asyncio.TimeoutError):  # the panel's window runs out, the group stays open
-        await panel.recv(timeout=0.3)
+    assert await panel.recv() == state(3, "listening")  # its own check confirmed it
+    await asyncio.sleep(0.3)  # the panel's window runs out, the group stays open
+    assert srv.device("panel").pipeline._arbitration_pending
 
     if outcome == "dropped":
         # The speaker's link goes before its check rules: the held wake is dropped and
         # the re-check rules the panel's group without it.
         await lose_link(srv, speaker)
-        assert await panel.recv() == state(3, "listening")
+        await panel.phrase()
+        assert await panel.recv() == state(3, "transcribing")
         return
     confirmed = outcome == "confirmed"
     verifier.verdict(11).set_result(WakewordVerdict(accepted=confirmed, score=0.9 if confirmed else 0.0))
     if confirmed:
-        # The speaker wins; the panel streams its phrase on silently and is let go.
+        # The speaker wins; the panel streams its phrase on and is let go.
         assert await speaker.recv() == {"type": "play_stop"}
         await speaker.send(type="played", id=old, dropped=True)
         assert await speaker.recv() == state(2, "listening")
@@ -667,8 +669,9 @@ async def test_a_held_wake_keeps_the_arbitration_open_until_its_check_rules(srv,
         assert await panel.recv() == state(3, "idle")
     else:
         # The re-check rules the panel's group without it: the panel keeps the phrase.
-        assert await panel.recv() == state(3, "listening")
         assert await speaker.recv() == {"type": "transcript", "session": 2, "text": "включи свет"}
+        await panel.phrase()
+        assert await panel.recv() == state(3, "transcribing")
 
 
 async def test_a_confirmed_wake_holds_the_arbitration_until_its_run_is_registered(srv):
@@ -701,8 +704,9 @@ async def test_a_confirmed_wake_holds_the_arbitration_until_its_run_is_registere
     verifier.verdict(11).set_result(WakewordVerdict(accepted=True, score=0.9))
     assert await speaker.recv() == {"type": "play_stop"}
     verifier.verdict(500).set_result(WakewordVerdict(accepted=True, score=0.9))
-    with pytest.raises(asyncio.TimeoutError):  # the speaker's run is not registered yet
-        await panel.recv(timeout=0.3)
+    assert await panel.recv() == state(3, "listening")  # its own check confirmed it
+    await asyncio.sleep(0.3)  # the speaker's run is not registered yet: the group stays open
+    assert srv.device("panel").pipeline._arbitration_pending
     release.set()
     await speaker.send(type="played", id=old, dropped=True)
     assert await speaker.recv() == state(2, "listening")
@@ -1449,8 +1453,9 @@ async def test_text_only_device_gets_no_tts(srv):
 
 async def test_one_phrase_heard_by_three_devices_runs_on_the_first_speaker(srv, tmp_path):
     # The panel (no speaker) hears the phrase first, then the kitchen speaker, then the
-    # hall speaker: only the kitchen's session goes on. The others stream their phrase
-    # on silently, are let go at its end and are logged as duplicates with what they
+    # hall speaker: only the kitchen's session goes on. The others are shown `listening`
+    # at their wake, stream their phrase on, are let go at its end and are logged as
+    # duplicates with what they
     # heard; the panel is then shown the kitchen's answer, once — not its follow-up.
     srv.rt.runs_store = RunsStore(str(tmp_path / "runs.db"))
     srv.rt.followup_backend = FakeGate(accepted=True)
@@ -1468,8 +1473,9 @@ async def test_one_phrase_heard_by_three_devices_runs_on_the_first_speaker(srv, 
             await until(lambda: srv.device(name).pipeline.preroll_pcm)
     assert await speaker.recv() == state(8, "listening")
     for dev, session in ((panel, 3), (hall, 5)):
+        assert await dev.recv() == state(session, "listening")
         await dev.phrase()
-        assert await dev.recv() == state(session, "idle")  # no `listening`, no `transcript`
+        assert await dev.recv() == state(session, "idle")  # no `transcript`
 
     await speaker.phrase()
     got = [await speaker.recv() for _ in range(7)]

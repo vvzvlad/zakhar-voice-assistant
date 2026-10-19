@@ -328,9 +328,11 @@ device                                   server
   `wake` the server holds over a running answer (above) joins only once the check confirms it,
   and until the check rules on it no open group is ruled: the held wake may be the same phrase.
   The server keeps one session — a device with a speaker over one without, between equals the
-  higher signal-to-noise ratio of the pre-roll, then the earlier wake. The others get no
-  `listening`: their microphone streams on silently until the server's VAD finds the end of the
-  phrase, and then they get `state idle`. For `core.arbitration.cooldown_ms` (default 2000 ms) after the
+  higher signal-to-noise ratio of the pre-roll, then the earlier wake. Each held device gets
+  `listening` as soon as the second check confirms its wake (at once when that check is off),
+  without waiting for the ruling; one ruled out by then — in the cooldown, or by the ruling its
+  own confirmation completes — gets none. The devices that lost stream their microphone on until
+  the server's VAD finds the end of the phrase, and then they get `state idle`. For `core.arbitration.cooldown_ms` (default 2000 ms) after the
   first of those wakes, a `wake` from any other device is ended the same way. The ended runs
   show in the run log as `rejected`, reason `duplicate`, with the phrase recognized by the STT
   of the first enabled chain; the device gets no `transcript` of it. When the kept session
