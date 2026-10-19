@@ -140,12 +140,14 @@ class ChainRun:
 
 
 async def run(rt, *, device: str, request, pcm: bytes = b"", text: str | None = None,
-              streams=None, on_text=None, on_filler=None) -> ChainRun:
+              streams=None, on_text=None, on_filler=None, gate=None) -> ChainRun:
     """Offer a request to the enabled chains in order until one answers.
 
     Voice (text is None): `pcm` is the utterance and `streams` the live sessions
     opened at speech by open_stream(), keyed by chain name; `on_text(text, t_stt)`
     fires once, with the first non-empty transcript and the ms spent on STT so far.
+    `await gate(text)` is asked about that transcript before on_text and before any
+    handler; False stops the run there (its attempt's outcome is "rejected").
     Text: `text` enters every chain at
     its handler, no STT runs. `request(text)` builds the handler's LlmRequest and
     `on_filler` is passed to LlmStage.respond(). Exceptions other than StageError
@@ -197,6 +199,9 @@ async def run(rt, *, device: str, request, pcm: bytes = b"", text: str | None = 
                         or contains_stt_hallucination(utterance)):
                     attempt["outcome"] = "empty"
                     continue
+                if not heard and gate is not None and not await gate(utterance):
+                    attempt.update(text=utterance, outcome="rejected")
+                    break
                 if not heard and on_text is not None:
                     on_text(utterance, out.t_stt)
                 heard = True

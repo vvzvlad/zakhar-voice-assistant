@@ -74,6 +74,7 @@ function ServiceMap({ catalog, config, stageAvg, perChain, reloading }) {
   const vad = selectedOf(catalog, "vad");
   const wake = selectedOf(catalog, "wakeword");
   const stress = selectedOf(catalog, "stress");
+  const followup = selectedOf(catalog, "followup");
   const speech = speechOf(catalog);
   const rows = chainRows(chainsOf(config), perChain);
   const busy = (...cats) => cats.some((c) => reloading.has(c));
@@ -97,6 +98,7 @@ function ServiceMap({ catalog, config, stageAvg, perChain, reloading }) {
     <Tile title="Speech" page="speech" on={!!speech.provider} loading={busy("tts", "stress")} prov={speech.provider || "—"}>
       <div className="mdl" data-testid="speech-voice">{speech.voice || "—"}{speech.fallbacks > 0 ? ` · +${speech.fallbacks} fallback` : ""}</div>
       <Mark label="stress" on={!!stress.values.enabled} />
+      <Mark label="follow-up" on={!!followup.values.enabled} />
       <Avg ms={stageAvg.tts} color={SC.tts} role="Text → speech" />
     </Tile>
   </div></div>;

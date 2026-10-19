@@ -9,10 +9,11 @@
 import { total } from "./components/primitives.jsx";
 
 // result -> { label, tone }; tone drives the pill/dot color (good|muted|bad).
-// "rejected" is a run ended before STT — the server-side wake-word verifier
-// blocked it (reason wakeword_reject / wakeword_error), or another device kept the
-// same phrase (reason duplicate). It produced no transcript on purpose, so it reads
-// as muted (like "empty"), not as a hard error.
+// "rejected" is a run ended before an answer — the server-side wake-word verifier
+// blocked it (reason wakeword_reject / wakeword_error), another device kept the same
+// phrase (reason duplicate), or the follow-up check dropped a follow-up phrase
+// (reason followup_*). It produced no answer on purpose, so it reads as muted (like
+// "empty"), not as a hard error.
 export const RESULT_META = {
   ok:       { label: "OK",        tone: "good" },
   tool:     { label: "OK · tool", tone: "good" },

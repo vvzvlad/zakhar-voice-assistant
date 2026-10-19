@@ -351,10 +351,12 @@ class RunsStore:
         # device's wake) abort before STT/LLM/TTS. They must NOT distort the
         # served-request KPIs (request count, latency percentiles, error rate) — those
         # describe runs the pipeline actually served. Only the verifier's rejects are
-        # counted in rejected_24h, for FAPH (false-accept-per-hour) auditing: a
-        # duplicate is no false trigger. The verifier (and the captured-utterance
-        # duration t_vad) DID run for rejected runs, so vad/wakeword averages span ALL
-        # rows; the never-run downstream stages span served only.
+        # counted in rejected_24h, for FAPH (false-accept-per-hour) auditing: neither a
+        # duplicate of another device's wake nor a follow-up phrase dropped as not a
+        # continuation (reason followup_*) is a wake-word false accept. The verifier (and
+        # the captured-utterance duration t_vad) DID run for rejected runs, so
+        # vad/wakeword averages span ALL rows; the never-run downstream stages span
+        # served only.
         served = [r for r in rows if r["result"] != "rejected"]
         rejected = sum(1 for r in rows if r["reason"] in _VERIFIER_REJECTS)
 

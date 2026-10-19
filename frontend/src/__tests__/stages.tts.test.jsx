@@ -38,6 +38,14 @@ function makeCatalog() {
           values: { enabled: true, stress_format: "plus" },
         }],
       },
+      {
+        id: "followup", selected: "jev",
+        providers: [{
+          id: "jev", label: "Jev (decision model)",
+          schema: { type: "object", properties: { enabled: { type: "boolean" }, window_ms: { type: "integer", title: "Window" } } },
+          values: { enabled: false, window_ms: 5000 },
+        }],
+      },
     ],
     core: { schema: {}, values: {} },
   };
@@ -53,6 +61,7 @@ afterEach(cleanup);
 
 const tabs = () => document.querySelector(".z-seg");
 const stressCard = () => screen.getByText("Stress placement").closest(".z-card");
+const followupCard = () => screen.getByText("Follow-up").closest(".z-card");
 
 async function saved() {
   fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
@@ -106,5 +115,16 @@ describe("TTS page — stress placement", () => {
       tts: { instances: { yandex: { voice: "alena" } } },
       stress: { instances: { ruaccent: { stress_format: "acute" } } },
     });
+  });
+});
+
+describe("TTS page — follow-up", () => {
+  it("shows the follow-up settings without the on/off switch and saves them", async () => {
+    render(<TTS />);
+    expect(within(followupCard()).queryByRole("switch")).toBeNull();
+    const window = within(followupCard()).getByDisplayValue("5000");
+    fireEvent.change(window, { target: { value: "4000" } });
+    fireEvent.blur(window);
+    expect(await saved()).toEqual({ followup: { instances: { jev: { window_ms: 4000 } } } });
   });
 });

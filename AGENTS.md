@@ -82,7 +82,7 @@ the only env-tunable values are the bind host/port of the admin panel
 start. The agent MCP endpoint rides the panel server at `/mcp` (same port); its
 only setting is `core.agent_mcp.enabled`, panel-editable and read live per request.
 
-- `vad`/`wakeword`/`stress` hold `{selected, instances}`; `stt`/`llm` hold only `{instances}` —
+- `vad`/`wakeword`/`stress`/`followup` hold `{selected, instances}`; `stt`/`llm` hold only `{instances}` —
   which STT feeds which handler is `core.chains`, an ordered list of `{name, enabled, stt,
   handler, narrow, parallel}` tried in turn on the same audio (`src/chains.py`); `tts` holds
   `{variants, instances}`, an ordered fallback list. Each provider

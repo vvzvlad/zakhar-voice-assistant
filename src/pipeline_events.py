@@ -13,7 +13,7 @@ class StageEvent(Enum):
     STT_VAD_END = auto()    # device state: transcribing (end of phrase)
     STT_END = auto()        # data: {"text": str}
     INTENT_START = auto()
-    INTENT_END = auto()     # data: {"conversation_id", "continue_conversation"}
+    INTENT_END = auto()     # data: {"conversation_id"}
     TTS_START = auto()      # data: {"text": str}
     ERROR = auto()          # data: {"code", "message"}
     RUN_END = auto()
