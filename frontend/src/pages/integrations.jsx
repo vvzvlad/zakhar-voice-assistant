@@ -100,6 +100,8 @@ const BUILTIN_SOURCES = [
     fallback: { enabled: true, url: "", username: "", password: "", calendar: "" }, configured: (v) => !!(v && v.url && v.username) },
   { id: "reminders", name: "Reminders (built-in)", sub: "core.reminders · built-in MCP",
     fallback: { enabled: true }, configured: (v) => !!(v && v.enabled) },
+  { id: "assistant_tasks", name: "Studio assistant (built-in)", sub: "core.assistant_tasks · built-in MCP (ZeroClaw webhook)",
+    fallback: { enabled: true, url: "", secret: "", task_suffix: "", prompt: "" }, configured: (v) => !!(v && v.url && v.secret) },
 ];
 
 // ── External MCP server modal (add / edit) ────────────────────────────────
@@ -107,8 +109,8 @@ const BUILTIN_SOURCES = [
 // transport (Literal), prompt (describes the server's tools to the model).
 const TRANSPORTS = ["auto", "streamable_http", "sse"];
 // Built-in ToolHub source ids — an external server may not shadow them, or it
-// would hide the openweathermap/calendar/reminders status in /api/tools.
-const RESERVED_NAMES = ["openweathermap", "calendar", "reminders"];
+// would hide the openweathermap/calendar/reminders/assistant_tasks status in /api/tools.
+const RESERVED_NAMES = ["openweathermap", "calendar", "reminders", "assistant_tasks"];
 function McpServerModal({ initial, onSave, onClose, title, takenNames }) {
   const [name, setName] = useState(initial?.name || "");
   const [url, setUrl] = useState(initial?.url || "");
@@ -233,7 +235,7 @@ export function MCP() {
   })), patchAndRefresh);
 
   return <FormPage form={form} narrow>
-    <PageHeader title="Tools" desc="Tool sources the model calls: external smart-home MCP servers and built-in weather/calendar/reminders. Sources are applied live — rebuilt on save, no restart needed."
+    <PageHeader title="Tools" desc="Tool sources the model calls: external smart-home MCP servers and built-in weather/calendar/reminders/studio assistant. Sources are applied live — rebuilt on save, no restart needed."
       actions={<button className="z-btn p" onClick={() => setModal({ mode: "add" })}><Ic n="add" w={14} />Add server</button>} />
     {toolsErr && <div className="z-banner warn" style={{ margin: "0 0 14px" }}>
       <Ic n="restart" w={15} />

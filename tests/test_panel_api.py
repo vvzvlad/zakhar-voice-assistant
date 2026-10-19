@@ -73,6 +73,33 @@ def _prompt_store(tmp_path, text="seed prompt"):
     return PromptStore(str(tmp_path / "prompts.db"), seed_path=str(seed))
 
 
+async def test_post_assistant_task_reply(tmp_path):
+    # ZeroClaw's send_url: the callback's status and body go back as is; ZeroClaw does
+    # not retry a 4xx, so the route must exist at exactly this path and method.
+    seen = []
+
+    async def reply(payload):
+        seen.append(payload)
+        return 404, {"error": "unknown task"}
+
+    client, _svc_ = await _client(tmp_path, assistant_task_reply=reply)
+    try:
+        resp = await client.post("/api/assistant-tasks/reply", json={"content": "x", "thread_id": "zakhar-7"})
+        assert (resp.status, await resp.json()) == (404, {"error": "unknown task"})
+        assert seen == [{"content": "x", "thread_id": "zakhar-7"}]
+        resp = await client.post("/api/assistant-tasks/reply", data="{not json",
+                                 headers={"Content-Type": "application/json"})
+        assert resp.status == 400
+    finally:
+        await client.close()
+    client, _svc_ = await _client(tmp_path)
+    try:
+        resp = await client.post("/api/assistant-tasks/reply", json={"content": "x"})
+        assert resp.status == 503
+    finally:
+        await client.close()
+
+
 async def test_get_catalog(tmp_path):
     client, _svc_ = await _client(tmp_path)
     try:

@@ -41,6 +41,7 @@ class Runtime:
         self.advert = None          # MdnsAdvert (the device server's mDNS record; restarted on a rebind)
         self.scheduler = None       # ReminderScheduler | None (Tier 3c reminders toggle)
         self.reminders_store = None  # RemindersStore | None (swapped by a reminders toggle)
+        self.assistant_tasks = None  # AssistantTasks (jobs handed to the studio assistant)
         self.panel = None           # PanelServer (so a runs-store swap reaches its endpoints)
 
     @property

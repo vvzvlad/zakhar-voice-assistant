@@ -167,6 +167,26 @@ class CalendarConfig(BaseModel):
                         json_schema_extra={"widget": "textarea"})
 
 
+class AssistantTasksConfig(BaseModel):
+    # Jobs handed off to the studio assistant (ZeroClaw) through its webhook channel;
+    # ZeroClaw posts each reply to POST /api/assistant-tasks/reply, which speaks it.
+    # Master switch: a disabled source is removed from the ToolHub and its prompt block is dropped.
+    enabled: bool = Field(True, title="Enabled", description=SOURCE_ENABLED_DESCRIPTION)
+    url: str = Field("", title="Webhook URL",
+                     description="ZeroClaw webhook channel the tasks are posted to. Its replies go to "
+                     "POST /api/assistant-tasks/reply on this panel.")
+    secret: str = Field("", title="Webhook secret", json_schema_extra=SECRET_FIELD_EXTRA)
+    task_suffix: str = Field(
+        "Ответ прозвучит на колонке, когда будет готов: начни с того, о чём была задача, "
+        "ответь коротко, одним-тремя предложениями, без разметки, списков и ссылок.",
+        title="Task suffix",
+        description="Appended to every task after a blank line.",
+    )
+    # Appended to the system prompt to describe this built-in MCP's tools to the model.
+    prompt: str = Field("", title="Tools prompt", description=SOURCE_PROMPT_DESCRIPTION,
+                        json_schema_extra={"widget": "textarea"})
+
+
 class DeviceConfig(BaseModel):
     # The device's hello id.
     name: str
@@ -273,6 +293,7 @@ class CoreConfig(BaseModel):
     openweathermap: OpenWeatherMapConfig = OpenWeatherMapConfig()
     mcp_servers: list[McpServerConfig] = []
     calendar: CalendarConfig = CalendarConfig()
+    assistant_tasks: AssistantTasksConfig = AssistantTasksConfig()
     agent_mcp: AgentMcpConfig = AgentMcpConfig()
     prompt: PromptConfig = PromptConfig()
     runs: RunsConfig = RunsConfig()

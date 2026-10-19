@@ -197,6 +197,7 @@ class PanelServer:
                  device_detect_set=None, device_model_reload=None,
                  static_dir=None, runs_store=None, tool_sources=None,
                  run_events=None, prompt_store=None, agent_mcp=None,
+                 assistant_task_reply=None,
                  heartbeat_interval: float = 1.0, reload_status=None):
         # svc: ConfigService; started_at: float (time.time())
         # device_status: optional callable -> list[dict]; static_dir: optional path to built frontend
@@ -271,6 +272,10 @@ class PanelServer:
         self.run_events = run_events
         self.prompt_store = prompt_store
         self.agent_mcp = agent_mcp
+        # assistant_task_reply: optional async callable (payload) -> (status, body) that
+        #   takes one reply of the studio assistant (AssistantTasks.on_reply). None ->
+        #   POST /api/assistant-tasks/reply returns 503.
+        self.assistant_task_reply = assistant_task_reply
         # reload_status: optional zero-arg callable -> list[str] of backend categories
         #   currently rebuilding (a model load is in flight); None -> the snapshot
         #   reports an empty list.
@@ -409,6 +414,20 @@ class PanelServer:
         except LookupError as e:
             return web.json_response({"error": str(e)}, status=404)
         return web.json_response(result)
+
+    async def _post_assistant_task_reply(self, request: web.Request) -> web.Response:
+        """The send_url of ZeroClaw's webhook channel: every reply of the studio assistant
+        lands here, {"content", "thread_id"?, "recipient"?}, and is stored on its task and
+        spoken on the task's speaker. No auth, like the rest of the trusted-LAN panel.
+
+        Status codes: 200 taken (also when it could not be spoken), 400 malformed JSON,
+        404 no task for the thread id, 503 assistant tasks not wired.
+        """
+        if self.assistant_task_reply is None:
+            return web.json_response({"error": "assistant tasks not available"}, status=503)
+        payload = await _read_json(request)
+        status, body = await self.assistant_task_reply(payload)
+        return web.json_response(body, status=status)
 
     async def _post_tts_test(self, request: web.Request) -> web.StreamResponse:
         """Synthesize a short test phrase with caller-supplied TTS settings and return
@@ -1365,6 +1384,7 @@ class PanelServer:
             web.get("/api/wake-models", self._get_wake_models),
             web.post("/api/wake-models", self._post_wake_model),
             web.post("/api/tts/test", self._post_tts_test),
+            web.post("/api/assistant-tasks/reply", self._post_assistant_task_reply),
             web.get("/api/prompt", self._get_prompt),
             web.put("/api/prompt", self._put_prompt),
             web.get("/api/prompt/profiles", self._get_prompt_profiles),

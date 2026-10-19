@@ -14,6 +14,7 @@
     "openweathermap": {"api_key": "", "city": "Moscow", "prompt": ""},
     "mcp_servers": [],
     "calendar": {"url": "", "username": "", "password": "", "calendar": "", "prompt": ""},
+    "assistant_tasks": {"url": "", "secret": "", "prompt": ""},
     "agent_mcp": {"enabled": true},
     "prompt": {"system_prompt_path": "data/system_prompt.md"},
     "runs": {"enabled": true, "retention_days": 30},

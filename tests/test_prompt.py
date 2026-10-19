@@ -1,4 +1,5 @@
 from src.core_config import (
+    AssistantTasksConfig,
     CalendarConfig,
     CoreConfig,
     McpServerConfig,
@@ -53,13 +54,15 @@ def test_build_system_prompt_appends_builtin_weather_and_calendar_prompts(tmp_pa
     core = CoreConfig(
         openweathermap=OpenWeatherMapConfig(prompt="WEATHER-BLOCK"),
         calendar=CalendarConfig(prompt="CAL-BLOCK"),
+        assistant_tasks=AssistantTasksConfig(prompt="TASKS-BLOCK"),
     )
 
     out = build_system_prompt(core, store)
 
-    # Both built-in sources' non-empty prompts are appended.
+    # Every built-in source's non-empty prompt is appended.
     assert "WEATHER-BLOCK" in out
     assert "CAL-BLOCK" in out
+    assert "TASKS-BLOCK" in out
     store.close()
 
 

@@ -12,6 +12,7 @@ from loguru import logger
 import src.plugins  # noqa: F401  triggers provider registration
 from src import config_store
 from src.agent_mcp import AgentMcpEndpoint
+from src.assistant_tasks import AssistantTasks, AssistantTasksStore
 from src.chains import referenced_instances
 from src.config_service import ConfigDoc, ConfigService
 from src.device_server import DeviceManager
@@ -128,6 +129,13 @@ async def main() -> None:
         reminders_store = RemindersStore(os.path.join(config_store.DATA_DIR, "reminders.db"))
         scheduler = ReminderScheduler(reminders_store)
 
+    # Jobs handed off to the studio assistant (ZeroClaw). Always built: the panel takes
+    # its replies even while the tool source is off. The service reads its config and the
+    # speakers through `rt`, which is late-bound below (the tool source built off it
+    # exists before the Runtime does).
+    assistant_tasks_store = AssistantTasksStore(os.path.join(config_store.DATA_DIR, "assistant_tasks.db"))
+    assistant_tasks = AssistantTasks(assistant_tasks_store)
+
     # Multi-source tool hub: an arbitrary list of external MCP servers (one
     # HttpMcpSource each) plus in-process built-in MCP servers (openweathermap first).
     # The source list is built by the shared build_sources() factory so boot and
@@ -136,7 +144,7 @@ async def main() -> None:
     # gracefully inside ToolHub.start(). The weather tool is gated on an OWM api key;
     # built-in OpenWeatherMap uses the proxied client_ext for its OWM call. Each
     # external server's source id is its (unique) name.
-    sources = build_sources(core, client_ext, scheduler)
+    sources = build_sources(core, client_ext, scheduler, assistant_tasks)
     hub = ToolHub(sources)
     await hub.start()
 
@@ -152,6 +160,8 @@ async def main() -> None:
         runs_store=runs_store, run_events=run_events,
         prompt_store=prompt_store,
     )
+    assistant_tasks.rt = rt
+    rt.assistant_tasks = assistant_tasks
 
     # The device server (/device WebSocket + /health on core.audio.host/port).
     manager = DeviceManager(rt)
@@ -222,6 +232,7 @@ async def main() -> None:
             run_events=run_events,
             prompt_store=prompt_store,
             agent_mcp=agent_mcp,
+            assistant_task_reply=assistant_tasks.on_reply,
             reload_status=reconf.reloading,
         )
         # Back-ref so the Reconfigurator can re-point the panel's runs-store at a
@@ -274,5 +285,6 @@ async def main() -> None:
         if runs_store is not None:
             runs_store.close()
         prompt_store.close()
+        assistant_tasks_store.close()
         if rt.reminders_store is not None:
             rt.reminders_store.close()

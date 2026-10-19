@@ -78,7 +78,7 @@ def action_for(path: str) -> str:
     if path == "core.tts_timeout":
         return "rebuild_backends"
     if (path.startswith("core.openweathermap") or path.startswith("core.calendar")
-            or path.startswith("core.mcp_servers")):
+            or path.startswith("core.mcp_servers") or path.startswith("core.assistant_tasks")):
         return "rebuild_tools"
     if path.startswith("core.agent_mcp"):
         return "live"          # enabled is read per /mcp request through the panel
@@ -450,7 +450,8 @@ class Reconfigurator:
     async def _rebuild_tools(self) -> None:
         """Rebuild the tool source set from current config and hot-swap it into the hub."""
         try:
-            sources = build_sources(self.rt.core, self.deps.http_cloud, self.rt.scheduler)
+            sources = build_sources(self.rt.core, self.deps.http_cloud, self.rt.scheduler,
+                                    self.rt.assistant_tasks)
             await self.rt.hub.set_sources(sources)
             logger.info("tool sources rebuilt (hot)")
         except Exception as e:
