@@ -145,15 +145,18 @@ void zl_sess_lost(zl_sess_t *s, bool *was_open);
 
 typedef struct {
     uint32_t id;
-    size_t left;  // its samples still in the buffer
-    bool ended;   // play_end arrived
+    size_t left;   // its samples still in the buffer
+    bool ended;    // play_end arrived
+    bool playing;  // primed: read out from now until it runs dry before its play_end
 } zl_stream_t;
 
 // A ring of mono samples holding streams back to back. Only the newest stream can be receiving
 // (between play_start and play_end); 0x02 payload bytes go to it, anything else is discarded.
+// A stream starts, and resumes after running dry, only once it holds `prime` samples or has
+// ended: a stream that arrives late plays with a pause instead of a run of clicks.
 typedef struct {
     int16_t *buf;
-    size_t cap, head, count;
+    size_t cap, head, count, prime;
     zl_stream_t streams[ZL_PLAYQ_STREAMS];  // in buffer order, the oldest first
     size_t nstreams;
     bool receiving;
@@ -164,7 +167,7 @@ typedef struct {
     size_t overflow;  // samples discarded since the buffer was full
 } zl_playq_t;
 
-void zl_playq_init(zl_playq_t *q, int16_t *buf, size_t cap);
+void zl_playq_init(zl_playq_t *q, int16_t *buf, size_t cap, size_t prime);
 // play_start: false when no slot is free, queued and done streams share ZL_PLAYQ_STREAMS (the
 // stream is then dropped). A stream still receiving is ended first.
 bool zl_playq_start(zl_playq_t *q, uint32_t id);
@@ -172,8 +175,8 @@ bool zl_playq_start(zl_playq_t *q, uint32_t id);
 void zl_playq_write(zl_playq_t *q, const uint8_t *data, size_t len);
 // play_end of the receiving stream; any other id is ignored.
 void zl_playq_end(zl_playq_t *q, uint32_t id);
-// Copies up to max samples out in stream order; a stream whose last sample went out after its
-// play_end moves to `done`.
+// Copies up to max samples out in stream order, stopping at a stream not primed; a stream whose
+// last sample went out after its play_end moves to `done`.
 size_t zl_playq_read(zl_playq_t *q, int16_t *out, size_t max);
 // play_stop or a wake: empties the buffer; writes the ids of the dropped streams to `dropped`
 // (ZL_PLAYQ_STREAMS slots) and returns their count. `done` is kept.

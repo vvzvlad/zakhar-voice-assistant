@@ -235,7 +235,7 @@ static void test_playq(void)
     int16_t buf[8], out[16];
     uint32_t ids[ZL_PLAYQ_STREAMS];
     zl_playq_t q;
-    zl_playq_init(&q, buf, 8);
+    zl_playq_init(&q, buf, 8, 0);
 
     // A sample split across two frames, then read out across the end of the stream.
     zl_playq_write(&q, (const uint8_t *)"\x01\x00", 2);  // no stream receiving: discarded
@@ -292,6 +292,31 @@ static void test_playq(void)
     size_t started = 1;  // 8 is receiving
     while (zl_playq_start(&q, 100 + (uint32_t)started)) started++;
     assert(started == ZL_PLAYQ_STREAMS);
+
+    // Priming at 3 samples: a stream waits for 3 samples, plays, runs dry, waits for 3 again; a
+    // shorter one plays at its play_end.
+    zl_playq_init(&q, buf, 8, 3);
+    const int16_t c[] = {30, 31, 32, 33, 34};
+    assert(zl_playq_start(&q, 9));
+    write_samples(&q, c, 2);
+    assert(zl_playq_read(&q, out, 16) == 0);
+    write_samples(&q, c + 2, 1);
+    assert(zl_playq_read(&q, out, 16) == 3 && out[0] == 30 && out[2] == 32);
+    write_samples(&q, c + 3, 1);
+    assert(zl_playq_read(&q, out, 16) == 0);  // ran dry: one sample is not enough to resume
+    write_samples(&q, c + 4, 1);
+    zl_playq_end(&q, 9);
+    assert(zl_playq_read(&q, out, 16) == 2 && out[0] == 33 && out[1] == 34);
+    assert(zl_playq_take_done(&q, ids) == 1 && ids[0] == 9);
+    // At a stream boundary the next stream primes on its own: 2 samples of it wait, 3 play on.
+    assert(zl_playq_start(&q, 10));
+    write_samples(&q, c, 2);
+    zl_playq_end(&q, 10);
+    assert(zl_playq_start(&q, 11));
+    write_samples(&q, c, 2);
+    assert(zl_playq_read(&q, out, 16) == 2 && zl_playq_take_done(&q, ids) == 1 && ids[0] == 10);
+    write_samples(&q, c + 2, 1);
+    assert(zl_playq_read(&q, out, 16) == 3 && out[0] == 30);
     printf("ok: playback queue\n");
 }
 
