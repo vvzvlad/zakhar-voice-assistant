@@ -92,7 +92,13 @@ The owner's words:
   `state idle` before `listening`. Of the rules offered (the first wake wins; the cleanest wake
   word wins; device priority; compare the texts after recognition), option 3: a device with a
   speaker beats one without, between equals the device that heard the wake word with the higher
-  signal-to-noise ratio, then the earlier wake.
+  signal-to-noise ratio, then the earlier wake. Then «пусть тоже распознается» — a dropped
+  duplicate's phrase is recognized for the run log too; «да пусть с индикацией, похуй, лишь бы
+  потом показало что дубликат» — the losing device may show its listening indication meanwhile,
+  the run log must show the run as a duplicate. Then, of «только тем панелям, что услышали эту же
+  фразу и проиграли» and «всем устройствам без динамика — каждый ответ», «первый вариант наверное,
+  да» — the answer of the kept session is shown on the screens of the devices without a speaker
+  that lost that phrase.
 
 ## Transport
 
@@ -237,12 +243,14 @@ device                                   server
   (default 500 ms) to collect the wakes of the other online devices, or less once every online
   device has woken; a lone online device is not held. With several wakes it rules only once
   each of them has its pre-roll in, or `window_ms` after that device's own `wake`, and the
-  server's second wake-word check has ruled on it; a wake that check rejects takes no part. It keeps one session — a device with a
-  speaker over one without, between equals the higher signal-to-noise ratio of the pre-roll,
-  then the earlier wake — and ends the others with `state idle` before `listening`. For
-  `core.arbitration.cooldown_ms` (default 2000 ms) after the first of those wakes, a `wake` from
-  any other device is ended the same way at once. The ended runs show in the run log as
-  `rejected`, reason `duplicate`.
+  server's second wake-word check has ruled on it; a wake that check rejects takes no part. It
+  keeps one session — a device with a speaker over one without, between equals the higher
+  signal-to-noise ratio of the pre-roll, then the earlier wake. The others get no `listening`:
+  their microphone streams on silently until the server's VAD finds the end of the phrase, and
+  then they get `state idle`. For `core.arbitration.cooldown_ms` (default 2000 ms) after the
+  first of those wakes, a `wake` from any other device is ended the same way. The ended runs
+  show in the run log as `rejected`, reason `duplicate`, with the phrase recognized by the STT
+  of the first enabled chain; the device gets no `transcript` of it.
 - `stop`: `{"type": "stop", "session": 17}`, device → server: the stop word. The device runs the
   stop model from 1 s after its playback starts until the playback ends; a detection flushes the
   playback and sends `stop`, then `played {id, "dropped": true}` for each stream it dropped.

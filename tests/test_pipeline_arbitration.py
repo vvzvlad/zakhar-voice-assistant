@@ -1,8 +1,9 @@
 """Pipeline-level tests for the cross-device wake arbitration hold: a wake run with an
 arbiter hook waits for its verdict like the wake-word gate waits for the verifier —
 nothing reaches STT and the device sees no `listening` until it is let through; a lost
-run ends silently as a duplicate. The arbiter itself is a recording double here; the
-verdicts are delivered by the test."""
+run streams on silently to its end-point and is logged as a duplicate with its
+transcript. The arbiter itself is a recording double in most tests; the verdicts are
+delivered by the test."""
 
 import pytest
 
@@ -59,9 +60,8 @@ async def test_the_cleaner_wake_wins_though_its_pre_roll_comes_after_its_wake(tm
     await second.on_start("b", WAKE)
     await second.on_audio(preroll(100, 1000))  # 20 dB
     assert StageEvent.STT_VAD_START in types_of(second_events)
-    await settle(first)
-    assert StageEvent.STT_VAD_START not in types_of(first_events)
-    assert types_of(first_events)[-1] == StageEvent.RUN_END
+    # The loser stays held, silently, until its own phrase ends.
+    assert types_of(first_events) == [StageEvent.RUN_START, StageEvent.STT_START]
     await settle(second)
 
 
@@ -118,33 +118,86 @@ async def test_a_held_run_starts_listening_only_once_it_won(tmp_path, monkeypatc
     assert store.records[-1]["stt_text"] == "включи свет"
 
 
-async def test_a_lost_run_ends_silently_as_a_duplicate(tmp_path, monkeypatch):
-    # Lost at once, before any of its audio arrived: still recorded.
+def held_phrase(pipeline):
+    """Small VAD thresholds and a phrase the fake VAD end-points: three speech frames,
+    then silence."""
+    set_small_vad_thresholds(pipeline)
+    install_fake_vad(pipeline, [True, True, True, False, False, False, False, False, False])
+
+
+async def test_a_lost_run_streams_on_to_its_end_point_and_is_logged_with_its_transcript(
+        tmp_path, monkeypatch):
+    # Lost at its wake (as in the cooldown): no `listening`, no transcript to the
+    # device, no handler, no ack — the phrase is only recognized for the run log.
     patch_llm(monkeypatch, reply="готово")
     store = FakeRunsStore()
-    stt = FakeSttBackend("не должно распознаться")
-    stt_calls = []
-    orig = stt.transcribe
-
-    async def spy(pcm):
-        stt_calls.append(pcm)
-        return await orig(pcm)
-
-    stt.transcribe = spy
     pipeline, events, arbiter = make_arbitrated(
-        tmp_path, monkeypatch, stt_backend=stt, runs_store=store, ack=True)
+        tmp_path, monkeypatch, stt_text="включи свет", runs_store=store, ack=True)
     ack_calls = []
     pipeline._schedule_ack = lambda: ack_calls.append(1)
+    held_phrase(pipeline)
 
     await pipeline.on_start("cid", WAKE)
     pipeline.arbitration_verdict(arbiter.tokens[-1], False)
+    await pipeline.on_audio(FRAME * 3)  # the phrase goes on
+    await settle(pipeline)
+    assert types_of(events) == [StageEvent.RUN_START, StageEvent.STT_START]
+    await pipeline.on_audio(FRAME * 6)  # ...and ends
     await settle(pipeline)
 
-    assert types_of(events) == [
-        StageEvent.RUN_START, StageEvent.STT_START, StageEvent.STT_END, StageEvent.RUN_END]
-    assert (stt_calls, ack_calls) == ([], [])
+    assert events == [(StageEvent.RUN_START, {}), (StageEvent.STT_START, {}),
+                      (StageEvent.STT_END, {"text": ""}), (StageEvent.RUN_END, {})]
+    assert ack_calls == []
     rec = store.records[-1]
-    assert (rec["result"], rec["reason"]) == ("rejected", "duplicate")
+    assert (rec["result"], rec["reason"], rec["stt_text"], rec["llm_text"]) == (
+        "rejected", "duplicate", "включи свет", "")
+
+
+async def test_a_duplicate_whose_stt_fails_is_still_logged(tmp_path, monkeypatch):
+    # The phrase had already ended when the verdict came: the run ends at once.
+    patch_llm(monkeypatch)
+    store = FakeRunsStore()
+    stt = FakeSttBackend()
+
+    async def down(pcm):
+        raise RuntimeError("stt down")
+
+    stt.transcribe = down
+    pipeline, _, arbiter = make_arbitrated(tmp_path, monkeypatch, stt_backend=stt, runs_store=store)
+    held_phrase(pipeline)
+
+    await pipeline.on_start("cid", WAKE)
+    await pipeline.on_audio(FRAME * 9)
+    pipeline.arbitration_verdict(arbiter.tokens[-1], False)
+    await settle(pipeline)
+    rec = store.records[-1]
+    assert (rec["result"], rec["reason"], rec["stt_text"]) == ("rejected", "duplicate", "")
+
+
+async def test_a_duplicate_without_speech_is_not_transcribed(tmp_path, monkeypatch):
+    # The STT would make words up for the noise, as for any no-speech run.
+    patch_llm(monkeypatch)
+    store = FakeRunsStore()
+    stt = FakeSttBackend(text="продолжение следует")
+    calls = []
+    real = stt.transcribe
+
+    async def counted(pcm):
+        calls.append(len(pcm))
+        return await real(pcm)
+
+    stt.transcribe = counted
+    pipeline, _, arbiter = make_arbitrated(tmp_path, monkeypatch, stt_backend=stt, runs_store=store)
+    set_small_vad_thresholds(pipeline)
+    install_fake_vad(pipeline, [False] * 400)
+
+    await pipeline.on_start("cid", WAKE)
+    pipeline.arbitration_verdict(arbiter.tokens[-1], False)
+    for _ in range(300):
+        await pipeline.on_audio(FRAME)
+    await settle(pipeline)
+    rec = store.records[-1]
+    assert (rec["result"], rec["reason"], rec["stt_text"], calls) == ("rejected", "duplicate", "", [])
 
 
 @pytest.mark.parametrize("verifier_first", [True, False])
@@ -176,8 +229,7 @@ async def test_an_utterance_that_ended_during_the_hold_is_finalized_on_release(
     store = FakeRunsStore()
     pipeline, events, arbiter = make_arbitrated(
         tmp_path, monkeypatch, stt_text="свет", runs_store=store)
-    set_small_vad_thresholds(pipeline)
-    install_fake_vad(pipeline, [True, True, True, False, False, False, False, False, False])
+    held_phrase(pipeline)
 
     await pipeline.on_start("cid", WAKE)
     await pipeline.on_audio(FRAME * 9)  # speech then silence: an end-point

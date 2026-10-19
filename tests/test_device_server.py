@@ -993,7 +993,8 @@ async def test_text_only_device_gets_no_tts(srv):
 
 async def test_one_phrase_heard_by_the_panel_and_the_speaker_runs_on_the_speaker(srv, tmp_path):
     # The panel (no speaker) hears the phrase first and the speaker a moment later:
-    # only the speaker's session goes on, the panel's ends as a duplicate.
+    # only the speaker's session goes on; the panel streams its phrase on silently and
+    # is let go at its end, logged as a duplicate with what it heard.
     srv.rt.runs_store = RunsStore(str(tmp_path / "runs.db"))
     speaker = await srv.connect()
     await speaker.recv()  # config
@@ -1007,13 +1008,15 @@ async def test_one_phrase_heard_by_the_panel_and_the_speaker_runs_on_the_speaker
     await speaker.send(type="wake", session=8, word="Захар")
     assert await speaker.recv() == {"type": "play_stop"}
     assert await speaker.recv() == state(8, "listening")
-    assert await panel.recv() == state(3, "idle")
+    await panel.phrase()
+    assert await panel.recv() == state(3, "idle")  # no `listening`, no `transcript`
 
     await speaker.phrase()
     got = [await speaker.recv() for _ in range(7)]
     await speaker.send(type="played", id=got[5]["id"])
     assert await speaker.recv() == state(8, "idle")
-    assert len(srv.stt.pcm) == 1
+    assert len(srv.stt.pcm) == 2
     rows = {row["device"]: row for row in srv.rt.runs_store.list()}
-    assert (rows["panel"]["result"], rows["panel"]["reason"]) == ("rejected", "duplicate")
+    assert (rows["panel"]["result"], rows["panel"]["reason"], rows["panel"]["stt_text"]) == (
+        "rejected", "duplicate", "включи свет")
     assert rows["kitchen"]["result"] == "ok"

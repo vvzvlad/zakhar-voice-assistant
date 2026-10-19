@@ -1,9 +1,11 @@
 """Cross-device wake arbitration: one phrase heard by several devices keeps one session.
 
 docs/device-protocol.md, "Voice session": when several online devices wake on one
-phrase, the server keeps exactly one session and ends the others with `state idle`
-before `listening`. Each wake run registers here and is held by its pipeline until
-the verdict. A group of wakes is collected for `core.arbitration.window_ms` (less
+phrase, the server keeps exactly one session; the others never get `listening`. Each
+wake run registers here and is held by its pipeline until the verdict. A lost run
+stays held — its device streams the rest of the phrase on silently — until its VAD
+end-points; it then ends with `state idle` and is recorded as a duplicate, its
+phrase recognized for the run log only (Pipeline.arbitration_verdict). A group of wakes is collected for `core.arbitration.window_ms` (less
 once every online device has woken; a lone online device is not held) and ruled on:
 a device with a speaker over one without, between equals the higher signal-to-noise
 ratio of the pre-roll, then the earlier wake. For `core.arbitration.cooldown_ms`
