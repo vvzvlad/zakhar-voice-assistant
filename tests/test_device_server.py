@@ -441,7 +441,7 @@ async def test_a_reminder_is_a_run_and_a_line_of_the_dialog(srv, tmp_path):
     assert [(a["kind"], a["outcome"]) for a in run["attempts"]] == [("tts", "spoke")]
     assert run["t_tts"] is not None
     assert context.load_context(str(tmp_path / "context_kitchen.txt")) == [
-        {"role": "assistant", "content": "молоко"}]
+        {"role": "user", "content": "[На колонке была произнесена фраза: «молоко»]"}]
 
 
 async def test_announce_on_an_offline_device_is_an_error_run(srv, tmp_path):
