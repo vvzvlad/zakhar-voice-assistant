@@ -164,9 +164,10 @@ device                                   server
 ```
 
 - `wake`: `{"type": "wake", "session": 17, "word": "Захар"}`. `session` is a device counter, +1 for
-  every wake. Right after `wake` the device streams the microphone: first the pre-roll (the audio
-  before the detection, 2000 ms on the Voice PE) as fast as it can, then live audio in 32 ms
-  frames (512 samples per channel, interleaved when `mic.channels` is 2). On the Voice PE
+  every wake. Right after `wake` the device streams the microphone: first the pre-roll (the 2000 ms
+  of audio before the detection; the server's end-pointing takes the wake word to end where the
+  pre-roll ends) as fast as it can, then live audio in 32 ms frames (512 samples per channel,
+  interleaved when `mic.channels` is 2). On the Voice PE
   channel 0 is the XMOS AGC output and channel 1 the XMOS noise-suppressed output.
 - The device keeps streaming until a `state` of this session other than `listening` arrives. The
   end of the phrase is found by the server's VAD; the device has no end-pointing.

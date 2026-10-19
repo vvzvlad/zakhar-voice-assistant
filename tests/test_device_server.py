@@ -158,7 +158,7 @@ class Server:
                 "audio": {"host": "127.0.0.1", "port": 0},
                 "ack": {"enabled": False},
                 "vad": {"min_speech_ms": 40, "silence_ms": 100, "max_utterance_ms": 400,
-                        "no_speech_timeout_ms": 200, "trim_start_ms": 0},
+                        "no_speech_timeout_ms": 200, "trim_start_ms": 0, "wake_pause_ms": 0},
                 "devices": [{"name": "kitchen"}],
                 "chains": [{"name": "main", "stt": "groq", "handler": "openrouter"}],
             },

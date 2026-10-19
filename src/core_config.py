@@ -67,6 +67,12 @@ class VadConfig(BaseModel):
         json_schema_extra={"unit": "ms", "multipleOf": 100},
         description="Trailing silence after speech before the utterance is considered finished. Higher tolerates longer mid-phrase pauses but adds the same delay before the reply starts.",
     )
+    wake_pause_ms: int = Field(
+        2000,
+        title="Pause after the wake word",
+        json_schema_extra={"unit": "ms", "multipleOf": 100},
+        description="Silence allowed between the wake word and the start of the command. Until the command starts, the phrase ends only after this pause, not after the end-of-phrase pause; a command said in one breath with the wake word is not delayed. At or below the end-of-phrase pause it has no effect.",
+    )
     min_speech_ms: int = Field(
         200,
         title="Minimum utterance length",
