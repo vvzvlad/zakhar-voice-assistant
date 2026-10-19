@@ -216,6 +216,10 @@ class DeviceConfig(BaseModel):
     echo_cancel: int = Field(1, ge=0, le=3)
     echo_cancel_mode: int = Field(2, ge=0, le=3)
     echo_cancel_filter: int = Field(4, ge=1, le=8)
+    # Sent to the device in `config`, ms: the audio its speaker holds before it starts a
+    # stream, and again after the stream runs dry. More: fewer stutters while the TTS pauses,
+    # the answer starts later.
+    play_prime_ms: int = Field(700, ge=0, le=2000)
     # The .tflite models sent to the device: its wake-word model and the VAD model that gates
     # it. Empty: the model the release ships (device_server.RELEASE_WAKE_MODEL /
     # RELEASE_VAD_MODEL). wake_model is otherwise a model name from GET /api/wake-models

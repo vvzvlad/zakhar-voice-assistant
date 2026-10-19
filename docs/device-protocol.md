@@ -112,6 +112,13 @@ The owner's words:
   фразу и проиграли» and «всем устройствам без динамика — каждый ответ», «первый вариант наверное,
   да» — the answer of the kept session is shown on the screens of the devices without a speaker
   that lost that phrase.
+- «дребезжит немного звук иногда на колонке», heard as «Щелчки, звук рвётся»: the speaker played
+  with no reserve and a pause in the arriving audio became silence. Option chosen: «колонка копит
+  ~0,3 с звука перед фразой», then, against waiting for Fish Audio's second chunk, «Оставить
+  0,3 с». Measured later (5 of 34 phrases still ran dry for 50–320 ms, every time while Fish
+  Audio paused 0.4–1 s after its first ~0.5 s of audio), option chosen: «Запас 0,7 с», then «надо
+  бы вынести в ручку» — the reserve is `play_prime_ms` in `config`, a per-device control in the
+  admin panel, default 700.
 
 ## Transport
 
@@ -166,7 +173,7 @@ The owner's words:
 3. Server → `config`, right after `hello` and again whenever the values change:
    ```json
    {"type": "config", "wake_cutoff": 80, "vad_cutoff": 30,
-    "echo_cancel": 1, "echo_cancel_mode": 2, "echo_cancel_filter": 4}
+    "echo_cancel": 1, "echo_cancel_mode": 2, "echo_cancel_filter": 4, "play_prime_ms": 700}
    ```
    The cutoffs are percent, 0..100. The device applies them as `uint8 = trunc(percent / 100 * 255)`
    to the wake-word model and to the on-device VAD gate. The `echo_cancel` fields set the device's
@@ -182,6 +189,9 @@ The owner's words:
    A new mode or filter length re-creates the canceller on the device; when it cannot be created
    the device works as with `echo_cancel` 0. The three are optional: a device without echo
    cancellation ignores them, and an absent field or one out of its range leaves the device's own.
+   `play_prime_ms`, 0..2000, default 700, is the playback reserve: the audio the device holds
+   before it starts a stream, and again after the stream runs dry (see [Playback](#playback)).
+   It is optional the same way; a device without a speaker ignores it.
    All these values live in the server config, not on the device; until the first `config` the
    device uses its compiled-in defaults.
 4. Server → `log_stream {on}` with the device's `core.devices[].log`, on or off, after `config`
@@ -338,11 +348,15 @@ the answer, so the next phrase needs no wake word:
   are still on the way are discarded.
 - The server stops waiting for `played` of a stream after its duration plus `buffer_ms` plus 5 s
   and treats it as dropped.
-- Pacing: the server keeps at most `buffer_ms − 500` ms of audio ahead of the device's playback,
-  estimating that playback runs at real time from the first frame it sends. The device buffer
-  holds `buffer_ms`.
+- Pacing: the server keeps at most `buffer_ms − play_prime_ms − 500` ms of audio ahead of the
+  device's playback, estimating that playback runs at real time from the first frame it sends;
+  `play_prime_ms` is the largest one it sent to that connection in `config` while the device had
+  a stream pending (no `played` yet, not flushed), else the last one sent: the device may still
+  lag by the reserve it primed with, so a smaller one paces only the streams after. The device
+  buffer holds `buffer_ms`.
 - The device starts a stream, and resumes one that ran dry before its `play_end`, once it holds
-  300 ms of it or its `play_end` has come; the 500 ms pacing margin covers that wait.
+  `play_prime_ms` (default 700) of it or its `play_end` has come; pacing leaves that much room in
+  the buffer for the wait.
 - Indication while playing outside a session (an announcement) is the device's own choice.
 
 ## Settings and diagnostics

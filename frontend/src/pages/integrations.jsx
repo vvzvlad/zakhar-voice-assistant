@@ -724,15 +724,16 @@ const CONTROL_HINTS = {
   echo_cancel: "0 = off, the stop word hears the wake word's input; 1..3 = on, residual echo suppression mild to strongest (FD modes only)",
   echo_cancel_mode: "0 SR low cost, 1 SR high performance, 2 FD low cost, 3 FD high performance; a change re-creates the canceller",
   echo_cancel_filter: "Filter length 1..8; a change re-creates the canceller",
+  play_prime_ms: "Audio the speaker holds before it starts a phrase, and again after the stream runs dry; more = fewer stutters, the answer starts later",
 };
 
 // Per-device controls (wake-word probability cutoff + VAD cutoff + the stop word's echo
-// cancellation + speaker volume) shown inside the Edit-speaker modal, next to CaptureControl.
-// Each is a Slider over the range the server gives it, written back debounced. The cutoffs and
-// the echo cancellation settings come from the server config (the server sends them to the
-// device); the volume is read from the connected device and is listed only while a
-// device with a speaker is connected. A background poll keeps the sliders in sync with
-// external changes (e.g. the physical volume dial) without stomping a control the user
+// cancellation + playback reserve + speaker volume) shown inside the Edit-speaker modal, next to
+// CaptureControl. Each is a Slider over the range the server gives it, written back debounced. The
+// cutoffs, the echo cancellation settings and the playback reserve come from the server config
+// (the server sends them to the device); the volume is read from the connected device and is
+// listed only while a device with a speaker is connected. A background poll keeps the sliders in
+// sync with external changes (e.g. the physical volume dial) without stomping a control the user
 // is actively dragging.
 function DeviceControls({ device }) {
   const { refreshConfig } = useAppData();
@@ -777,8 +778,8 @@ function DeviceControls({ device }) {
     if (timers.current[c.id]) clearTimeout(timers.current[c.id]);
     timers.current[c.id] = setTimeout(() => {
       // `device` is a stable prop for the modal's lifetime, so no stale-closure risk.
-      // A cutoff or an echo cancellation setting is stored in the server config: refresh the
-      // config snapshot so a later save of the device list carries the new value.
+      // A cutoff, an echo cancellation setting or the playback reserve is stored in the server
+      // config: refresh the config snapshot so a later save of the device list carries the new value.
       setDeviceControl(device, c.id, v)
         .then((snap) => { applySnapshot(snap); setErr(null); return refreshConfig(); })
         .catch((e) => setErr(e))
@@ -787,7 +788,7 @@ function DeviceControls({ device }) {
   };
 
   if (controls.length === 0) {
-    return <Field label="Device controls" hint="Wake-word cutoff, VAD cutoff, stop word echo cancellation & speaker volume">
+    return <Field label="Device controls" hint="Wake-word cutoff, VAD cutoff, stop word echo cancellation, playback reserve & speaker volume">
       {err
         ? <div className="z-fh" style={{ color: "#b91c1c" }}>{err.message || String(err)}</div>
         : <div className="z-fh">Loading…</div>}

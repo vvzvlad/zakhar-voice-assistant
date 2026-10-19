@@ -110,7 +110,8 @@ void zl_report_volume(int percent);
 
 // Speakers: the next playback samples (mono, play_rate) for the I2S writer task, after
 // zl_start(). Returns the count copied, fewer than max (0 included) when the buffer runs dry or
-// the stream at its head is still priming (300 ms of it, or its play_end).
+// the stream at its head is still priming (`config`'s play_prime_ms of it, 700 ms until the
+// first `config`, or its play_end).
 size_t zl_play_read(int16_t *out, size_t max);
 
 // Whether a stream is in the playback buffer (from its play_start until its last sample is out);
