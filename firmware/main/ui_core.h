@@ -27,6 +27,7 @@ typedef enum {
     IND_REPLYING,
     IND_ERROR,
     IND_MUTED,      // "Muted or Silent"
+    IND_OTA,        // white fill, the share of a firmware update received
 } ind_t;
 
 #define IND_ERROR_MS 1000  // stock on_end keeps the error phase a second
@@ -41,14 +42,19 @@ typedef struct {
     int volume;
     led_phase_t phase;
     uint32_t error_at;  // ms, when the phase became LED_PHASE_ERROR
+    bool ota;           // a firmware update is being received
+    int ota_percent;    // its share received, 0..100
 } ind_state_t;
 
 void ind_set_phase(ind_state_t *s, led_phase_t phase, uint32_t now_ms);
 
-// The indication at now_ms, in the stock control_leds order: provisioning (the stock Improv BLE),
-// no server, the capture, the session phase, an announcement playing, mute or volume 0, dark. An
-// error phase older than IND_ERROR_MS turns idle first.
+// The indication at now_ms: a firmware update over everything, then the stock control_leds order:
+// provisioning (the stock Improv BLE), no server, the capture, the session phase, an announcement
+// playing, mute or volume 0, dark. An error phase older than IND_ERROR_MS turns idle first.
 ind_t ind_choose(ind_state_t *s, uint32_t now_ms);
+
+// How many of `leds` LEDs show `percent`: rounded up, so the first percent already lights one.
+int ind_fill(int percent, int leds);
 
 // ---------------------------------------------------------------- the dial
 

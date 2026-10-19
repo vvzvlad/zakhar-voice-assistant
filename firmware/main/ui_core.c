@@ -8,6 +8,7 @@ void ind_set_phase(ind_state_t *s, led_phase_t phase, uint32_t now_ms)
 
 ind_t ind_choose(ind_state_t *s, uint32_t now_ms)
 {
+    if (s->ota) return IND_OTA;
     if (s->provisioning) return IND_PROVISIONING;
     if (!s->network || !s->link) return IND_NO_SERVER;
     if (s->capture) return IND_CAPTURE;
@@ -29,6 +30,11 @@ ind_t ind_choose(ind_state_t *s, uint32_t now_ms)
     if (s->playing) return IND_REPLYING;
     if (s->muted || s->volume == 0) return IND_MUTED;
     return IND_OFF;
+}
+
+int ind_fill(int percent, int leds)
+{
+    return (percent * leds + 99) / 100;
 }
 
 // ESPHome's rotary_encoder state table (2026.5.3 rotary_encoder.cpp, after QEIx4): index

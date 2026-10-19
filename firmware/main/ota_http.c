@@ -6,6 +6,7 @@
 #include "esp_system.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "leds.h"
 
 static const char *TAG = "ota";
 
@@ -17,6 +18,7 @@ static char s_buf[4096];
 static esp_err_t fail(httpd_req_t *req, const char *what, esp_err_t err)
 {
     ESP_LOGE(TAG, "%s: %s", what, esp_err_to_name(err));
+    leds_set_ota(-1);
     httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, what);
     return ESP_FAIL;
 }
@@ -35,6 +37,7 @@ static esp_err_t ota_post(httpd_req_t *req)
     esp_ota_handle_t ota;
     esp_err_t err = esp_ota_begin(part, OTA_WITH_SEQUENTIAL_WRITES, &ota);
     if (err != ESP_OK) return fail(req, "ota begin", err);
+    leds_set_ota(0);
     size_t left = req->content_len;
     while (left > 0) {
         const int n = httpd_req_recv(req, s_buf, left < sizeof s_buf ? left : sizeof s_buf);
@@ -48,6 +51,7 @@ static esp_err_t ota_post(httpd_req_t *req)
             return fail(req, "write", err);
         }
         left -= (size_t)n;
+        leds_set_ota((int)((uint64_t)(req->content_len - left) * 100 / req->content_len));
     }
     err = esp_ota_end(ota);  // validates the image
     if (err != ESP_OK) return fail(req, "image", err);

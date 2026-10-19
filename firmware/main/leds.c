@@ -2,11 +2,11 @@
 // of its voice_assistant_leds light ("Listening For Command", "Replying", "Error", "Muted or
 // Silent", the red "Twinkle" of no connection, the warm white "Twinkle" of Improv BLE, here shown
 // while BLE provisioning waits for a network) and the zakhar config's "Thinking White" and capture
-// blink, with ESPHome's light pipeline under them (light/addressable_light_effect.h,
-// light/esp_color_correction.h, core/color.h at 2026.5.3): each LED is
-// gamma_2.8(value * brightness), the ring is remapped (logical i = physical (i + 7) % 12) and the
-// LED power follows the stock power_supply (on 20 ms before the first lit frame, off 10 s after
-// the last LED goes dark).
+// blink, plus our own white fill of a firmware update's progress, with ESPHome's light pipeline
+// under them (light/addressable_light_effect.h, light/esp_color_correction.h, core/color.h at
+// 2026.5.3): each LED is gamma_2.8(value * brightness), the ring is remapped (logical i = physical
+// (i + 7) % 12) and the LED power follows the stock power_supply (on 20 ms before the first lit
+// frame, off 10 s after the last LED goes dark).
 //
 // Which indication wins is ui_core's ind_choose; its inputs live under one spinlock, set from any
 // task and read by the leds task once per tick.
@@ -250,6 +250,11 @@ static void draw(ind_t fx, const ind_state_t *in, uint32_t now)
         s_bright = BRIGHT_RING;
         if (due(now, 16)) muted(in);
         break;
+    case IND_OTA:
+        // Clockwise from logical 0, the way "Listening For Command" spins.
+        s_bright = BRIGHT_RING;
+        for (int i = 0; i < N; i++) s_px[i] = i < ind_fill(in->ota_percent, N) ? WHITE : BLACK;
+        break;
     }
     s_initial = false;
 }
@@ -381,4 +386,9 @@ void leds_set_muted(bool on)
 void leds_set_volume(int percent)
 {
     LOCKED(s_ind.volume = percent);
+}
+
+void leds_set_ota(int percent)
+{
+    LOCKED(s_ind.ota = percent >= 0; s_ind.ota_percent = percent);
 }
