@@ -498,7 +498,10 @@ static bool link_connect(void)
 
 static void wake_refused(zl_wake_t why)
 {
-    ESP_LOGI(TAG, "wake word ignored: %s", why == ZL_WAKE_DETECT_OFF ? "detection is off" : "a capture is running");
+    ESP_LOGI(TAG, "wake word ignored: %s",
+             why == ZL_WAKE_DETECT_OFF ? "detection is off"
+             : why == ZL_WAKE_CAPTURE  ? "a capture is running"
+                                       : "the session still hears its phrase");
 }
 
 static void wake(void)

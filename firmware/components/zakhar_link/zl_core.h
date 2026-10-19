@@ -106,13 +106,15 @@ typedef enum {
     ZL_WAKE_START,
     ZL_WAKE_DETECT_OFF,  // a `detect` turned detection off
     ZL_WAKE_CAPTURE,     // a capture runs
+    ZL_WAKE_MIC,         // the session's audio still streams: its phrase is still being said
 } zl_wake_t;
 
 // What a wake word would do now; changes nothing.
 zl_wake_t zl_sess_wake_check(const zl_sess_t *s);
 
-// A wake word: refused while detection is off or a capture runs (as zl_sess_wake_check says);
-// otherwise the next session starts (new number, open, the mic on) and replaces the current one.
+// A wake word: refused while detection is off, a capture runs or the session's mic still streams
+// (as zl_sess_wake_check says) — a detection inside the phrase must not cut it off; otherwise the
+// next session starts (new number, open, the mic on) and replaces the current one.
 zl_wake_t zl_sess_wake(zl_sess_t *s);
 
 // A `detect`: wake words start sessions (true) or are refused (false). A capture does not care.

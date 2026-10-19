@@ -319,6 +319,7 @@ zl_wake_t zl_sess_wake_check(const zl_sess_t *s)
 {
     if (s->detect_off) return ZL_WAKE_DETECT_OFF;
     if (s->capture) return ZL_WAKE_CAPTURE;
+    if (s->mic) return ZL_WAKE_MIC;
     return ZL_WAKE_START;
 }
 

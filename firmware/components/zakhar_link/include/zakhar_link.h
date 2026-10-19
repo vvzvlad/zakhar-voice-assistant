@@ -67,8 +67,8 @@ typedef struct {
     // ignored meanwhile. A lost link does not end it: it ends once all its audio is sent, or 2 s
     // after its last frame was recorded when it cannot be sent.
     void (*on_capture)(bool active);
-    // Asked on a wake word that would start a session (online, detection on, no capture); false
-    // ignores it.
+    // Asked on a wake word that would start a session (online, detection on, no capture, no
+    // session streaming its mic); false ignores it.
     bool (*can_start)(void);
     // A model the server sent (`model` and its 0x03 frames), all `size` bytes in. The callee owns
     // `data` (16-byte aligned, in PSRAM, released with heap_caps_free) and returns whether the

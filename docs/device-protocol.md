@@ -177,10 +177,12 @@ device                                   server
 - `transcript` and `reply` carry the recognised phrase and the answer text, for devices with a
   screen. `reply` without `session` is an announcement (a reminder, an agent's `speak`).
 - Every server message of a session carries its `session`; the device drops messages whose
-  `session` is not its current one. A new `wake` replaces the current session on both sides: the
-  device flushes its playback, the server cancels the older run and, before anything else of the
-  new session, sends `play_stop` — a stream the server started before it saw the `wake` is
-  dropped on the device too.
+  `session` is not its current one. While a session's microphone streams (from `wake` to its first
+  `state` other than `listening`) a wake word starts no new session: the phrase is still being said,
+  and a detection inside it must not cut it off. After that a new `wake` replaces the current
+  session on both sides: the device flushes its playback, the server cancels the older run and,
+  before anything else of the new session, sends `play_stop` — a stream the server started before
+  it saw the `wake` is dropped on the device too.
 - A device without a speaker (`caps.speaker: false`) never gets playback: the server skips TTS for
   it and sends the text only.
 

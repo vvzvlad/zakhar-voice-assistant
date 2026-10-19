@@ -162,6 +162,8 @@ static void test_session(void)
 {
     zl_sess_t s = {0};
     assert(zl_sess_wake(&s) == ZL_WAKE_START && s.session == 1 && s.open && s.mic);
+    // A detection inside the phrase, before or after `listening`, starts no new session.
+    assert(zl_sess_wake(&s) == ZL_WAKE_MIC && s.session == 1 && s.mic);
     zl_msg_t cur = msg_of("{\"type\": \"state\", \"session\": 1, \"value\": \"listening\"}");
     zl_msg_t old = msg_of("{\"type\": \"state\", \"session\": 0, \"value\": \"idle\"}");
     zl_msg_t any = msg_of("{\"type\": \"reply\", \"text\": \"a\"}");
@@ -169,6 +171,7 @@ static void test_session(void)
 
     zl_sess_state(&s, ZL_STATE_LISTENING);
     assert(s.mic && s.open);
+    assert(zl_sess_wake(&s) == ZL_WAKE_MIC && s.session == 1);
     assert(!zl_sess_capture(&s));  // busy: a session is open
     zl_sess_state(&s, ZL_STATE_TRANSCRIBING);
     assert(!s.mic && s.open);
@@ -203,7 +206,7 @@ static void test_session(void)
     assert(zl_sess_wake(&s) == ZL_WAKE_START && s.session == before + 1);
     zl_sess_detect(&s, false);
     zl_sess_detect(&s, true);
-    assert(zl_sess_wake_check(&s) == ZL_WAKE_START);
+    assert(zl_sess_wake_check(&s) == ZL_WAKE_MIC);  // detection is on again; the session still streams
 
     zl_msg_free(&cur);
     zl_msg_free(&old);
