@@ -1,7 +1,8 @@
 // The pure audio pieces of the Voice PE firmware: no ESP headers, host-tested
 // (make fw-voicepe-host-test). The microphone sample conversion, the microphone tap ring, the echo
 // reference (decimator, aligned reads, the skip decision), the echo delay estimator, the mic
-// task's per-chunk bookkeeping and the speaker volume -> DAC register mapping.
+// task's per-chunk bookkeeping, the room's noise level and the speaker volume -> DAC register
+// mapping.
 #pragma once
 
 #include <stdatomic.h>
@@ -138,6 +139,42 @@ void mic_chunks_init(mic_chunks_t *c, uint32_t frames, uint32_t ref_settle);
 // chunk after the step that asked for the NONE write that went through, and AGC again from the
 // MIC_STAGE_SETTLE-th after the AGC one.
 mic_chunk_t mic_chunks_step(mic_chunks_t *c, uint32_t dropped, bool want_raw, bool wrote, uint32_t ref_written);
+
+// ---------------------------------------------------------------- the room's noise level
+
+// The RMS of channel 0's 32-bit slots over the chunks added, at their full resolution: a quiet
+// room is a few steps of the 16-bit samples the tap keeps.
+typedef struct {
+    double squares;  // the sum of the squared slot values
+    uint64_t n;      // the slots summed
+} ambient_t;
+
+void ambient_init(ambient_t *a);
+// Adds channel 0 (slot 0) of `frames` 32-bit stereo frames (slot 0, slot 1).
+void ambient_add(ambient_t *a, const int32_t *in, size_t frames);
+// The RMS in dBFS of the 32-bit slot, 20 log10(rms / 2^31), rounded to one decimal; -inf when
+// nothing was added or every slot was 0.
+double ambient_dbfs(const ambient_t *a);
+
+// When to measure: a measurement starts at the `every`-th chunk of quiet in a row, counted from
+// the previous measurement's start, and ends after `chunks` raw chunks; the end of quiet ends it
+// with nothing to report.
+typedef struct {
+    unsigned every, chunks;
+    unsigned quiet;  // chunks of quiet in a row since the last start
+    unsigned taken;  // raw chunks the running measurement measured
+    bool measuring;
+    ambient_t level;
+} ambient_sched_t;
+
+void ambient_sched_init(ambient_sched_t *s, unsigned every, unsigned chunks);
+// Per chunk, before mic_chunks_step: whether channel 0 is to be raw for a measurement. `quiet` is
+// auto volume on, nothing playing and the microphone not busy.
+bool ambient_sched_want(ambient_sched_t *s, bool quiet);
+// Per chunk, after mic_chunks_step, when ambient_sched_want() said true: a raw chunk (`raw`, its
+// `frames` 32-bit stereo frames in `in`) is measured, any other is not. True when this chunk
+// completes the measurement; ambient_dbfs(&s->level) is then its level.
+bool ambient_sched_take(ambient_sched_t *s, bool raw, const int32_t *in, size_t frames);
 
 // ---------------------------------------------------------------- speaker volume
 

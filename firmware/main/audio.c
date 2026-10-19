@@ -12,6 +12,10 @@
 // stop word's input. Channel 1 and the wake word's input never change. While the speaker is
 // silent, echo_cancel is 0 or no AEC could be made for the settings, channel 0 is the XMOS AGC
 // output and the stop word hears channel 1 as the wake word does.
+// With the server's auto_volume on, every 15 s of quiet (nothing playing, no session open, no
+// capture held) channel 0 is the raw microphone 0 for about a second: the room's noise is measured
+// on its 32-bit slots, before the XMOS's noise suppression and AGC, and goes to the server as
+// `ambient`. Playback, a session or a capture ends a measurement at once, and nothing is sent.
 #include "audio.h"
 
 #include <math.h>
@@ -85,6 +89,11 @@ static const aec_mode_t AEC_MODES[] = {
 #define LAG_GUARD (4 * LAG_BIN)
 #define LAG_EVERY 8  // chunks between estimates while the AEC runs: 256 ms
 
+// Auto volume: a measurement starts every AMBIENT_EVERY chunks of quiet (15 s) and takes
+// AMBIENT_CHUNKS raw chunks (0.99 s).
+#define AMBIENT_EVERY (15 * MIC_RATE / CHUNK)
+#define AMBIENT_CHUNKS (MIC_RATE / CHUNK)
+
 static i2s_chan_handle_t s_tx, s_rx;
 static tap_t s_tap;
 static tap_t s_ref;
@@ -93,6 +102,8 @@ static dec3_t s_dec;
 static _Atomic int s_echo_cancel = ECHO_CANCEL_DEFAULT;
 static _Atomic int s_echo_mode = ECHO_MODE_DEFAULT;
 static _Atomic int s_echo_filter = ECHO_FILTER_DEFAULT;
+// The server's auto_volume, taken by the mic task per chunk; off until the first `config`.
+static _Atomic bool s_auto_volume;
 // Microphone frames the RX driver dropped since the mic task last took them.
 static _Atomic uint32_t s_mic_dropped;
 // DMA buffers the speaker played as silence because the speaker task had not refilled them in
@@ -187,7 +198,8 @@ static void log_playback(const aec_handle_t *aec, int filter, const aec_stats_t 
 // WAKE_GAIN) and the stop word (channel 0 at WAKE_GAIN while it is raw). While the AEC runs, the
 // lag is estimated every LAG_EVERY chunks once the raw chunks in a row span the estimator's
 // window (mic_chunks_step). A new echo_cancel_mode or echo_cancel_filter re-creates the AEC
-// between chunks.
+// between chunks. An auto volume measurement asks for the raw channel 0 through the same
+// accounting and takes only the chunks it reports raw.
 static void mic_task(void *arg)
 {
     (void)arg;
@@ -199,6 +211,7 @@ static void mic_task(void *arg)
     static lag_track_t lag;
     static float corr[LAG_MAX + 1];
     static mic_chunks_t chunks;
+    static ambient_sched_t amb;
     aec_handle_t *aec = NULL;
     int made_mode = -1, made_filter = -1;  // the settings aec was made with, or failed to be
     int applied = 0;                       // the level aec suppresses at
@@ -210,6 +223,7 @@ static void mic_task(void *arg)
     size_t fill = 0;
     lag_track_init(&lag);
     mic_chunks_init(&chunks, CHUNK, REF_SETTLE);
+    ambient_sched_init(&amb, AMBIENT_EVERY, AMBIENT_CHUNKS);
     for (;;) {
         size_t got = 0;
         if (i2s_channel_read(s_rx, &raw[fill * 2], (CHUNK - fill) * 2 * sizeof(int32_t), &got, portMAX_DELAY) !=
@@ -237,14 +251,24 @@ static void mic_task(void *arg)
             made_filter = filter;
             applied = level;
         }
-        const bool want_raw = level > 0 && aec != NULL && zl_playing();
+        // Quiet is auto volume on, nothing playing, no session open and no capture held; its end
+        // ends a measurement.
+        const bool measuring = ambient_sched_want(
+            &amb, atomic_load_explicit(&s_auto_volume, memory_order_relaxed) && !zl_playing() && !zl_mic_busy());
+        const bool want_raw = (level > 0 && aec != NULL && zl_playing()) || measuring;
         const mic_chunk_t c = mic_chunks_step(&chunks, dropped, want_raw, wrote, tap_position(&s_ref));
         // Written as soon as the chunk is in, so the chunk's processing does not delay the switch.
         wrote = c.write && xmos_ch0_raw(c.write_raw) == ESP_OK;
 
         pcm_split(raw, CHUNK, both, wake, WAKE_GAIN);
         const int16_t *stop_in = NULL;
-        if (c.raw) {
+        if (c.raw && measuring) {
+            // No AEC: channel 0 goes to the tap as read, at gain 1. The estimator still gets it: its
+            // window is the raw chunks in a row (mic_chunks_step), which a playback that takes the
+            // raw channel over from here continues.
+            lag_track_push(&lag, both, CHUNK, 2);
+            if (ambient_sched_take(&amb, true, raw, CHUNK)) zl_report_ambient(ambient_dbfs(&amb.level));
+        } else if (c.raw) {
             for (size_t i = 0; i < CHUNK; i++) in[i] = both[2 * i];
             const uint32_t aligned = c.pos + c.offset - (uint32_t)lag_in_use;
             const bool cancel = aec != NULL && c.have_offset && !aec_skip(&s_ref, aligned, CHUNK, (size_t)filter * CHUNK);
@@ -413,6 +437,11 @@ void audio_set_echo_cancel(int level, int mode, int filter)
     if (level >= 0) atomic_store_explicit(&s_echo_cancel, level, memory_order_relaxed);
     if (mode >= 0) atomic_store_explicit(&s_echo_mode, mode, memory_order_relaxed);
     if (filter >= 0) atomic_store_explicit(&s_echo_filter, filter, memory_order_relaxed);
+}
+
+void audio_set_auto_volume(bool on)
+{
+    atomic_store_explicit(&s_auto_volume, on, memory_order_relaxed);
 }
 
 esp_err_t audio_start_playback(void)

@@ -4,7 +4,7 @@
 // Two tasks. The component task owns the client: it creates it, and when the link is lost
 // destroys it and connects a new one after the backoff. It sends everything the device starts:
 // the wake, `stop`, the session's and the capture's mic frames, audio_end, wake_peak once a second,
-// `played` of finished streams, `volume` and, while the server asks for it, the device log in
+// `played` of finished streams, `volume`, `ambient` and, while the server asks for it, the device log in
 // `log` messages. It also owns the microphone position, so a `capture` and a `capture_resume`
 // are handed to it; only a follow-up `listening` sets the position on the client's task, under
 // the mutex, together with turning the mic on. A capture outlives a lost link: the next hello
@@ -64,6 +64,7 @@ static const char *TAG = "zakhar_link";
 #define EV_VOLUME (1u << 4)
 #define EV_CAPTURE_RESUME (1u << 5)
 #define EV_STOP (1u << 6)
+#define EV_AMBIENT (1u << 7)
 
 static zl_config_t s_cfg;
 static zl_callbacks_t s_cb;
@@ -87,6 +88,7 @@ static bool s_capture_sending;
 static bool s_peak_on;
 static bool s_log_on;  // the server asked for the log on this link
 static int s_volume;
+static double s_ambient;  // the last zl_report_ambient()
 static zl_playq_t s_playq;
 
 // The client's task only.
@@ -278,12 +280,13 @@ static void on_text(esp_websocket_client_handle_t ws, const char *json, size_t l
     }
     switch (m.type) {
     case ZL_MSG_CONFIG:
-        ESP_LOGI(TAG, "config: wake %u, vad %u, echo_cancel %d mode %d filter %d, play_prime_ms %d", m.wake, m.vad,
-                 m.echo_cancel, m.echo_mode, m.echo_filter, m.play_prime_ms);
+        ESP_LOGI(TAG, "config: wake %u, vad %u, echo_cancel %d mode %d filter %d, play_prime_ms %d, auto_volume %d",
+                 m.wake, m.vad, m.echo_cancel, m.echo_mode, m.echo_filter, m.play_prime_ms, m.auto_volume);
         if (s_cb.on_config != NULL) s_cb.on_config(m.wake, m.vad);
         if ((m.echo_cancel >= 0 || m.echo_mode >= 0 || m.echo_filter >= 0) && s_cb.on_echo_cancel != NULL) {
             s_cb.on_echo_cancel(m.echo_cancel, m.echo_mode, m.echo_filter);
         }
+        if (m.auto_volume >= 0 && s_cb.on_auto_volume != NULL) s_cb.on_auto_volume(m.auto_volume == 1);
         break;
     case ZL_MSG_STATE:
         ESP_LOGI(TAG, "session %u: %s%s%s", (unsigned)m.session, zl_state_name(m.state), m.text != NULL ? ": " : "",
@@ -304,6 +307,9 @@ static void on_text(esp_websocket_client_handle_t ws, const char *json, size_t l
         break;
     case ZL_MSG_SET_VOLUME:
         if (s_cb.on_set_volume != NULL) s_cb.on_set_volume(m.value);
+        break;
+    case ZL_MSG_VOLUME_BOOST:
+        if (s_cb.on_volume_boost != NULL) s_cb.on_volume_boost(m.value);
         break;
     case ZL_MSG_WAKE_PEAK_STREAM:
         ESP_LOGI(TAG, "wake_peak stream %s", m.on ? "on" : "off");
@@ -723,6 +729,15 @@ static void send_volume(void)
     if (online) send_json(s_ws, zl_encode_volume(volume));
 }
 
+static void send_ambient(void)
+{
+    lock();
+    const bool online = s_online;
+    const double dbfs = s_ambient;
+    unlock();
+    if (online) send_json(s_ws, zl_encode_ambient(dbfs));
+}
+
 // The device log while the server asks for it: up to LOG_CHUNK bytes of whole lines a pass, in
 // one `log`. Not through send_json: its failure line carries the message, which would feed the
 // log into itself; a failure here logs only a fixed line.
@@ -766,6 +781,7 @@ static void link_task(void *arg)
         if (ev & EV_WAKE) wake();
         if (ev & EV_PLAYED) send_played();
         if (ev & EV_VOLUME) send_volume();
+        if (ev & EV_AMBIENT) send_ambient();
         mic_poll();
         capture_poll();
         if (now - peak_at >= pdMS_TO_TICKS(PEAK_MS)) {
@@ -825,6 +841,23 @@ void zl_report_volume(int percent)
     s_volume = percent;
     unlock();
     notify(EV_VOLUME);
+}
+
+void zl_report_ambient(double dbfs)
+{
+    lock();
+    s_ambient = dbfs;
+    unlock();
+    notify(EV_AMBIENT);
+}
+
+bool zl_mic_busy(void)
+{
+    if (s_lock == NULL) return false;
+    lock();
+    const bool busy = s_sess.open || s_sess.capture;
+    unlock();
+    return busy;
 }
 
 size_t zl_play_read(int16_t *out, size_t max)

@@ -2,9 +2,9 @@
 // Devices page: every write of the device list starts from the server's current
 // list (a cutoff set from a slider, a device that connected while the page was
 // open), the Edit dialog opens from the re-read config, shows the id read-only, saves a
-// display label, a wake-word model (a listed or an uploaded one) and the device log switch, and shows why its controls cannot load, and a slider write or a
+// display label, a wake-word model (a listed or an uploaded one), the device log and the auto volume switches, and shows why its controls cannot load, and a slider write or a
 // newly connected device refreshes the app's config snapshot. The dialog also says a
-// typed text on the speaker to check the volume.
+// typed text on the speaker to check the volume and shows the auto volume's readings.
 import React from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
@@ -28,6 +28,9 @@ vi.mock("../api.js", () => ({
 }));
 
 afterEach(cleanup);
+
+// The switch of the dialog field labelled `label`.
+const switchOf = async (label) => (await screen.findByText(label)).closest(".z-f").querySelector('[role="switch"]');
 
 // What the page rendered from: kitchen at the old cutoff, no hall yet.
 const STALE = [{ name: "kitchen", enabled: true, wake_cutoff: 80, vad_cutoff: 30 }];
@@ -157,7 +160,7 @@ describe("Devices page", () => {
     data.catalog.core.values.device_log_days = 7;
     render(<Devices />);
     fireEvent.click(screen.getByText("Edit"));
-    const sw = await screen.findByRole("switch");
+    const sw = await switchOf("Device log");
     expect(sw).toHaveAttribute("aria-checked", "false");
     expect(screen.getByText(/keeps the last 7 days in data\/device_logs\/kitchen\//)).toBeInTheDocument();
     expect(screen.getByText("Save")).toBeDisabled();
@@ -169,6 +172,47 @@ describe("Devices page", () => {
       { ...FRESH[0], log: true },
       FRESH[1],
     ] } });
+  });
+
+  it("edit switches auto volume off and saves it onto the server's current list", async () => {
+    api.getDeviceControls.mockResolvedValue({ device: "kitchen", online: true, versions: [], controls: [] });
+    data.catalog.core.values.devices = [{ ...STALE[0], auto_volume: true }];
+    render(<Devices />);
+    fireEvent.click(screen.getByText("Edit"));
+    const sw = await switchOf("Auto volume");
+    expect(sw).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByText("Save")).toBeDisabled();
+    fireEvent.click(sw);
+    fireEvent.click(screen.getByText("Save"));
+    await waitFor(() => expect(data.patch).toHaveBeenCalledTimes(1));
+    expect(data.patch).toHaveBeenCalledWith({ core: { devices: [
+      { ...FRESH[0], auto_volume: false },
+      FRESH[1],
+    ] } });
+  });
+
+  it("edit shows the auto volume readings, — before the first value, and a fractional gain", async () => {
+    const snap = (noise, boost) => ({
+      device: "kitchen", online: true, versions: [],
+      controls: [{ id: "auto_volume_gain", name: "Auto volume gain", value: 2, min: 0, max: 10, step: 0.1, unit: "%/dB" }],
+      readings: [
+        { id: "ambient_noise", name: "Ambient noise", value: noise, unit: "dBFS" },
+        { id: "volume_boost", name: "Volume boost", value: boost, unit: "%" },
+      ],
+    });
+    api.getDeviceControls.mockResolvedValue(snap(null, null));
+    const { unmount } = render(<Devices />);
+    fireEvent.click(screen.getByText("Edit"));
+    expect((await screen.findByText("Ambient noise")).nextSibling).toHaveTextContent(/^—$/);
+    expect(screen.getByText("Volume boost").nextSibling).toHaveTextContent(/^—$/);
+    expect(screen.getByText("2.0 %/dB")).toBeInTheDocument();
+    unmount();
+
+    api.getDeviceControls.mockResolvedValue(snap(-47.26, 26));
+    render(<Devices />);
+    fireEvent.click(screen.getByText("Edit"));
+    expect(await screen.findByText("-47.3 dBFS")).toBeInTheDocument();
+    expect(screen.getByText("26%")).toBeInTheDocument();
   });
 
   it("edit opens with the label and model saved since the page loaded", async () => {

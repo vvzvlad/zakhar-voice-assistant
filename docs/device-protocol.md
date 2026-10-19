@@ -122,6 +122,18 @@ The owner's words:
 - «давай сбрасывать только если сервер подтвердил» — a wake word heard over the speaker's own
   playback no longer flushes it on the device; the playback is dropped only once the server's
   second wake-word check confirms the wake, and a rejected wake leaves it playing to the end.
+- «изучи возможность сделать адаптивную громкость в зависимости от уровня громкости звуков вокруг»,
+  then «можно изредка мониторить второй канал сырых данных, смотреть на максимальную среднюю
+  громкость и подстараивать громкость ответов, если автогромкость включена, с каким-то множителем
+  (его можно подобрать руками)»; to measuring on the device, on a raw XMOS stage, by a median, with
+  the dial as the base the server only adds to: «го попробуем, ок»; to the plan: «ок» — with
+  `auto_volume` on, every 15 s of quiet (nothing playing, no session open) the speaker switches its
+  channel 0 to the raw microphone for a second, measures the level and sends it (`ambient`); a wake
+  word in that second switches the channel back at once. The server takes the median of the last
+  minute and, above a threshold, adds (noise − threshold) × gain to the dial's volume
+  (`volume_boost`), which the speaker adds without storing it. The panel's device dialog has the
+  switch, the threshold, the gain and the live noise and boost. Channel 0, not channel 1: channel 1
+  is the wake word's input and does not change. See [Auto volume](#auto-volume).
 
 ## Transport
 
@@ -176,7 +188,8 @@ The owner's words:
 3. Server → `config`, right after `hello` and again whenever the values change:
    ```json
    {"type": "config", "wake_cutoff": 80, "vad_cutoff": 30,
-    "echo_cancel": 1, "echo_cancel_mode": 2, "echo_cancel_filter": 4, "play_prime_ms": 700}
+    "echo_cancel": 1, "echo_cancel_mode": 2, "echo_cancel_filter": 4, "play_prime_ms": 700,
+    "auto_volume": false}
    ```
    The cutoffs are percent, 0..100. The device applies them as `uint8 = trunc(percent / 100 * 255)`
    to the wake-word model and to the on-device VAD gate. The `echo_cancel` fields set the device's
@@ -189,18 +202,25 @@ The owner's words:
      high performance; default 2.
    - `echo_cancel_filter`: the filter length, 1..8; default 4.
 
+   `auto_volume`: true has the device measure the room's noise and send `ambient`, see
+   [Auto volume](#auto-volume); default false.
+
    A new mode or filter length re-creates the canceller on the device; when it cannot be created
    the device works as with `echo_cancel` 0. The three are optional: a device without echo
    cancellation ignores them, and an absent field or one out of its range leaves the device's own.
    `play_prime_ms`, 0..2000, default 700, is the playback reserve: the audio the device holds
    before it starts a stream, and again after the stream runs dry (see [Playback](#playback)).
    It is optional the same way; a device without a speaker ignores it.
+   So is `auto_volume`: a device that does not measure ignores it, and an absent one or one that is
+   not a boolean leaves the device's own.
    All these values live in the server config, not on the device; until the first `config` the
    device uses its compiled-in defaults.
-4. Server → `log_stream {on}` with the device's `core.devices[].log`, on or off, after `config`
-   (and after what a capture the device holds needs, see [Capture](#capture)): see
+4. Server → `volume_boost {value}` right after `config`: 0, a new connection has no `ambient` yet;
+   see [Auto volume](#auto-volume).
+5. Server → `log_stream {on}` with the device's `core.devices[].log`, on or off, after
+   `volume_boost` (and after what a capture the device holds needs, see [Capture](#capture)): see
    [Settings and diagnostics](#settings-and-diagnostics).
-5. Server → the wake-word and VAD models, and to a device with a speaker the stop model, right
+6. Server → the wake-word and VAD models, and to a device with a speaker the stop model, right
    after `log_stream`: see [Models](#models).
 
 ## Models
@@ -264,7 +284,9 @@ device                                   server
   gain ×4 (applied before the cut to 16 bits, saturating): exactly the samples the wake-word model
   gets. While the Voice PE plays with `echo_cancel` on, channel 0 is instead the raw microphone 0
   with the speaker's own playback cancelled, at gain 1, the stop word's input before its ×4; the
-  switch each way takes the device two 32 ms frames.
+  switch each way takes the device two 32 ms frames. During an auto volume measurement channel 0
+  is the raw microphone 0 as read, at gain 1, switched the same way; a wake ends the measurement
+  and switches it back (see [Auto volume](#auto-volume)).
 - The device keeps streaming until a `state` of this session other than `listening` arrives. The
   end of the phrase is found by the server's VAD; the device has no end-pointing.
 - `state`: `{"type": "state", "session": 17, "value": "listening"}`. Values: `listening`,
@@ -384,6 +406,8 @@ the answer, so the next phrase needs no wake word:
 |---|---|---|
 | `set_volume {value}` | server → device | speaker volume, percent; the device stores it itself |
 | `volume {value}` | device → server | the volume changed on the device (the dial) or after `set_volume` |
+| `ambient {value}` | device → server | the room's noise after an auto volume measurement, dBFS of the 32-bit microphone slot, one decimal: see [Auto volume](#auto-volume) |
+| `volume_boost {value}` | server → device | percent points, 0..100, the speaker adds to its volume on the DAC: see [Auto volume](#auto-volume) |
 | `wake_peak_stream {on}` | server → device | start or stop the wake probability stream |
 | `wake_peak {value}` | device → server | once a second while the stream is on: the highest wake-word probability of that second, percent |
 | `detect {on}` | server → device | wake-word detection on or off; off: the models keep running (`wake_peak` too) but a detection starts no session. Every new connection starts with detection on |
@@ -392,6 +416,24 @@ the answer, so the next phrase needs no wake word:
 | `audio_end {reason, id}` | device → server | a capture ended on the device: `capture` (all its audio is out) or `busy` (refused, a session is running) |
 | `log_stream {on}` | server → device | send the device log in `log` messages or stop; after every `hello` and whenever `core.devices[].log` changes. Off from boot. A lost link does not turn it off on the device: the lines logged meanwhile wait (16 KB on the Voice PE, a line that does not fit is dropped) for the next connection's `log_stream`, and off drops them |
 | `log {text}` | device → server | one or more whole lines of the device's ESP log, each ending in `\n` (on the Voice PE up to 2 KB a message, a line cut at 512 bytes). The server appends them to `data/device_logs/<id>/<YYYY-MM-DD>.log` (its local day), each behind its own time of arrival `HH:MM:SS.mmm`, and deletes a day's file once that day ended more than `core.device_log_days` (7) days ago |
+
+### Auto volume
+
+- While `auto_volume` is on, the device measures the room's noise after every 15 s of quiet:
+  nothing playing, no session open and no capture held. The Voice PE switches the XMOS channel 0
+  to the raw microphone 0 (stage NONE: before the XMOS's echo cancellation, noise suppression and
+  AGC) for about a second, takes the RMS of its 32-bit slots and sends `ambient {value}`:
+  `20·log10(rms / 2^31)` dBFS, one decimal. Playback starting, a session opening or a capture
+  starting ends a measurement at once and nothing is sent: channel 0 goes back to AGC, or stays
+  raw for a playback's echo cancellation. Channel 1, the wake word's input, does not change.
+- The server keeps the connection's last 4 `ambient` values (a minute) and sends
+  `volume_boost {value}`, `round(max(0, median − threshold) × gain)` up to 100, whenever it
+  changes: after an `ambient`, and when `core.devices[].auto_volume`, `auto_volume_threshold`
+  (dBFS, default −60) or `auto_volume_gain` (percent per dB, default 2.0) changes; 0 while
+  `auto_volume` is off. The threshold and the gain stay on the server.
+- The device adds the boost to its own volume on the DAC, up to 100 %; a volume of 0 stays muted.
+  It does not store the boost, does not report it as `volume`, and shows its volume without it.
+  It is 0 from boot until the server sends one.
 
 ## Capture
 

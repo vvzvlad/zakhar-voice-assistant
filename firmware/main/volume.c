@@ -16,6 +16,15 @@ static const char *TAG = "volume";
 
 static nvs_handle_t s_nvs;
 static _Atomic int s_volume = INITIAL;
+static int s_boost;  // the controls task only: the server's volume_boost, 0 from boot
+
+// The DAC plays the volume plus the boost, at most 100 %; a volume of 0 stays muted.
+static void dac_apply(void)
+{
+    const int base = atomic_load(&s_volume);
+    const int v = base == 0 ? 0 : base + s_boost;
+    aic3204_set_volume(v > 100 ? 100 : v);
+}
 
 void volume_init(void)
 {
@@ -33,11 +42,18 @@ int volume_get(void)
 void volume_set(int v)
 {
     atomic_store(&s_volume, v);
-    aic3204_set_volume(v);
+    dac_apply();
     if (nvs_set_u8(s_nvs, NVS_KEY, (uint8_t)v) != ESP_OK || nvs_commit(s_nvs) != ESP_OK) {
         ESP_LOGE(TAG, "not stored");
     }
     leds_set_volume(v);
     zl_report_volume(v);
     ESP_LOGI(TAG, "%d %%", v);
+}
+
+void volume_set_boost(int points)
+{
+    s_boost = points;
+    dac_apply();
+    ESP_LOGI(TAG, "boost +%d %%", points);
 }

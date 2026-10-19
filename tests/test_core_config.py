@@ -69,6 +69,15 @@ def test_device_config_cutoffs_default_and_are_percent():
         DeviceConfig(name="a", vad_cutoff=-1)
 
 
+def test_device_config_auto_volume_defaults_and_ranges():
+    d = DeviceConfig(name="a")
+    assert (d.auto_volume, d.auto_volume_threshold, d.auto_volume_gain) == (False, -60, 2.0)
+    for field, bad in (("auto_volume_threshold", -121), ("auto_volume_threshold", 1),
+                       ("auto_volume_gain", -0.1), ("auto_volume_gain", 10.1)):
+        with pytest.raises(ValidationError):
+            DeviceConfig(name="a", **{field: bad})
+
+
 def test_device_config_echo_cancel_defaults_and_ranges():
     d = DeviceConfig(name="a")
     assert (d.echo_cancel, d.echo_cancel_mode, d.echo_cancel_filter) == (1, 2, 4)

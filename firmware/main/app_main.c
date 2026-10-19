@@ -344,6 +344,8 @@ void app_main(void)
         .can_start = can_start,
         .on_model = on_model,
         .on_echo_cancel = audio_set_echo_cancel,
+        .on_auto_volume = audio_set_auto_volume,
+        .on_volume_boost = controls_request_boost,
         .on_log_stream = net_log_forward,
     };
     zl_start(&cfg, &cb);

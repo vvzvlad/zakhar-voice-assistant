@@ -27,7 +27,18 @@ static void test_decode(void)
     zl_msg_t m;
     assert(decode("{\"type\": \"config\", \"wake_cutoff\": 80, \"vad_cutoff\": 30}", &m));
     assert(m.type == ZL_MSG_CONFIG && m.wake == 204 && m.vad == 76 && !m.has_session);
-    assert(m.echo_cancel == -1 && m.echo_mode == -1 && m.echo_filter == -1 && m.play_prime_ms == -1);
+    assert(m.echo_cancel == -1 && m.echo_mode == -1 && m.echo_filter == -1 && m.play_prime_ms == -1 &&
+           m.auto_volume == -1);
+    zl_msg_free(&m);
+    // auto_volume: a boolean, else -1 (the device keeps its own), and the cutoffs apply.
+    assert(decode("{\"type\": \"config\", \"wake_cutoff\": 80, \"vad_cutoff\": 30, \"auto_volume\": true}", &m));
+    assert(m.auto_volume == 1 && m.wake == 204);
+    zl_msg_free(&m);
+    assert(decode("{\"type\": \"config\", \"wake_cutoff\": 80, \"vad_cutoff\": 30, \"auto_volume\": false}", &m));
+    assert(m.auto_volume == 0);
+    zl_msg_free(&m);
+    assert(decode("{\"type\": \"config\", \"wake_cutoff\": 80, \"vad_cutoff\": 30, \"auto_volume\": 1}", &m));
+    assert(m.auto_volume == -1 && m.wake == 204);
     zl_msg_free(&m);
     assert(decode("{\"type\": \"config\", \"wake_cutoff\": 100, \"vad_cutoff\": 0}", &m));
     assert(m.wake == 255 && m.vad == 0);
@@ -88,6 +99,14 @@ static void test_decode(void)
     zl_msg_free(&m);
     assert(decode("{\"type\": \"set_volume\", \"value\": 45}", &m) && m.value == 45);
     zl_msg_free(&m);
+    assert(decode("{\"type\": \"volume_boost\", \"value\": 12}", &m) && m.type == ZL_MSG_VOLUME_BOOST && m.value == 12);
+    assert(!m.has_session);
+    zl_msg_free(&m);
+    assert(decode("{\"type\": \"volume_boost\", \"value\": 0}", &m) && m.value == 0);
+    zl_msg_free(&m);
+    assert(!decode("{\"type\": \"volume_boost\", \"value\": -1}", &m));
+    assert(!decode("{\"type\": \"volume_boost\", \"value\": 101}", &m));
+    assert(!decode("{\"type\": \"volume_boost\"}", &m));
     assert(decode("{\"type\": \"wake_peak_stream\", \"on\": true}", &m) && m.on);
     zl_msg_free(&m);
     assert(decode("{\"type\": \"detect\", \"on\": false}", &m) && m.type == ZL_MSG_DETECT && !m.on);
@@ -155,6 +174,8 @@ static void test_encode(void)
     encoded_is(zl_encode_played(9, true, 0, 0), "{\"type\":\"played\",\"id\":9,\"dropped\":true}");
     encoded_is(zl_encode_volume(60), "{\"type\":\"volume\",\"value\":60}");
     encoded_is(zl_encode_wake_peak(42), "{\"type\":\"wake_peak\",\"value\":42}");
+    encoded_is(zl_encode_ambient(-63.4), "{\"type\":\"ambient\",\"value\":-63.4}");
+    encoded_is(zl_encode_ambient(-120), "{\"type\":\"ambient\",\"value\":-120}");
     encoded_is(zl_encode_audio_end("busy", 7), "{\"type\":\"audio_end\",\"reason\":\"busy\",\"id\":7}");
     encoded_is(zl_encode_audio_end("capture", 4294967295u),
                "{\"type\":\"audio_end\",\"reason\":\"capture\",\"id\":4294967295}");

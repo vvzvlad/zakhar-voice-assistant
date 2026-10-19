@@ -82,6 +82,14 @@ def log_switch(msg) -> bool | None:
     return data["on"] if data["type"] == "log_stream" else None
 
 
+def boost_value(msg) -> int | None:
+    """The `value` of a `volume_boost` message, None for any other frame."""
+    if msg.type != aiohttp.WSMsgType.TEXT:
+        return None
+    data = json.loads(msg.data)
+    return data["value"] if data["type"] == "volume_boost" else None
+
+
 class FakeDevice:
     """The device end of the protocol. Play frames are collected per stream id."""
 
@@ -92,12 +100,12 @@ class FakeDevice:
         self._stream = None
 
     async def recv(self, timeout=5.0) -> dict:
-        """The next text message other than `model` and `log_stream`; play frames before it
-        go into self.plays, models and log switches are skipped (model() and log_switch()
-        read them)."""
+        """The next text message other than `model`, `log_stream` and `volume_boost`; play
+        frames before it go into self.plays, models, log switches and boosts are skipped
+        (model(), log_switch() and boost() read them)."""
         while True:
             msg = await asyncio.wait_for(self.ws.receive(), timeout)
-            if is_model(msg) or log_switch(msg) is not None:
+            if is_model(msg) or log_switch(msg) is not None or boost_value(msg) is not None:
                 continue
             if msg.type == aiohttp.WSMsgType.BINARY:
                 assert msg.data[0] == PLAY
@@ -112,10 +120,10 @@ class FakeDevice:
             return data
 
     async def model(self, timeout=5.0) -> tuple[dict, bytes]:
-        """The next frame other than a `log_stream` must start a `model`: it and the 0x03
-        payload that follows."""
+        """The next frame other than a `log_stream` or a `volume_boost` must start a `model`: it
+        and the 0x03 payload that follows."""
         msg = await asyncio.wait_for(self.ws.receive(), timeout)
-        while log_switch(msg) is not None:
+        while log_switch(msg) is not None or boost_value(msg) is not None:
             msg = await asyncio.wait_for(self.ws.receive(), timeout)
         assert msg.type == aiohttp.WSMsgType.TEXT, (msg.type, msg.data)
         model = json.loads(msg.data)
@@ -157,17 +165,27 @@ class FakeDevice:
         return got
 
     async def log_switch(self, timeout=5.0) -> bool:
-        """The `on` of the next `log_stream`; only models may come before it."""
+        """The `on` of the next `log_stream`; only models and boosts may come before it."""
         while True:
             msg = await asyncio.wait_for(self.ws.receive(), timeout)
-            if not is_model(msg):
+            if not is_model(msg) and boost_value(msg) is None:
                 on = log_switch(msg)
                 assert on is not None, (msg.type, msg.data)
                 return on
 
+    async def boost(self, timeout=5.0) -> int:
+        """The `value` of the next `volume_boost`; only models and log switches may come
+        before it."""
+        while True:
+            msg = await asyncio.wait_for(self.ws.receive(), timeout)
+            if not is_model(msg) and log_switch(msg) is None:
+                value = boost_value(msg)
+                assert value is not None, (msg.type, msg.data)
+                return value
+
     async def closed_with(self) -> int:
         msg = await asyncio.wait_for(self.ws.receive(), 5.0)
-        while is_model(msg) or log_switch(msg) is not None:
+        while is_model(msg) or log_switch(msg) is not None or boost_value(msg) is not None:
             msg = await asyncio.wait_for(self.ws.receive(), 5.0)
         assert msg.type == aiohttp.WSMsgType.CLOSE, (msg.type, msg.data)
         return msg.data
@@ -268,7 +286,9 @@ def session_msgs(session, *rest):
 async def test_hello_gets_config_and_the_models(srv):
     dev = await srv.connect()
     assert await dev.recv() == {"type": "config", "wake_cutoff": 80, "vad_cutoff": 30, "echo_cancel": 1,
-                                "echo_cancel_mode": 2, "echo_cancel_filter": 4, "play_prime_ms": 700}
+                                "echo_cancel_mode": 2, "echo_cancel_filter": 4, "play_prime_ms": 700,
+                                "auto_volume": False}
+    assert await dev.boost() == 0  # a new connection has no `ambient` yet
     # wake_model / vad_model are empty: the release's files go out, and the stop model always.
     for kind, path in (("wake", device_server.RELEASE_WAKE_MODEL), ("vad", device_server.RELEASE_VAD_MODEL),
                        ("stop", device_server.RELEASE_STOP_MODEL)):
@@ -1124,17 +1144,19 @@ async def test_controls(srv):
     dev = await srv.connect()
     await dev.recv()  # config
     controls = srv.manager.device_controls("kitchen")["controls"]
-    assert [(c["id"], c["value"], c["min"], c["max"]) for c in controls] == [
-        ("wake_probability_cutoff", 80, 0, 100), ("vad_cutoff", 30, 0, 100), ("echo_cancel", 1, 0, 3),
-        ("echo_cancel_mode", 2, 0, 3), ("echo_cancel_filter", 4, 1, 8), ("play_prime_ms", 700, 0, 2000),
-        ("speaker_volume", 60, 0, 100),
+    assert [(c["id"], c["value"], c["min"], c["max"], c["step"]) for c in controls] == [
+        ("wake_probability_cutoff", 80, 0, 100, 1), ("vad_cutoff", 30, 0, 100, 1), ("echo_cancel", 1, 0, 3, 1),
+        ("echo_cancel_mode", 2, 0, 3, 1), ("echo_cancel_filter", 4, 1, 8, 1), ("play_prime_ms", 700, 0, 2000, 50),
+        ("auto_volume_threshold", -60, -120, 0, 1), ("auto_volume_gain", 2.0, 0, 10, 0.1),
+        ("speaker_volume", 60, 0, 100, 1),
     ]
 
     # A cutoff is written to the config; the reconfigure that follows sends `config`.
     srv.manager.set_device_control("kitchen", "wake_probability_cutoff", 55)
     assert srv.svc.core.devices[0].wake_cutoff == 55
     await srv.manager.reconfigure()
-    rest = {"echo_cancel": 1, "echo_cancel_mode": 2, "echo_cancel_filter": 4, "play_prime_ms": 700}
+    rest = {"echo_cancel": 1, "echo_cancel_mode": 2, "echo_cancel_filter": 4, "play_prime_ms": 700,
+            "auto_volume": False}
     assert await dev.recv() == {"type": "config", "wake_cutoff": 55, "vad_cutoff": 30, **rest}
     # So are the echo cancellation settings and the playback reserve, each clamped to its range.
     for control, value, stored in (("echo_cancel", 7, 3), ("echo_cancel_mode", -2, 0), ("echo_cancel_filter", 0, 1),
@@ -1149,12 +1171,67 @@ async def test_controls(srv):
     srv.manager.set_device_control("kitchen", "speaker_volume", 40)
     assert await dev.recv() == {"type": "set_volume", "value": 40}
     await dev.send(type="volume", value=70)
-    await until(lambda: srv.manager.device_controls("kitchen")["controls"][6]["value"] == 70)
+    await until(lambda: srv.manager.device_controls("kitchen")["controls"][8]["value"] == 70)
 
     srv.manager.set_wake_prob_stream("kitchen", True)
     assert await dev.recv() == {"type": "wake_peak_stream", "on": True}
     await dev.send(type="wake_peak", value=42)
     await until(lambda: srv.manager.wake_prob("kitchen")["value"] == 42)
+
+
+async def test_auto_volume_boosts_by_the_median_noise_over_the_threshold(srv):
+    dev = await srv.connect()
+    await dev.recv()  # config
+    assert await dev.boost() == 0
+
+    def readings():
+        return [r["value"] for r in srv.manager.device_controls("kitchen")["readings"]]
+
+    assert readings() == [None, 0]
+    # Off: the noise is kept and shown, the boost stays 0.
+    await dev.send(type="ambient", value=-50.0)
+    await until(lambda: readings() == [-50.0, 0])
+    # On: `config` carries it, then the boost: (-50 - -60) x 2.
+    devices = [d.model_dump(mode="json") for d in srv.svc.core.devices]
+    srv.svc.apply({"core": {"devices": [{**devices[0], "auto_volume": True}]}})
+    await srv.manager.reconfigure()
+    assert (await dev.recv())["auto_volume"] is True
+    assert await dev.boost() == 20
+    # The median of the last four values: the fifth drops the first (-50).
+    for value, boost in ((-40.0, 30), (-70.0, 20), (-30.0, 30), (-30.0, 50)):
+        await dev.send(type="ambient", value=value)
+        assert await dev.boost() == boost
+    assert readings() == [-35.0, 50]
+    # A microphone reading all zeros sends null (-inf): not a level, the link stays up.
+    await dev.send(type="ambient", value=None)
+    await dev.send(type="volume", value=41)
+    await until(lambda: srv.device().conn.volume == 41)
+    assert readings() == [-35.0, 50]
+    # The threshold and the gain stay on the server: a change sends the new boost, no `config`.
+    srv.manager.set_device_control("kitchen", "auto_volume_threshold", -40)
+    await srv.manager.reconfigure()
+    assert await dev.boost() == 10
+    srv.manager.set_device_control("kitchen", "auto_volume_gain", 3.04)
+    assert srv.svc.core.devices[0].auto_volume_gain == 3.0
+    await srv.manager.reconfigure()
+    assert await dev.boost() == 15
+    srv.manager.set_device_control("kitchen", "auto_volume_gain", 12)
+    await srv.manager.reconfigure()
+    assert await dev.boost() == 50
+    # A boost past 100 is 100, and a boost that stays as it is is not sent again.
+    await dev.send(type="ambient", value=0.0)  # the median -30: (-30 - -40) x 10
+    assert await dev.boost() == 100
+    await dev.send(type="ambient", value=0.0)  # the median -15: 250
+    with pytest.raises(asyncio.TimeoutError):
+        await dev.boost(timeout=0.2)
+    assert readings() == [-15.0, 100]
+    # Off again: the boost goes back to 0 and the stale noise is dropped.
+    devices = [d.model_dump(mode="json") for d in srv.svc.core.devices]
+    srv.svc.apply({"core": {"devices": [{**devices[0], "auto_volume": False}]}})
+    await srv.manager.reconfigure()
+    assert (await dev.recv())["auto_volume"] is False
+    assert await dev.boost() == 0
+    assert readings() == [None, 0]
 
 
 async def test_set_volume_to_a_level_or_by_a_change(srv):
