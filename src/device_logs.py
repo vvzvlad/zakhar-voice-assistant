@@ -55,3 +55,34 @@ def prune(days: int, device: str | None = None) -> None:
             m = _NAME_RE.fullmatch(f)
             if m is not None and m.group(1) < oldest:
                 os.remove(os.path.join(directory, f))
+
+
+def days() -> dict[str, list[str]]:
+    """Every device that has day files, with its days (YYYY-MM-DD) newest first."""
+    if not os.path.isdir(root()):
+        return {}
+    out = {}
+    for device in sorted(os.listdir(root())):
+        directory = os.path.join(root(), device)
+        if not os.path.isdir(directory):
+            continue
+        names = [m.group(1) for f in os.listdir(directory) if (m := _NAME_RE.fullmatch(f))]
+        if names:
+            out[device] = sorted(names, reverse=True)
+    return out
+
+
+def read(device: str, day: str, offset: int) -> tuple[str, int] | None:
+    """The device's day file from byte `offset` up to and including its last newline, and the
+    byte position it stopped at; a line still being written is left for the next read. An offset
+    past the file's end reads from 0. None when days() does not list that device and day, which
+    also keeps a crafted name from reaching any other file."""
+    if day not in days().get(device, []):
+        return None
+    with open(os.path.join(root(), device, f"{day}.log"), "rb") as f:
+        if offset > f.seek(0, os.SEEK_END):
+            offset = 0
+        f.seek(offset)
+        data = f.read()
+    end = data.rfind(b"\n") + 1
+    return data[:end].decode("utf-8", errors="replace"), offset + end

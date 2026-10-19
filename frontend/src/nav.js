@@ -9,7 +9,7 @@ export const NAV = [
   // setting lives on the Providers pages.
   { grp: "Pipeline", items: [["devices", "Devices"], ["capture", "Capture"], ["logic", "Logic"], ["speech", "Speech"]] },
   { grp: "Providers", items: [["vad", "VAD"], ["stt", "STT"], ["llm", "LLM", [["prompt", "System Prompt"]]], ["commands", "Commands"], ["tts", "TTS"], ["tools", "Tools"]] },
-  { grp: "Operations", items: [["log", "Request Log"], ["system", "System"]] },
+  { grp: "Operations", items: [["log", "Request Log"], ["devlog", "Device Log"], ["system", "System"]] },
 ];
 // Flatten children into TITLES so child ids stay valid routes/page titles.
 export const TITLES = Object.fromEntries(

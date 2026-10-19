@@ -163,6 +163,13 @@ export async function downloadCaptureResult(device) {
     URL.revokeObjectURL(url);
   }
 }
+
+// Device logs: the speakers' own logs the server keeps on disk, one file per device and day.
+// getDeviceLogs returns {devices: {id: [YYYY-MM-DD, newest first]}}; getDeviceLog returns a
+// day's text from byte `offset` up to its last whole line: {text, offset: where to read on from}.
+export const getDeviceLogs = () => request("/api/device-logs");
+export const getDeviceLog = (device, day, offset) =>
+  request(`/api/device-logs/${encodeURIComponent(device)}/${encodeURIComponent(day)}?offset=${offset}`);
 // Start a voice test: POST the CURRENT (possibly unsaved) TTS draft to
 // /api/tts/test and return the raw Response (a WAV body) for the caller to play.
 // The backend always sends any error as a JSON body with a non-2xx status BEFORE

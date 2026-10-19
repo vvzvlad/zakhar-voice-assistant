@@ -33,7 +33,7 @@ from loguru import logger
 from multidict import CIMultiDict
 from pydantic import ValidationError
 
-from src import captures, config_store, dataset_jobs
+from src import captures, config_store, dataset_jobs, device_logs
 from src.audio_prep import pcm_to_wav_bytes
 from src.device_server import (
     CAPTURE_MAX_SECONDS, RELEASE_WAKE_MODEL, UPLOADED_WAKE_PREFIX, CaptureBusyError, DeviceOfflineError,
@@ -1014,6 +1014,26 @@ class PanelServer:
             return web.json_response({"error": "not found"}, status=404)
         return web.json_response({"ok": True})
 
+    # --- device logs (src/device_logs.py) ---------------------------------------
+    async def _get_device_logs(self, request: web.Request) -> web.Response:
+        """The device log days on disk: {"devices": {device: [YYYY-MM-DD, newest first]}}."""
+        return web.json_response({"devices": await asyncio.to_thread(device_logs.days)})
+
+    async def _get_device_log(self, request: web.Request) -> web.Response:
+        """One device log day from byte ?offset= (default 0) up to its last whole line:
+        {"text", "offset": the byte position to read on from}. 400 for a non-integer offset,
+        404 when the device has no such day."""
+        device, day = request.match_info["device"], request.match_info["day"]
+        try:
+            offset = int(request.query.get("offset", "0"))
+        except ValueError:
+            return web.json_response({"error": "offset must be an integer"}, status=400)
+        got = await asyncio.to_thread(device_logs.read, device, day, offset)
+        if got is None:
+            return web.json_response({"error": "not found"}, status=404)
+        text, offset = got
+        return web.json_response({"text": text, "offset": offset})
+
     # --- wake-word dataset recording -------------------------------------------
     def _dataset_refusal(self, name: str) -> web.Response | None:
         """503 when dataset recording is not wired, 400 for an invalid set name, else None."""
@@ -1407,6 +1427,8 @@ class PanelServer:
             web.get("/api/captures", self._get_captures),
             web.get("/api/captures/{device}/{name}.wav", self._get_capture_wav),
             web.delete("/api/captures/{device}/{name}", self._delete_capture),
+            web.get("/api/device-logs", self._get_device_logs),
+            web.get("/api/device-logs/{device}/{day}", self._get_device_log),
             web.get("/api/datasets", self._get_datasets),
             web.post("/api/datasets/{name}", self._post_dataset),
             web.post("/api/datasets/{name}/stop", self._post_dataset_stop),
