@@ -433,8 +433,8 @@ function Log() {
           : runs.length === 0 && total === 0 ? <div className="z-empty"><div className="ic"><Ic n="log" w={20} /></div><b>No recorded runs yet</b>Once the assistant processes a request, it will appear here.</div>
             : <>
               <div className="z-tblwrap">
-                <table className="z-tbl">
-                  <thead><tr><th>Time</th><th>Device</th><th>Chain</th><th>Recognized</th><th>Response</th><th style={{ textAlign: "right" }}>Tok</th><th>Stage waterfall</th><th style={{ textAlign: "right" }}>Σ</th><th>Status</th></tr></thead>
+                <table className="z-tbl" style={{ minWidth: 820 }}>
+                  <thead><tr><th style={{ width: 80 }}>Time</th><th style={{ width: 150 }}>Device</th><th style={{ width: 80 }}>Chain</th><th>Recognized</th><th>Response</th><th style={{ width: 64, textAlign: "right" }}>Tok</th><th style={{ width: "20%" }}>Stage waterfall</th><th style={{ width: 80, textAlign: "right" }}>Σ</th><th style={{ width: 92 }}>Status</th></tr></thead>
                   <tbody>
                     {runs.map((r) => {
                       const m = statusMeta(r);

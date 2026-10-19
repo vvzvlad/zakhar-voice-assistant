@@ -192,9 +192,14 @@ button{font-family:inherit;}
 /* ── Tables ─────────────────────────────────────────────── */
 .z-tbl{width:100%;border-collapse:collapse;}
 .z-tblwrap{overflow-x:auto;}
-/* Fits a standard 1280px viewport (≈1020px card) without overflow; narrower
-   windows still scroll horizontally via .z-tblwrap. */
-.z-tblwrap .z-tbl{min-width:960px;}
+/* Run tables (log, dashboard): fixed layout. The narrow columns take the widths set
+   on their <th>; the text columns share what is left and clip with an ellipsis, and
+   the waterfall stretches to its column, so the table follows the card width. Only
+   below the table's min-width does .z-tblwrap scroll. */
+.z-tblwrap .z-tbl{table-layout:fixed;min-width:680px;}
+.z-tblwrap .z-tbl td{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.z-tblwrap .z-tx{max-width:none;}
+.z-tblwrap .z-wf{width:100%;}
 .z-tbl th{text-align:left;font-size:9.5px;letter-spacing:.05em;text-transform:uppercase;color:var(--mut2);font-weight:600;padding:9px 13px;border-bottom:1px solid var(--line);background:var(--panel2);}
 .z-tbl td{padding:0 13px;height:46px;border-bottom:1px solid var(--line2);font-size:12px;vertical-align:middle;}
 .z-tbl tbody tr:last-child td{border-bottom:none;}
