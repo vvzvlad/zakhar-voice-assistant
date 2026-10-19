@@ -67,7 +67,8 @@ The owner's words:
   its reply), option chosen: «Не делать» — no echo cancellation on the device. Measured on the
   Voice PE with ESP-SR's AEC against the exact playback: the echo drops by 28 dB on a raw
   microphone (XMOS stage NONE) and by about 1 dB on the XMOS-processed channels the wake word and
-  the server use; hearing over the reply would mean taking a raw microphone from the XMOS.
+  the server use; hearing over the reply would mean taking a raw microphone from the XMOS. The
+  findings: [echo-cancellation.md](echo-cancellation.md).
 
 ## Transport
 
