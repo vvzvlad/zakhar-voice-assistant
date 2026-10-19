@@ -1,5 +1,5 @@
 // Pure helpers for run toast notifications (kept free of React for testing).
-import { statusMeta } from "./runsModel.js";
+import { statusMeta, isAnnouncement } from "./runsModel.js";
 
 // Pages that already render live runs — no toasts while the user is there.
 export const QUIET_PAGES = new Set(["dashboard", "log"]);
@@ -28,7 +28,7 @@ export function toastFromRun(run) {
     device,
     label: meta.label,
     tone: meta.tone,
-    text: run.stt_text || (live ? "(in progress)" : "(silence)"),
+    text: run.stt_text || (live ? "(in progress)" : isAnnouncement(run) ? run.llm_text : "(silence)"),
     totalMs: run.t_total ?? null,
   };
 }

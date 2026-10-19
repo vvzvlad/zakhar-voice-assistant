@@ -547,7 +547,7 @@ class _FakeClient:
         self.online = online
         self.announced = []
 
-    async def announce(self, text):
+    async def announce(self, text, reason):
         self.announced.append(text)
 
 

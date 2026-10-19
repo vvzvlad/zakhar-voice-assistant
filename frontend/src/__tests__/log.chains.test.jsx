@@ -2,7 +2,8 @@
 // Integration tests (jsdom) for the chain parts of the Request Log: the Chain
 // column, the chain filter forwarded to /api/runs, and the run detail listing
 // the chain and TTS attempts in the order they ran, with why a handler declined.
-// Also the device column, which shows a device's label and filters by it.
+// Also the device column, which shows a device's label and filters by it, and the
+// request of an announcement, which is no request rather than silence.
 import React from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
@@ -72,5 +73,17 @@ describe("Request log — chains", () => {
     expect(items[2].textContent).toContain("timeout");
     expect(items[2].textContent).toContain("6.00s");
     expect(items[3].textContent).toContain("spoke");
+  });
+
+  it("shows a dash, not (silence), as the request of an announcement", async () => {
+    getRuns.mockResolvedValue({ runs: [
+      { ...ROW, reason: "reminder", stt_text: null, llm_text: "молоко" },
+      { ...ROW, id: 8, reason: "endpoint", stt_text: "", llm_text: "" },
+    ], total: 2 });
+    render(<Log />);
+    await screen.findByText("молоко");
+    const recognized = screen.getAllByRole("row").filter((tr) => tr.querySelector("td"))
+      .map((tr) => tr.querySelectorAll("td")[3].textContent);
+    expect(recognized).toEqual(["—", "(silence)"]);
   });
 });

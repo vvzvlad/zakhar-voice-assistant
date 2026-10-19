@@ -5,8 +5,8 @@ The pipeline loads the recent window to feed it back to the model so it remember
 the last few turns, and appends the new exchange after each run. A conversation
 idle longer than ttl_seconds is considered finished and reset to empty, so an
 unrelated later request starts fresh. Only the last max_turns * 2 messages are
-kept: user+assistant exchanges, plus lone assistant replies that arrived later
-(append_reply), so the window may start with an assistant message.
+kept: user+assistant exchanges, plus lone assistant messages the device said
+unprompted (append_reply), so the window may start with an assistant message.
 """
 
 import json
@@ -80,9 +80,9 @@ def append_context(
 
 
 def append_reply(context_path: str, text: str, max_turns: int = 5, ttl_seconds: int = 300) -> None:
-    """Append one assistant message that has no user turn of its own: a reply that
-    arrived later and was spoken unprompted (a handed-off task's answer), so a
-    follow-up question sees it. Failures are logged and never raised."""
+    """Append one assistant message that has no user turn of its own: anything the
+    device said unprompted (an agent's say, a reminder, a handed-off task's answer),
+    so a follow-up question sees it. Failures are logged and never raised."""
     _append(context_path, [{"role": "assistant", "content": text}], max_turns, ttl_seconds)
 
 

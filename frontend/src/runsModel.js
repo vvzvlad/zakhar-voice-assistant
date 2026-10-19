@@ -91,6 +91,12 @@ export function statusMeta(r) {
   return RESULT_META[r && r.result] || { label: r && r.result, tone: "muted" };
 }
 
+// Speech the assistant made on its own (an agent's `say`, a reminder): such a run has
+// no request, so an empty request text is not silence.
+export function isAnnouncement(r) {
+  return !!r && (r.reason === "say" || r.reason === "reminder");
+}
+
 // Apply a streamed run (live partial or finalized) to the current list.
 // Rows are keyed by `mapped.key` (real id when finalized, "live:<device>" while
 // live). A finalized run ALWAYS removes the live row it supersedes (same device),

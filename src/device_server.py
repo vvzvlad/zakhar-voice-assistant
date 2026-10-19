@@ -22,10 +22,11 @@ import soxr
 from aiohttp import WSCloseCode, WSMsgType, web
 from loguru import logger
 
-from src import captures, config_store
+from src import captures, config_store, context
 from src.chime import build_ack_clip
 from src.pipeline import Pipeline
 from src.pipeline_events import StageEvent
+from src.run_events import record_run
 from src.tts import pcm_rate
 
 # Binary frame kinds (first byte).
@@ -548,15 +549,40 @@ class Device:
         conn.send({"type": "set_volume", "value": pct})
         conn.volume = pct
 
-    async def announce(self, text: str, attempts: list | None = None) -> None:
+    async def announce(self, text: str, reason: str, request: str | None = None) -> None:
         """Proactively say `text`: the text to the device as an announcement and, on
-        a device with a speaker, the synthesized speech. `attempts` collects the TTS
-        variants tried, as in Pipeline.speak."""
-        conn = self.conn
-        if conn is None:
-            raise RuntimeError(f"{self.name} is offline")
-        conn.send({"type": "reply", "text": text})
-        await self.pipeline.speak(text, attempts)
+        a device with a speaker, the synthesized speech.
+
+        Every announcement is a run in the run log: `reason` names who made the device
+        speak ("say", "reminder", "assistant"), `request` is the request text it answers
+        (if any), `text` is the reply, and a failure carries the error stage ("device"
+        when offline, "TTS" when the speech failed). An announcement that reached the
+        device also joins its conversation context as an assistant message, so a
+        follow-up question can refer to it. Raises on failure, after the run is
+        recorded."""
+        t0 = time.perf_counter()
+        record = {"ts": time.time(), "device": self.name, "reason": reason, "result": "ok",
+                  "stt_text": request, "llm_text": text,
+                  "error_stage": None, "error_text": None, "attempts": []}
+        try:
+            conn = self.conn
+            if conn is None:
+                record.update(result="error", error_stage="device", error_text="offline")
+                raise RuntimeError(f"{self.name} is offline")
+            conn.send({"type": "reply", "text": text})
+            try:
+                await self.pipeline.speak(text, record["attempts"])
+            except Exception as e:
+                record.update(result="error", error_stage="TTS", error_text=str(e))
+                raise
+            # Time to the start of the speech, as a text run counts it.
+            record["t_tts"] = sum(a["t"] for a in record["attempts"] if a["kind"] == "tts")
+            ctx = self.rt.core.context
+            context.append_reply(self.pipeline._context_path, text,
+                                 max_turns=ctx.max_turns, ttl_seconds=ctx.ttl_seconds)
+        finally:
+            record["t_total"] = int((time.perf_counter() - t0) * 1000)
+            await record_run(self.rt, record)
 
     def start_capture(self, seconds: int) -> captures.Capture:
         """Create a capture on disk and send `capture` for it. Raises DeviceOfflineError or
@@ -673,7 +699,7 @@ class DeviceManager:
         if target is None or not target.online:
             logger.warning(f"reminder target {device_name!r} unavailable; dropping")
             return
-        await target.announce(text)
+        await target.announce(text, "reminder")
 
     def capture_start(self, device_name: str, seconds: int) -> dict:
         """Start a capture on the named device; return its snapshot (state `starting`).
