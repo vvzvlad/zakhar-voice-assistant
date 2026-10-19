@@ -70,12 +70,14 @@ char *zl_encode_volume(int percent);
 char *zl_encode_wake_peak(int percent);
 char *zl_encode_audio_end(const char *reason, uint32_t id);
 char *zl_encode_model_loaded(zl_model_t kind, const char *name, bool ok);
+// session goes out only with has_session (a stop word outside a session has none).
+char *zl_encode_stop(bool has_session, uint32_t session);
 void zl_free(char *json);
 
 // ---------------------------------------------------------------- numbers
 
 const char *zl_state_name(zl_state_t state);  // the wire value: "listening" ...
-const char *zl_model_name(zl_model_t kind);   // the wire value: "wake", "vad"
+const char *zl_model_name(zl_model_t kind);   // the wire value: "wake", "vad", "stop"
 uint8_t zl_cutoff_u8(double percent);  // trunc(percent / 100 * 255)
 int zl_peak_percent(uint8_t peak);     // 0..255 -> 0..100, rounded
 uint32_t zl_backoff_next(uint32_t s);  // 1, 2, 4 ... 30 seconds

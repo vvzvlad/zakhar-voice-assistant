@@ -121,11 +121,13 @@ _KIND_QUESTION = {
     "instructions": "What kind of request is this utterance to a home voice assistant?",
     "criteria": {
         "device_command": "A command to switch or adjust one smart-home device or scene",
+        # One option for everything that is not a command: _decide declines all of it
+        # alike, so splitting it only spreads the probability over two labels.
         "other": (
-            "A question, conversation, or a request for something else "
-            "(weather, reminders, search, several devices at once)"
+            "Anything else: a question, conversation, a request for something else "
+            "(weather, reminders, search, several devices at once), a fragment, "
+            "thanks, or meaningless speech"
         ),
-        "noise": "Not addressed to the assistant: a fragment, thanks, or meaningless speech",
     },
 }
 _COMPOUND_QUESTION = {

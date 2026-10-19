@@ -8,7 +8,8 @@ Server-side VAD end-pointing
 ----------------------------
 The device fires its wake word on-device and then streams mic PCM to us
 continuously (silence included). It has no end-pointing of its own
-(docs/device-protocol.md), so on_stop has no caller on the wire. To know when the user has
+(docs/device-protocol.md), so on_stop has no caller on the wire (the device's `stop`, the stop
+word, cancels the run through cancel_run). To know when the user has
 finished speaking we run the configured VAD stage backend over the incoming PCM
 (one VadSession per run, see src/vad.py) and finalize the utterance once it
 reports an endpoint (speech followed by enough trailing silence), a hard max
@@ -241,16 +242,8 @@ class Pipeline:
         any of it can run again."""
         if any(t is not None and not t.done() for t in (self._run_task, self._wakeword_task)):
             logger.info(f"{self.name}: new wake cancels the running run")
-        # Cancellation of an already-finished task is a no-op. Not awaited: each
-        # cancelled task unwinds on its own (the ack/filler sets self-clean via their
-        # done-callbacks); snapshot the sets first since those callbacks mutate them.
-        for task in (self._run_task, self._wakeword_task,
-                     *self._ack_tasks, *self._filler_tasks):
-            if task is not None:
-                task.cancel()
-        self._run_task = None
-        # A wake ends a follow-up window the previous answer opened.
-        self._followup = None
+        # Also ends a follow-up window the previous answer opened.
+        self.cancel_run()
         self._wake_word = wake_word_phrase or ""
         await self._reset_run(
             conversation_id,
@@ -344,6 +337,23 @@ class Pipeline:
         logger.info(f"{self.name}: 👂 listening for a follow-up ({window_ms} ms)")
         self._emit(StageEvent.STT_VAD_START, {})
         self._open_stt_streams()
+
+    def cancel_run(self) -> None:
+        """Cancel the running run: its run task, the wake-word verify (and a run it
+        started) and its ack/filler plays, and end an open follow-up window: audio
+        that still arrives is dropped. Synchronous; the cancelled run emits no
+        RUN_END (its stages catch Exception, which a cancellation is not)."""
+        # Cancellation of an already-finished task is a no-op. Not awaited: each
+        # cancelled task unwinds on its own (the ack/filler sets self-clean via their
+        # done-callbacks); snapshot the sets first since those callbacks mutate them.
+        for task in (self._run_task, self._wakeword_task,
+                     *self._ack_tasks, *self._filler_tasks):
+            if task is not None:
+                task.cancel()
+        self._run_task = None
+        if self._followup is not None:
+            self._followup = None
+            self._finalized = True
 
     def _open_stt_streams(self) -> None:
         """Open the live streaming STT sessions for this run (synchronous): one per

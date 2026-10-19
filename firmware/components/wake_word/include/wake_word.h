@@ -1,5 +1,5 @@
-// The micro_wake_word engine: a wake model and a VAD model, loaded at run time, over 16 kHz mono
-// audio.
+// The micro_wake_word engine: a wake model, a stop model and a VAD model, loaded at run time, over
+// 16 kHz mono audio.
 #pragma once
 
 #include <stdbool.h>
@@ -13,10 +13,11 @@ extern "C" {
 // The word a detection stands for (the "Zakhar" manifest's wake_word).
 #define WAKE_WORD_NAME "Захар"
 
-// The two models of the engine.
+// The three models of the engine.
 typedef enum {
     WAKE_WORD_MODEL_WAKE,
     WAKE_WORD_MODEL_VAD,
+    WAKE_WORD_MODEL_STOP,
 } wake_word_model_t;
 
 // Sets up the frontend and, per model, its op resolver and arenas (PSRAM); no model is loaded.
@@ -30,9 +31,11 @@ bool wake_word_init(void);
 // the kind then has no model and `data` is released.
 bool wake_word_load(wake_word_model_t kind, uint8_t *data, size_t size);
 
-// Runs n samples through the frontend and each loaded model; detection runs only while both are
-// loaded. A detection is logged and handed to the callback of wake_word_set_detect_cb, on the
-// calling task.
+// Runs n samples through the frontend and each loaded model; detection runs only while the wake
+// and VAD models are loaded. A detection is logged and handed to the callback of
+// wake_word_set_detect_cb, on the calling task. The stop model runs only from 1 s of playback on
+// (wake_word_set_stop) until the playback ends; its detection, gated by the VAD model too, goes to
+// the stop callback.
 void wake_word_feed(const int16_t *samples, size_t n);
 
 // The detection cutoffs of the wake and VAD models, 0..255 (probability * 255). Safe from any task.
@@ -42,6 +45,11 @@ void wake_word_set_cutoffs(uint8_t wake, uint8_t vad);
 uint8_t wake_word_take_peak(void);
 
 void wake_word_set_detect_cb(void (*cb)(void));
+
+// The stop word: `playing` says whether the device plays audio, asked once per wake_word_feed()
+// before the engine's lock is taken; `cb` gets a stop word detection, on the feeding task. Safe
+// from any task.
+void wake_word_set_stop(bool (*playing)(void), void (*cb)(void));
 
 #ifdef __cplusplus
 }

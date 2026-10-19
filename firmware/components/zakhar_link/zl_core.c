@@ -20,6 +20,7 @@ static const char *const STATES[] = {
 static const char *const MODELS[] = {
     [ZL_MODEL_WAKE] = "wake",
     [ZL_MODEL_VAD] = "vad",
+    [ZL_MODEL_STOP] = "stop",
 };
 
 static const cJSON *field(const cJSON *o, const char *name)
@@ -257,6 +258,14 @@ char *zl_encode_model_loaded(zl_model_t kind, const char *name, bool ok)
     return finish(o, o != NULL && cJSON_AddStringToObject(o, "kind", MODELS[kind]) != NULL &&
                          cJSON_AddStringToObject(o, "name", name) != NULL &&
                          cJSON_AddBoolToObject(o, "ok", ok) != NULL);
+}
+
+char *zl_encode_stop(bool has_session, uint32_t session)
+{
+    cJSON *o = message("stop");
+    bool ok = o != NULL;
+    if (ok && has_session) ok = cJSON_AddNumberToObject(o, "session", session) != NULL;
+    return finish(o, ok);
 }
 
 void zl_free(char *json)

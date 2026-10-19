@@ -211,7 +211,19 @@ static void on_detect(void)
 
 static bool on_model(zl_model_t kind, uint8_t *data, size_t size)
 {
-    return wake_word_load(kind == ZL_MODEL_WAKE ? WAKE_WORD_MODEL_WAKE : WAKE_WORD_MODEL_VAD, data, size);
+    wake_word_model_t model = WAKE_WORD_MODEL_WAKE;
+    switch (kind) {
+    case ZL_MODEL_WAKE:
+        model = WAKE_WORD_MODEL_WAKE;
+        break;
+    case ZL_MODEL_VAD:
+        model = WAKE_WORD_MODEL_VAD;
+        break;
+    case ZL_MODEL_STOP:
+        model = WAKE_WORD_MODEL_STOP;
+        break;
+    }
+    return wake_word_load(model, data, size);
 }
 
 // ---------------------------------------------------------------- boot
@@ -332,12 +344,13 @@ void app_main(void)
     };
     zl_start(&cfg, &cb);
     // zl_start() reports no failure; its task exists only when the start got through (the playback
-    // buffer, the lock, the task), and zl_play_read() and zl_report_volume() must not run without
-    // it.
+    // buffer, the lock, the task), and zl_play_read(), zl_report_volume() and zl_stop() must not run
+    // without it.
     if (xTaskGetHandle("zakhar_link") == NULL) {
         ESP_LOGE(TAG, "zakhar_link did not start");
         return;
     }
+    wake_word_set_stop(zl_playing, zl_stop);
     err = audio_start_playback();
     if (err == ESP_OK) err = controls_start();
     if (err != ESP_OK) {
