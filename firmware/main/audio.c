@@ -4,11 +4,13 @@
 // reference on the same wire never stops.
 #include "audio.h"
 
+#include <stdatomic.h>
 #include <string.h>
 
 #include "audio_core.h"
 #include "board.h"
 #include "driver/i2s_std.h"
+#include "esp_attr.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
@@ -29,9 +31,23 @@ static const char *TAG = "audio";
 
 #define SPK_RATE 48000
 #define SPK_BLOCK 720  // frames per write: 15 ms, the stock DMA buffer
+#define LATE_CHECK_BLOCKS 67  // the speaker task reports late buffers about once a second
 
 static i2s_chan_handle_t s_tx, s_rx;
 static tap_t s_tap;
+// DMA buffers the speaker played as silence because the speaker task had not refilled them in
+// time: the driver's sending queue overflowed (i2s_common.c, i2s_dma_tx_callback). Each is 15 ms
+// of silence that no stream reported, the speaker task having been kept off the CPU.
+static _Atomic uint32_t s_late;
+
+static bool IRAM_ATTR on_late(i2s_chan_handle_t handle, i2s_event_data_t *event, void *ctx)
+{
+    (void)handle;
+    (void)event;
+    (void)ctx;
+    atomic_fetch_add_explicit(&s_late, 1, memory_order_relaxed);
+    return false;
+}
 
 static void mic_task(void *arg)
 {
@@ -54,7 +70,17 @@ static void speaker_task(void *arg)
     (void)arg;
     static int16_t mono[SPK_BLOCK];
     static int16_t stereo[SPK_BLOCK * 2];
-    for (;;) {
+    // The buffers that went out before this task started are not late.
+    uint32_t seen = atomic_load_explicit(&s_late, memory_order_relaxed);
+    for (unsigned blocks = 1;; blocks++) {
+        if (blocks % LATE_CHECK_BLOCKS == 0) {
+            const uint32_t late = atomic_load_explicit(&s_late, memory_order_relaxed);
+            if (late != seen) {
+                ESP_LOGW(TAG, "speaker task late: %u DMA buffers (%u ms) went out as silence", (unsigned)(late - seen),
+                         (unsigned)(late - seen) * SPK_BLOCK * 1000 / SPK_RATE);
+                seen = late;
+            }
+        }
         const size_t n = zl_play_read(mono, SPK_BLOCK);
         leds_set_playing(n > 0);
         memset(mono + n, 0, (SPK_BLOCK - n) * sizeof mono[0]);
@@ -87,8 +113,10 @@ esp_err_t audio_start(void)
     };
     tx_std.slot_cfg.slot_bit_width = I2S_SLOT_BIT_WIDTH_32BIT;
     tx_std.slot_cfg.ws_width = 32;
+    const i2s_event_callbacks_t tx_cb = {.on_send_q_ovf = on_late};
     esp_err_t err = i2s_new_channel(&tx_cc, &s_tx, NULL);
     if (err == ESP_OK) err = i2s_channel_init_std_mode(s_tx, &tx_std);
+    if (err == ESP_OK) err = i2s_channel_register_event_callback(s_tx, &tx_cb, NULL);
     if (err == ESP_OK) err = i2s_channel_enable(s_tx);
     if (err != ESP_OK) return err;
 
