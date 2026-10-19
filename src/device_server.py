@@ -11,7 +11,9 @@ import asyncio
 import io
 import itertools
 import json
+import math
 import re
+import statistics
 import time
 import wave
 from collections import deque
@@ -66,15 +68,26 @@ VAD_CUTOFF = "vad_cutoff"
 ECHO_CANCEL = "echo_cancel"
 ECHO_CANCEL_MODE = "echo_cancel_mode"
 ECHO_CANCEL_FILTER = "echo_cancel_filter"
+AUTO_VOLUME_THRESHOLD = "auto_volume_threshold"
+AUTO_VOLUME_GAIN = "auto_volume_gain"
 SPEAKER_VOLUME = "speaker_volume"
-# The controls kept in the device config: control id -> (field, its minimum, its maximum).
+# The controls kept in the device config: control id -> (field, its minimum, its maximum, the
+# decimals a value keeps).
 _CONFIG_FIELDS = {
-    WAKE_CUTOFF: ("wake_cutoff", 0, 100),
-    VAD_CUTOFF: ("vad_cutoff", 0, 100),
-    ECHO_CANCEL: ("echo_cancel", 0, 3),
-    ECHO_CANCEL_MODE: ("echo_cancel_mode", 0, 3),
-    ECHO_CANCEL_FILTER: ("echo_cancel_filter", 1, 8),
+    WAKE_CUTOFF: ("wake_cutoff", 0, 100, 0),
+    VAD_CUTOFF: ("vad_cutoff", 0, 100, 0),
+    ECHO_CANCEL: ("echo_cancel", 0, 3, 0),
+    ECHO_CANCEL_MODE: ("echo_cancel_mode", 0, 3, 0),
+    ECHO_CANCEL_FILTER: ("echo_cancel_filter", 1, 8, 0),
+    AUTO_VOLUME_THRESHOLD: ("auto_volume_threshold", -120, 0, 0),
+    AUTO_VOLUME_GAIN: ("auto_volume_gain", 0, 10, 1),
 }
+# The device config's fields `config` carries. The auto volume threshold and gain are not among
+# them: the server turns them into `volume_boost` (_boost).
+_DEVICE_FIELDS = ("wake_cutoff", "vad_cutoff", "echo_cancel", "echo_cancel_mode", "echo_cancel_filter",
+                  "auto_volume")
+# The `ambient` values a connection keeps: a minute of them, the device measuring every 15 s.
+AMBIENT_KEEP = 4
 
 # StageEvents that map onto a plain `state` message; TTS_START, STT_END and ERROR
 # carry text and are handled in Device._send_event, the rest send nothing.
@@ -98,9 +111,19 @@ def _spawn(coro) -> None:
     task.add_done_callback(_background.discard)
 
 
-def _config_fields(cfg) -> dict[str, int]:
-    """The device config's fields that `config` carries: those of the config controls."""
-    return {field: getattr(cfg, field) for field, _, _ in _CONFIG_FIELDS.values()}
+def _config_fields(cfg) -> dict[str, int | bool]:
+    """The device config's fields that `config` carries."""
+    return {field: getattr(cfg, field) for field in _DEVICE_FIELDS}
+
+
+def _boost(cfg, ambient) -> int:
+    """The volume boost, percent points 0..100: (the median of the `ambient` values - the
+    threshold) x the gain, rounded; 0 below the threshold, before any value and with auto volume
+    off."""
+    if not cfg.auto_volume or not ambient:
+        return 0
+    over = max(0.0, statistics.median(ambient) - cfg.auto_volume_threshold)
+    return min(100, round(over * cfg.auto_volume_gain))
 
 
 def _model_paths(cfg, speaker: bool) -> dict[str, tuple[str, str]]:
@@ -259,6 +282,8 @@ class Connection:
         self.play_rate = play.get("rate")
         self.buffer_ms = play.get("buffer_ms")
         self.volume = hello.get("volume")
+        self.ambient: deque = deque(maxlen=AMBIENT_KEEP)  # the last `ambient` values, dBFS
+        self.boost = 0  # the `volume_boost` last sent; the device starts at 0
         self.wake_peak = None
         # The device's current session, and whether its run is still going (from
         # wake until the terminal state): plays in that window belong to the session.
@@ -309,6 +334,10 @@ class Connection:
     def send_config(self, cfg) -> None:
         self.config_sent = _config_fields(cfg)
         self.send({"type": "config", **self.config_sent})
+
+    def send_boost(self, value: int) -> None:
+        self.boost = value
+        self.send({"type": "volume_boost", "value": value})
 
     def send_log_stream(self, on: bool) -> None:
         self.log_on = on
@@ -539,6 +568,12 @@ class Device:
             conn.on_played(msg["id"], bool(msg.get("dropped")), msg.get("dry"), msg.get("gap_ms"))
         elif kind == "volume":
             conn.volume = msg["value"]
+        elif kind == "ambient":
+            # A microphone reading all zeros measures -inf, which arrives as null: not a level.
+            value = msg.get("value")
+            if isinstance(value, (int, float)) and math.isfinite(value):
+                conn.ambient.append(value)
+                self.update_boost()
         elif kind == "wake_peak":
             conn.wake_peak = msg["value"]
         elif kind == "log":
@@ -578,6 +613,16 @@ class Device:
         elif data[0] == MIC:
             await self.pipeline.on_audio(*_channels(data[1:], conn.mic_channels))
 
+    def update_boost(self) -> None:
+        """Send `volume_boost` to a connected device whose boost (_boost of its config and its
+        `ambient` values) is not the one it has."""
+        conn = self.conn
+        if conn is None:
+            return
+        boost = _boost(self.cfg, conn.ambient)
+        if boost != conn.boost:
+            conn.send_boost(boost)
+
     def versions(self) -> list[dict]:
         conn = self.conn
         return [
@@ -586,8 +631,9 @@ class Device:
         ]
 
     def controls(self) -> list[dict]:
-        """Panel controls: the cutoffs and the stop word's echo cancellation (server config)
-        and, on a connected device with a speaker, its volume."""
+        """Panel controls: the cutoffs, the stop word's echo cancellation and the auto volume's
+        threshold and gain (server config) and, on a connected device with a speaker, its
+        volume."""
         cfg = self.cfg
         out = [
             {"id": WAKE_CUTOFF, "name": "Wake word cutoff", "value": cfg.wake_cutoff,
@@ -601,6 +647,10 @@ class Device:
              "value": cfg.echo_cancel_mode, "min": 0, "max": 3, "step": 1, "unit": ""},
             {"id": ECHO_CANCEL_FILTER, "name": "Stop word echo cancellation filter length",
              "value": cfg.echo_cancel_filter, "min": 1, "max": 8, "step": 1, "unit": ""},
+            {"id": AUTO_VOLUME_THRESHOLD, "name": "Auto volume threshold",
+             "value": cfg.auto_volume_threshold, "min": -120, "max": 0, "step": 1, "unit": "dBFS"},
+            {"id": AUTO_VOLUME_GAIN, "name": "Auto volume gain",
+             "value": cfg.auto_volume_gain, "min": 0, "max": 10, "step": 0.1, "unit": "%/dB"},
         ]
         conn = self.conn
         if conn is not None and conn.speaker:
@@ -608,18 +658,30 @@ class Device:
                         "min": 0, "max": 100, "step": 1, "unit": "%"})
         return out
 
+    def readings(self) -> list[dict]:
+        """Panel readings of the auto volume: the room's noise (the median of the connection's
+        `ambient` values, None before the first) and the boost sent (None offline)."""
+        conn = self.conn
+        ambient = list(conn.ambient) if conn is not None else []
+        return [
+            {"id": "ambient_noise", "name": "Ambient noise",
+             "value": statistics.median(ambient) if ambient else None, "unit": "dBFS"},
+            {"id": "volume_boost", "name": "Volume boost",
+             "value": conn.boost if conn is not None else None, "unit": "%"},
+        ]
+
     def set_control(self, control_id: str, value: float) -> None:
-        """A cutoff or a stop word echo cancellation setting is written to the config (the
-        reconfigure that follows sends `config` to a connected device); the volume goes to
-        the device.
+        """A cutoff, a stop word echo cancellation setting or an auto volume setting is written
+        to the config (the reconfigure that follows sends `config` or `volume_boost` to a
+        connected device); the volume goes to the device.
         Raises LookupError (unknown control / no speaker) or RuntimeError (offline)."""
         config = _CONFIG_FIELDS.get(control_id)
         if config is not None:
-            field, low, high = config
+            field, low, high, digits = config
             devices = [d.model_dump(mode="json") for d in self.rt.core.devices]
             for d in devices:
                 if d["name"] == self.name:
-                    d[field] = max(low, min(high, round(value)))
+                    d[field] = max(low, min(high, round(value, digits) if digits else round(value)))
             self.rt.svc.apply({"core": {"devices": devices}})
             return
         pct = max(0, min(100, round(value)))
@@ -860,6 +922,7 @@ class DeviceManager:
             "device": device_name,
             "online": target.online,
             "controls": target.controls(),
+            "readings": target.readings(),
             "versions": target.versions() if target.online else [],
         }
 
@@ -973,8 +1036,8 @@ class DeviceManager:
 
     async def _hello(self, ws, hello: dict):
         """Admit a device: add an unknown id to the config, refuse a disabled one,
-        replace an older connection of the same id, then send `config`, what the device's
-        capture needs, `log_stream` and the models."""
+        replace an older connection of the same id, then send `config`, `volume_boost`, what
+        the device's capture needs, `log_stream` and the models."""
         name = hello["id"]
         cfg = next((d for d in self.rt.core.devices if d.name == name), None)
         if cfg is None:
@@ -993,6 +1056,8 @@ class DeviceManager:
             old.close(CLOSE_REPLACED)
             await device.pipeline.on_disconnect()
         conn.send_config(cfg)
+        # A new connection has no `ambient` yet: the boost is 0.
+        conn.send_boost(0)
         # Before the models: the device holds a capture's unsent audio only in its ~3 s tap.
         # A capture file that cannot be read must not keep the device from connecting.
         try:
@@ -1011,7 +1076,8 @@ class DeviceManager:
 
     async def reconfigure(self) -> None:
         """Apply the device config to live connections: close a device that left the
-        config or got disabled, send `config` to one whose `config` values changed, `log_stream`
+        config or got disabled, send `config` to one whose `config` values changed,
+        `volume_boost` to one whose boost changed with its auto volume settings, `log_stream`
         to one whose log switch changed and a model whose name changed."""
         names = {cfg.name for cfg in self.rt.core.devices}
         for name, device in self._devices.items():
@@ -1029,6 +1095,10 @@ class DeviceManager:
                 continue
             if conn.config_sent != _config_fields(cfg):
                 conn.send_config(cfg)
+            if not cfg.auto_volume:
+                # The device stops measuring: its old values would show and come back stale.
+                conn.ambient.clear()
+            device.update_boost()
             if conn.log_on != cfg.log:
                 conn.send_log_stream(cfg.log)
             for kind, (model, path) in _model_paths(cfg, conn.speaker).items():

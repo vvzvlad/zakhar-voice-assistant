@@ -564,16 +564,18 @@ export function Prompt() {
 
 // ── Devices ───────────────────────────────────────────────────────────────
 // Add mode (`onSave({name, enabled})`) asks for a device id. Edit mode (`device`, the
-// saved id) edits the display label, the wake-word model and the device log switch (`onSave`
-// gets only the changed ones of {label, wake_model, log}; wake_model "" = the release default;
-// an uploaded .tflite becomes the selected model), shows the id read-only — it is what the
-// firmware sends in hello — and hosts the live controls; `online` says whether the device is
-// reachable, `logDays` how many days of device log the server keeps.
-function DeviceModal({ onSave, onClose, title, device, label: savedLabel = "", wakeModel: savedWakeModel = "", log: savedLog = false, logDays, online }) {
+// saved id) edits the display label, the wake-word model, the device log switch and the auto
+// volume switch (`onSave` gets only the changed ones of {label, wake_model, log, auto_volume};
+// wake_model "" = the release default; an uploaded .tflite becomes the selected model), shows
+// the id read-only — it is what the firmware sends in hello — and hosts the live controls;
+// `online` says whether the device is reachable, `logDays` how many days of device log the
+// server keeps.
+function DeviceModal({ onSave, onClose, title, device, label: savedLabel = "", wakeModel: savedWakeModel = "", log: savedLog = false, autoVolume: savedAutoVolume = false, logDays, online }) {
   const [name, setName] = useState("");
   const [label, setLabel] = useState(savedLabel);
   const [wakeModel, setWakeModel] = useState(savedWakeModel);
   const [log, setLog] = useState(savedLog);
+  const [autoVolume, setAutoVolume] = useState(savedAutoVolume);
   const [wakeModels, setWakeModels] = useState(null); // {options, release} from GET /api/wake-models
   const [uploadErr, setUploadErr] = useState(null);
   const fileRef = useRef(null);
@@ -600,7 +602,8 @@ function DeviceModal({ onSave, onClose, title, device, label: savedLabel = "", w
     }
   }
   if (device) {
-    const unchanged = label.trim() === savedLabel && wakeModel === savedWakeModel && log === savedLog;
+    const unchanged = label.trim() === savedLabel && wakeModel === savedWakeModel && log === savedLog
+      && autoVolume === savedAutoVolume;
     return <Modal title={title} onClose={onClose}
       footer={<><button className="z-btn g" onClick={onClose}>Close</button>
         <button className="z-btn p" disabled={unchanged} onClick={() => onSave({
@@ -608,6 +611,7 @@ function DeviceModal({ onSave, onClose, title, device, label: savedLabel = "", w
           ...(label.trim() !== savedLabel && { label: label.trim() }),
           ...(wakeModel !== savedWakeModel && { wake_model: wakeModel }),
           ...(log !== savedLog && { log }),
+          ...(autoVolume !== savedAutoVolume && { auto_volume: autoVolume }),
         })}>Save</button></>}>
       <Field label="Name" hint="Shown in the panel instead of the device id; empty shows the id."><div className="z-inp"><input value={label} placeholder={device} onChange={(e) => setLabel(e.target.value)} /></div></Field>
       <Field label="Device id" hint="Sent by the firmware when it connects — keys the device's settings and dialog context."><div className="z-inp"><input value={device} readOnly /></div></Field>
@@ -624,6 +628,9 @@ function DeviceModal({ onSave, onClose, title, device, label: savedLabel = "", w
       </Field>}
       <Field row label="Device log" hint={`On: the speaker streams its whole log to the server, which keeps the last ${logDays} days in data/device_logs/${device}/. Off: the speaker sends nothing. Applies on save, no reflash.`}>
         <Toggle on={log} onChange={setLog} />
+      </Field>
+      <Field row label="Auto volume" hint="On: every 15 s of quiet the speaker measures the room's noise on its raw microphone; noise above the threshold raises the reply over the dial's volume by (noise − threshold) × gain. Applies on save, no reflash.">
+        <Toggle on={autoVolume} onChange={setAutoVolume} />
       </Field>
       <CaptureControl device={device} online={online} />
       <DeviceControls device={device} />
@@ -724,19 +731,26 @@ const CONTROL_HINTS = {
   echo_cancel: "0 = off, the stop word hears the wake word's input; 1..3 = on, residual echo suppression mild to strongest (FD modes only)",
   echo_cancel_mode: "0 SR low cost, 1 SR high performance, 2 FD low cost, 3 FD high performance; a change re-creates the canceller",
   echo_cancel_filter: "Filter length 1..8; a change re-creates the canceller",
+  auto_volume_threshold: "Room noise above this raises the volume, with Auto volume on",
+  auto_volume_gain: "Volume % added per dB of noise above the threshold; 2.5 %/dB raises the reply 1 dB per dB",
 };
 
+// A value with its unit: "%" sticks to the number, any other unit follows a space.
+const withUnit = (text, unit) => (!unit || unit === "%" ? `${text}${unit || ""}` : `${text} ${unit}`);
+
 // Per-device controls (wake-word probability cutoff + VAD cutoff + the stop word's echo
-// cancellation + speaker volume) shown inside the Edit-speaker modal, next to CaptureControl.
-// Each is a Slider over the range the server gives it, written back debounced. The cutoffs and
-// the echo cancellation settings come from the server config (the server sends them to the
-// device); the volume is read from the connected device and is listed only while a
-// device with a speaker is connected. A background poll keeps the sliders in sync with
-// external changes (e.g. the physical volume dial) without stomping a control the user
-// is actively dragging.
+// cancellation + the auto volume's threshold and gain + speaker volume) shown inside the
+// Edit-speaker modal, next to CaptureControl. Each is a Slider over the range and step the
+// server gives it, written back debounced. The cutoffs, the echo cancellation and the auto
+// volume settings come from the server config; the volume is read from the connected device
+// and is listed only while a device with a speaker is connected. The auto volume's readings
+// (the room's noise, the boost) are shown read-only, "—" before the first value. A background
+// poll keeps the sliders and the readings in sync with external changes (e.g. the physical
+// volume dial) without stomping a control the user is actively dragging.
 function DeviceControls({ device }) {
   const { refreshConfig } = useAppData();
   const [controls, setControls] = useState([]); // [{id,name,value,min,max,step,unit}]
+  const [readings, setReadings] = useState([]); // [{id,name,value,unit}] read-only, value null before the first
   const [versions, setVersions] = useState([]); // [{id,name,value}] read-only firmware versions
   const [err, setErr] = useState(null);
   const [local, setLocal] = useState({});        // id -> in-flight value (responsive drag)
@@ -746,6 +760,7 @@ function DeviceControls({ device }) {
   // Apply a fresh snapshot, skipping controls the user is actively writing.
   const applySnapshot = (snap) => {
     setControls(snap.controls || []);
+    setReadings(snap.readings || []);
     setVersions(snap.versions || []);
     setLocal((prev) => {
       const next = { ...prev };
@@ -787,7 +802,7 @@ function DeviceControls({ device }) {
   };
 
   if (controls.length === 0) {
-    return <Field label="Device controls" hint="Wake-word cutoff, VAD cutoff, stop word echo cancellation & speaker volume">
+    return <Field label="Device controls" hint="Wake-word cutoff, VAD cutoff, stop word echo cancellation, auto volume & speaker volume">
       {err
         ? <div className="z-fh" style={{ color: "#b91c1c" }}>{err.message || String(err)}</div>
         : <div className="z-fh">Loading…</div>}
@@ -800,9 +815,17 @@ function DeviceControls({ device }) {
       return <Field key={c.id} label={c.name} hint={CONTROL_HINTS[c.id]}>
         <Slider min={c.min} max={c.max} step={c.step || 1} value={v}
           onChange={(nv) => onSlide(c, nv)}
-          fmt={(val) => `${Math.round(val)}${c.unit || ""}`} />
+          fmt={(val) => withUnit(c.step < 1 ? Number(val).toFixed(1) : Math.round(val), c.unit)} />
       </Field>;
     })}
+    {readings.length > 0 && <div style={{ marginTop: 8, display: "flex", gap: 16, flexWrap: "wrap" }}>
+      {readings.map((r) => <div key={r.id}>
+        <div style={{ fontSize: 10.5, color: "var(--mut)", textTransform: "uppercase", letterSpacing: ".04em", fontWeight: 600 }}>{r.name}</div>
+        <div className="mono" style={{ fontSize: 13, fontWeight: 600, marginTop: 2 }}>
+          {r.value == null ? "—" : withUnit(Number.isInteger(r.value) ? r.value : r.value.toFixed(1), r.unit)}
+        </div>
+      </div>)}
+    </div>}
     {err && <div className="z-fh" style={{ color: "#b91c1c", marginTop: 6 }}>
       {(err && (err.message || String(err))) || "Failed to load controls."}
     </div>}
@@ -995,6 +1018,7 @@ export function Devices() {
       device={modal.name} label={devices.find((d) => d.name === modal.name)?.label || ""}
       wakeModel={devices.find((d) => d.name === modal.name)?.wake_model || ""}
       log={!!devices.find((d) => d.name === modal.name)?.log} logDays={catalog.core.values.device_log_days}
+      autoVolume={!!devices.find((d) => d.name === modal.name)?.auto_volume}
       onSave={(edit) => onEdit(modal.name, edit)} online={statusOf(modal.name) === "online"} />}
   </div>;
 }

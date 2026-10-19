@@ -1,6 +1,7 @@
 // Host test of the Voice PE firmware's pure audio core (audio_core.c): the microphone sample
 // conversion against ESPHome's MicrophoneSource, the tap ring, the echo reference and delay
-// estimator, the mic task's chunk bookkeeping, and the stock volume -> DAC byte table.
+// estimator, the mic task's chunk bookkeeping, the room's noise level, and the stock volume -> DAC
+// byte table.
 // `make fw-voicepe-host-test` builds it.
 #include <assert.h>
 #include <math.h>
@@ -327,6 +328,94 @@ static void test_chunk_offset(void)
     assert(k.have_offset && k.offset == 16100u - (768 + 512));
 }
 
+static void test_ambient(void)
+{
+    enum { N = 512 };
+    static int32_t in[2 * N];
+    ambient_t a;
+    ambient_init(&a);
+    assert(isinf(ambient_dbfs(&a)) && ambient_dbfs(&a) < 0);  // nothing added
+    // A sine of 1/1000 full scale on channel 0, full scale on channel 1: the RMS is the peak / sqrt 2,
+    // -63.0 dBFS, and channel 1 does not count.
+    for (size_t i = 0; i < N; i++) {
+        in[2 * i] = (int32_t)lrint(2147483648.0 / 1000 * sin(2 * M_PI * 1000 * i / 16000));
+        in[2 * i + 1] = INT32_MAX;
+    }
+    ambient_add(&a, in, N);
+    assert(ambient_dbfs(&a) == -63.0);
+    // The level counts over every chunk added: a silent chunk halves the mean square, -3 dB.
+    memset(in, 0, sizeof in);
+    ambient_add(&a, in, N);
+    assert(ambient_dbfs(&a) == -66.0);
+    // Below one step of the 16-bit tap (pcm_s32_to_s16 gives 0) the 32-bit slot still measures:
+    // 2^14 of 2^31 is 20 log10(2^-17) = -102.35 dBFS, rounded away from zero.
+    ambient_init(&a);
+    for (size_t i = 0; i < N; i++) in[2 * i] = i % 2 ? 1 << 14 : -(1 << 14);
+    assert(pcm_s32_to_s16(in[0], 1) == -1 && pcm_s32_to_s16(in[2], 1) == 0);
+    ambient_add(&a, in, N);
+    assert(ambient_dbfs(&a) == -102.4);
+    // Full scale is 0 dBFS.
+    ambient_init(&a);
+    for (size_t i = 0; i < N; i++) in[2 * i] = INT32_MIN;
+    ambient_add(&a, in, N);
+    assert(ambient_dbfs(&a) == 0);
+}
+
+// One chunk of the mic task's measurement path, with the stage accounting it rides on: the slots
+// are `raw_value` while the wire carries the raw microphone and 2^28 while it carries AGC, so a
+// measured AGC chunk would show in the level. True when the chunk completes a measurement.
+static bool sched_chunk(ambient_sched_t *s, mic_chunks_t *c, bool *wrote, bool quiet, int32_t raw_value)
+{
+    enum { N = 512 };
+    static int32_t in[2 * N];
+    const bool measuring = ambient_sched_want(s, quiet);
+    const mic_chunk_t k = mic_chunks_step(c, 0, measuring, *wrote, 0);
+    *wrote = k.write;
+    for (size_t i = 0; i < N; i++) in[2 * i] = k.raw ? raw_value : 1 << 28;
+    return measuring && ambient_sched_take(s, k.raw, in, N);
+}
+
+static void test_ambient_sched(void)
+{
+    ambient_sched_t s;
+    mic_chunks_t c;
+    bool wrote = false;
+    ambient_sched_init(&s, 6, 3);
+    mic_chunks_init(&c, 512, 16000);
+    // Quiet chunks 1..5 measure nothing; the 6th starts a measurement.
+    for (int i = 1; i <= 5; i++) {
+        assert(!sched_chunk(&s, &c, &wrote, true, 1 << 20));
+        assert(!s.measuring);
+    }
+    assert(!sched_chunk(&s, &c, &wrote, true, 1 << 20) && s.measuring);  // 6: NONE asked
+    // The stage settles over MIC_STAGE_SETTLE chunks (AGC on the wire, not measured), then three
+    // raw chunks complete it: chunks 8, 9, 10. Only raw chunks count: 2^20 of 2^31 is -66.2 dBFS.
+    assert(MIC_STAGE_SETTLE == 2);
+    assert(!sched_chunk(&s, &c, &wrote, true, 1 << 20));  // 7
+    assert(!sched_chunk(&s, &c, &wrote, true, 1 << 20));  // 8
+    assert(!sched_chunk(&s, &c, &wrote, true, 1 << 20));  // 9
+    assert(sched_chunk(&s, &c, &wrote, true, 1 << 20));   // 10
+    assert(!s.measuring && ambient_dbfs(&s.level) == -66.2);
+    // Quiet counts from the last start: the next measurement starts at chunk 12, six after 6.
+    assert(!sched_chunk(&s, &c, &wrote, true, 1 << 20) && !s.measuring);  // 11
+    sched_chunk(&s, &c, &wrote, true, 1 << 20);                          // 12
+    assert(s.measuring);
+
+    // The end of quiet ends a measurement with nothing to report, and the count starts over.
+    ambient_sched_init(&s, 6, 3);
+    mic_chunks_init(&c, 512, 16000);
+    wrote = false;
+    for (int i = 1; i <= 8; i++) assert(!sched_chunk(&s, &c, &wrote, true, 1 << 20));  // 8: one raw taken
+    assert(s.measuring && s.taken == 1);
+    assert(!sched_chunk(&s, &c, &wrote, false, 1 << 20) && !s.measuring);  // 9: a wake
+    for (int i = 10; i <= 14; i++) assert(!sched_chunk(&s, &c, &wrote, true, 1 << 20) && !s.measuring);
+    assert(!sched_chunk(&s, &c, &wrote, true, 1 << 16) && s.measuring && s.taken == 0);  // 15
+    // The new measurement starts from nothing: its level is that of its own chunks.
+    int n = 0;
+    while (!sched_chunk(&s, &c, &wrote, true, 1 << 16)) assert(++n < 10);
+    assert(ambient_dbfs(&s.level) == -90.3);
+}
+
 static void test_volume(void)
 {
     // The stock table: UI volume -> register byte (0.5 dB steps from 0 dB = 0x00).
@@ -365,6 +454,8 @@ int main(void)
     test_chunk_loss();
     test_chunk_lag_span();
     test_chunk_offset();
+    test_ambient();
+    test_ambient_sched();
     test_volume();
     printf("audio_core: all tests passed\n");
     return 0;

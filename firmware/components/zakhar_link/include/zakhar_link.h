@@ -86,6 +86,12 @@ typedef struct {
     // high performance; filter (echo_cancel_filter) 1..8, the filter length. Each is -1 when its
     // field is absent or out of its range, for the device to keep its own; called when any is not.
     void (*on_echo_cancel)(int level, int mode, int filter);
+    // The `config` auto_volume: the device measures the room's noise and reports it with
+    // zl_report_ambient() (true) or not (false); called only when the field is present.
+    void (*on_auto_volume)(bool on);
+    // A `volume_boost`: percent points the speaker adds to its own volume on the DAC (a volume of 0
+    // stays muted), not stored and not reported as `volume`.
+    void (*on_volume_boost)(int points);
     // A `log_stream`: the server wants the device log (true) or no longer (false). A lost link
     // does not call it: the device keeps collecting its lines meanwhile, and the next
     // connection's `log_stream` decides.
@@ -107,6 +113,14 @@ void zl_wake(const char *word);
 // The volume changed on the device (the dial, or after on_set_volume): sent as `volume` and
 // carried by the next hello. Safe from any task after zl_start().
 void zl_report_volume(int percent);
+
+// The room's noise level, dBFS, sent as `ambient` while online (dropped offline). Safe from any
+// task after zl_start().
+void zl_report_ambient(double dbfs);
+
+// Whether the microphone is in use: a voice session is open (from its wake to its idle or error)
+// or a capture is held; false before zl_start(). Takes the component's lock briefly.
+bool zl_mic_busy(void);
 
 // Speakers: the next playback samples (mono, play_rate) for the I2S writer task, after
 // zl_start(). Returns the count copied, fewer than max (0 included) when the buffer runs dry or

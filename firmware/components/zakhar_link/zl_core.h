@@ -35,6 +35,7 @@ typedef enum {
     ZL_MSG_DETECT,
     ZL_MSG_MODEL,
     ZL_MSG_LOG_STREAM,
+    ZL_MSG_VOLUME_BOOST,
 } zl_msg_type_t;
 
 typedef struct {
@@ -48,7 +49,8 @@ typedef struct {
     // CONFIG: echo_cancel 0..3, echo_cancel_mode 0..3, echo_cancel_filter 1..8; each -1 when absent
     // or out of its range (the device keeps its own).
     int echo_cancel, echo_mode, echo_filter;
-    int value;            // SET_VOLUME, percent
+    int auto_volume;      // CONFIG: 1 on, 0 off, -1 when absent or not a boolean (the device keeps its own)
+    int value;            // SET_VOLUME, percent; VOLUME_BOOST, percent points
     bool on;              // WAKE_PEAK_STREAM, DETECT, LOG_STREAM
     uint32_t capture_ms;  // CAPTURE
     uint32_t from;        // CAPTURE_RESUME: the offset of the first frame the server lacks
@@ -59,8 +61,8 @@ typedef struct {
 } zl_msg_t;
 
 // One text frame. False for anything the device ignores: not a JSON object, an unknown type, a
-// known field of the wrong type or out of its range (but for the optional echo cancellation fields
-// of `config`, which then read -1). On true, release with zl_msg_free().
+// known field of the wrong type or out of its range (but for the optional echo cancellation and
+// auto volume fields of `config`, which then read -1). On true, release with zl_msg_free().
 bool zl_decode(const char *data, size_t len, zl_msg_t *m);
 void zl_msg_free(zl_msg_t *m);
 
@@ -80,6 +82,8 @@ char *zl_encode_model_loaded(zl_model_t kind, const char *name, bool ok);
 char *zl_encode_stop(bool has_session, uint32_t session);
 // len bytes of log lines, not NUL-terminated.
 char *zl_encode_log(const char *text, size_t len);
+// The room's noise level, dBFS, as the caller rounded it.
+char *zl_encode_ambient(double dbfs);
 void zl_free(char *json);
 
 // ---------------------------------------------------------------- numbers

@@ -241,6 +241,56 @@ mic_chunk_t mic_chunks_step(mic_chunks_t *c, uint32_t dropped, bool want_raw, bo
     return out;
 }
 
+void ambient_init(ambient_t *a)
+{
+    memset(a, 0, sizeof *a);
+}
+
+void ambient_add(ambient_t *a, const int32_t *in, size_t frames)
+{
+    for (size_t i = 0; i < frames; i++) {
+        const double v = in[2 * i];
+        a->squares += v * v;
+    }
+    a->n += frames;
+}
+
+double ambient_dbfs(const ambient_t *a)
+{
+    const double rms = a->n > 0 ? sqrt(a->squares / (double)a->n) : 0;
+    return round(200 * log10(rms / 2147483648.0)) / 10;
+}
+
+void ambient_sched_init(ambient_sched_t *s, unsigned every, unsigned chunks)
+{
+    memset(s, 0, sizeof *s);
+    s->every = every;
+    s->chunks = chunks;
+}
+
+bool ambient_sched_want(ambient_sched_t *s, bool quiet)
+{
+    if (!quiet) {
+        s->measuring = false;
+        s->quiet = 0;
+    } else if (++s->quiet == s->every) {
+        s->quiet = 0;
+        s->measuring = true;
+        s->taken = 0;
+        ambient_init(&s->level);
+    }
+    return s->measuring;
+}
+
+bool ambient_sched_take(ambient_sched_t *s, bool raw, const int32_t *in, size_t frames)
+{
+    if (!s->measuring || !raw) return false;
+    ambient_add(&s->level, in, frames);
+    if (++s->taken < s->chunks) return false;
+    s->measuring = false;
+    return true;
+}
+
 uint8_t volume_dac_byte(int percent)
 {
     // -127 + (0.40 + p / 100 * 0.45) * 175 = (7875 p - 570000) / 10000; C division truncates

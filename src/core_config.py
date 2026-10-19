@@ -216,6 +216,16 @@ class DeviceConfig(BaseModel):
     echo_cancel: int = Field(1, ge=0, le=3)
     echo_cancel_mode: int = Field(2, ge=0, le=3)
     echo_cancel_filter: int = Field(4, ge=1, le=8)
+    # Auto volume. auto_volume goes to the device in `config`: while it is on, the speaker
+    # measures the room's noise on its raw microphone every 15 s of quiet and sends `ambient`
+    # (dBFS of its 32-bit microphone slot). The threshold and the gain stay on the server: noise
+    # (the median of the last minute's `ambient`) above the threshold adds (noise - threshold) x
+    # gain percent to the speaker's own volume, sent as `volume_boost`. The gain is percent per
+    # dB: the firmware's volume is ~0.39 dB per percent (audio_core volume_dac_byte: 0.45/100 x
+    # 175 steps of 0.5 dB), so 2.5 %/dB raises the reply 1 dB per 1 dB of noise.
+    auto_volume: bool = False
+    auto_volume_threshold: int = Field(-60, ge=-120, le=0)
+    auto_volume_gain: float = Field(2.0, ge=0, le=10)
     # The .tflite models sent to the device: its wake-word model and the VAD model that gates
     # it. Empty: the model the release ships (device_server.RELEASE_WAKE_MODEL /
     # RELEASE_VAD_MODEL). wake_model is otherwise a model name from GET /api/wake-models

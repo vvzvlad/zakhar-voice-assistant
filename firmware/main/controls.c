@@ -24,6 +24,7 @@ static const char *TAG = "controls";
 static dial_t s_dial;               // the dial interrupt only
 static _Atomic int s_counts;        // dial counts since the last tick
 static _Atomic int s_request = -1;  // a set_volume not applied yet
+static _Atomic int s_boost = -1;    // a volume_boost not applied yet
 static void (*s_on_hold)(void);     // set before the button task starts
 
 static void dial_isr(void *arg)
@@ -42,6 +43,8 @@ static void controls_task(void *arg)
         leds_set_muted(gpio_get_level(PIN_MUTE) == 1);
         const int request = atomic_exchange(&s_request, -1);
         if (request >= 0) volume_set(request);
+        const int boost = atomic_exchange(&s_boost, -1);
+        if (boost >= 0) volume_set_boost(boost);
         const int counts = atomic_exchange(&s_counts, 0);
         if (counts != 0) volume_set(dial_volume(volume_get(), counts));
     }
@@ -72,6 +75,11 @@ esp_err_t controls_start(void)
 void controls_request_volume(int percent)
 {
     atomic_store(&s_request, percent);
+}
+
+void controls_request_boost(int points)
+{
+    atomic_store(&s_boost, points);
 }
 
 static void button_task(void *arg)

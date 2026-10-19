@@ -53,6 +53,12 @@ static int get_setting(const cJSON *v, int lo, int hi)
     return d >= lo && d <= hi && d == floor(d) ? (int)d : -1;
 }
 
+// An optional boolean field: 1 true, 0 false, -1 when it is absent or anything else.
+static int get_flag(const cJSON *v)
+{
+    return cJSON_IsBool(v) ? cJSON_IsTrue(v) : -1;
+}
+
 // A string field: *out is its text, `absent` when the field is missing.
 static bool get_text(const cJSON *o, const char *name, const char *absent, const char **out)
 {
@@ -78,6 +84,7 @@ static bool decode_fields(const cJSON *o, const char *type, zl_msg_t *m)
         m->echo_cancel = get_setting(field(o, "echo_cancel"), 0, 3);
         m->echo_mode = get_setting(field(o, "echo_cancel_mode"), 0, 3);
         m->echo_filter = get_setting(field(o, "echo_cancel_filter"), 1, 8);
+        m->auto_volume = get_flag(field(o, "auto_volume"));
         return true;
     }
     if (strcmp(type, "state") == 0) {
@@ -112,6 +119,12 @@ static bool decode_fields(const cJSON *o, const char *type, zl_msg_t *m)
     }
     if (strcmp(type, "set_volume") == 0) {
         m->type = ZL_MSG_SET_VOLUME;
+        if (!get_percent(field(o, "value"), &a)) return false;
+        m->value = (int)a;
+        return true;
+    }
+    if (strcmp(type, "volume_boost") == 0) {
+        m->type = ZL_MSG_VOLUME_BOOST;
         if (!get_percent(field(o, "value"), &a)) return false;
         m->value = (int)a;
         return true;
@@ -301,6 +314,12 @@ char *zl_encode_log(const char *text, size_t len)
     char *json = finish(o, o != NULL && cJSON_AddStringToObject(o, "text", s) != NULL);
     free(s);
     return json;
+}
+
+char *zl_encode_ambient(double dbfs)
+{
+    cJSON *o = message("ambient");
+    return finish(o, o != NULL && cJSON_AddNumberToObject(o, "value", dbfs) != NULL);
 }
 
 void zl_free(char *json)
