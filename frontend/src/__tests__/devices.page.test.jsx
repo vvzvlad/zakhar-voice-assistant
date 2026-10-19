@@ -3,7 +3,8 @@
 // list (a cutoff set from a slider, a device that connected while the page was
 // open), the Edit dialog opens from the re-read config, shows the id read-only, saves a
 // display label, a wake-word model (a listed or an uploaded one) and the device log switch, and shows why its controls cannot load, and a slider write or a
-// newly connected device refreshes the app's config snapshot.
+// newly connected device refreshes the app's config snapshot. The dialog also says a
+// typed text on the speaker to check the volume.
 import React from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
@@ -16,6 +17,7 @@ vi.mock("../api.js", () => ({
   getConfig: vi.fn(),
   getDeviceControls: vi.fn(),
   setDeviceControl: vi.fn(),
+  sayOnDevice: vi.fn(),
   getWakeProbability: vi.fn(async () => ({ online: true, value: null })),
   setWakeProbabilityStream: vi.fn(async () => ({})),
   getWakeModels: vi.fn(async () => ({
@@ -200,5 +202,40 @@ describe("Devices page", () => {
     fireEvent(track, new MouseEvent("pointerdown", { bubbles: true, clientX: 55 }));
     await waitFor(() => expect(api.setDeviceControl).toHaveBeenCalledWith("kitchen", "wake_probability_cutoff", 55));
     await waitFor(() => expect(data.refreshConfig).toHaveBeenCalledTimes(1));
+  });
+
+  it("edit says the typed text on the speaker to check the volume", async () => {
+    api.getDeviceControls.mockResolvedValue({ device: "kitchen", online: true, versions: [], controls: [] });
+    let finish;
+    api.sayOnDevice.mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
+    render(<Devices />);
+    fireEvent.click(screen.getByText("Edit"));
+    const input = await screen.findByDisplayValue("Проверка громкости");
+    fireEvent.change(input, { target: { value: "" } });
+    expect(screen.getByText("Say")).toBeDisabled();
+    fireEvent.change(input, { target: { value: "раз два" } });
+    fireEvent.click(screen.getByText("Say"));
+    expect(api.sayOnDevice).toHaveBeenCalledWith("kitchen", "раз два");
+    expect(await screen.findByText("Saying…")).toBeDisabled();
+    finish({ ok: true });
+    expect(await screen.findByText("Say")).toBeEnabled();
+  });
+
+  it("edit shows why the speaker could not say the text, and an offline speaker cannot", async () => {
+    api.getDeviceControls.mockResolvedValue({ device: "kitchen", online: true, versions: [], controls: [] });
+    api.sayOnDevice.mockRejectedValue(new Error("tts down"));
+    const { unmount } = render(<Devices />);
+    fireEvent.click(screen.getByText("Edit"));
+    await screen.findByDisplayValue("Проверка громкости");
+    fireEvent.click(screen.getByText("Say"));
+    expect(await screen.findByText("tts down")).toBeInTheDocument();
+    unmount();
+
+    data.system = { devices: [{ name: "kitchen", online: false, versions: [] }] };
+    render(<Devices />);
+    fireEvent.click(screen.getByText("Edit"));
+    await screen.findByDisplayValue("Проверка громкости");
+    expect(screen.getByText("Say")).toBeDisabled();
+    expect(screen.getByText("Say")).toHaveAttribute("title", "Speaker offline");
   });
 });

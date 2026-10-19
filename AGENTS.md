@@ -21,8 +21,8 @@ configured under `core.mcp_servers` in `data/config.json`.
   the running process (backends/tools/audio/devices/reminders) without a restart.
   `src/agent_mcp.py` — the agent-facing MCP SERVER (FastMCP over streamable HTTP,
   served by the admin panel at `/mcp` on the panel port): external agents read the
-  run log, view/patch the config, speak text and send full text requests through
-  the pipeline.
+  run log, view/patch the config, speak text, set a speaker's volume and send full
+  text requests through the pipeline.
 - `frontend/` — Vite/React admin panel (vitest tests in `frontend/src/__tests__/`).
 - `tests/` — pytest
 - `ci/smoke.py` — smoke gate run by CI against the built image; read its module docstring

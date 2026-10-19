@@ -1302,6 +1302,41 @@ async def test_post_model_reloads_and_maps_errors(tmp_path):
         await client.close()
 
 
+async def test_post_say_speaks_and_maps_errors(tmp_path):
+    said = []
+
+    async def say(device, text):
+        if device == "nope":
+            raise LookupError(f"unknown device {device!r}")
+        if device == "away":
+            raise DeviceOfflineError(f"{device} is offline")
+        if device == "mute":
+            raise RuntimeError("tts down")
+        said.append((device, text))
+
+    client, _svc_ = await _client(tmp_path, device_say=say)
+    try:
+        resp = await client.post("/api/device/say", json={"device": "hall", "text": "проверка"})
+        assert resp.status == 200
+        assert await resp.json() == {"ok": True}
+        assert said == [("hall", "проверка")]
+        for body, status in (({"text": "x"}, 400), ({"device": "hall"}, 400),
+                             ({"device": "hall", "text": "  "}, 400),
+                             ({"device": "nope", "text": "x"}, 404),
+                             ({"device": "away", "text": "x"}, 409),
+                             ({"device": "mute", "text": "x"}, 502)):
+            resp = await client.post("/api/device/say", json=body)
+            assert resp.status == status, body
+        assert (await resp.json())["error"] == "tts down"
+    finally:
+        await client.close()
+    client, _svc_ = await _client(tmp_path)
+    try:
+        assert (await client.post("/api/device/say", json={"device": "hall", "text": "x"})).status == 503
+    finally:
+        await client.close()
+
+
 async def test_get_tools(tmp_path):
     # tool_sources is a zero-arg callable returning ToolHub.describe() output.
     sources = [{

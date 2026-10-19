@@ -52,13 +52,14 @@ class StubPipeline:
 
 
 class StubClient:
-    """Device double: cfg.name, online flag, announce recorder, pipeline."""
+    """Device double: cfg.name, online flag, announce recorder, volume, pipeline."""
 
     def __init__(self, name, online=True):
         self.cfg = SimpleNamespace(name=name)
         self.online = online
         self.announced = []
         self.reasons = []
+        self.volume = 50
         self.pipeline = StubPipeline()
 
     async def announce(self, text, reason, request=None):
@@ -66,6 +67,13 @@ class StubClient:
             raise RuntimeError(f"{self.cfg.name} is offline")
         self.announced.append(text)
         self.reasons.append(reason)
+
+    def get_volume(self):
+        return self.volume
+
+    def set_volume(self, level=None, change=None):
+        self.volume = level if level is not None else self.volume + change
+        return self.volume
 
 
 def make_rt(clients=(), runs_store=None, svc=None):
@@ -233,6 +241,43 @@ async def test_say_named_offline_device_returns_error():
     rt = make_rt(clients=[StubClient("a", online=False)])
     out = await call(rt, "say", {"text": "привет", "device": "a"})
     assert "offline" in out["error"]
+
+
+# --- set_volume ---------------------------------------------------------------
+
+async def test_set_volume_on_named_device():
+    kitchen, hall = StubClient("kitchen"), StubClient("hall")
+    rt = make_rt(clients=[kitchen, hall])
+
+    out = await call(rt, "set_volume", {"level": 30, "device": "hall"})
+
+    assert out == {"ok": True, "device": "hall", "volume": 30}
+    assert (kitchen.volume, hall.volume) == (50, 30)
+
+
+async def test_set_volume_defaults_to_first_online():
+    offline, online = StubClient("a", online=False), StubClient("b")
+    rt = make_rt(clients=[offline, online])
+
+    out = await call(rt, "set_volume", {"change": -10})
+
+    assert out == {"ok": True, "device": "b", "volume": 40}
+
+
+async def test_set_volume_unknown_device():
+    rt = make_rt(clients=[StubClient("kitchen")])
+    out = await call(rt, "set_volume", {"level": 30, "device": "nope"})
+    assert out == {"error": "unknown device 'nope'"}
+
+
+async def test_get_volume_named_default_and_unknown_device():
+    kitchen, hall = StubClient("kitchen", online=False), StubClient("hall")
+    hall.volume = 35
+    rt = make_rt(clients=[kitchen, hall])
+
+    assert await call(rt, "get_volume", {"device": "kitchen"}) == {"ok": True, "device": "kitchen", "volume": 50}
+    assert await call(rt, "get_volume", {}) == {"ok": True, "device": "hall", "volume": 35}
+    assert await call(rt, "get_volume", {"device": "nope"}) == {"error": "unknown device 'nope'"}
 
 
 # --- ask ----------------------------------------------------------------------

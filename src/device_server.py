@@ -609,6 +609,31 @@ class Device:
         conn.send({"type": "set_volume", "value": pct})
         conn.volume = pct
 
+    def get_volume(self) -> int:
+        """The speaker volume in percent: the last one the device reported or the server
+        set. Raises RuntimeError (offline, or the device has not reported its volume) or
+        LookupError (no speaker)."""
+        conn = self.conn
+        if conn is None:
+            raise RuntimeError(f"{self.name} is offline")
+        if not conn.speaker:
+            raise LookupError(f"{self.name} has no speaker")
+        if conn.volume is None:
+            raise RuntimeError(f"{self.name} has not reported its volume")
+        return conn.volume
+
+    def set_volume(self, level: int | None = None, change: int | None = None) -> int:
+        """Set the speaker volume to `level` percent, or move it by `change` percent from
+        the current volume (get_volume); exactly one of the two (else
+        ValueError). Goes through set_control: clamped to 0..100, raises LookupError (no
+        speaker) or RuntimeError (offline). Returns the new volume in percent."""
+        if (level is None) == (change is None):
+            raise ValueError("exactly one of level and change is required")
+        if change is not None:
+            level = self.get_volume() + change
+        self.set_control(SPEAKER_VOLUME, level)
+        return self.conn.volume
+
     async def announce(self, text: str, reason: str, request: str | None = None) -> None:
         """Proactively say `text`: the text to the device as an announcement and, on
         a device with a speaker, the synthesized speech.
@@ -817,6 +842,23 @@ class DeviceManager:
     def set_device_control(self, device_name: str, control_id: str, value: float) -> dict:
         self._find(device_name).set_control(control_id, value)
         return self.device_controls(device_name)
+
+    def get_volume(self, device_name: str) -> int:
+        """Device.get_volume on the named device; LookupError for an unknown name."""
+        return self._find(device_name).get_volume()
+
+    def set_volume(self, device_name: str, level: int | None = None, change: int | None = None) -> int:
+        """Device.set_volume on the named device; LookupError for an unknown name."""
+        return self._find(device_name).set_volume(level, change)
+
+    async def say(self, device_name: str, text: str) -> None:
+        """Speak `text` on the named device (the panel's "Say on speaker"). Raises
+        LookupError (unknown device), DeviceOfflineError, or what announce raises when
+        the speech fails."""
+        device = self._find(device_name)
+        if not device.online:
+            raise DeviceOfflineError(f"{device_name} is offline")
+        await device.announce(text, "say")
 
     def set_wake_prob_stream(self, device_name: str, enabled: bool) -> dict:
         target = self._find(device_name)
