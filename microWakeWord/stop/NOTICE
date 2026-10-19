@@ -1,0 +1,7 @@
+microWakeWord "Stop" model (stop.tflite, stop.json)
+Copyright Kevin Ahrendt
+
+Taken unchanged from https://github.com/kahrendt/microWakeWord/releases/tag/stop, the model the
+stock Home Assistant Voice PE firmware runs as its stop word. Licensed under the Apache License,
+Version 2.0 (https://github.com/kahrendt/microWakeWord/blob/main/LICENSE,
+https://www.apache.org/licenses/LICENSE-2.0).

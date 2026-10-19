@@ -27,6 +27,7 @@ typedef enum {
 typedef enum {
     ZL_MODEL_WAKE,
     ZL_MODEL_VAD,
+    ZL_MODEL_STOP,
 } zl_model_t;
 
 typedef struct {
@@ -96,6 +97,14 @@ void zl_report_volume(int percent);
 // Speakers: the next playback samples (mono, play_rate) for the I2S writer task, after
 // zl_start(). Returns the count copied, fewer than max (0 included) when the buffer runs dry.
 size_t zl_play_read(int16_t *out, size_t max);
+
+// Whether a stream is in the playback buffer (from its play_start until its last sample is out);
+// false on a device without a speaker and before zl_start(). Takes the component's lock briefly.
+bool zl_playing(void);
+
+// The stop word: only notifies the component task, which flushes the playback and sends `stop`
+// (with the open session's number), so it is safe in the detection callback. After zl_start().
+void zl_stop(void);
 
 #ifdef __cplusplus
 }
