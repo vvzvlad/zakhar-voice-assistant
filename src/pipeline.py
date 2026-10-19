@@ -719,7 +719,8 @@ class Pipeline:
     @property
     def verifier_pending(self) -> bool:
         """Whether the wake-word verifier has yet to rule on this run; the arbiter
-        rules on a run only after its verifier."""
+        waits for it, except that a run without a speaker loses as it is once a ready
+        candidate has one."""
         return self._wakeword_pending
 
     def awaits_arbitration(self, token: int) -> bool:
