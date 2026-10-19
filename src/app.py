@@ -153,7 +153,8 @@ async def main() -> None:
     # gracefully inside ToolHub.start(). The weather tool is gated on an OWM api key;
     # built-in OpenWeatherMap uses the proxied client_ext for its OWM call. Each
     # external server's source id is its (unique) name.
-    sources = build_sources(core, client_ext, scheduler, assistant_tasks)
+    # The volume tool reads the manager at call time: `rt` is assigned further down.
+    sources = build_sources(core, client_ext, scheduler, assistant_tasks, lambda: rt.manager)
     hub = ToolHub(sources)
     await hub.start()
 
@@ -236,6 +237,7 @@ async def main() -> None:
             device_wake_prob_set=manager.set_wake_prob_stream,
             device_detect_set=manager.set_detect,
             device_model_reload=manager.reload_model,
+            device_say=manager.say,
             static_dir=static_dir if os.path.isdir(static_dir) else None,
             runs_store=runs_store,
             tool_sources=hub.describe,

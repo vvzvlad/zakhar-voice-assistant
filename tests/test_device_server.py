@@ -872,6 +872,67 @@ async def test_controls(srv):
     await until(lambda: srv.manager.wake_prob("kitchen")["value"] == 42)
 
 
+async def test_set_volume_to_a_level_or_by_a_change(srv):
+    dev = await srv.connect()
+    await dev.recv()  # config
+    device = srv.device()
+    assert device.set_volume(level=30) == 30
+    assert await dev.recv() == {"type": "set_volume", "value": 30}
+    # A change counts from the volume the device reported last (e.g. turned on the dial).
+    await dev.send(type="volume", value=50)
+    await until(lambda: device.conn.volume == 50)
+    assert srv.manager.set_volume("kitchen", change=-10) == 40
+    assert await dev.recv() == {"type": "set_volume", "value": 40}
+    assert device.set_volume(change=100) == 100  # clamped
+    assert await dev.recv() == {"type": "set_volume", "value": 100}
+    for args in ({}, {"level": 10, "change": 5}):
+        with pytest.raises(ValueError):
+            device.set_volume(**args)
+    assert srv.manager.get_volume("kitchen") == 100
+    device.conn.volume = None
+    with pytest.raises(RuntimeError, match="has not reported its volume"):
+        device.set_volume(change=10)
+    with pytest.raises(RuntimeError, match="has not reported its volume"):
+        srv.manager.get_volume("kitchen")
+
+
+async def test_set_volume_refuses_offline_unknown_and_speakerless_devices(srv):
+    for args in ({"level": 30}, {"change": 10}):
+        with pytest.raises(RuntimeError, match="offline"):
+            srv.manager.set_volume("kitchen", **args)
+    with pytest.raises(RuntimeError, match="offline"):
+        srv.manager.get_volume("kitchen")
+    with pytest.raises(LookupError, match="unknown device"):
+        srv.manager.set_volume("nope", level=30)
+    with pytest.raises(LookupError, match="unknown device"):
+        srv.manager.get_volume("nope")
+    dev = await srv.connect("panel", speaker=False)
+    await dev.recv()  # config
+    for args in ({"level": 30}, {"change": 10}):
+        with pytest.raises(LookupError, match="no speaker"):
+            srv.manager.set_volume("panel", **args)
+    with pytest.raises(LookupError, match="no speaker"):
+        srv.manager.get_volume("panel")
+
+
+async def test_say_speaks_on_an_online_device_only(srv, tmp_path):
+    srv.rt.runs_store = RunsStore(str(tmp_path / "runs.db"))
+    with pytest.raises(DeviceOfflineError):
+        await srv.manager.say("kitchen", "проверка громкости")
+    assert srv.rt.runs_store.list() == []
+
+    dev = await srv.connect()
+    await dev.recv()  # config
+    say = asyncio.create_task(srv.manager.say("kitchen", "проверка громкости"))
+    assert await dev.recv() == {"type": "reply", "text": "проверка громкости"}
+    start = await dev.recv()
+    assert (await dev.recv())["type"] == "play_end"
+    await dev.send(type="played", id=start["id"])
+    await asyncio.wait_for(say, 2)
+    [row] = srv.rt.runs_store.list()
+    assert (row["reason"], row["result"], row["llm_text"]) == ("say", "ok", "проверка громкости")
+
+
 async def test_set_detect_sends_switch_and_refuses_offline(srv):
     with pytest.raises(RuntimeError, match="offline"):
         srv.manager.set_detect("kitchen", False)

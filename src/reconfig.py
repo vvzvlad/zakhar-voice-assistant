@@ -457,7 +457,7 @@ class Reconfigurator:
         """Rebuild the tool source set from current config and hot-swap it into the hub."""
         try:
             sources = build_sources(self.rt.core, self.deps.http_cloud, self.rt.scheduler,
-                                    self.rt.assistant_tasks)
+                                    self.rt.assistant_tasks, lambda: self.rt.manager)
             await self.rt.hub.set_sources(sources)
             logger.info("tool sources rebuilt (hot)")
         except Exception as e:

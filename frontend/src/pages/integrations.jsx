@@ -14,7 +14,7 @@ import {
   getPromptProfiles, getPromptProfile, createPromptProfile, updatePromptProfile,
   deletePromptProfile, activatePromptProfile,
   getTools, getOptions, startCapture, getCaptureStatus, downloadCaptureResult, getDeviceControls, setDeviceControl,
-  getWakeProbability, setWakeProbabilityStream, getConfig, getWakeModels, uploadWakeModel,
+  sayOnDevice, getWakeProbability, setWakeProbabilityStream, getConfig, getWakeModels, uploadWakeModel,
 } from "../api.js";
 import { deviceLabel, deviceVersion } from "../format.js";
 
@@ -109,8 +109,8 @@ const BUILTIN_SOURCES = [
 // transport (Literal), prompt (describes the server's tools to the model).
 const TRANSPORTS = ["auto", "streamable_http", "sse"];
 // Built-in ToolHub source ids — an external server may not shadow them, or it
-// would hide the openweathermap/calendar/reminders/assistant_tasks status in /api/tools.
-const RESERVED_NAMES = ["openweathermap", "calendar", "reminders", "assistant_tasks"];
+// would hide the openweathermap/calendar/reminders/assistant_tasks/volume status in /api/tools.
+const RESERVED_NAMES = ["openweathermap", "calendar", "reminders", "assistant_tasks", "volume"];
 function McpServerModal({ initial, onSave, onClose, title, takenNames }) {
   const [name, setName] = useState(initial?.name || "");
   const [url, setUrl] = useState(initial?.url || "");
@@ -237,7 +237,7 @@ export function MCP() {
   })), patchAndRefresh);
 
   return <FormPage form={form} narrow>
-    <PageHeader title="Tools" desc="Tool sources the model calls: external smart-home MCP servers and built-in weather/calendar/reminders/assistant tasks. Sources are applied live — rebuilt on save, no restart needed."
+    <PageHeader title="Tools" desc="Tool sources the model calls: external smart-home MCP servers and built-in weather/calendar/reminders/assistant tasks/speaker volume. Sources are applied live — rebuilt on save, no restart needed."
       actions={<button className="z-btn p" onClick={() => setModal({ mode: "add" })}><Ic n="add" w={14} />Add server</button>} />
     {toolsErr && <div className="z-banner warn" style={{ margin: "0 0 14px" }}>
       <Ic n="restart" w={15} />
@@ -627,6 +627,7 @@ function DeviceModal({ onSave, onClose, title, device, label: savedLabel = "", w
       </Field>
       <CaptureControl device={device} online={online} />
       <DeviceControls device={device} />
+      <SayControl device={device} online={online} />
       <WakeProbabilityMeter device={device} online={online} />
     </Modal>;
   }
@@ -809,6 +810,36 @@ function DeviceControls({ device }) {
       </div>)}
     </div>}
   </>;
+}
+
+// "Say on speaker" control shown inside the Edit-speaker modal, below the device controls:
+// speaks the typed text on the speaker through the TTS, so the volume can be checked by
+// ear. The request resolves once the speech has played. Disabled (tooltip) while offline.
+function SayControl({ device, online }) {
+  const [text, setText] = useState("Проверка громкости");
+  const [saying, setSaying] = useState(false);
+  const [err, setErr] = useState(null);
+
+  const say = async () => {
+    setErr(null);
+    setSaying(true);
+    try {
+      await sayOnDevice(device, text);
+    } catch (e) {
+      setErr(e.message || "failed");
+    } finally {
+      setSaying(false);
+    }
+  };
+
+  return <Field label="Say on speaker" hint="Speaks the text on the speaker through the TTS — to check the volume.">
+    <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+      <div className="z-inp" style={{ flex: 1 }}><input value={text} onChange={(e) => setText(e.target.value)} /></div>
+      <button className="z-btn p" disabled={!online || !text.trim() || saying} title={online ? "" : "Speaker offline"}
+        onClick={say}>{saying ? "Saying…" : "Say"}</button>
+    </div>
+    {err && <div className="z-fh" style={{ color: "#b91c1c" }}>{err}</div>}
+  </Field>;
 }
 
 // Live, read-only Wake Probability meter shown inside the Edit-speaker modal (only for

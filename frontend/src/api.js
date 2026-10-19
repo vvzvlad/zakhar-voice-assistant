@@ -106,6 +106,9 @@ export const getDeviceControls = (device) =>
 // Set one control; returns the refreshed snapshot.
 export const setDeviceControl = (device, control, value) =>
   request("/api/device/controls", { method: "POST", body: { device, control, value } });
+// Speak the text on the speaker through the TTS; resolves once it has played.
+export const sayOnDevice = (device, text) =>
+  request("/api/device/say", { method: "POST", body: { device, text } });
 
 // Live Wake Probability (on-device per-second PEAK, %). GET returns
 // {device, online, available, value}. The stream is gated on the device: POST
