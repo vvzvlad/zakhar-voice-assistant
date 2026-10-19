@@ -49,6 +49,11 @@ CONFIG_LWIP_TCP_SND_BUF_DEFAULT=32768
 # fell to 127-307 B free and, while the speaker played, its largest block to 1.5 KB: frames larger
 # than that were dropped and the link to the server broke every ~15 s.
 CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
+# That option alone raises the Wi-Fi defaults: static RX buffers 10 -> 16, internal RAM taken at
+# Wi-Fi init (~1.6 KB each), and the RX block-ack window 6 -> 16. Booted with them, the speaker had
+# 5 KB of internal RAM left and could not create the WebSocket task. The previous values:
+CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=10
+CONFIG_ESP_WIFI_RX_BA_WIN=6
 # The mDNS task's stack and its packets in PSRAM: at boot no internal block was left for the 4 KB
 # stack ("failed to allocate memory for the mDNS task's stack") and the link to the server never
 # started.
