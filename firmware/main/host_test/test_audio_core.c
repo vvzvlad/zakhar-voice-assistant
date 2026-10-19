@@ -219,13 +219,13 @@ static void test_chunk_stages(void)
     assert(!k.write && !k.raw);
     k = chunk(&c, true, false);
     assert(!k.write && k.raw);
-    // AGC at chunk 4: still raw at chunk 5, AGC from chunk 6.
+    // AGC at chunk 4: still raw at chunk 5, where either stage may come, AGC from chunk 6.
     k = chunk(&c, false, false);
-    assert(k.write && !k.write_raw && k.raw);
+    assert(k.write && !k.write_raw && k.raw && !k.settling);
     k = chunk(&c, false, true);
-    assert(!k.write && k.raw);
+    assert(!k.write && k.raw && k.settling);
     k = chunk(&c, false, false);
-    assert(!k.write && !k.raw);
+    assert(!k.write && !k.raw && !k.settling);
     // A failed write is asked for again and counts nothing down.
     k = chunk(&c, true, false);
     assert(k.write && k.write_raw);
@@ -263,12 +263,13 @@ static void test_chunk_stage_change(void)
     chunk(&c, true, true);
     assert(chunk(&c, true, false).raw);
     k = chunk(&c, false, false);
-    assert(k.write && !k.write_raw && k.raw);
+    assert(k.write && !k.write_raw && k.raw && !k.settling);
+    // The two chunks after the AGC write may carry AGC, though both count raw.
     k = chunk(&c, true, true);
-    assert(k.write && k.write_raw && k.raw);
+    assert(k.write && k.write_raw && k.raw && k.settling);
     for (int i = 0; i < 3; i++) {
         k = chunk(&c, true, i == 0);
-        assert(!k.write && k.raw);
+        assert(!k.write && k.raw && k.settling == (i == 0));
     }
 }
 
