@@ -156,6 +156,26 @@ async def test_verify_grammar_recognizer_gets_words_and_waveform():
     assert rec.accepted == b"pcmbytes"
 
 
+async def test_verify_tries_each_frame_alignment_until_keyword_hits():
+    # A borderline keyword can be missed at one 10 ms alignment of the window and
+    # found at another. The fake hits only on the window shifted by 20 ms (640 bytes),
+    # so the verifier must decode at 0, 10 and 20 ms and accept on the last one.
+    pcm = bytes(range(256)) * 10
+    seen = []
+
+    class _AlignmentRecognizer(_FakeRecognizer):
+        def AcceptWaveform(self, data):
+            seen.append(data)
+            hit = data == pcm[640:]
+            self._result = {"text": "захар" if hit else "[unk]"}
+            return True
+
+    v = _stub_verifier(lambda: _AlignmentRecognizer({}), keywords=["захар"])
+    verdict = await v.verify(pcm)
+    assert verdict.accepted is True
+    assert seen == [pcm, pcm[320:], pcm[640:]]
+
+
 async def test_per_call_decode_does_not_redirect_fd2(tmp_path):
     # The per-call recognizer path must NOT redirect process-global fd 2.
     # We point fd 2 at a temp file ourselves around the decode and have the stub

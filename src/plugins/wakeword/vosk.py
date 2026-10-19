@@ -2,8 +2,9 @@
 
 Second-stage wake-word gate. The pre-roll PCM captured around the on-device wake
 trigger is decoded by a Vosk recognizer constrained to a tiny grammar (the wake
-keywords plus "[unk]"). Grammar mode keeps decode at ~10ms for a 1.5s clip (vs
-~112ms full-vocab), so it is required. The verdict gates the rest of the pipeline.
+keywords plus "[unk]"). Grammar mode keeps the decode fast (one decode of the
+default 2.5 s window takes ~45 ms in production), so it is required. The verdict
+gates the rest of the pipeline.
 """
 
 import asyncio
@@ -17,12 +18,16 @@ from src.logging_setup import capture_native_stderr
 from src.plugins.base import Deps, Provider, register
 from src.wakeword import PassthroughVerifier, WakewordVerdict, WakewordVerifier
 
+# Window-start shifts of 0 / 10 / 20 ms in 16 kHz 16-bit mono PCM: one per 10 ms
+# position inside the model's 30 ms frame grid (see VoskWakewordVerifier._decode).
+_ALIGNMENT_SHIFTS_BYTES = (0, 320, 640)
+
 
 class VoskWakewordVerifier(WakewordVerifier):
     """In-process Vosk verifier built on a grammar-restricted KaldiRecognizer.
 
     The model is loaded once and shared; a grammar-restricted recognizer is
-    spawned per call. Decoding is blocking C code, so it runs in a worker thread.
+    spawned per decode (up to one per frame alignment, see _decode). Decoding is blocking C code, so it runs in a worker thread.
     verify() NEVER raises: on any internal error it returns the fail-open/closed
     verdict so the pipeline's gate stays well-defined.
     """
@@ -87,6 +92,23 @@ class VoskWakewordVerifier(WakewordVerifier):
         return KaldiRecognizer(self._model, 16000, grammar)
 
     def _decode(self, pcm: bytes) -> WakewordVerdict:
+        """Decode the window at each frame alignment; accept on the first hit.
+
+        A Kaldi chain model (vosk-model-small-ru included) scores audio on a 30 ms
+        grid: 10 ms feature frames subsampled by 3. For a borderline keyword the
+        grammar decode can hit at one 10 ms alignment of the window start and miss
+        at another, so a single decode depends on where the window happened to
+        start. Trying all three 10 ms phases of the 30 ms grid takes that phase out
+        of the verdict. A reject costs three decodes, an accept usually one.
+        """
+        verdict = None
+        for shift in _ALIGNMENT_SHIFTS_BYTES:
+            verdict = self._decode_once(pcm[shift:])
+            if verdict.accepted:
+                return verdict
+        return verdict
+
+    def _decode_once(self, pcm: bytes) -> WakewordVerdict:
         rec = self._make_recognizer()
         rec.SetWords(True)
         rec.AcceptWaveform(pcm)
