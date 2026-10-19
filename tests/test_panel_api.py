@@ -1084,6 +1084,31 @@ async def test_captures_are_kept_listed_downloaded_and_deleted(tmp_path, monkeyp
         await client.close()
 
 
+async def test_device_logs_are_listed_and_read_from_an_offset(tmp_path, monkeypatch):
+    monkeypatch.setattr("src.config_store.DATA_DIR", str(tmp_path / "data"))
+    directory = tmp_path / "data" / "device_logs" / "kitchen"
+    directory.mkdir(parents=True)
+    (directory / "2026-10-18.log").write_text("x\n", encoding="utf-8")
+    (directory / "2026-10-19.log").write_text(
+        "10:00:00.000 I (1) a: b\n10:00:01.000 I (2) a: c\n", encoding="utf-8")
+
+    client, _svc_ = await _client(tmp_path)
+    try:
+        resp = await client.get("/api/device-logs")
+        assert await resp.json() == {"devices": {"kitchen": ["2026-10-19", "2026-10-18"]}}
+        resp = await client.get("/api/device-logs/kitchen/2026-10-19")
+        assert await resp.json() == {
+            "text": "10:00:00.000 I (1) a: b\n10:00:01.000 I (2) a: c\n", "offset": 48}
+        resp = await client.get("/api/device-logs/kitchen/2026-10-19", params={"offset": "24"})
+        assert await resp.json() == {"text": "10:00:01.000 I (2) a: c\n", "offset": 48}
+        resp = await client.get("/api/device-logs/kitchen/2026-10-19", params={"offset": "x"})
+        assert resp.status == 400
+        assert (await client.get("/api/device-logs/hall/2026-10-19")).status == 404
+        assert (await client.get("/api/device-logs/kitchen/2026-10-17")).status == 404
+    finally:
+        await client.close()
+
+
 async def test_capture_bad_seconds_returns_400(tmp_path):
     called = []
     client, _svc_ = await _client(tmp_path, device_capture_start=lambda d, s: called.append((d, s)))
