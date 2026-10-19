@@ -6,7 +6,7 @@ import React, { useState, useEffect, useCallback, useRef } from "react";
 import { Ic } from "../components/icons.jsx";
 import { PageHeader, Waterfall, KV, Loading, ErrorBox, Select, fillerMarkerPct } from "../components/primitives.jsx";
 import { getRuns, getRun, openRunsStream, runAudioUrl, downloadRunAudio, runTtsAudioUrl, downloadRunTtsAudio } from "../api.js";
-import { RESULT_META, STAGE_COLOR, fmtSec, mapRun, totalMs, statusMeta, isAnnouncement, applyStreamedRun, pageWindow } from "../runsModel.js";
+import { STAGE_COLOR, fmtSec, mapRun, totalMs, statusMeta, isAnnouncement, applyStreamedRun, pageWindow } from "../runsModel.js";
 import { FILLER_COLOR } from "../stageMeta.js";
 import { matchesFilters } from "../runsFilters.js";
 import { useDeviceList } from "../appData.jsx";
@@ -141,7 +141,7 @@ function Collapsible({ summary, children }) {
 
 // Right-side drawer with the full run detail. `r` is the mapped detail row.
 function Drawer({ r, loading, error, onClose }) {
-  const m = RESULT_META[r && r.result] || { label: r && r.result, tone: "muted" };
+  const m = statusMeta(r);
   const device = deviceLabel(useDeviceList(), r && r.device);
   // Another device heard the same phrase and kept it; the verifier did not reject it.
   const duplicate = !!r && r.result === "rejected" && r.reason === "duplicate";

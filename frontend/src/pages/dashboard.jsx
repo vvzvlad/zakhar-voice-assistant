@@ -175,7 +175,7 @@ function Dashboard() {
                     return <tr key={r.key} onClick={() => { if (r.id == null) return; try { localStorage.setItem("z-openreq", String(r.id)); } catch { /* ignore */ } nav("log"); }}>
                       <td className="tm">{r.time}</td>
                       <td style={{ fontWeight: 600 }}>{deviceLabel(catalog?.core?.values?.devices, r.device)}</td>
-                      <td><div className={"z-tx" + (r.stt ? "" : " mut")}>{r.stt || (r.live ? "…" : isAnnouncement(r) ? "—" : "(silence)")}</div></td>
+                      <td><div className={"z-tx" + (r.stt ? "" : " mut")}>{r.stt || (r.live ? "…" : isAnnouncement(r) ? "—" : r.reason === "duplicate" ? "(duplicate)" : "(silence)")}</div></td>
                       <td><div className={"z-tx wide" + (r.llm ? "" : " mut")}>{r.llm || (r.live ? "…" : "—")}</div></td>
                       <td className="num" style={{ fontWeight: 600 }}>{fmtSec(totalMs(r))}</td>
                       <td><Waterfall r={r} /></td>
