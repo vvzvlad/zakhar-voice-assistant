@@ -174,7 +174,8 @@ docker compose pull && docker compose up -d
   - `vad`: `webrtc` (WebRTC VAD) — агрессивность; пороги энд-поинтинга и
     авто-усиление VAD «только для решения» (`mic_auto_gain`, в основных настройках
     захвата голоса) остаются в `core.vad`.
-  - `stt`: `groq` (облачный Whisper) | `vosk` (офлайн) | `yandex` (SpeechKit v3, стриминг по gRPC).
+  - `stt`: `groq` (облачный Whisper) | `vosk` (офлайн) | `gigaam` (офлайн GigaAM v3, каталог
+    модели `models/gigaam-v3-onnx`) | `yandex` (SpeechKit v3, стриминг по gRPC).
   - `llm` (обработчики): `openrouter` | `groq` — model, api_key, temperature, max_tokens,
     max_tool_rounds; `simple-nlu` — офлайн-движок команд (синонимы, глаголы действий);
     `jev` — модель решений `typesafe/jev-1.14` на OpenRouter: для фразы без числа выбирает

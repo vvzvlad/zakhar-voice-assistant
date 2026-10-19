@@ -9,7 +9,7 @@ def test_tts_ids_registered():
 
 
 def test_stt_ids_registered():
-    assert set(providers("stt")) == {"groq", "vosk", "openrouter", "yandex"}
+    assert set(providers("stt")) == {"groq", "vosk", "openrouter", "yandex", "gigaam"}
 
 
 def test_llm_ids_registered():
