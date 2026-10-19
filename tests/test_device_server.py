@@ -285,7 +285,8 @@ def session_msgs(session, *rest):
 async def test_hello_gets_config_and_the_models(srv):
     dev = await srv.connect()
     assert await dev.recv() == {"type": "config", "wake_cutoff": 80, "vad_cutoff": 30, "echo_cancel": 1,
-                                "echo_cancel_mode": 2, "echo_cancel_filter": 4, "auto_volume": False}
+                                "echo_cancel_mode": 2, "echo_cancel_filter": 4, "play_prime_ms": 700,
+                                "auto_volume": False}
     assert await dev.boost() == 0  # a new connection has no `ambient` yet
     # wake_model / vad_model are empty: the release's files go out, and the stop model always.
     for kind, path in (("wake", device_server.RELEASE_WAKE_MODEL), ("vad", device_server.RELEASE_VAD_MODEL),
@@ -418,7 +419,7 @@ async def test_new_wake_drops_the_older_session(srv):
     # Session 1 is mid-playback (paced, never reported played) when wake 2 arrives:
     # nothing of session 1 may reach the device after that.
     srv.tts.clips.append(b"\x02\x00" * 32000)  # 2 s
-    dev = await srv.connect(buffer_ms=700)
+    dev = await srv.connect(buffer_ms=1400)
     await dev.recv()  # config
     await dev.wake(1)
     await dev.phrase()
@@ -480,7 +481,7 @@ async def test_stop_word_in_a_session_ends_it(srv):
     # Session 1 is mid-playback when the stop word comes: the playback stops, the run is
     # cancelled and the session ends with exactly one `state idle`.
     srv.tts.clips.append(b"\x02\x00" * 32000)  # 2 s
-    dev = await srv.connect(buffer_ms=700)
+    dev = await srv.connect(buffer_ms=1400)
     await dev.recv()  # config
     await dev.wake(1)
     await dev.phrase()
@@ -503,7 +504,7 @@ async def test_stop_word_in_a_session_ends_it(srv):
 
 async def test_stop_word_outside_a_session_stops_the_playback_only(srv):
     srv.tts.clips.append(b"\x02\x00" * 32000)  # 2 s
-    dev = await srv.connect(buffer_ms=700)
+    dev = await srv.connect(buffer_ms=1400)
     await dev.recv()  # config
     say = asyncio.create_task(srv.manager.announce("kitchen", "молоко"))
     assert await dev.recv() == {"type": "reply", "text": "молоко"}
@@ -592,7 +593,7 @@ async def test_follow_up_listens_after_a_played_answer_only(srv):
 
 async def test_run_ends_when_played_never_comes(srv, monkeypatch):
     monkeypatch.setattr(device_server, "PLAYED_WAIT_MARGIN_S", 0.2)
-    dev = await srv.connect(buffer_ms=700)
+    dev = await srv.connect(buffer_ms=1400)
     await dev.recv()  # config
     await dev.wake(1)
     await dev.phrase()
@@ -612,10 +613,16 @@ async def test_no_speech_sends_no_transcript(srv):
     assert await dev.recv() == state(1, "idle")
 
 
-async def test_playback_is_paced_to_the_device_buffer(srv):
-    # buffer_ms 700 -> at most 200 ms of audio ahead of real-time playback.
-    dev = await srv.connect(buffer_ms=700)
+@pytest.mark.parametrize("prime", [None, 300])
+async def test_playback_is_paced_to_the_device_buffer(srv, prime):
+    # buffer_ms - play_prime_ms (the default 700, or the one the panel set and the last
+    # `config` sent) - 500 -> at most 200 ms of audio ahead of real-time playback.
+    dev = await srv.connect(buffer_ms=(prime or 700) + 700)
     await dev.recv()  # config
+    if prime is not None:
+        srv.manager.set_device_control("kitchen", "play_prime_ms", prime)
+        await srv.manager.reconfigure()
+        assert (await dev.recv())["play_prime_ms"] == prime
     pcm = b"\x03\x00" * 12800  # 0.8 s at 16 kHz
     play = asyncio.create_task(srv.device().play(pcm_mime(16000), pcm))
     start = await dev.recv()
@@ -629,8 +636,55 @@ async def test_playback_is_paced_to_the_device_buffer(srv):
         assert n <= 4096
         received += n
         assert received / 32000 - (t - t0) <= 0.2 + 0.05
-    assert dev.frame_times[-1][0] - t0 >= 0.35
+    # The last frame leaves once 0.6 s of the 0.8 s has played.
+    assert 0.35 <= dev.frame_times[-1][0] - t0 < 0.8
     assert not play.done()  # still waiting for `played`
+    await dev.send(type="played", id=start["id"])
+    await asyncio.wait_for(play, 2)
+
+
+async def test_a_smaller_reserve_mid_stream_keeps_the_pacing_of_the_larger(srv):
+    # 1400 - 700 - 500 -> 200 ms ahead. The device primed this stream with 700 ms, so a reserve
+    # lowered to 0 while it plays must not let the server run 900 ms ahead and overflow it.
+    dev = await srv.connect(buffer_ms=1400)
+    await dev.recv()  # config
+
+    async def chunks():
+        for _ in range(8):
+            yield b"\x03\x00" * 1600  # 0.1 s at 16 kHz
+
+    async def lower():
+        await asyncio.sleep(0.1)
+        srv.manager.set_device_control("kitchen", "play_prime_ms", 0)
+        await srv.manager.reconfigure()
+
+    play = asyncio.create_task(srv.device().play(pcm_mime(16000), chunks()))
+    start = await dev.recv()
+    assert start["type"] == "play_start"
+    # Lowered in the background, so the frames are read (and timed) as they arrive.
+    lowering = asyncio.create_task(lower())
+    assert (await dev.recv())["play_prime_ms"] == 0
+    await lowering
+    assert (await dev.recv())["type"] == "play_end"
+    t0 = dev.frame_times[0][0]
+    received = 0
+    for t, n in dev.frame_times:
+        received += n
+        assert received / 32000 - (t - t0) <= 0.2 + 0.05
+    await dev.send(type="played", id=start["id"])
+    await asyncio.wait_for(play, 2)
+
+    # The next stream starts on an empty buffer: paced by the reserve 0, 900 ms ahead (once the
+    # server's estimate of the first stream's playback has run out too).
+    await asyncio.sleep(0.4)
+    dev.frame_times.clear()
+    play = asyncio.create_task(srv.device().play(pcm_mime(16000), b"\x03\x00" * 19200))  # 1.2 s
+    start = await dev.recv()
+    assert (await dev.recv())["type"] == "play_end"
+    t0 = dev.frame_times[0][0]
+    ahead = max(sum(n for _, n in dev.frame_times[:i + 1]) / 32000 - (t - t0)
+                for i, (t, _) in enumerate(dev.frame_times))
+    assert 0.8 <= ahead <= 0.9 + 0.05
     await dev.send(type="played", id=start["id"])
     await asyncio.wait_for(play, 2)
 
@@ -873,7 +927,7 @@ async def test_controls(srv):
     controls = srv.manager.device_controls("kitchen")["controls"]
     assert [(c["id"], c["value"], c["min"], c["max"], c["step"]) for c in controls] == [
         ("wake_probability_cutoff", 80, 0, 100, 1), ("vad_cutoff", 30, 0, 100, 1), ("echo_cancel", 1, 0, 3, 1),
-        ("echo_cancel_mode", 2, 0, 3, 1), ("echo_cancel_filter", 4, 1, 8, 1),
+        ("echo_cancel_mode", 2, 0, 3, 1), ("echo_cancel_filter", 4, 1, 8, 1), ("play_prime_ms", 700, 0, 2000, 50),
         ("auto_volume_threshold", -60, -120, 0, 1), ("auto_volume_gain", 2.0, 0, 10, 0.1),
         ("speaker_volume", 60, 0, 100, 1),
     ]
@@ -882,21 +936,23 @@ async def test_controls(srv):
     srv.manager.set_device_control("kitchen", "wake_probability_cutoff", 55)
     assert srv.svc.core.devices[0].wake_cutoff == 55
     await srv.manager.reconfigure()
-    echo = {"echo_cancel": 1, "echo_cancel_mode": 2, "echo_cancel_filter": 4, "auto_volume": False}
-    assert await dev.recv() == {"type": "config", "wake_cutoff": 55, "vad_cutoff": 30, **echo}
-    # So are the echo cancellation settings, each clamped to its range.
+    rest = {"echo_cancel": 1, "echo_cancel_mode": 2, "echo_cancel_filter": 4, "play_prime_ms": 700,
+            "auto_volume": False}
+    assert await dev.recv() == {"type": "config", "wake_cutoff": 55, "vad_cutoff": 30, **rest}
+    # So are the echo cancellation settings and the playback reserve, each clamped to its range.
     for control, value, stored in (("echo_cancel", 7, 3), ("echo_cancel_mode", -2, 0), ("echo_cancel_filter", 0, 1),
-                                   ("echo_cancel_filter", 9, 8)):
+                                   ("echo_cancel_filter", 9, 8), ("play_prime_ms", 450, 450),
+                                   ("play_prime_ms", 2500, 2000)):
         srv.manager.set_device_control("kitchen", control, value)
         assert getattr(srv.svc.core.devices[0], control) == stored
         await srv.manager.reconfigure()
-        echo[control] = stored
-        assert await dev.recv() == {"type": "config", "wake_cutoff": 55, "vad_cutoff": 30, **echo}
+        rest[control] = stored
+        assert await dev.recv() == {"type": "config", "wake_cutoff": 55, "vad_cutoff": 30, **rest}
 
     srv.manager.set_device_control("kitchen", "speaker_volume", 40)
     assert await dev.recv() == {"type": "set_volume", "value": 40}
     await dev.send(type="volume", value=70)
-    await until(lambda: srv.manager.device_controls("kitchen")["controls"][7]["value"] == 70)
+    await until(lambda: srv.manager.device_controls("kitchen")["controls"][8]["value"] == 70)
 
     srv.manager.set_wake_prob_stream("kitchen", True)
     assert await dev.recv() == {"type": "wake_peak_stream", "on": True}
@@ -1095,13 +1151,24 @@ async def test_unknown_disabled_and_replaced_ids(srv):
     disconnects = []
     on_disconnect = pipeline.on_disconnect
 
+    plays = []
+
     async def spy():
         disconnects.append(1)
+        # A play that starts while the old connection is wound down goes out after `config`.
+        if not plays:
+            plays.append(asyncio.create_task(srv.device().play(pcm_mime(16000), b"\x01\x00" * 1600)))
+            await asyncio.sleep(0)
         await on_disconnect()
 
     pipeline.on_disconnect = spy
     second = await srv.connect()
     assert (await second.recv())["type"] == "config"
+    start = await second.recv()
+    assert start["type"] == "play_start"
+    assert (await second.recv())["type"] == "play_end"
+    await second.send(type="played", id=start["id"])
+    await asyncio.wait_for(plays[0], 2)
     assert await first.closed_with() == 4001
     await asyncio.sleep(0.1)
     assert srv.device().conn is not None and srv.device().pipeline is pipeline

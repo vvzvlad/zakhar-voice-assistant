@@ -49,6 +49,7 @@ typedef struct {
     // CONFIG: echo_cancel 0..3, echo_cancel_mode 0..3, echo_cancel_filter 1..8; each -1 when absent
     // or out of its range (the device keeps its own).
     int echo_cancel, echo_mode, echo_filter;
+    int play_prime_ms;    // CONFIG: 0..2000, the playback reserve; -1 when absent or out of range
     int auto_volume;      // CONFIG: 1 on, 0 off, -1 when absent or not a boolean (the device keeps its own)
     int value;            // SET_VOLUME, percent; VOLUME_BOOST, percent points
     bool on;              // WAKE_PEAK_STREAM, DETECT, LOG_STREAM
@@ -62,7 +63,8 @@ typedef struct {
 
 // One text frame. False for anything the device ignores: not a JSON object, an unknown type, a
 // known field of the wrong type or out of its range (but for the optional echo cancellation and
-// auto volume fields of `config`, which then read -1). On true, release with zl_msg_free().
+// playback reserve and auto volume fields of `config`, which then read -1). On true, release
+// with zl_msg_free().
 bool zl_decode(const char *data, size_t len, zl_msg_t *m);
 void zl_msg_free(zl_msg_t *m);
 

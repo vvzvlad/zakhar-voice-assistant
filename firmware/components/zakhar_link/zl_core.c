@@ -84,6 +84,7 @@ static bool decode_fields(const cJSON *o, const char *type, zl_msg_t *m)
         m->echo_cancel = get_setting(field(o, "echo_cancel"), 0, 3);
         m->echo_mode = get_setting(field(o, "echo_cancel_mode"), 0, 3);
         m->echo_filter = get_setting(field(o, "echo_cancel_filter"), 1, 8);
+        m->play_prime_ms = get_setting(field(o, "play_prime_ms"), 0, 2000);
         m->auto_volume = get_flag(field(o, "auto_volume"));
         return true;
     }

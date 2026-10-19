@@ -216,6 +216,10 @@ class DeviceConfig(BaseModel):
     echo_cancel: int = Field(1, ge=0, le=3)
     echo_cancel_mode: int = Field(2, ge=0, le=3)
     echo_cancel_filter: int = Field(4, ge=1, le=8)
+    # Sent to the device in `config`, ms: the audio its speaker holds before it starts a
+    # stream, and again after the stream runs dry. More: fewer stutters while the TTS pauses,
+    # the answer starts later.
+    play_prime_ms: int = Field(700, ge=0, le=2000)
     # Auto volume. auto_volume goes to the device in `config`: while it is on, the speaker
     # measures the room's noise on its raw microphone every 15 s of quiet and sends `ambient`
     # (dBFS of its 32-bit microphone slot). The threshold and the gain stay on the server: noise
