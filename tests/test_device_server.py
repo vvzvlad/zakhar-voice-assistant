@@ -498,7 +498,7 @@ async def wake_over(dev, session):
 
 
 async def test_a_wake_over_the_answer_drops_it_only_once_confirmed(srv):
-    dev = await srv.connect(buffer_ms=700)
+    dev = await srv.connect(buffer_ms=1400)
     old = await answer_playing(srv, dev, 10)
     verifier = srv.rt.wakeword_backend = HeldVerifier()
     pipeline = srv.device().pipeline
@@ -544,7 +544,7 @@ async def test_a_wake_over_the_answer_drops_it_only_once_confirmed(srv):
 
 async def test_a_rejected_wake_leaves_the_answer_playing_under_the_new_session(srv, tmp_path):
     srv.rt.runs_store = RunsStore(str(tmp_path / "runs.db"))
-    dev = await srv.connect(buffer_ms=700)
+    dev = await srv.connect(buffer_ms=1400)
     old = await answer_playing(srv, dev, 1)
     verifier = srv.rt.wakeword_backend = HeldVerifier()
     verifier.verdict(11).set_result(WakewordVerdict(accepted=False, score=0.0))
@@ -569,7 +569,7 @@ async def test_a_rejected_wake_over_an_announcement_ends_its_session(srv):
     verifier = srv.rt.wakeword_backend = HeldVerifier()
     verifier.verdict(11).set_result(WakewordVerdict(accepted=False, score=0.1))
     srv.tts.clips.append(b"\x02\x00" * 16000)  # 1 s
-    dev = await srv.connect(buffer_ms=700)
+    dev = await srv.connect(buffer_ms=1400)
     await dev.recv()  # config
     say = asyncio.create_task(srv.manager.announce("kitchen", "молоко"))
     assert await dev.recv() == {"type": "reply", "text": "молоко"}
@@ -599,7 +599,7 @@ async def test_a_held_wake_keeps_the_arbitration_open_until_its_check_rules(srv,
     # The kitchen speaker answers and holds a wake when the panel (no speaker) wakes too and
     # its check rules first: no device keeps the phrase until the speaker's check rules.
     srv.svc.apply({"core": {"arbitration": {"window_ms": 100, "cooldown_ms": 300}}})
-    speaker = await srv.connect(buffer_ms=700)
+    speaker = await srv.connect(buffer_ms=1400)
     panel = await srv.connect("panel", speaker=False)
     await panel.recv()  # config
     old = await answer_playing(srv, speaker, 10)
@@ -641,7 +641,7 @@ async def test_a_confirmed_wake_holds_the_arbitration_until_its_run_is_registere
     # The speaker's held wake is confirmed and the panel's check rules while the speaker's
     # run is still starting: the panel's group waits for the speaker, which then wins.
     srv.svc.apply({"core": {"arbitration": {"window_ms": 100, "cooldown_ms": 300}}})
-    speaker = await srv.connect(buffer_ms=700)
+    speaker = await srv.connect(buffer_ms=1400)
     panel = await srv.connect("panel", speaker=False)
     await panel.recv()  # config
     old = await answer_playing(srv, speaker, 10)
