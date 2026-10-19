@@ -87,8 +87,9 @@ function TtsVariantsCard({ list, providers, onChange }) {
     {list.map((v, i) => {
       const prov = providers.find((p) => p.id === v.provider);
       const about = [prov?.label, prov && voiceOf(prov.values)].filter(Boolean).join(" · ");
-      return <div key={v.provider} className="z-f row" data-testid="tts-variant" style={{ opacity: v.enabled ? 1 : 0.55 }}>
-        <div style={{ display: "flex", alignItems: "baseline", gap: 10, minWidth: 0 }}>
+      // A switched-off variant dims its number, name and voice; its toggle and buttons stay as is.
+      return <div key={v.provider} className="z-f row" data-testid="tts-variant">
+        <div className={v.enabled ? "" : "z-dim"} style={{ display: "flex", alignItems: "baseline", gap: 10, minWidth: 0 }}>
           <span className="mono" style={{ color: "var(--mut2)", fontSize: 11 }}>{i + 1}</span>
           <b className="mono" style={{ fontSize: 12.5 }}>{v.provider}</b>
           {about && <span className="z-fh" style={{ marginTop: 0 }}>{about}</span>}

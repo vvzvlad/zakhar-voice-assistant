@@ -33,7 +33,9 @@ function ProviderPick({ label, cat, value, options, onChange }) {
 
 function ChainCard({ chain, index, count, catalog, chains, isLastEnabled, onUpdate, onMove, onDelete }) {
   const openEnded = isLastEnabled && handlerHasVocabulary(catalog, chain.handler);
-  return <div className="z-card" data-testid="chain-card" style={{ opacity: chain.enabled ? 1 : 0.55 }}>
+  // A switched-off chain is not dimmed: everything on the card is a working control,
+  // and the toggle shows the state.
+  return <div className="z-card" data-testid="chain-card">
     <div className="z-card-h">
       <div style={{ display: "flex", alignItems: "center", gap: 10, flex: 1, minWidth: 0 }}>
         <span className="mono" style={{ color: "var(--mut2)", fontSize: 12 }}>#{index + 1}</span>

@@ -149,16 +149,18 @@ function McpServerModal({ initial, onSave, onClose, title, takenNames }) {
 // One external MCP server card: header (name + status pill), the
 // url in mono, and the live tool chips matched from /api/tools by source id ===
 // server name. Enable/Disable / Edit / Delete buttons drive the CRUD flow above;
-// a disabled server is dimmed and shows a "disabled" pill (missing flag = enabled).
+// a disabled server is dimmed except its buttons and shows a "disabled" pill (missing
+// flag = enabled).
 function McpServerCard({ server, live, onToggle, onEdit, onDelete }) {
   const enabled = server.enabled ?? true;
+  const dim = enabled ? "" : "z-dim";
   let pill;
   if (!enabled) pill = <Pill tone="muted">disabled</Pill>;
   else if (live) pill = <StatusPill status={live.online ? "online" : "offline"} />;
   else pill = <StatusPill status="offline" />;
-  return <div className="z-card" style={{ marginBottom: 14, opacity: enabled ? 1 : 0.55 }}>
+  return <div className="z-card" style={{ marginBottom: 14 }}>
     <div className="z-card-h">
-      <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
+      <div className={dim} style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
         <Ic n="mcp" w={17} />
         <div style={{ minWidth: 0 }}>
           <b style={{ display: "block" }}>{server.name}</b>
@@ -166,7 +168,7 @@ function McpServerCard({ server, live, onToggle, onEdit, onDelete }) {
         </div>
       </div>
       <div style={{ display: "flex", alignItems: "center", gap: 12, marginLeft: "auto" }}>
-        {pill}
+        <div className={dim} style={{ display: "flex" }}>{pill}</div>
         <div style={{ display: "flex", gap: 6 }}>
           <button className="z-mini" onClick={onToggle}>{enabled ? "Disable" : "Enable"}</button>
           <button className="z-mini" onClick={onEdit}>Edit</button>
@@ -174,7 +176,7 @@ function McpServerCard({ server, live, onToggle, onEdit, onDelete }) {
         </div>
       </div>
     </div>
-    <div className="z-card-b">
+    <div className={`z-card-b ${dim}`}>
       <ToolChips tools={live?.tools} />
     </div>
   </div>;
@@ -933,12 +935,13 @@ export function Devices() {
             ? <tr><td colSpan={5} style={{ color: "var(--mut)", padding: "14px 0" }}>No speakers configured.</td></tr>
             : devices.map((d, i) => {
               const enabled = d.enabled ?? true;
-              return <tr key={i} style={{ cursor: "default", opacity: enabled ? 1 : 0.55 }}>
-                <td style={{ fontWeight: 600 }}>{d.label || d.name}</td>
+              const dim = enabled ? "" : "z-dim";
+              return <tr key={i} style={{ cursor: "default" }}>
+                <td className={dim} style={{ fontWeight: 600 }}>{d.label || d.name}</td>
                 {/* Firmware/model versions come from the live WS snapshot; "—" while offline/disabled. */}
-                <td className="mono" style={{ fontSize: 11.5 }}>{deviceVersion(liveOf(d.name), "config_version") ?? "—"}</td>
-                <td className="mono" style={{ fontSize: 11.5 }}>{deviceVersion(liveOf(d.name), "model_version") ?? "—"}</td>
-                <td>{enabled ? <StatusPill status={statusOf(d.name)} /> : <Pill tone="muted">disabled</Pill>}</td>
+                <td className={`mono ${dim}`} style={{ fontSize: 11.5 }}>{deviceVersion(liveOf(d.name), "config_version") ?? "—"}</td>
+                <td className={`mono ${dim}`} style={{ fontSize: 11.5 }}>{deviceVersion(liveOf(d.name), "model_version") ?? "—"}</td>
+                <td className={dim}>{enabled ? <StatusPill status={statusOf(d.name)} /> : <Pill tone="muted">disabled</Pill>}</td>
                 <td style={{ textAlign: "right" }}><div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
                   <button className="z-mini" onClick={() => onToggle(d.name)}>{enabled ? "Disable" : "Enable"}</button>
                   {/* Re-read the config first: the dialog starts from the device's saved label and

@@ -2,13 +2,15 @@
 // Integration tests (jsdom) for the Pipeline pages Capture and Speech. They only
 // choose what runs and switch stages on and off: every change is a draft until
 // the Save in the page's save bar, which sends the whole page as ONE patch;
-// "configure →" opens the Providers page (and provider tab) holding the settings.
+// "configure →" opens the Providers page (and provider tab) holding the settings; a
+// switched-off TTS variant fades its name, not its toggle and buttons.
 import React from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, cleanup, waitFor, within } from "@testing-library/react";
 import { Capture, Speech } from "../pages/pipeline.jsx";
 import { useAppData } from "../appData.jsx";
 import { setNavigate, pendingTab, clearTab } from "../navStore.js";
+import { faded } from "./faded.js";
 
 vi.mock("../appData.jsx", () => ({ useAppData: vi.fn() }));
 
@@ -113,6 +115,13 @@ describe("Capture page", () => {
 
 describe("Speech page", () => {
   const rows = () => screen.getAllByTestId("tts-variant");
+
+  it("a switched-off variant fades its name, not its toggle and buttons", () => {
+    render(<Speech />);
+    const piper = rows()[1];
+    expect(faded(within(piper).getByText("piper"))).toBe(true);
+    for (const el of [within(piper).getByRole("switch"), ...within(piper).getAllByRole("button")]) expect(faded(el)).toBe(false);
+  });
 
   it("saves variant edits and the stress and follow-up switches in one patch carrying the whole variant array", async () => {
     render(<Speech />);
