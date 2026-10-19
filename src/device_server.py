@@ -49,7 +49,8 @@ RELEASE_VAD_MODEL = "microWakeWord/vad/vad.tflite"  # stock: esphome/micro-wake-
 RELEASE_STOP_MODEL = "microWakeWord/stop/stop.tflite"  # stock: kahrendt/microWakeWord release `stop`
 # Name prefix of the wake-word models uploaded through the panel (uploaded_wake_models_dir).
 UPLOADED_WAKE_PREFIX = "uploaded/"
-# The server keeps at most buffer_ms minus this much audio ahead of the device's playback.
+# The server keeps at most buffer_ms minus the play reserve (play_prime_ms) minus this much
+# audio ahead of the device's playback.
 PACING_MARGIN_MS = 500
 # The wait for `played` gives up after the stream's duration + buffer_ms + this much.
 PLAYED_WAIT_MARGIN_S = 5.0
@@ -66,6 +67,7 @@ VAD_CUTOFF = "vad_cutoff"
 ECHO_CANCEL = "echo_cancel"
 ECHO_CANCEL_MODE = "echo_cancel_mode"
 ECHO_CANCEL_FILTER = "echo_cancel_filter"
+PLAY_PRIME = "play_prime_ms"
 SPEAKER_VOLUME = "speaker_volume"
 # The controls kept in the device config: control id -> (field, its minimum, its maximum).
 _CONFIG_FIELDS = {
@@ -74,6 +76,7 @@ _CONFIG_FIELDS = {
     ECHO_CANCEL: ("echo_cancel", 0, 3),
     ECHO_CANCEL_MODE: ("echo_cancel_mode", 0, 3),
     ECHO_CANCEL_FILTER: ("echo_cancel_filter", 1, 8),
+    PLAY_PRIME: ("play_prime_ms", 0, 2000),
 }
 
 # StageEvents that map onto a plain `state` message; TTS_START, STT_END and ERROR
@@ -270,6 +273,9 @@ class Connection:
         # The last `state`, `transcript` and `reply` sent in the current session, by type.
         self.last_sent: dict[str, dict] = {}
         self.config_sent = None  # _config_fields() last sent in `config`
+        # The reserve the pacing allows for: a device still playing may lag by a larger reserve
+        # it primed with before a smaller one came, so that holds until its streams are done.
+        self._pace_prime_ms = 0
         self.log_on = None  # `on` last sent in `log_stream`
         self.models: dict[str, str] = {}  # kind -> the name last sent in `model`
         self.closed = False
@@ -314,6 +320,8 @@ class Connection:
 
     def send_config(self, cfg) -> None:
         self.config_sent = _config_fields(cfg)
+        prime = self.config_sent["play_prime_ms"]
+        self._pace_prime_ms = max(self._pace_prime_ms, prime) if self._streams else prime
         self.send({"type": "config", **self.config_sent})
 
     def send_log_stream(self, on: bool) -> None:
@@ -389,6 +397,8 @@ class Connection:
                 if self.closed:
                     stream.end("closed")
                 else:
+                    if not self._streams:  # the device's buffer is empty: no older lag left
+                        self._pace_prime_ms = self.config_sent["play_prime_ms"]
                     self._streams[stream.id] = stream
                     self.send(self._stream_msg("play_start", stream), stream)
                 try:
@@ -421,11 +431,13 @@ class Connection:
         return {"outcome": outcome, "dry": stream.dry, "gap_ms": stream.gap_ms}
 
     async def _send_pcm(self, stream: _Stream, pcm: bytes) -> None:
-        """Queue PCM frames, keeping at most buffer_ms - PACING_MARGIN_MS of audio
-        ahead of the device, whose playback is taken to run at real time from the
-        first frame sent."""
+        """Queue PCM frames, keeping at most buffer_ms - play_prime_ms - PACING_MARGIN_MS
+        of audio ahead of the device, whose playback is taken to run at real time from the
+        first frame sent. The device starts only once it holds play_prime_ms, so that much
+        more stays in its buffer (the largest reserve sent while its streams play, see
+        _pace_prime_ms)."""
         loop = asyncio.get_running_loop()
-        ahead = (self.buffer_ms - PACING_MARGIN_MS) / 1000
+        ahead = (self.buffer_ms - self._pace_prime_ms - PACING_MARGIN_MS) / 1000
         for i in range(0, len(pcm), PLAY_FRAME_BYTES):
             frame = pcm[i:i + PLAY_FRAME_BYTES]
             seconds = len(frame) / 2 / self.play_rate
@@ -697,8 +709,8 @@ class Device:
         ]
 
     def controls(self) -> list[dict]:
-        """Panel controls: the cutoffs and the stop word's echo cancellation (server config)
-        and, on a connected device with a speaker, its volume."""
+        """Panel controls: the cutoffs, the stop word's echo cancellation and the playback
+        reserve (server config) and, on a connected device with a speaker, its volume."""
         cfg = self.cfg
         out = [
             {"id": WAKE_CUTOFF, "name": "Wake word cutoff", "value": cfg.wake_cutoff,
@@ -712,6 +724,8 @@ class Device:
              "value": cfg.echo_cancel_mode, "min": 0, "max": 3, "step": 1, "unit": ""},
             {"id": ECHO_CANCEL_FILTER, "name": "Stop word echo cancellation filter length",
              "value": cfg.echo_cancel_filter, "min": 1, "max": 8, "step": 1, "unit": ""},
+            {"id": PLAY_PRIME, "name": "Playback reserve", "value": cfg.play_prime_ms,
+             "min": 0, "max": 2000, "step": 50, "unit": "ms"},
         ]
         conn = self.conn
         if conn is not None and conn.speaker:
@@ -720,9 +734,9 @@ class Device:
         return out
 
     def set_control(self, control_id: str, value: float) -> None:
-        """A cutoff or a stop word echo cancellation setting is written to the config (the
-        reconfigure that follows sends `config` to a connected device); the volume goes to
-        the device.
+        """A cutoff, a stop word echo cancellation setting or the playback reserve is written
+        to the config (the reconfigure that follows sends `config` to a connected device); the
+        volume goes to the device.
         Raises LookupError (unknown control / no speaker) or RuntimeError (offline)."""
         config = _CONFIG_FIELDS.get(control_id)
         if config is not None:
@@ -1100,11 +1114,13 @@ class DeviceManager:
             return None, None
         device = self._device(name)
         conn = Connection(ws, hello)
+        # First, before the connection is attached: a play that starts on it (during the await
+        # below) paces by the reserve in config_sent.
+        conn.send_config(cfg)
         old = device.attach(conn)
         if old is not None:
             old.close(CLOSE_REPLACED)
             await device.pipeline.on_disconnect()
-        conn.send_config(cfg)
         # Before the models: the device holds a capture's unsent audio only in its ~3 s tap.
         # A capture file that cannot be read must not keep the device from connecting.
         try:

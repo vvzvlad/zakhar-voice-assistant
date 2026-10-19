@@ -44,11 +44,12 @@ static const char *TAG = "zakhar_link";
 #define SILENCE_MS 30000       // nothing heard for this long drops the link
 #define RX_CAP 4096            // a text frame larger than this is skipped; fits a long reply
 #define PEAK_MS 1000           // wake_peak period
-// Audio a stream holds before it plays, and again after it runs dry. A TTS stream arrives in
-// bursts with pauses between them; played with no reserve, each pause longer than what is queued
-// is a gap of silence mid-word, heard as a click. The wait stays inside the server's 500 ms pacing
-// margin (docs/device-protocol.md), so the buffer does not overflow.
-#define PLAY_PRIME_MS 300
+// Audio a stream holds before it plays, and again after it runs dry, until the first `config`
+// sets it (play_prime_ms). A TTS stream arrives in bursts with pauses between them; played with no
+// reserve, each pause longer than what is queued is a gap of silence mid-word, heard as a click.
+// The server keeps the reserve out of what it sends ahead (docs/device-protocol.md), so the buffer
+// does not overflow.
+#define PLAY_PRIME_MS 700
 #define LOG_CHUNK 2048  // the most log text one `log` message carries; one goes out per pass
 // Core 0, priority 3, for both tasks: next to the wake-word task, away from the UI on core 1.
 #define TASK_STACK (6 * 1024)
@@ -230,6 +231,7 @@ static void on_text(esp_websocket_client_handle_t ws, const char *json, size_t l
         switch (m.type) {
         case ZL_MSG_CONFIG:
             s_backoff = 1;
+            if (m.play_prime_ms >= 0) s_playq.prime = (size_t)s_cfg.play_rate * (size_t)m.play_prime_ms / 1000;
             break;
         case ZL_MSG_STATE:
             if (zl_sess_state(&s_sess, m.state)) s_mic_pos = mic_now;
@@ -276,8 +278,8 @@ static void on_text(esp_websocket_client_handle_t ws, const char *json, size_t l
     }
     switch (m.type) {
     case ZL_MSG_CONFIG:
-        ESP_LOGI(TAG, "config: wake %u, vad %u, echo_cancel %d mode %d filter %d", m.wake, m.vad, m.echo_cancel,
-                 m.echo_mode, m.echo_filter);
+        ESP_LOGI(TAG, "config: wake %u, vad %u, echo_cancel %d mode %d filter %d, play_prime_ms %d", m.wake, m.vad,
+                 m.echo_cancel, m.echo_mode, m.echo_filter, m.play_prime_ms);
         if (s_cb.on_config != NULL) s_cb.on_config(m.wake, m.vad);
         if ((m.echo_cancel >= 0 || m.echo_mode >= 0 || m.echo_filter >= 0) && s_cb.on_echo_cancel != NULL) {
             s_cb.on_echo_cancel(m.echo_cancel, m.echo_mode, m.echo_filter);
