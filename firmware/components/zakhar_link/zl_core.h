@@ -45,6 +45,9 @@ typedef struct {
     const char *text;     // STATE (NULL when absent), TRANSCRIPT and REPLY ("" when absent)
     uint32_t id;          // PLAY_START, PLAY_END, CAPTURE (> 0), CAPTURE_RESUME
     uint8_t wake, vad;    // CONFIG, as uint8 cutoffs
+    // CONFIG: echo_cancel 0..3, echo_cancel_mode 0..3, echo_cancel_filter 1..8; each -1 when absent
+    // or out of its range (the device keeps its own).
+    int echo_cancel, echo_mode, echo_filter;
     int value;            // SET_VOLUME, percent
     bool on;              // WAKE_PEAK_STREAM, DETECT, LOG_STREAM
     uint32_t capture_ms;  // CAPTURE
@@ -56,7 +59,8 @@ typedef struct {
 } zl_msg_t;
 
 // One text frame. False for anything the device ignores: not a JSON object, an unknown type, a
-// known field of the wrong type or out of its range. On true, release with zl_msg_free().
+// known field of the wrong type or out of its range (but for the optional echo cancellation fields
+// of `config`, which then read -1). On true, release with zl_msg_free().
 bool zl_decode(const char *data, size_t len, zl_msg_t *m);
 void zl_msg_free(zl_msg_t *m);
 

@@ -721,11 +721,15 @@ function CaptureControl({ device, online }) {
 const CONTROL_HINTS = {
   wake_probability_cutoff: "Higher = fewer false-fires, may miss wake word",
   vad_cutoff: "Lower = fewer dropped wakes, slightly more non-speech leak",
+  echo_cancel: "0 = off, the stop word hears the wake word's input; 1..3 = on, residual echo suppression mild to strongest (FD modes only)",
+  echo_cancel_mode: "0 SR low cost, 1 SR high performance, 2 FD low cost, 3 FD high performance; a change re-creates the canceller",
+  echo_cancel_filter: "Filter length 1..8; a change re-creates the canceller",
 };
 
-// Per-device controls (wake-word probability cutoff + VAD cutoff + speaker volume) shown
-// inside the Edit-speaker modal, next to CaptureControl. Each is a 0..100 Slider written
-// back debounced. The cutoffs come from the server config (the server sends them to the
+// Per-device controls (wake-word probability cutoff + VAD cutoff + the stop word's echo
+// cancellation + speaker volume) shown inside the Edit-speaker modal, next to CaptureControl.
+// Each is a Slider over the range the server gives it, written back debounced. The cutoffs and
+// the echo cancellation settings come from the server config (the server sends them to the
 // device); the volume is read from the connected device and is listed only while a
 // device with a speaker is connected. A background poll keeps the sliders in sync with
 // external changes (e.g. the physical volume dial) without stomping a control the user
@@ -773,8 +777,8 @@ function DeviceControls({ device }) {
     if (timers.current[c.id]) clearTimeout(timers.current[c.id]);
     timers.current[c.id] = setTimeout(() => {
       // `device` is a stable prop for the modal's lifetime, so no stale-closure risk.
-      // A cutoff is stored in the server config: refresh the config snapshot so a
-      // later save of the device list carries the new value.
+      // A cutoff or an echo cancellation setting is stored in the server config: refresh the
+      // config snapshot so a later save of the device list carries the new value.
       setDeviceControl(device, c.id, v)
         .then((snap) => { applySnapshot(snap); setErr(null); return refreshConfig(); })
         .catch((e) => setErr(e))
@@ -783,7 +787,7 @@ function DeviceControls({ device }) {
   };
 
   if (controls.length === 0) {
-    return <Field label="Device controls" hint="Wake-word cutoff, VAD cutoff & speaker volume">
+    return <Field label="Device controls" hint="Wake-word cutoff, VAD cutoff, stop word echo cancellation & speaker volume">
       {err
         ? <div className="z-fh" style={{ color: "#b91c1c" }}>{err.message || String(err)}</div>
         : <div className="z-fh">Loading…</div>}

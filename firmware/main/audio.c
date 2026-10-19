@@ -2,27 +2,41 @@
 // stereo, Philips; the left slot is the XMOS channel 0, the right slot channel 1. Speaker on I2S0:
 // 48 kHz, 16-bit samples in 32-bit slots, stereo, Philips, running all the time so the XMOS echo
 // reference on the same wire never stops.
+// The stop word hears the speaker's own playback cancelled out of a raw microphone: an AEC after
+// the XMOS's processing takes about 1 dB of the echo off its channels and 28 dB off a raw
+// microphone (docs/echo-cancellation.md). While the speaker plays, the XMOS puts the raw
+// microphone 0 (stage NONE) on channel 0, and ESP-SR's AEC runs on it against what went to the
+// wire (what the speaker task wrote and the DMA buffers the driver sent as silence when it was
+// late), decimated to 16 kHz and delayed by the echo's lag, which is measured on that raw
+// channel while playback runs. Its output is channel 0 of the tap and, at the wake-word gain, the
+// stop word's input. Channel 1 and the wake word's input never change. While the speaker is
+// silent, echo_cancel is 0 or no AEC could be made for the settings, channel 0 is the XMOS AGC
+// output and the stop word hears channel 1 as the wake word does.
 #include "audio.h"
 
+#include <math.h>
 #include <stdatomic.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "audio_core.h"
 #include "board.h"
 #include "driver/i2s_std.h"
+#include "esp_aec.h"
 #include "esp_attr.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "leds.h"
 #include "wake_word.h"
+#include "xmos.h"
 #include "zakhar_link.h"
 
 static const char *TAG = "audio";
 
 #define MIC_RATE 16000
-#define MIC_STEP 160    // frames per read: one 10 ms wake-word feature step
 #define WAKE_GAIN 4     // the stock micro_wake_word gain_factor on channel 1
 // The tap: 65536 frames = 4.096 s (2000 ms pre-roll plus the wait for the server), a power of two;
 // readers keep 1 s away from the end being overwritten.
@@ -33,8 +47,54 @@ static const char *TAG = "audio";
 #define SPK_BLOCK 720  // frames per write: 15 ms, the stock DMA buffer
 #define LATE_CHECK_BLOCKS 67  // the speaker task reports late buffers about once a second
 
+// The mic task's unit: 512 frames = 32 ms, the AEC's frame in its SR and FD modes at 16 kHz and
+// the protocol's microphone frame. It is two whole RX DMA buffers, so no read leaves one half
+// read: IDF's i2s_channel_read skips the rest of a half-read buffer when its queue is nearly full,
+// a loss that on_mic_overflow would not see.
+#define CHUNK 512
+#define MIC_DMA_FRAMES (CHUNK / 2)
+
+// The echo canceller's settings until the server's first `config`, all in one place: echo_cancel 1
+// (on, the residual echo suppression at AEC_NLP_LEVEL_NORMAL: levels 1..3 are NORMAL, AGGR and
+// VERYAGGR, in the full-duplex modes only), echo_cancel_mode 2 (AEC_MODES[2], AEC_MODE_FD_LOW_COST)
+// and echo_cancel_filter 4 (the filter length). The AEC takes channel 0 in and out and one
+// reference.
+#define ECHO_CANCEL_DEFAULT 1
+#define ECHO_MODE_DEFAULT 2
+#define ECHO_FILTER_DEFAULT 4
+static const aec_mode_t AEC_MODES[] = {
+    AEC_MODE_SR_LOW_COST, AEC_MODE_SR_HIGH_PERF, AEC_MODE_FD_LOW_COST, AEC_MODE_FD_HIGH_PERF,
+};
+#define FD_MODES 2  // AEC_MODES from this index on are full-duplex
+
+// The reference: the speaker's output at 16 kHz. 65536 frames = 4.1 s, a power of two, past the
+// lag estimator's 2 s; readers keep 4096 frames away from the end being overwritten.
+#define REF_FRAMES (1u << 16)
+#define REF_MARGIN 4096
+// Microphone frame m pairs with reference position m + offset - lag. The offset (mic_chunks_t) is
+// taken once, at the first chunk after REF_SETTLE reference frames: past the speaker task's first
+// writes, which go straight into the empty DMA buffers.
+#define REF_SETTLE MIC_RATE
+// The lag in use until the first clear estimate: 1344 frames = 84 ms, where the estimator settled
+// on a raw XMOS microphone of the Voice PE (docs/echo-cancellation.md).
+#define LAG_INIT (21 * LAG_BIN)
+// An estimate is the correlation peak of the energy envelopes, which the room's echo tail puts up
+// to a few bins after the echo's onset; the reference is aligned this much earlier, since the
+// filter models a delay but not an advance. A new estimate is taken only when it moves the lag by
+// more than a bin.
+#define LAG_GUARD (4 * LAG_BIN)
+#define LAG_EVERY 8  // chunks between estimates while the AEC runs: 256 ms
+
 static i2s_chan_handle_t s_tx, s_rx;
 static tap_t s_tap;
+static tap_t s_ref;
+static dec3_t s_dec;
+// The server's echo_cancel, echo_cancel_mode and echo_cancel_filter, taken by the mic task per chunk.
+static _Atomic int s_echo_cancel = ECHO_CANCEL_DEFAULT;
+static _Atomic int s_echo_mode = ECHO_MODE_DEFAULT;
+static _Atomic int s_echo_filter = ECHO_FILTER_DEFAULT;
+// Microphone frames the RX driver dropped since the mic task last took them.
+static _Atomic uint32_t s_mic_dropped;
 // DMA buffers the speaker played as silence because the speaker task had not refilled them in
 // time: the driver's sending queue overflowed (i2s_common.c, i2s_dma_tx_callback). Each is 15 ms
 // of silence that no stream reported, the speaker task having been kept off the CPU.
@@ -49,19 +109,191 @@ static bool IRAM_ATTR on_late(i2s_chan_handle_t handle, i2s_event_data_t *event,
     return false;
 }
 
+// One playback's echo cancellation on channel 0, logged when channel 0 is back to AGC.
+typedef struct {
+    uint32_t chunks;
+    uint64_t e_in, e_out;  // channel 0's energy into and out of the AEC
+    uint64_t us;           // aec_process time in all
+    uint32_t us_max;
+    uint32_t dropped;      // microphone frames the RX driver dropped
+    float corr;            // the latest estimate's correlation at the lag in use; NAN before one
+} aec_stats_t;
+
+// The RX driver's queue of filled DMA buffers was full when one more filled: it dropped the
+// oldest, event->size bytes of 2 x 32-bit frames.
+static bool IRAM_ATTR on_mic_overflow(i2s_chan_handle_t handle, i2s_event_data_t *event, void *user_ctx)
+{
+    (void)handle;
+    (void)user_ctx;
+    atomic_fetch_add_explicit(&s_mic_dropped, event->size / (2 * sizeof(int32_t)), memory_order_relaxed);
+    return false;
+}
+
+static aec_nlp_level_t nlp_level(int echo_cancel)
+{
+    return (aec_nlp_level_t)(AEC_NLP_LEVEL_NORMAL + echo_cancel - 1);
+}
+
+static int16_t gain_sat(int16_t v, int gain)
+{
+    const int32_t g = (int32_t)v * gain;
+    return g > INT16_MAX ? INT16_MAX : g < INT16_MIN ? INT16_MIN : (int16_t)g;
+}
+
+// A new AEC in AEC_MODES[mode] with the filter length `filter`, its suppression at `level` (the
+// default one when off); NULL, logged, when ESP-SR cannot make it or makes it with another frame
+// than CHUNK.
+static aec_handle_t *aec_make(int mode, int filter, int level)
+{
+    aec_config_t ac = {
+        .mic_num = 1,
+        .ref_num = 1,
+        .out_num = 1,
+        .filter_length = filter,
+        .sample_rate = MIC_RATE,
+        .caps = MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT,
+        .mode = AEC_MODES[mode],
+        .nlp_level = nlp_level(level > 0 ? level : ECHO_CANCEL_DEFAULT),
+    };
+    aec_handle_t *aec = aec_create_from_config(&ac);
+    if (aec != NULL && aec_get_chunksize(aec) != CHUNK) {
+        ESP_LOGE(TAG, "echo cancel: mode %d works in %d-frame chunks, not %d", mode, aec_get_chunksize(aec), CHUNK);
+        aec_destroy(aec);
+        aec = NULL;
+    }
+    if (aec == NULL) {
+        ESP_LOGE(TAG, "echo cancel: no AEC in mode %d, filter %d: channel 0 stays AGC", mode, filter);
+        return NULL;
+    }
+    ESP_LOGI(TAG, "echo cancel: %s, filter %d; free heap %u B internal, %u B PSRAM", aec_get_config_string(aec), filter,
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+    return aec;
+}
+
+static void log_playback(const aec_handle_t *aec, int filter, const aec_stats_t *st, int32_t lag)
+{
+    ESP_LOGI(TAG, "echo cancel: %.1f s of playback, %s, filter %d, lag %ld frames (%ld ms), correlation %.2f, "
+                  "channel 0 down %.1f dB, AEC %lu us mean / %lu us max per %d ms chunk, %lu mic frames dropped",
+             st->chunks * (double)CHUNK / MIC_RATE, aec_get_config_string(aec), filter, (long)lag,
+             (long)(lag * 1000 / MIC_RATE), st->corr, 10 * log10((double)st->e_in / (double)st->e_out),
+             (unsigned long)(st->us / st->chunks), (unsigned long)st->us_max, CHUNK * 1000 / MIC_RATE,
+             (unsigned long)st->dropped);
+}
+
+// Per chunk: channel 0's stage follows the playback (raw while it plays, with echo_cancel on and
+// an AEC made); while channel 0 is raw, the AEC runs on it while the reference it could be using
+// is not all silence, else it passes through; then the tap, the wake-word engine (channel 1 at
+// WAKE_GAIN) and the stop word (channel 0 at WAKE_GAIN while it is raw). While the AEC runs, the
+// lag is estimated every LAG_EVERY chunks once the raw chunks in a row span the estimator's
+// window (mic_chunks_step). A new echo_cancel_mode or echo_cancel_filter re-creates the AEC
+// between chunks.
 static void mic_task(void *arg)
 {
     (void)arg;
-    static int32_t raw[MIC_STEP * 2];
-    static int16_t both[MIC_STEP * 2];
-    static int16_t ch1[MIC_STEP];
+    // A chunk: the raw slots, the tap's interleaved frames, the wake-word and stop-word inputs, and
+    // the AEC's input (channel 0), output and reference.
+    static int32_t raw[CHUNK * 2];
+    static int16_t both[CHUNK * 2], wake[CHUNK], stop[CHUNK];
+    static _Alignas(16) int16_t in[CHUNK], out[CHUNK], ref[CHUNK];
+    static lag_track_t lag;
+    static float corr[LAG_MAX + 1];
+    static mic_chunks_t chunks;
+    aec_handle_t *aec = NULL;
+    int made_mode = -1, made_filter = -1;  // the settings aec was made with, or failed to be
+    int applied = 0;                       // the level aec suppresses at
+    int32_t lag_in_use = LAG_INIT;
+    unsigned since_estimate = 0;
+    bool wrote = false;  // the stage write the previous chunk asked for went through
+    bool stack_logged = false;
+    aec_stats_t st = {.corr = NAN};
+    size_t fill = 0;
+    lag_track_init(&lag);
+    mic_chunks_init(&chunks, CHUNK, REF_SETTLE);
     for (;;) {
         size_t got = 0;
-        if (i2s_channel_read(s_rx, raw, sizeof raw, &got, portMAX_DELAY) != ESP_OK) continue;
-        const size_t frames = got / (2 * sizeof(int32_t));
-        pcm_split(raw, frames, both, ch1, WAKE_GAIN);
-        tap_write(&s_tap, both, frames);
-        wake_word_feed(ch1, frames);
+        if (i2s_channel_read(s_rx, &raw[fill * 2], (CHUNK - fill) * 2 * sizeof(int32_t), &got, portMAX_DELAY) !=
+            ESP_OK) {
+            continue;
+        }
+        fill += got / (2 * sizeof(int32_t));
+        if (fill < CHUNK) continue;
+        fill = 0;
+        // Frames dropped before this chunk count toward its position, so the reference stays aligned.
+        const uint32_t dropped = atomic_exchange_explicit(&s_mic_dropped, 0, memory_order_relaxed);
+
+        const int level = atomic_load_explicit(&s_echo_cancel, memory_order_relaxed);
+        const int mode = atomic_load_explicit(&s_echo_mode, memory_order_relaxed);
+        const int filter = atomic_load_explicit(&s_echo_filter, memory_order_relaxed);
+        if (mode != made_mode || filter != made_filter) {
+            if (st.chunks > 0) {
+                log_playback(aec, made_filter, &st, lag_in_use);
+                st = (aec_stats_t){.corr = NAN};
+                since_estimate = 0;
+            }
+            if (aec != NULL) aec_destroy(aec);
+            aec = aec_make(mode, filter, level);
+            made_mode = mode;
+            made_filter = filter;
+            applied = level;
+        }
+        const bool want_raw = level > 0 && aec != NULL && zl_playing();
+        const mic_chunk_t c = mic_chunks_step(&chunks, dropped, want_raw, wrote, tap_position(&s_ref));
+        // Written as soon as the chunk is in, so the chunk's processing does not delay the switch.
+        wrote = c.write && xmos_ch0_raw(c.write_raw) == ESP_OK;
+
+        pcm_split(raw, CHUNK, both, wake, WAKE_GAIN);
+        const int16_t *stop_in = NULL;
+        if (c.raw) {
+            for (size_t i = 0; i < CHUNK; i++) in[i] = both[2 * i];
+            const uint32_t aligned = c.pos + c.offset - (uint32_t)lag_in_use;
+            const bool cancel = aec != NULL && c.have_offset && !aec_skip(&s_ref, aligned, CHUNK, (size_t)filter * CHUNK);
+            if (cancel) {
+                if (level > 0 && level != applied) {
+                    if (mode >= FD_MODES) aec_set_nlp_level(aec, nlp_level(level));
+                    applied = level;
+                }
+                tap_read_at(&s_ref, aligned, ref, CHUNK);
+                const int64_t t0 = esp_timer_get_time();
+                aec_process(aec, in, ref, out);
+                const uint32_t us = (uint32_t)(esp_timer_get_time() - t0);
+                for (size_t i = 0; i < CHUNK; i++) {
+                    st.e_in += (uint64_t)((int32_t)in[i] * in[i]);
+                    st.e_out += (uint64_t)((int32_t)out[i] * out[i]);
+                }
+                st.chunks++;
+                st.us += us;
+                if (us > st.us_max) st.us_max = us;
+            } else {
+                memcpy(out, in, sizeof out);
+            }
+            for (size_t i = 0; i < CHUNK; i++) {
+                both[2 * i] = out[i];
+                // x4 after the AEC: before it, the loud echo would clip and could not be cancelled.
+                stop[i] = gain_sat(out[i], WAKE_GAIN);
+            }
+            stop_in = stop;
+            st.dropped += dropped;
+            lag_track_push(&lag, in, CHUNK, 1);
+            if (cancel && c.lag_ok && ++since_estimate == LAG_EVERY) {
+                since_estimate = 0;
+                const int est = lag_track_run(&lag, &s_ref, c.pos + CHUNK, c.offset, corr);
+                if (est >= 0 && abs(est - LAG_GUARD - (int)lag_in_use) > LAG_BIN) lag_in_use = est - LAG_GUARD;
+                st.corr = corr[(lag_in_use + LAG_GUARD) / LAG_BIN];
+            }
+        } else {
+            if (st.chunks > 0) {
+                log_playback(aec, made_filter, &st, lag_in_use);
+                st = (aec_stats_t){.corr = NAN};
+                since_estimate = 0;
+                if (!stack_logged) {
+                    ESP_LOGI(TAG, "mic task: %u B of its stack never used", (unsigned)uxTaskGetStackHighWaterMark(NULL));
+                    stack_logged = true;
+                }
+            }
+        }
+        tap_write(&s_tap, both, CHUNK);
+        wake_word_feed(wake, stop_in, CHUNK);
     }
 }
 
@@ -70,9 +302,18 @@ static void speaker_task(void *arg)
     (void)arg;
     static int16_t mono[SPK_BLOCK];
     static int16_t stereo[SPK_BLOCK * 2];
+    static int16_t ref[SPK_BLOCK / 3];
+    static const int16_t silence[SPK_BLOCK / 3];
     // The buffers that went out before this task started are not late.
     uint32_t seen = atomic_load_explicit(&s_late, memory_order_relaxed);
+    uint32_t ref_late = seen;
     for (unsigned blocks = 1;; blocks++) {
+        // A buffer that went out as silence is on the wire but was never written here: its
+        // silence goes into the echo reference too, or the reference falls behind the wire. It
+        // lands after the block that was waiting for the buffer, which went out after it: one
+        // block out of place, the count right.
+        const uint32_t late_now = atomic_load_explicit(&s_late, memory_order_relaxed);
+        for (; ref_late != late_now; ref_late++) tap_write(&s_ref, silence, SPK_BLOCK / 3);
         if (blocks % LATE_CHECK_BLOCKS == 0) {
             const uint32_t late = atomic_load_explicit(&s_late, memory_order_relaxed);
             if (late != seen) {
@@ -88,6 +329,8 @@ static void speaker_task(void *arg)
             stereo[2 * i] = mono[i];
             stereo[2 * i + 1] = mono[i];
         }
+        // The echo reference: this block, silence included, as it goes to the wire.
+        tap_write(&s_ref, ref, dec3_run(&s_dec, mono, SPK_BLOCK, ref));
         size_t written;
         i2s_channel_write(s_tx, stereo, sizeof stereo, &written, portMAX_DELAY);
     }
@@ -120,10 +363,11 @@ esp_err_t audio_start(void)
     if (err == ESP_OK) err = i2s_channel_enable(s_tx);
     if (err != ESP_OK) return err;
 
-    // The stock DMA: 4 x 256 frames.
+    // The stock DMA: 4 x 256 frames. A filled buffer the mic task is too late for is dropped by the
+    // driver and counted by on_mic_overflow.
     i2s_chan_config_t rx_cc = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_1, I2S_ROLE_SLAVE);
     rx_cc.dma_desc_num = 4;
-    rx_cc.dma_frame_num = 256;
+    rx_cc.dma_frame_num = MIC_DMA_FRAMES;
     const i2s_std_config_t rx_std = {
         .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(MIC_RATE),
         .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_32BIT, I2S_SLOT_MODE_STEREO),
@@ -135,8 +379,10 @@ esp_err_t audio_start(void)
             .din = PIN_MIC_DIN,
         },
     };
+    const i2s_event_callbacks_t rx_cb = {.on_recv_q_ovf = on_mic_overflow};
     err = i2s_new_channel(&rx_cc, NULL, &s_rx);
     if (err == ESP_OK) err = i2s_channel_init_std_mode(s_rx, &rx_std);
+    if (err == ESP_OK) err = i2s_channel_register_event_callback(s_rx, &rx_cb, NULL);
     if (err == ESP_OK) err = i2s_channel_enable(s_rx);
     if (err != ESP_OK) return err;
 
@@ -146,12 +392,27 @@ esp_err_t audio_start(void)
         return ESP_ERR_NO_MEM;
     }
     tap_init(&s_tap, tap, TAP_FRAMES, TAP_MARGIN, 2);
-    // Core 1, away from Wi-Fi and zakhar_link on core 0. The stack holds the TFLite inference.
-    if (xTaskCreatePinnedToCore(mic_task, "mic", 8 * 1024, NULL, 5, NULL, 1) != pdPASS) {
+    int16_t *ref = heap_caps_calloc(REF_FRAMES, sizeof(int16_t), MALLOC_CAP_SPIRAM);
+    if (ref == NULL) {
+        ESP_LOGE(TAG, "echo reference: out of PSRAM");
+        return ESP_ERR_NO_MEM;
+    }
+    tap_init(&s_ref, ref, REF_FRAMES, REF_MARGIN, 1);
+    dec3_init(&s_dec);
+    // Core 1, away from Wi-Fi and zakhar_link on core 0. The stack holds the TFLite inference and
+    // the one-channel AEC.
+    if (xTaskCreatePinnedToCore(mic_task, "mic", 12 * 1024, NULL, 5, NULL, 1) != pdPASS) {
         ESP_LOGE(TAG, "mic task create failed");
         return ESP_ERR_NO_MEM;
     }
     return ESP_OK;
+}
+
+void audio_set_echo_cancel(int level, int mode, int filter)
+{
+    if (level >= 0) atomic_store_explicit(&s_echo_cancel, level, memory_order_relaxed);
+    if (mode >= 0) atomic_store_explicit(&s_echo_mode, mode, memory_order_relaxed);
+    if (filter >= 0) atomic_store_explicit(&s_echo_filter, filter, memory_order_relaxed);
 }
 
 esp_err_t audio_start_playback(void)
