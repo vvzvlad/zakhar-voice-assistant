@@ -17,8 +17,10 @@ void pcm_split(const int32_t *in, size_t frames, int16_t *both, int16_t *ch1, in
 {
     for (size_t i = 0; i < frames; i++) {
         both[2 * i] = pcm_s32_to_s16(in[2 * i], 1);
-        both[2 * i + 1] = pcm_s32_to_s16(in[2 * i + 1], 1);
         ch1[i] = pcm_s32_to_s16(in[2 * i + 1], ch1_gain);
+        // The stream carries channel 1 exactly as the wake-word engine gets it: the gain applied
+        // before the cut to 16 bits keeps low bits that channel 1 at gain 1 would drop.
+        both[2 * i + 1] = ch1[i];
     }
 }
 

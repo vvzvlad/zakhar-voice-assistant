@@ -16,6 +16,7 @@ esp_err_t audio_start(void);
 esp_err_t audio_start_playback(void);
 
 // zakhar_link's microphone tap: 16 kHz, 2 channels interleaved (ch0 the XMOS AGC output, ch1 its
-// noise-suppressed output), positions in frames.
+// noise-suppressed output at the wake-word gain, exactly the wake-word engine's input), positions
+// in frames.
 uint32_t audio_mic_position(void);
 size_t audio_mic_read(uint32_t *pos, int16_t *out, size_t max_frames);
