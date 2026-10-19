@@ -28,8 +28,11 @@ static const char *TAG = "wake_word";
 
 static const int SAMPLE_RATE = 16000;
 static const int FEATURES = 40;  // PREPROCESSOR_FEATURE_SIZE
-static const int WINDOW = 5;     // sliding_window_size, both manifests
+static const int WINDOW = 5;     // sliding_window_size, all three manifests
 static const int MIN_SLICES_BEFORE_DETECTION = 100;
+// The stop model runs from this many 10 ms slices of playback on: the stock firmware's
+// activate_stop_word_once enables it 1 s after the answer starts.
+static const int STOP_ARM_SLICES = 100;
 static const size_t VAR_ARENA_SIZE = 1024;  // STREAMING_MODEL_VARIABLE_ARENA_SIZE
 // Each model's tensor arena, allocated once and reused by every model loaded into it: well above
 // the manifests' tensor_arena_size (Zakhar v31 48000, the stock VAD 16772), so a retrained model
@@ -55,12 +58,19 @@ struct Model {
 // trunc(percent / 100 * 255).
 static Model s_wake(204);
 static Model s_vad(76);
+// The stop model's cutoff is compiled in: stop.json's probability_cutoff 0.5, trunc(0.5 * 255).
+static Model s_stop(127);
 
 static FrontendState s_fs;
 // Held by wake_word_feed() while it runs the models and by wake_word_load() while it swaps one.
 static SemaphoreHandle_t s_lock;
 static std::atomic<uint8_t> s_peak{0};  // the highest wake probability since wake_word_take_peak()
 static std::atomic<void (*)(void)> s_detect_cb{nullptr};
+static std::atomic<bool (*)(void)> s_playing{nullptr};
+static std::atomic<void (*)(void)> s_stop_cb{nullptr};
+// Under s_lock: the consecutive slices fed while playing, and whether the stop model runs.
+static int s_playing_slices = 0;
+static bool s_stop_armed = false;
 
 struct Lock {
   Lock() { xSemaphoreTake(s_lock, portMAX_DELAY); }
@@ -153,7 +163,7 @@ extern "C" bool wake_word_init(void) {
   fc.log_scale.scale_shift = 6;
   s_lock = xSemaphoreCreateMutex();
   if (s_lock == nullptr || !FrontendPopulateState(&fc, &s_fs, SAMPLE_RATE) || !model_init(s_wake) ||
-      !model_init(s_vad)) {
+      !model_init(s_vad) || !model_init(s_stop)) {
     ESP_LOGE(TAG, "frontend/arena init failed");
     return false;
   }
@@ -162,7 +172,8 @@ extern "C" bool wake_word_init(void) {
 }
 
 extern "C" bool wake_word_load(wake_word_model_t kind, uint8_t *data, size_t size) {
-  Model &m = kind == WAKE_WORD_MODEL_WAKE ? s_wake : s_vad;
+  Model &m = kind == WAKE_WORD_MODEL_WAKE ? s_wake : kind == WAKE_WORD_MODEL_VAD ? s_vad : s_stop;
+  const char *name = kind == WAKE_WORD_MODEL_WAKE ? "wake" : kind == WAKE_WORD_MODEL_VAD ? "VAD" : "stop";
   bool ok;
   size_t used = 0;
   {
@@ -171,13 +182,16 @@ extern "C" bool wake_word_load(wake_word_model_t kind, uint8_t *data, size_t siz
     if (ok) used = m.interp->arena_used_bytes();
   }
   if (ok) {
-    ESP_LOGI(TAG, "%s model of %u B loaded, tensor arena %u of %u B used", kind == WAKE_WORD_MODEL_WAKE ? "wake" : "VAD",
-             (unsigned) size, (unsigned) used, (unsigned) TENSOR_ARENA_SIZE);
+    ESP_LOGI(TAG, "%s model of %u B loaded, tensor arena %u of %u B used", name, (unsigned) size, (unsigned) used,
+             (unsigned) TENSOR_ARENA_SIZE);
   }
   return ok;
 }
 
 extern "C" void wake_word_feed(const int16_t *samples, size_t n) {
+  // Asked before s_lock is taken: it takes the playback owner's lock.
+  bool (*playing_cb)(void) = s_playing.load(std::memory_order_acquire);
+  const bool playing = playing_cb != nullptr && playing_cb();
   int8_t features[FEATURES];
   while (n > 0) {
     size_t used = 0;
@@ -190,10 +204,38 @@ extern "C" void wake_word_feed(const int16_t *samples, size_t n) {
       features[i] = (int8_t) std::clamp<int32_t>(v, INT8_MIN, INT8_MAX);
     }
     Lock lock;
+    if (!playing) {
+      s_playing_slices = 0;
+      s_stop_armed = false;
+    } else if (!s_stop_armed && ++s_playing_slices >= STOP_ARM_SLICES) {
+      // As ESPHome's enable_model (reset_probabilities): the stop model starts with an empty
+      // window and the cool-off.
+      s_stop_armed = true;
+      memset(s_stop.probs, 0, sizeof(s_stop.probs));
+      s_stop.idx = 0;
+      s_stop.fresh = false;
+      s_stop.ignore = -MIN_SLICES_BEFORE_DETECTION;
+    }
     const bool wake = s_wake.interp != nullptr, vad = s_vad.interp != nullptr;
-    if ((wake && !model_feed(s_wake, features)) || (vad && !model_feed(s_vad, features))) {
+    const bool stop = s_stop_armed && s_stop.interp != nullptr;
+    if ((wake && !model_feed(s_wake, features)) || (vad && !model_feed(s_vad, features)) ||
+        (stop && !model_feed(s_stop, features))) {
       ESP_LOGW(TAG, "invoke failed");
       continue;
+    }
+    // The same rule as "Zakhar" below.
+    if (stop && vad && s_stop.fresh && s_stop.ignore >= 0) {
+      s_stop.fresh = false;
+      if (model_above_cutoff(s_stop)) {
+        if (!model_above_cutoff(s_vad)) {
+          ESP_LOGI(TAG, "\"Stop\" blocked by VAD");
+        } else {
+          ESP_LOGI(TAG, "\"Stop\" detected");
+          if (void (*cb)(void) = s_stop_cb.load(std::memory_order_acquire)) cb();
+          memset(s_stop.probs, 0, sizeof(s_stop.probs));
+          s_stop.ignore = -MIN_SLICES_BEFORE_DETECTION;
+        }
+      }
     }
     if (!wake || !vad) continue;
     // As WakeWordModel::determine_detected: during the cool-off the probability stays unprocessed,
@@ -220,3 +262,8 @@ extern "C" void wake_word_set_cutoffs(uint8_t wake, uint8_t vad) {
 extern "C" uint8_t wake_word_take_peak(void) { return s_peak.exchange(0, std::memory_order_relaxed); }
 
 extern "C" void wake_word_set_detect_cb(void (*cb)(void)) { s_detect_cb.store(cb, std::memory_order_release); }
+
+extern "C" void wake_word_set_stop(bool (*playing)(void), void (*cb)(void)) {
+  s_playing.store(playing, std::memory_order_release);
+  s_stop_cb.store(cb, std::memory_order_release);
+}

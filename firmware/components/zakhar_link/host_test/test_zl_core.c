@@ -88,6 +88,9 @@ static void test_decode(void)
     assert(decode("{\"type\": \"model\", \"kind\": \"vad\", \"name\": \"vad.tflite\", \"size\": 1}", &m));
     assert(m.model == ZL_MODEL_VAD);
     zl_msg_free(&m);
+    assert(decode("{\"type\": \"model\", \"kind\": \"stop\", \"name\": \"microWakeWord/stop/stop.tflite\", \"size\": 1}", &m));
+    assert(m.model == ZL_MODEL_STOP && strcmp(m.name, "microWakeWord/stop/stop.tflite") == 0);
+    zl_msg_free(&m);
     assert(!decode("{\"type\": \"model\", \"kind\": \"vad\", \"name\": \"vad.tflite\", \"size\": 0}", &m));
     assert(!decode("{\"type\": \"model\", \"kind\": \"stt\", \"name\": \"x\", \"size\": 5}", &m));
     assert(!decode("{\"type\": \"model\", \"kind\": \"wake\", \"size\": 5}", &m));
@@ -126,6 +129,8 @@ static void test_encode(void)
                "{\"type\":\"model_loaded\",\"kind\":\"wake\",\"name\":\"zakhar.tflite\",\"ok\":true}");
     encoded_is(zl_encode_model_loaded(ZL_MODEL_VAD, "vad.tflite", false),
                "{\"type\":\"model_loaded\",\"kind\":\"vad\",\"name\":\"vad.tflite\",\"ok\":false}");
+    encoded_is(zl_encode_stop(true, 17), "{\"type\":\"stop\",\"session\":17}");
+    encoded_is(zl_encode_stop(false, 17), "{\"type\":\"stop\"}");  // outside a session
     printf("ok: encode\n");
 }
 

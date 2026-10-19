@@ -41,9 +41,11 @@ HEARTBEAT_S = 10.0
 PLAY_FRAME_BYTES = 4096
 # The release's default models (the Dockerfile copies every .tflite under microWakeWord/ into
 # the image), sent to a device whose core.devices[].wake_model / vad_model is empty: the wake
-# one by its name (wake_model_files), the VAD one by its path.
+# one by its name (wake_model_files), the VAD one by its path. The stop model is not
+# configurable: every device with a speaker gets the release's, by its path.
 RELEASE_WAKE_MODEL = "zakhar/zakhar_v31"
 RELEASE_VAD_MODEL = "microWakeWord/vad/vad.tflite"  # stock: esphome/micro-wake-word-models models/v2/vad.tflite
+RELEASE_STOP_MODEL = "microWakeWord/stop/stop.tflite"  # stock: kahrendt/microWakeWord release `stop`
 # Name prefix of the wake-word models uploaded through the panel (uploaded_wake_models_dir).
 UPLOADED_WAKE_PREFIX = "uploaded/"
 # The server keeps at most buffer_ms minus this much audio ahead of the device's playback.
@@ -85,13 +87,18 @@ def _spawn(coro) -> None:
     task.add_done_callback(_background.discard)
 
 
-def _model_paths(cfg) -> dict[str, tuple[str, str]]:
+def _model_paths(cfg, speaker: bool) -> dict[str, tuple[str, str]]:
     """The model sent to a device per `model` kind, as (name, path): the configured one, else
-    the release's. A wake value that names a model in wake_model_files opens that model's
-    file; any other value is the path of the file and its own name."""
+    the release's; the stop model is always the release's and goes only to a device with a
+    speaker (it listens only while the device plays). A wake value that names a model in
+    wake_model_files opens that model's file; any other value is the path of the file and its
+    own name."""
     wake = cfg.wake_model or RELEASE_WAKE_MODEL
     vad = cfg.vad_model or RELEASE_VAD_MODEL
-    return {"wake": (wake, wake_model_files().get(wake, wake)), "vad": (vad, vad)}
+    models = {"wake": (wake, wake_model_files().get(wake, wake)), "vad": (vad, vad)}
+    if speaker:
+        models["stop"] = (RELEASE_STOP_MODEL, RELEASE_STOP_MODEL)
+    return models
 
 
 def uploaded_wake_models_dir() -> Path:
@@ -102,14 +109,14 @@ def uploaded_wake_models_dir() -> Path:
 
 def wake_model_files() -> dict[str, str]:
     """The wake-word models a device's wake_model can name, {name: path}: every .tflite under
-    microWakeWord/ except the VAD model's directory, plus every .tflite directly in
+    microWakeWord/ except the VAD and stop models' directories, plus every .tflite directly in
     uploaded_wake_models_dir(); the path is relative to the working directory (where
     send_model opens it). microWakeWord/esphome/<stem>.tflite is esphome/<stem>;
     microWakeWord/v<N>/…/zakhar.tflite is zakhar/zakhar_v<N> and any other <stem>.tflite
     under v<N> is zakhar/zakhar_v<N>_<stem>; an uploaded <stem>.tflite is uploaded/<stem>."""
     files = {}
     for p in Path("microWakeWord").rglob("*.tflite"):
-        if p.is_relative_to("microWakeWord/vad"):
+        if p.is_relative_to("microWakeWord/vad") or p.is_relative_to("microWakeWord/stop"):
             continue
         top = p.parts[1]
         if top == "esphome":
@@ -297,12 +304,17 @@ class Connection:
         return True
 
     def start_session(self, session) -> None:
-        """A wake: the device flushed its playback, so every stream in flight and
-        every queued audio frame is dropped here too, and `play_stop` goes out
-        before anything else of the new session (it drops on the device a stream
-        whose play_start left before the wake was seen)."""
+        """A wake: the device flushed its playback, so it is dropped here too
+        (drop_playback), with `play_stop` before anything else of the new session."""
         self.session = session
         self.session_open = True
+        self.drop_playback()
+
+    def drop_playback(self) -> None:
+        """The device flushed its playback (a wake, the stop word): every stream in
+        flight and every queued audio frame is dropped here too, and `play_stop` goes
+        out (it drops on the device a stream whose play_start left before the flush
+        was seen)."""
         self._out = deque(item for item in self._out if item[0] is None)
         for stream in self._streams.values():
             stream.end("dropped")
@@ -470,6 +482,16 @@ class Device:
             # (at the top of on_start) the cancelled older run.
             conn.start_session(msg["session"])
             await self.pipeline.on_start(str(msg["session"]), msg.get("word"))
+        elif kind == "stop":
+            # Synchronously, as a wake: the dropped plays and the cancelled run. A cancelled
+            # run emits no RUN_END, so the session's terminal `state idle` goes out here.
+            conn.drop_playback()
+            in_session = conn.session_open
+            if in_session:
+                self.pipeline.cancel_run()
+                conn.send_session({"type": "state", "value": "idle"})
+                conn.session_open = False
+            logger.info(f"{self.name}: stop word, playback{' and run' if in_session else ''} stopped")
         elif kind == "played":
             conn.on_played(msg["id"], bool(msg.get("dropped")))
         elif kind == "volume":
@@ -765,7 +787,7 @@ class DeviceManager:
         return {"device": device_name, "detect": bool(enabled)}
 
     def reload_model(self, device_name: str) -> dict:
-        """The direct reload command: re-read both model files and send them; the device
+        """The direct reload command: re-read the model files and send them; the device
         swaps them without a restart. Returns {device, models: {kind: name sent}}.
         Raises LookupError (unknown device) or RuntimeError (offline)."""
         target = self._find(device_name)
@@ -773,7 +795,7 @@ class DeviceManager:
         if conn is None:
             raise RuntimeError(f"{device_name} is offline")
         logger.info(f"{device_name}: reloading the models")
-        sent = {kind: name for kind, (name, path) in _model_paths(target.cfg).items()
+        sent = {kind: name for kind, (name, path) in _model_paths(target.cfg, conn.speaker).items()
                 if conn.send_model(kind, name, path)}
         return {"device": device_name, "models": sent}
 
@@ -833,7 +855,7 @@ class DeviceManager:
 
     async def _hello(self, ws, hello: dict):
         """Admit a device: add an unknown id to the config, refuse a disabled one,
-        replace an older connection of the same id, then send `config`, both models and
+        replace an older connection of the same id, then send `config`, the models and
         what the device's capture needs."""
         name = hello["id"]
         cfg = next((d for d in self.rt.core.devices if d.name == name), None)
@@ -859,7 +881,7 @@ class DeviceManager:
             device.resume_capture(conn)
         except Exception as e:
             logger.error(f"{name}: captures not taken up: {e}")
-        for kind, (model, path) in _model_paths(cfg).items():
+        for kind, (model, path) in _model_paths(cfg, conn.speaker).items():
             conn.send_model(kind, model, path)
         logger.info(
             f"{name}: connected ({conn.fw}, speaker={conn.speaker}"
@@ -887,7 +909,7 @@ class DeviceManager:
                 continue
             if conn.cutoffs != (cfg.wake_cutoff, cfg.vad_cutoff):
                 conn.send_config(cfg)
-            for kind, (model, path) in _model_paths(cfg).items():
+            for kind, (model, path) in _model_paths(cfg, conn.speaker).items():
                 if conn.models.get(kind) != model:
                     conn.send_model(kind, model, path)
 

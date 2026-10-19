@@ -59,6 +59,10 @@ The owner's words:
   link after its 3 s send timeout, then waits the 1 s backoff and ~1 s to reconnect, against a
   ~3 s tap), option chosen: «Оставить как есть» — no larger tap, no faster reconnect; the
   hole shows in the capture's `gaps`.
+- «давай ее добавим тож» (the stop word of the stock Voice PE firmware) — the speaker runs the
+  stock «Stop» model (kahrendt/microWakeWord, release `stop`) from 1 s after its playback starts
+  until the playback ends; a detection only stops: the playback and the device's run end, no new
+  session starts.
 
 ## Transport
 
@@ -115,23 +119,27 @@ The owner's words:
    Both are percent, 0..100. The device applies them as `uint8 = trunc(percent / 100 * 255)` to the
    wake-word model and to the on-device VAD gate. They live in the server config, not on the
    device; until the first `config` the device uses its compiled-in defaults.
-4. Server → both models, right after `config`: see [Models](#models).
+4. Server → the wake-word and VAD models, and to a device with a speaker the stop model, right
+   after `config`: see [Models](#models).
 
 ## Models
 
-The device stores no model. The server sends the wake-word model and the VAD model that gates it
-at every connection, again when the model configured for the device changes, on the direct
-reload command (panel API `POST /api/device/model {device}`), and when a wake-word model file the
-device uses is uploaded anew (panel API `POST /api/wake-models`). Which file goes out is the
-server's choice: `core.devices[].wake_model` / `vad_model`, empty for the models the release
-ships.
+The device stores no model. The server sends the wake-word model, the stop model and the VAD
+model that gates both at every connection, again when the model configured for the device
+changes, on the direct reload command (panel API `POST /api/device/model {device}`), and when a
+wake-word model file the device uses is uploaded anew (panel API `POST /api/wake-models`). Which
+file goes out is the server's choice: `core.devices[].wake_model` / `vad_model`, empty for the
+models the release ships. The stop model is always the release's
+(`microWakeWord/stop/stop.tflite`, the stock «Stop» of kahrendt/microWakeWord) and is not
+configurable: no device field, no panel setting, no cutoff in `config` — the firmware compiles in
+its manifest's cutoff, 0.5. Only a device with a speaker (`caps.speaker: true`) gets it.
 
 1. Server → `model`, then the bytes:
    ```json
    {"type": "model", "kind": "wake", "name": "zakhar/zakhar_v31", "size": 77848}
    ```
-   `kind` is `wake` or `vad`, `name` is the model's name, opaque to the device, and `size` (> 0)
-   is the length of the .tflite that follows in `0x03` frames of at most 4096 payload bytes.
+   `kind` is `wake`, `vad` or `stop`, `name` is the model's name, opaque to the device, and `size`
+   (> 0) is the length of the .tflite that follows in `0x03` frames of at most 4096 payload bytes.
    `model` carries no `session`, so the session filter lets it through. A new `model` while an
    earlier one is still arriving discards the earlier one; bytes past `size` are discarded.
 2. Device → `model_loaded`, once all the bytes are in and the load was tried:
@@ -143,8 +151,10 @@ ships.
    could not be allocated, the previous model stays. The server
    shows the `name` of the last wake model loaded as the device's model.
 
-- The device swaps a model live, without a restart, and detects nothing until both are loaded.
-- A device that does not know `model` (an older firmware) ignores it and its `0x03` frames.
+- The device swaps a model live, without a restart. It detects the wake word only while the wake
+  and VAD models are loaded, and the stop word only while the stop and VAD models are.
+- A device that does not know `model` (an older firmware) ignores it and its `0x03` frames; a
+  firmware that does not know kind `stop` ignores that `model` and its `0x03` frames the same way.
 
 ## Voice session
 
@@ -186,6 +196,13 @@ device                                   server
   session on both sides: the device flushes its playback, the server cancels the older run and,
   before anything else of the new session, sends `play_stop` — a stream the server started before
   it saw the `wake` is dropped on the device too.
+- `stop`: `{"type": "stop", "session": 17}`, device → server: the stop word. The device runs the
+  stop model from 1 s after its playback starts until the playback ends; a detection flushes the
+  playback and sends `stop`, then `played {id, "dropped": true}` for each stream it dropped.
+  `session` is the open session's number, absent outside a session. A stop word starts no session.
+  The server drops the playback as for a `wake` and sends `play_stop`; in a session it then
+  cancels the run and ends the session with `state idle`, outside one (an announcement, an
+  agent's `speak`) only the playback stops.
 - A device without a speaker (`caps.speaker: false`) never gets playback: the server skips TTS for
   it and sends the text only.
 
@@ -196,8 +213,9 @@ device                                   server
 - The device plays streams back to back in arrival order (the end-of-phrase chime, a filler, the
   answer) and sends `played {id}` when the last sample of a stream is out.
 - `play_stop` flushes everything queued and playing; the device answers `played {id, "dropped":
-  true}` for each stream it dropped. A new `wake` flushes the same way. `0x02` frames and
-  `play_end` of a dropped stream that are still on the way are discarded.
+  true}` for each stream it dropped. A new `wake` and the stop word flush the same way, and the
+  server answers either with `play_stop`. `0x02` frames and `play_end` of a dropped stream that
+  are still on the way are discarded.
 - The server stops waiting for `played` of a stream after its duration plus `buffer_ms` plus 5 s
   and treats it as dropped.
 - Pacing: the server keeps at most `buffer_ms − 500` ms of audio ahead of the device's playback,

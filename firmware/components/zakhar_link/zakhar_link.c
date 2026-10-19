@@ -3,7 +3,7 @@
 //
 // Two tasks. The component task owns the client: it creates it, and when the link is lost
 // destroys it and connects a new one after the backoff. It sends everything the device starts:
-// the wake, the session's and the capture's microphone frames, audio_end, wake_peak once a second,
+// the wake, `stop`, the session's and the capture's mic frames, audio_end, wake_peak once a second,
 // `played` of finished streams and `volume`. It also owns the microphone position, so a `capture`
 // and a `capture_resume` are handed to it. A capture outlives a lost link: the next hello names
 // it, and a `capture_resume` sends it on from the frame the server asks for. The client's own task
@@ -54,6 +54,7 @@ static const char *TAG = "zakhar_link";
 #define EV_PLAYED (1u << 3)
 #define EV_VOLUME (1u << 4)
 #define EV_CAPTURE_RESUME (1u << 5)
+#define EV_STOP (1u << 6)
 
 static zl_config_t s_cfg;
 static zl_callbacks_t s_cb;
@@ -546,6 +547,27 @@ static void wake(void)
     send_dropped(s_ws, dropped, ndropped);
 }
 
+// The stop word: the playback is flushed, and the server stops the open session's run. The
+// session itself ends with the server's `state`.
+static void stop(void)
+{
+    uint32_t dropped[ZL_PLAYQ_STREAMS];
+    lock();
+    const size_t ndropped = zl_playq_flush(&s_playq, dropped);
+    const bool online = s_online;
+    const bool has_session = online && s_sess.open;
+    const uint32_t session = s_sess.session;
+    unlock();
+    if (has_session) {
+        ESP_LOGI(TAG, "stop word: session %u, %u streams dropped", (unsigned)session, (unsigned)ndropped);
+    } else {
+        ESP_LOGI(TAG, "stop word: no session, %u streams dropped", (unsigned)ndropped);
+    }
+    if (!online) return;
+    send_json(s_ws, zl_encode_stop(has_session, session));
+    send_dropped(s_ws, dropped, ndropped);
+}
+
 // A `capture` from the server: from now, no pre-roll, in place of one held already; refused while
 // a session is open.
 static void capture_start(void)
@@ -684,6 +706,8 @@ static void link_task(void *arg)
         }
         if (ev & EV_CAPTURE) capture_start();
         if (ev & EV_CAPTURE_RESUME) capture_resume();
+        // Before a wake of the same pass: its `stop` names the session the wake replaces.
+        if (ev & EV_STOP) stop();
         if (ev & EV_WAKE) wake();
         if (ev & EV_PLAYED) send_played();
         if (ev & EV_VOLUME) send_volume();
@@ -751,4 +775,18 @@ size_t zl_play_read(int16_t *out, size_t max)
     unlock();
     if (done) notify(EV_PLAYED);
     return n;
+}
+
+bool zl_playing(void)
+{
+    if (s_lock == NULL || s_cfg.play_rate <= 0) return false;
+    lock();
+    const bool playing = s_playq.nstreams > 0;
+    unlock();
+    return playing;
+}
+
+void zl_stop(void)
+{
+    notify(EV_STOP);
 }
