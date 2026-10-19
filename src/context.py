@@ -4,8 +4,9 @@ Each line is one JSON object {"role": "user"|"assistant", "content": "<text>"}.
 The pipeline loads the recent window to feed it back to the model so it remembers
 the last few turns, and appends the new exchange after each run. A conversation
 idle longer than ttl_seconds is considered finished and reset to empty, so an
-unrelated later request starts fresh. Only the last max_turns user+assistant
-exchanges are kept.
+unrelated later request starts fresh. Only the last max_turns * 2 messages are
+kept: user+assistant exchanges, plus lone assistant replies that arrived later
+(append_reply), so the window may start with an assistant message.
 """
 
 import json
@@ -72,16 +73,26 @@ def append_context(
     ttl_seconds: int = 300,
 ) -> None:
     """Append the user and assistant messages to the per-device context file.
+    Failures are logged and never raised; the pipeline relies on that."""
+    _append(context_path, [{"role": "user", "content": user_text},
+                           {"role": "assistant", "content": assistant_text}],
+            max_turns, ttl_seconds)
 
-    Loads the current window (which already returns [] when missing/stale/unreadable
-    and skips legacy lines), appends the new exchange, trims to the last
-    max_turns * 2 messages, and rewrites the whole file as JSONL. The full rewrite
-    is intentional: it applies trimming and the staleness reset in one place.
-    Failures are logged and never raised; the pipeline relies on that.
-    """
+
+def append_reply(context_path: str, text: str, max_turns: int = 5, ttl_seconds: int = 300) -> None:
+    """Append one assistant message that has no user turn of its own: a reply that
+    arrived later and was spoken unprompted (a handed-off task's answer), so a
+    follow-up question sees it. Failures are logged and never raised."""
+    _append(context_path, [{"role": "assistant", "content": text}], max_turns, ttl_seconds)
+
+
+def _append(context_path: str, new: list[dict], max_turns: int, ttl_seconds: int) -> None:
+    """Load the current window (which already returns [] when missing/stale/unreadable
+    and skips legacy lines), append `new`, trim to the last max_turns * 2 messages,
+    and rewrite the whole file as JSONL. The full rewrite is intentional: it applies
+    trimming and the staleness reset in one place."""
     messages = load_context(context_path, max_turns=max_turns, ttl_seconds=ttl_seconds)
-    messages.append({"role": "user", "content": user_text})
-    messages.append({"role": "assistant", "content": assistant_text})
+    messages.extend(new)
     messages = messages[-(max_turns * 2):]
 
     try:

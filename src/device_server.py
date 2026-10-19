@@ -548,14 +548,15 @@ class Device:
         conn.send({"type": "set_volume", "value": pct})
         conn.volume = pct
 
-    async def announce(self, text: str) -> None:
+    async def announce(self, text: str, attempts: list | None = None) -> None:
         """Proactively say `text`: the text to the device as an announcement and, on
-        a device with a speaker, the synthesized speech."""
+        a device with a speaker, the synthesized speech. `attempts` collects the TTS
+        variants tried, as in Pipeline.speak."""
         conn = self.conn
         if conn is None:
             raise RuntimeError(f"{self.name} is offline")
         conn.send({"type": "reply", "text": text})
-        await self.pipeline.speak(text)
+        await self.pipeline.speak(text, attempts)
 
     def start_capture(self, seconds: int) -> captures.Capture:
         """Create a capture on disk and send `capture` for it. Raises DeviceOfflineError or

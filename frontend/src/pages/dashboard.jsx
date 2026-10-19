@@ -166,7 +166,7 @@ function Dashboard() {
           : <>
             <div className="z-tblwrap">
               <table className="z-tbl">
-                <thead><tr><th>Time</th><th>Device</th><th>Recognized</th><th>Response</th><th style={{ textAlign: "right" }}>Σ</th><th>Stage waterfall</th><th>Status</th></tr></thead>
+                <thead><tr><th style={{ width: 80 }}>Time</th><th style={{ width: 150 }}>Device</th><th>Recognized</th><th>Response</th><th style={{ width: 80, textAlign: "right" }}>Σ</th><th style={{ width: "20%" }}>Stage waterfall</th><th style={{ width: 92 }}>Status</th></tr></thead>
                 <tbody>
                   {recent.map((r) => {
                     const rm = statusMeta(r);

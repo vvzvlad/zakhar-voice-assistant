@@ -422,6 +422,20 @@ async def test_wake_drops_an_announcement_already_on_the_wire(srv):
     )
 
 
+async def test_announce_reports_the_tts_attempts(srv):
+    dev = await srv.connect()
+    await dev.recv()  # config
+    kitchen = next(c for c in srv.manager.clients if c.name == "kitchen")
+    attempts = []
+    say = asyncio.create_task(kitchen.announce("молоко", attempts))
+    assert await dev.recv() == {"type": "reply", "text": "молоко"}
+    start = await dev.recv()
+    assert (await dev.recv())["type"] == "play_end"
+    await dev.send(type="played", id=start["id"])
+    await asyncio.wait_for(say, 2)
+    assert [(a["kind"], a["outcome"]) for a in attempts] == [("tts", "spoke")]
+
+
 async def test_run_ends_when_played_never_comes(srv, monkeypatch):
     monkeypatch.setattr(device_server, "PLAYED_WAIT_MARGIN_S", 0.2)
     dev = await srv.connect(buffer_ms=700)
