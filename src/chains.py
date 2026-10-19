@@ -11,6 +11,11 @@ opens their live sessions (open_stream) when speech starts, and run() starts all
 them (a session's finish() or a batch transcribe) concurrently the moment the
 utterance ends. Any other chain's STT starts only when that chain is reached. The
 results of parallel chains that are never reached are cancelled.
+
+A chain whose STT and vocabulary equal an earlier chain's (parallel or not) opens no
+session and starts no recognition: it takes that chain's transcript. Only a
+recognition that succeeded is shared; after a failed one the chain recognizes the
+utterance itself when reached.
 """
 
 import asyncio
@@ -29,9 +34,17 @@ def enabled_chains(chains) -> list:
     return [c for c in chains if c.enabled]
 
 
-def starts_at_speech(chains) -> list:
-    """Enabled chains whose STT starts at speech: the first one and every parallel one."""
-    return [c for i, c in enumerate(enabled_chains(chains)) if i == 0 or c.parallel]
+def starts_at_speech(rt, chains) -> list:
+    """Enabled chains whose STT starts at speech: the first one and every parallel one,
+    except a chain that takes an earlier chain's transcript (_transcript_key)."""
+    seen = set()
+    out = []
+    for i, c in enumerate(enabled_chains(chains)):
+        key = _transcript_key(rt, c)
+        if (i == 0 or c.parallel) and key not in seen:
+            out.append(c)
+        seen.add(key)
+    return out
 
 
 def referenced_instances(chains) -> set[tuple[str, str]]:
@@ -66,6 +79,13 @@ def _vocabulary(rt, chain, stt) -> list[str] | None:
     if chain.narrow and getattr(stt, "supports_vocabulary", False):
         return rt.svc.vocabulary(chain.handler) or None
     return None
+
+
+def _transcript_key(rt, chain) -> tuple:
+    """Chains with equal keys hear one utterance the same: the same STT narrowed to the
+    same vocabulary (None when not narrowed)."""
+    vocab = _vocabulary(rt, chain, rt.stt_backends.get(chain.stt))
+    return chain.stt, tuple(vocab) if vocab else None
 
 
 def open_stream(rt, chain):
@@ -135,9 +155,12 @@ async def run(rt, *, device: str, request, pcm: bytes = b"", text: str | None = 
     voice = text is None
     out = ChainRun()
     early: dict[str, asyncio.Task] = {}
+    # Successful recognitions of this utterance by _transcript_key, for the later
+    # chains that share an earlier chain's STT and vocabulary.
+    transcripts: dict[tuple, str] = {}
     if voice:
         streams = streams or {}
-        for chain in starts_at_speech(chains):
+        for chain in starts_at_speech(rt, chains):
             early[chain.name] = asyncio.create_task(
                 _recognize(rt, chain, pcm, streams.get(chain.name)))
     heard = False
@@ -147,18 +170,23 @@ async def run(rt, *, device: str, request, pcm: bytes = b"", text: str | None = 
             out.attempts.append(attempt)
             utterance = text
             if voice:
-                task = early.pop(chain.name, None)
+                key = _transcript_key(rt, chain)
                 t = time.perf_counter()
-                try:
-                    utterance = await (task if task is not None
-                                       else _recognize(rt, chain, pcm, None))
-                except StageError as e:
-                    attempt.update(outcome="stt_error", error=str(e), t_stt=_ms(t))
-                    out.t_stt += attempt["t_stt"]
-                    out.error = e
-                    logger.error(f"{device}: STT [{_desc(rt, 'stt', chain.stt)}] "
-                                 f"chain {chain.name!r} failed: {e}")
-                    continue
+                if key in transcripts:
+                    utterance = transcripts[key]
+                else:
+                    task = early.pop(chain.name, None)
+                    try:
+                        utterance = await (task if task is not None
+                                           else _recognize(rt, chain, pcm, None))
+                    except StageError as e:
+                        attempt.update(outcome="stt_error", error=str(e), t_stt=_ms(t))
+                        out.t_stt += attempt["t_stt"]
+                        out.error = e
+                        logger.error(f"{device}: STT [{_desc(rt, 'stt', chain.stt)}] "
+                                     f"chain {chain.name!r} failed: {e}")
+                        continue
+                    transcripts[key] = utterance
                 attempt["t_stt"] = _ms(t)
                 out.t_stt += attempt["t_stt"]
                 logger.info(f"{device}: 📝 STT [{_desc(rt, 'stt', chain.stt)}] chain "

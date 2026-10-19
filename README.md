@@ -175,15 +175,17 @@ Shape (see `templates/default_config.json` for the full default):
   - `stt`: `groq` (cloud Whisper) | `vosk` (offline) | `yandex` (SpeechKit v3 streaming, gRPC).
   - `llm` (handlers): `openrouter` | `groq` — model, api_key, temperature, max_tokens,
     max_tool_rounds; `simple-nlu` — the offline command engine (aliases, action verbs);
-    with `decision_model` set (e.g. `typesafe/jev-1.14` on OpenRouter) a phrase it does
-    not match and that has no number goes to that decision model, which picks the alias
-    target and the verb.
+    `jev` — the decision model `typesafe/jev-1.14` on OpenRouter: picks one device and
+    one action for a phrase without a number, from the names and verbs of the Commands
+    page (the `simple-nlu` aliases and actions), and declines anything else.
   - Which STT feeds which handler is set by `core.chains`: an ordered list of
     `{name, enabled, stt, handler, narrow, parallel}`. One utterance goes through the
     enabled chains in order on the same audio until one answers; the next chain is tried
     when the STT fails or hears nothing, when the handler declines, or when it fails
     before running a tool. `narrow` restricts the chain's STT to its handler's vocabulary
     (Vosk + `simple-nlu`); `parallel` starts the chain's STT together with the first one.
+    A chain with the same STT and vocabulary as an earlier one takes that transcript
+    instead of recognizing the audio again.
     When another chain follows, `simple-nlu` runs strict: it executes a command only if
     every word is explained (alias, verb, number, filler word) and declines otherwise.
   - `stress`: `ruaccent` (offline Russian stress placement) — runs between LLM and TTS,
