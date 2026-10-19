@@ -70,6 +70,9 @@ async def main() -> None:
     deps = Deps(http_cloud=client_ext, http_local=client_local, tts_timeout=core.tts_timeout)
 
     svc = ConfigService(doc, deps)
+    # Bound before any backend is built: jev reads the Commands page's names (the
+    # simple-nlu instance) through it on every request.
+    deps.instance_config = svc.instance_config
     core = svc.core
     vad_backend = svc.create("vad")
     # One STT / handler backend per provider an enabled recognition chain references.

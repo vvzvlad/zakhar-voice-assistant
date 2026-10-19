@@ -301,9 +301,9 @@ class Pipeline:
 
     def _open_stt_streams(self) -> None:
         """Open the live streaming STT sessions for this run (synchronous): one per
-        chain whose STT starts at speech (the first enabled chain and every parallel
-        one), so on_audio can feed them chunks while speech is still arriving (VAD
-        still owns end-pointing; on finalize the chain runner calls finish()).
+        chain whose STT starts at speech (chains.starts_at_speech), so on_audio can
+        feed them chunks while speech is still arriving (VAD still owns end-pointing;
+        on finalize the chain runner calls finish()).
 
         A batch-only backend (no open_stream(), or one returning None) gets no
         session — NOT an error — and is transcribed in one shot at VAD end; only a
@@ -312,7 +312,7 @@ class Pipeline:
         identical.
         """
         self._stt_streams = {}
-        for chain in chains.starts_at_speech(self.core.chains):
+        for chain in chains.starts_at_speech(self.rt, self.core.chains):
             try:
                 stream = chains.open_stream(self.rt, chain)
             except Exception as e:  # noqa: BLE001 - never let STT setup break the run; batch-fallback

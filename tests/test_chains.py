@@ -273,7 +273,56 @@ def test_referenced_instances_and_starts_at_speech_follow_enabled_chains():
     assert chains.referenced_instances(cs) == {
         ("stt", "vosk"), ("stt", "groq"), ("stt", "yandex"),
         ("llm", "simple-nlu"), ("llm", "groq")}
-    assert [c.name for c in chains.starts_at_speech(cs)] == ["a", "c"]
+    assert [c.name for c in chains.starts_at_speech(runtime(cs), cs)] == ["a", "c"]
+
+
+async def test_chains_on_one_stt_and_vocabulary_share_one_recognition():
+    # Commands -> Jev -> LLM (parallel), all on one cloud STT: one recognition, and
+    # neither later chain opens a session of its own, the parallel one included.
+    stt = Stt("включи свет")
+    cs = [chain("cmd", stt="cloud"), chain("jev", stt="cloud"),
+          chain("llm", stt="cloud", parallel=True)]
+    rt = runtime(cs, stt={"cloud": stt},
+                 handlers={"cmd": Handler(Declined("нет")), "jev": Handler(Declined("нет")),
+                           "llm": Handler("ok")})
+    assert [c.name for c in chains.starts_at_speech(rt, cs)] == ["cmd"]
+
+    run = await voice(rt)
+
+    assert stt.calls == [None]
+    assert outcomes(run) == [("cmd", "declined"), ("jev", "declined"), ("llm", "answered")]
+    assert [a["text"] for a in run.attempts] == ["включи свет"] * 3
+    assert [a["t_stt"] for a in run.attempts[1:]] == [0, 0]
+
+
+class FailsOnceStt(Stt):
+    """Stt double whose first call raises `error`; later calls return `text`."""
+
+    async def transcribe(self, pcm, **kw):
+        try:
+            return await super().transcribe(pcm, **kw)
+        finally:
+            self.error = None
+
+
+async def test_failed_recognition_is_not_shared():
+    stt = FailsOnceStt("включи свет", error=StageError("stt", "timeout"))
+    rt = runtime([chain("a", stt="s"), chain("b", stt="s")], stt={"s": stt},
+                 handlers={"a": Handler("не должен"), "b": Handler("ok")})
+    run = await voice(rt)
+    assert outcomes(run) == [("a", "stt_error"), ("b", "answered")]
+    assert stt.calls == [None, None]
+
+
+async def test_same_stt_with_another_vocabulary_recognizes_on_its_own():
+    stt = Stt("свет", supports_vocabulary=True)
+    cs = [chain("a", stt="s"), chain("b", stt="s", narrow=False, parallel=True)]
+    rt = runtime(cs, stt={"s": stt}, handlers={"a": Handler(Declined("нет")), "b": Handler("ok")},
+                 vocabulary=["свет"])
+    assert [c.name for c in chains.starts_at_speech(rt, cs)] == ["a", "b"]
+    run = await voice(rt)
+    assert outcomes(run) == [("a", "declined"), ("b", "answered")]
+    assert stt.calls == [["свет"], None]
 
 
 # --- the pipeline over chains -------------------------------------------------------

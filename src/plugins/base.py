@@ -8,6 +8,7 @@ self-registers via @register on `import src.plugins`.
 
 import os
 from collections import defaultdict
+from collections.abc import Callable
 from dataclasses import dataclass
 
 import httpx
@@ -21,6 +22,10 @@ class Deps:
     http_cloud: httpx.AsyncClient   # proxied client for cloud APIs (STT/LLM/Yandex TTS)
     http_local: httpx.AsyncClient   # direct (non-proxied) client for local services
     tts_timeout: int = 30
+    # (category, provider id) -> that provider instance's live, validated config, for a
+    # provider that reads another one's settings per request. Bound to
+    # ConfigService.instance_config once the service exists (src/app.py).
+    instance_config: Callable[[str, str], BaseModel] | None = None
 
 
 # Shared schema annotation for the `model` field: rendered as a dynamic select

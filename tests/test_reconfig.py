@@ -289,8 +289,8 @@ class _StubSvc:
 
     provider(cat) returns an object whose uses_http_cloud bool mirrors the selected
     provider's flag for the single-backend stages; `cloud_cats` marks which of them are
-    cloud. The STT/handler/TTS pools read the real registry flag (groq/openrouter/
-    simple-nlu/yandex cloud, vosk/piper offline). `variants` is the enabled TTS variant list.
+    cloud. The STT/handler/TTS pools read the real registry flag (groq/openrouter/yandex
+    cloud, vosk/simple-nlu/piper offline). `variants` is the enabled TTS variant list.
     """
 
     def __init__(self, fail_on=None, cloud_cats=(), variants=("yandex",)):
@@ -1127,15 +1127,15 @@ async def test_apply_job_rebuild_http_also_rebuilds_vad_changed_in_job(monkeypat
 
 
 @pytest.mark.asyncio
-async def test_apply_job_rebuild_http_reloads_no_offline_model(monkeypatch):
-    # vosk -> simple-nlu with piper TTS: a proxy change reloads neither offline model
-    # (vosk, piper) and rebuilds only simple-nlu, whose decision-model step uses the
-    # cloud client; tools are still rebuilt and the client swapped + the old one closed.
+async def test_apply_job_rebuild_http_offline_only_reloads_no_model(monkeypatch):
+    # ALL providers in use are offline (uses_http_cloud False): a proxy change rebuilds
+    # NO backends (no svc.create calls -> no model reload), but tools are still rebuilt and
+    # the client is still swapped + the old one closed.
     monkeypatch.setattr("src.reconfig.build_sources", lambda c, h, s, t: ["new-src"])
     new_client = _FakeHttpClient("new")
     monkeypatch.setattr("src.reconfig.httpx.AsyncClient", lambda **kw: new_client)
     old_client = _FakeHttpClient("old")
-    svc = _StubSvc(variants=("piper",))   # STT and TTS offline
+    svc = _StubSvc(variants=("piper",))   # every stage offline
     hub = _FakeHub()
     rt = _http_runtime(svc, hub, chains=[_chain(stt="vosk", handler="simple-nlu")])
     deps = types.SimpleNamespace(http_cloud=old_client, tts_timeout=30)
@@ -1144,9 +1144,10 @@ async def test_apply_job_rebuild_http_reloads_no_offline_model(monkeypatch):
 
     await reconf.apply_job({"core.network.external_proxy"})
 
-    assert svc.calls == {("llm", "simple-nlu"): 1}
+    # No model reload at all: not a single create() call across the stages.
+    assert svc.calls == {}
     assert rt.stt_backends == {"vosk": "old-stt"}
-    assert rt.llm_backends == {"simple-nlu": ("backend", "llm", "simple-nlu", 30)}
+    assert rt.llm_backends == {"simple-nlu": "old-llm"}
     assert rt.tts_backends == {"piper": "old-tts"}
     assert deps.tts_timeout == 30          # no tts rebuild -> timeout push skipped
     assert hub.set_calls == [["new-src"]]  # tools still rebuilt (OpenWeatherMap uses http_cloud)

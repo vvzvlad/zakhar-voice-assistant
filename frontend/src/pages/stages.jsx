@@ -355,7 +355,7 @@ export function Commands() {
   const toggle = () => setOpen((o) => !o);
   return <FormPage form={form} narrow>
     <PageHeader title="Commands · Offline command engine"
-      desc="The offline command engine answers smart-home commands from its own vocabulary without an LLM. Spoken names and verbs come from the MCP tool catalog. With a decision model set, a phrase it does not match is sent to that model over the network." />
+      desc="The offline command engine answers smart-home commands from its own vocabulary without an LLM. Spoken names and verbs come from the MCP tool catalog." />
     {prov
       ? <div className="z-grid">
         <NluCatalogEditor draft={form.draftOf(key)} onChange={form.onChangeOf(key)} />
