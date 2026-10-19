@@ -68,7 +68,9 @@ The owner's words:
   Voice PE with ESP-SR's AEC against the exact playback: the echo drops by 28 dB on a raw
   microphone (XMOS stage NONE) and by about 1 dB on the XMOS-processed channels the wake word and
   the server use; hearing over the reply would mean taking a raw microphone from the XMOS. The
-  findings: [echo-cancellation.md](echo-cancellation.md).
+  findings: [echo-cancellation.md](echo-cancellation.md). Asked again for the stop word
+  («можешь восстановить код, надо для слова стоп»), option chosen: «Только сохранить код» — the
+  code is kept on the branch `echo-cancel`, not merged; the stop word does not get a raw microphone.
 
 ## Transport
 
