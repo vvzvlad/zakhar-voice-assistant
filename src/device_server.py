@@ -557,8 +557,8 @@ class Device:
         speak ("say", "reminder", "assistant"), `request` is the request text it answers
         (if any), `text` is the reply, and a failure carries the error stage ("device"
         when offline, "TTS" when the speech failed). An announcement that reached the
-        device also joins its conversation context as an assistant message, so a
-        follow-up question can refer to it. Raises on failure, after the run is
+        device also joins its conversation context as a note that it was spoken, so
+        a follow-up question can refer to it. Raises on failure, after the run is
         recorded."""
         t0 = time.perf_counter()
         record = {"ts": time.time(), "device": self.name, "reason": reason, "result": "ok",
@@ -578,8 +578,8 @@ class Device:
             # Time to the start of the speech, as a text run counts it.
             record["t_tts"] = sum(a["t"] for a in record["attempts"] if a["kind"] == "tts")
             ctx = self.rt.core.context
-            context.append_reply(self.pipeline._context_path, text,
-                                 max_turns=ctx.max_turns, ttl_seconds=ctx.ttl_seconds)
+            context.append_spoken(self.pipeline._context_path, text,
+                                  max_turns=ctx.max_turns, ttl_seconds=ctx.ttl_seconds)
         finally:
             record["t_total"] = int((time.perf_counter() - t0) * 1000)
             await record_run(self.rt, record)
