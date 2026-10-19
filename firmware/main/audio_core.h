@@ -14,8 +14,8 @@
 // to Q25, times the gain, clamped to Q25, then the top 16 bits. Gain 1 is the plain top 16 bits.
 int16_t pcm_s32_to_s16(int32_t sample, int gain);
 
-// frames 32-bit stereo frames (slot 0, slot 1) to 16 bits: `both` gets them interleaved at gain 1,
-// `ch1` gets channel 1 alone at ch1_gain.
+// frames 32-bit stereo frames (slot 0, slot 1) to 16 bits: `ch1` gets channel 1 alone at ch1_gain,
+// `both` gets channel 0 at gain 1 interleaved with that same `ch1`.
 void pcm_split(const int32_t *in, size_t frames, int16_t *both, int16_t *ch1, int ch1_gain);
 
 // ---------------------------------------------------------------- the microphone tap

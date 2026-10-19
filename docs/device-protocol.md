@@ -168,7 +168,9 @@ device                                   server
   of audio before the detection; the server's end-pointing takes the wake word to end where the
   pre-roll ends) as fast as it can, then live audio in 32 ms frames (512 samples per channel,
   interleaved when `mic.channels` is 2). On the Voice PE
-  channel 0 is the XMOS AGC output and channel 1 the XMOS noise-suppressed output.
+  channel 0 is the XMOS AGC output and channel 1 the XMOS noise-suppressed output at the wake-word
+  gain ×4 (applied before the cut to 16 bits, saturating): exactly the samples the wake-word model
+  gets.
 - The device keeps streaming until a `state` of this session other than `listening` arrives. The
   end of the phrase is found by the server's VAD; the device has no end-pointing.
 - `state`: `{"type": "state", "session": 17, "value": "listening"}`. Values: `listening`,
