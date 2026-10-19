@@ -3,8 +3,8 @@
 After the spoken answer of a session the pipeline keeps listening for `window_ms`
 without a wake word (docs/device-protocol.md, "Follow-up"). The first transcript of a
 phrase heard there goes to check() with the assistant's name (the session's wake word),
-the last request and answer; a phrase that is not accepted is dropped without a sound. The PIPELINE owns when the window opens and
-when check() is called.
+the last request and answer; a phrase that is not accepted is dropped without a sound.
+The PIPELINE owns when the window opens and when check() is called.
 """
 from abc import ABC, abstractmethod
 from dataclasses import dataclass

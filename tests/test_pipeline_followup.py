@@ -7,6 +7,8 @@ first transcript. These tests drive Pipeline directly with a fake check and the
 existing pipeline test doubles.
 """
 
+import asyncio
+
 import pytest
 
 from src import context
@@ -192,6 +194,39 @@ async def test_proactive_speech_closes_the_window_first(tmp_path, monkeypatch):
     assert events == [(StageEvent.STT_END, {"text": ""}), (StageEvent.RUN_END, {})]
     assert pipeline._followup is None
     await _say(pipeline, "напоминаю: выключить духовку")
+    assert pipeline.rt.followup_backend.calls == []
+
+
+async def test_no_window_while_proactive_speech_is_queued(tmp_path, monkeypatch):
+    # A reminder synthesized while the answer still plays is queued behind it on the
+    # device: the window must not open into it.
+    pipeline, events = _make(tmp_path, monkeypatch)
+    release = asyncio.Event()
+    start_tts = pipeline._start_tts
+
+    async def slow_reminder_tts(text, attempts=None):
+        if text == "напоминаю":
+            await release.wait()
+        return await start_tts(text, attempts)
+
+    pipeline._start_tts = slow_reminder_tts
+    reminder = asyncio.create_task(pipeline.speak("напоминаю"))
+    await asyncio.sleep(0)
+    await _answer(pipeline)
+    release.set()
+    await reminder
+    assert types_of(events) == [*ANSWERED, StageEvent.RUN_END]
+    assert pipeline._followup is None
+
+
+async def test_a_cancelled_run_ends_the_window(tmp_path, monkeypatch):
+    # The stop word cancels the session (the device server sends `idle`): audio that
+    # still arrives in the window is no phrase.
+    pipeline, _ = _make(tmp_path, monkeypatch)
+    await _answer(pipeline)
+    pipeline.cancel_run()
+    assert pipeline._followup is None
+    await _say(pipeline, "стоп")
     assert pipeline.rt.followup_backend.calls == []
 
 

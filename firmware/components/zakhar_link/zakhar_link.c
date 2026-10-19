@@ -6,9 +6,10 @@
 // the wake, `stop`, the session's and the capture's mic frames, audio_end, wake_peak once a second,
 // `played` of finished streams and `volume`. It also owns the microphone position, so a `capture`
 // and a `capture_resume` are handed to it; only a follow-up `listening` sets the position on the
-// client's task, under the mutex, together with turning the mic on. A capture outlives a lost link: the next hello names
-// it, and a `capture_resume` sends it on from the frame the server asks for. The client's own task
-// runs the event handler: the hello on connect and every received frame in arrival order, so a
+// client's task, under the mutex, together with turning the mic on. A capture outlives a lost
+// link: the next hello names it, and a `capture_resume` sends it on from the frame the server
+// asks for. The client's own task runs the event handler: the hello on connect and every
+// received frame in arrival order, so a
 // play_start, its 0x02 frames and its play_end reach the playback queue in the order sent; a model
 // is assembled from its 0x03 frames and handed to on_model there too. One mutex guards the shared
 // state.

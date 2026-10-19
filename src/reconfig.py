@@ -278,8 +278,8 @@ class Reconfigurator:
         return keys
 
     async def _rebuild_backend_cats(self, cats) -> None:
-        """Rebuild the given backend categories (subset of {'vad','wakeword','stress','followup'}) and swap
-        them into the runtime. Shared by path-driven rebuilds (_rebuild_backends) and the
+        """Rebuild the given backend categories (subset of {'vad','wakeword','stress',
+        'followup'}) and swap them into the runtime. Shared by path-driven rebuilds (_rebuild_backends) and the
         http rebuild (which rebuilds all cloud backends off the new client). Same
         contracts as _rebuild_backends: per-category isolation, old backend kept on a
         failed create()."""

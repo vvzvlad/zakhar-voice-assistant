@@ -2,7 +2,7 @@
 
 One Pipeline instance per device name. It owns its own audio buffer and lock; the
 brain and TTS backend are stateless shared dependencies, and the device server
-injects the transport hooks (send_event, play, has_speaker).
+injects the transport hooks (send_event, play, has_speaker, has_follow_up).
 
 Server-side VAD end-pointing
 ----------------------------
@@ -162,6 +162,8 @@ class Pipeline:
         self.play = None
         self.has_speaker = False
         self.has_follow_up = False
+        # speak() calls not yet played out (see speak()).
+        self._speaking = 0
 
         # Background "filler" play tasks (early "I'll go check it" lines). Kept in a
         # set so a still-playing filler isn't garbage-collected mid-flight; each task
@@ -1150,10 +1152,11 @@ class Pipeline:
                         f"{self.name}: ✅ run complete in {time.perf_counter() - t0:.2f}s"
                     )
                     # The answer played out (not dropped by a new wake or play_stop) on
-                    # a device that reopens its microphone, with the stage on: the
-                    # session stays open for a follow-up phrase instead of ending.
+                    # a device that reopens its microphone, with the stage on and no
+                    # proactive speech queued behind it: the session stays open for a
+                    # follow-up phrase instead of ending.
                     fb = self.rt.followup_backend
-                    if (played == "played" and self.has_follow_up
+                    if (played == "played" and self.has_follow_up and not self._speaking
                             and fb is not None and not isinstance(fb, NoFollowup)):
                         await self._arm_followup(conversation_id, run.text, run.reply)
                     else:
@@ -1263,8 +1266,9 @@ class Pipeline:
         optionally spoken on the speaker.
 
         A simplified mirror of the chains/TTS portion of `_run`: no audio, no VAD/STT
-        and NO stage events (`_emit` is never called — there is no voice session
-        for a text run, so stage events would reach the device out of band). Serialized with voice runs via the same per-device
+        and no stage events of its own (there is no voice session for a text run, so
+        they would reach the device out of band; speak() first ends an open follow-up
+        window, see _close_followup). Serialized with voice runs via the same per-device
         lock. The run is recorded to the runs store with reason="text" and the
         request in stt_text, so the panel run log shows it in the usual column.
 
@@ -1502,12 +1506,18 @@ class Pipeline:
         """
         if not self.has_speaker:
             return
-        await self._close_followup()
-        # The backend of the variant that started both synthesizes and labels the
-        # log line, so they can never diverge.
-        backend, mime, audio = await self._start_tts(text, attempts)
-        logger.info(f"{self.name}: 🔔 speak [tts={self._backend_desc(backend)}]: {text!r}")
-        await self.play(mime, audio)
+        # Counted until it has played: a speech started while an answer still plays is
+        # queued behind it on the device, so that answer opens no follow-up window.
+        self._speaking += 1
+        try:
+            await self._close_followup()
+            # The backend of the variant that started both synthesizes and labels the
+            # log line, so they can never diverge.
+            backend, mime, audio = await self._start_tts(text, attempts)
+            logger.info(f"{self.name}: 🔔 speak [tts={self._backend_desc(backend)}]: {text!r}")
+            await self.play(mime, audio)
+        finally:
+            self._speaking -= 1
 
     async def _deliver_filler(self, text: str) -> None:
         """Speak an early 'filler' line via speak().

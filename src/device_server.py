@@ -3,8 +3,8 @@
 One aiohttp app on core.audio.host/port serves GET /device (the device protocol) and
 GET /health. DeviceManager keeps one Device per name; a Device keeps its Pipeline and its
 running capture across reconnects and binds the pipeline's transport hooks (send_event,
-play, has_speaker, has_follow_up) to its live Connection. This module alone maps StageEvents onto wire
-messages and converts outgoing audio to what the device plays.
+play, has_speaker, has_follow_up) to its live Connection. This module alone maps
+StageEvents onto wire messages and converts outgoing audio to what the device plays.
 """
 
 import asyncio

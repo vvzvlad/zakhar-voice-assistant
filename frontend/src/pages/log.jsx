@@ -92,7 +92,7 @@ const ATTEMPT_TONE = {
 // {kind:"chain", chain, stt, handler, text, outcome, error, detail, t_stt, t_handler}
 // (`detail`: why the handler declined, null when it gave no reason);
 // a TTS attempt is {kind:"tts", provider, outcome, error, t} (times in ms);
-// a follow-up check is {kind:"followup", provider, outcome, probability, t}.
+// a follow-up check is {kind:"followup", provider, text, outcome, probability, t}.
 function Attempts({ attempts }) {
   return <div className="z-card"><div style={{ padding: "4px 17px" }}>
     {attempts.map((a, i) => {
