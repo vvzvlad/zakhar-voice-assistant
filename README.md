@@ -187,8 +187,18 @@ Shape (see `templates/default_config.json` for the full default):
     (Vosk + `simple-nlu`); `parallel` starts the chain's STT together with the first one.
     A chain with the same STT and vocabulary as an earlier one takes that transcript
     instead of recognizing the audio again.
-    When another chain follows, `simple-nlu` runs strict: it executes a command only if
-    every word is explained (alias, verb, number, filler word) and declines otherwise.
+    When another chain follows, `simple-nlu` runs strict: it executes a command when
+    every word is explained (alias, verb in the imperative or infinitive, number, filler
+    word). Otherwise its classifier — one class per concrete command, trained on phrases
+    built from the aliases and verbs plus a "not a command" class
+    (`src/plugins/llm/simple_nlu_negatives.txt`) — acts only when it is at least
+    `classifier_threshold` sure, every word is a verb, a filler word or close to a name of
+    that command's device (a misheard ending or letter), the verb fits the command, a
+    word can name the device, and the phrase holds no number, no indicative verb or
+    word like «можно», «надо», and nothing unheard (`[unk]`); it never unlocks. Both
+    paths decline a question (including «мне открыть дверь»), a negation, a past tense,
+    a request for later, a second request («и») or a second device. As the last chain it
+    skips the all-words rule; the phrase checks stay.
   - `stress`: `ruaccent` (offline Russian stress placement) — runs between LLM and TTS,
     marks the stressed vowels in the reply (the canonical `+vowel` text every TTS backend
     already adapts); `enabled` (on by default) + model size.
