@@ -59,6 +59,15 @@ The owner's words:
   link after its 3 s send timeout, then waits the 1 s backoff and ~1 s to reconnect, against a
   ~3 s tap), option chosen: «Оставить как есть» — no larger tap, no faster reconnect; the
   hole shows in the capture's `gaps`.
+- «надо еще некоторое время слушать после окончания фразы которую говорит колонка, если я хочу
+  продолжить диалог без активационной фразы», «еще одна стадия в конце, которую можно включить?»,
+  «через jev стоит оценивать, продолжение это диалога или нет», then «го делать» — after the
+  spoken answer of a session the server sends `listening` again and the device reopens its
+  microphone without a wake word (see [Follow-up](#follow-up)); the server stage `followup`
+  turns it on and off. A phrase heard in that window goes on only when the jev decision model
+  takes it for a continuation of the dialog; otherwise it is dropped without a sound.
+- On the end-of-phrase chime of such a phrase, option chosen: «После «да» от jev» — it plays once
+  jev accepted the phrase, never on speech jev drops.
 
 ## Transport
 
@@ -94,7 +103,7 @@ The owner's words:
 1. Device → `hello`:
    ```json
    {"type": "hello", "id": "fc012cd1e5ec", "fw": "voicepe 0.1.0 (a1b2c3d)",
-    "caps": {"speaker": true, "screen": false},
+    "caps": {"speaker": true, "screen": false, "follow_up": true},
     "mic": {"channels": 2},
     "play": {"rate": 48000, "buffer_ms": 4000},
     "volume": 60}
@@ -104,6 +113,8 @@ The owner's words:
      `core.devices[].label` instead when one is set. An unknown `id` is added to the config as
      an enabled device.
    - `play` and `volume` are present only when `caps.speaker` is true.
+   - `caps.follow_up` is true when the device reopens its microphone on a follow-up `listening`
+     (see [Follow-up](#follow-up)); the server listens for a follow-up only on such a device.
    - `capture` (the running capture's `id`) is present only while the device holds a capture,
      see [Capture](#capture).
 2. The server closes the connection with code 4000 when the device is disabled in the config, and
@@ -161,6 +172,7 @@ device                                   server
                                   ◄──    play_start / 0x02 … / play_end
   played {id}                     ──►
                                   ◄──    state idle             (or state error {text})
+                                         or, with follow-up on, state listening (see Follow-up)
 ```
 
 - `wake`: `{"type": "wake", "session": 17, "word": "Захар"}`. `session` is a device counter, +1 for
@@ -178,14 +190,41 @@ device                                   server
 - `transcript` and `reply` carry the recognised phrase and the answer text, for devices with a
   screen. `reply` without `session` is an announcement (a reminder, an agent's `speak`).
 - Every server message of a session carries its `session`; the device drops messages whose
-  `session` is not its current one. While a session's microphone streams (from `wake` to its first
-  `state` other than `listening`) a wake word starts no new session: the phrase is still being said,
+  `session` is not its current one. While a session's microphone streams (from `wake` or a
+  follow-up `listening` to the next `state` other than `listening`) a wake word starts no new
+  session: the phrase is still being said,
   and a detection inside it must not cut it off. After that a new `wake` replaces the current
   session on both sides: the device flushes its playback, the server cancels the older run and,
   before anything else of the new session, sends `play_stop` — a stream the server started before
   it saw the `wake` is dropped on the device too.
 - A device without a speaker (`caps.speaker: false`) never gets playback: the server skips TTS for
   it and sends the text only.
+
+### Follow-up
+
+With the server stage `followup` on, a device with `caps.follow_up` keeps the session open after
+the answer, so the next phrase needs no wake word:
+
+```
+  played {id}                     ──►    (the answer is out, not dropped)
+                                  ◄──    state listening
+  0x01 mic: live, no pre-roll     ─►
+                                  ◄──    state transcribing     (end of phrase)
+                                  ◄──    state thinking / reply / speaking … as above
+  or no speech in the window:     ◄──    state idle
+```
+
+- A `listening` of the open session whose microphone is off turns the microphone on again: the
+  device streams live audio from the moment the `listening` arrives, no pre-roll, in the frames of
+  a wake.
+- The server waits `followup` window for speech to start. Silence ends the session with
+  `state idle`, without a sound. A phrase goes to the jev decision model with the assistant's name
+  (the `word` of the session's `wake`), the last request and answer; one it does not take for a continuation of the dialog also ends the session with
+  `state idle`, without a sound and without a transcript. One it takes gets the end-of-phrase chime
+  and runs like any phrase, and its answer opens the window again.
+- No follow-up after an answer that was dropped (`play_stop`, a new `wake`), outside a session (an
+  announcement), or on a device without `caps.follow_up`. An announcement while the window still
+  waits for speech ends the session with `state idle` before it plays.
 
 ## Playback
 

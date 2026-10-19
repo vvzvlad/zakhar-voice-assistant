@@ -15,6 +15,7 @@ vi.mock("../appData.jsx", () => ({ useAppData: vi.fn() }));
 const WAKE_HINT = "Verify the on-device wake trigger.";
 const ACK_HINT = "Play a short confirmation chime.";
 const STRESS_HINT = "Place Russian stress marks.";
+const FOLLOWUP_HINT = "Keep listening after the answer.";
 const onOff = (hint) => ({ type: "object", properties: { enabled: { type: "boolean", description: hint } } });
 
 function makeCatalog({ engines = ["webrtc", "silero"] } = {}) {
@@ -23,6 +24,7 @@ function makeCatalog({ engines = ["webrtc", "silero"] } = {}) {
       { id: "vad", selected: "webrtc", providers: engines.map((id) => ({ id, label: `${id} VAD`, values: {} })) },
       { id: "wakeword", selected: "vosk", providers: [{ id: "vosk", schema: onOff(WAKE_HINT), values: { enabled: true, keywords: ["захар"] } }] },
       { id: "stress", selected: "ruaccent", providers: [{ id: "ruaccent", schema: onOff(STRESS_HINT), values: { enabled: true, model_size: "turbo" } }] },
+      { id: "followup", selected: "jev", providers: [{ id: "jev", schema: onOff(FOLLOWUP_HINT), values: { enabled: false, window_ms: 5000 } }] },
       {
         id: "tts",
         variants: [{ provider: "yandex", enabled: true }, { provider: "piper", enabled: false }],
@@ -112,7 +114,7 @@ describe("Capture page", () => {
 describe("Speech page", () => {
   const rows = () => screen.getAllByTestId("tts-variant");
 
-  it("saves variant edits and the stress switch in one patch carrying the whole variant array", async () => {
+  it("saves variant edits and the stress and follow-up switches in one patch carrying the whole variant array", async () => {
     render(<Speech />);
     expect(rows().map((r) => r.querySelector("b").textContent)).toEqual(["yandex", "piper"]);
     fireEvent.click(within(rows()[0]).getByRole("button", { name: "Move down" }));   // piper, yandex
@@ -120,10 +122,13 @@ describe("Speech page", () => {
     fireEvent.click(screen.getByRole("button", { name: "+ fishaudio" }));              // piper, yandex, fishaudio
     fireEvent.click(within(rows()[1]).getByRole("button", { name: "Remove" }));        // piper, fishaudio
     fireEvent.click(within(itemOf("Stress placement")).getByRole("switch"));
+    fireEvent.click(within(itemOf("Follow-up")).getByRole("switch"));
+    expect(within(itemOf("Follow-up")).getByText(FOLLOWUP_HINT)).toBeInTheDocument();
     expect(patch).not.toHaveBeenCalled();
     expect(await saved()).toEqual({
       tts: { variants: [{ provider: "piper", enabled: true }, { provider: "fishaudio", enabled: true }] },
       stress: { instances: { ruaccent: { enabled: false } } },
+      followup: { instances: { jev: { enabled: true } } },
     });
   });
 

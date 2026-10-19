@@ -84,29 +84,34 @@ function Gantt({ r }) {
 // Attempt outcome -> pill tone: an answer or spoken audio is good, a failure is
 // bad, a decline / empty text / cancellation is an expected hand-off (muted).
 const ATTEMPT_TONE = {
-  answered: "good", spoke: "good",
+  answered: "good", spoke: "good", accepted: "good",
   stt_error: "bad", handler_error: "bad", error: "bad",
 };
 
 // The run's chain and TTS attempts in the order they ran. A chain attempt is
 // {kind:"chain", chain, stt, handler, text, outcome, error, detail, t_stt, t_handler}
 // (`detail`: why the handler declined, null when it gave no reason);
-// a TTS attempt is {kind:"tts", provider, outcome, error, t} (times in ms).
+// a TTS attempt is {kind:"tts", provider, outcome, error, t} (times in ms);
+// a follow-up check is {kind:"followup", provider, outcome, probability, t}.
 function Attempts({ attempts }) {
   return <div className="z-card"><div style={{ padding: "4px 17px" }}>
     {attempts.map((a, i) => {
       const tts = a.kind === "tts";
+      const followup = a.kind === "followup";
       return <div className="z-f" key={i} data-testid="attempt">
         <div className="z-fl">
           <span style={{ display: "flex", alignItems: "baseline", gap: 8, minWidth: 0 }}>
             <span className="mono" style={{ color: "var(--mut2)", fontSize: 11 }}>{i + 1}</span>
             {tts
               ? <b>TTS · <span className="mono">{a.provider}</span></b>
+              : followup
+              ? <b>Follow-up check · <span className="mono">{a.provider}</span></b>
               : <b>{a.chain} · <span className="mono" style={{ fontWeight: 500 }}>{a.stt ? `${a.stt} → ${a.handler}` : a.handler}</span></b>}
           </span>
           <span style={{ display: "flex", alignItems: "center", gap: 10 }}>
             <span className="mono" style={{ fontSize: 11, color: "var(--mut)" }}>
-              {tts ? fmtSec(a.t)
+              {followup ? `${a.probability != null ? `probability ${a.probability.toFixed(2)} · ` : ""}${fmtSec(a.t)}`
+                : tts ? fmtSec(a.t)
                 : a.stt ? `STT ${fmtSec(a.t_stt)} · handler ${fmtSec(a.t_handler)}`
                 : `handler ${fmtSec(a.t_handler)}`}
             </span>
@@ -138,6 +143,10 @@ function Collapsible({ summary, children }) {
 function Drawer({ r, loading, error, onClose }) {
   const m = RESULT_META[r && r.result] || { label: r && r.result, tone: "muted" };
   const device = deviceLabel(useDeviceList(), r && r.device);
+  // A phrase of the follow-up window that the follow-up check did not take for a
+  // continuation of the dialog (followup_reject) or could not judge (followup_error).
+  const followupReject = !!r && r.result === "rejected" && (r.reason || "").startsWith("followup_");
+  const followupCheck = followupReject ? (r.attempts || []).find((a) => a.kind === "followup") : null;
   return <>
     <div className="z-scrim" onClick={onClose} />
     <div className="z-drawer" role="dialog">
@@ -159,9 +168,12 @@ function Drawer({ r, loading, error, onClose }) {
 
           {/* The server-side wake-word verifier blocked this run before STT (a false
               trigger). Mirrors the error banner, but muted — it is an expected reject,
-              not a failure. reason is wakeword_reject (low score) or wakeword_error. */}
+              not a failure. reason is wakeword_reject (low score) or wakeword_error, or
+              followup_reject / followup_error for a dropped follow-up phrase. */}
           {r.result === "rejected" && <div className="z-banner" style={{ background: "var(--panel2)", border: "1px solid var(--line)", color: "var(--mut)", marginBottom: 16 }}>
-            <Ic n="wakeword" w={15} /><span><b>Rejected by wake-word verify.</b> {r.reason === "wakeword_error" ? "verifier error" : "wake word not confirmed"}{r.wakeword_score != null ? ` · score ${r.wakeword_score.toFixed(2)}` : ""}</span>
+            <Ic n="wakeword" w={15} />{followupReject
+              ? <span><b>Not a continuation (follow-up check).</b> {followupCheck && followupCheck.probability != null ? `probability ${followupCheck.probability.toFixed(2)}` : "check failed"}</span>
+              : <span><b>Rejected by wake-word verify.</b> {r.reason === "wakeword_error" ? "verifier error" : "wake word not confirmed"}{r.wakeword_score != null ? ` · score ${r.wakeword_score.toFixed(2)}` : ""}</span>}
           </div>}
 
           <div className="z-sl" style={{ marginTop: 0 }}>Stage timeline</div>
@@ -169,7 +181,7 @@ function Drawer({ r, loading, error, onClose }) {
 
           {/* Wake-word verifier confidence + time, shown whenever the stage produced a
               score (a passed run) or actively rejected the phrase. */}
-          {(r.wakeword_score != null || r.result === "rejected") && <>
+          {(r.wakeword_score != null || (r.result === "rejected" && !followupReject)) && <>
             <div className="z-sl">Wake-word verify<div className="ln" />{r.t && r.t.wakeword ? <span style={{ fontFamily: "var(--mono)", fontSize: 10.5, color: "var(--mut2)", textTransform: "none", letterSpacing: 0 }}>{fmtSec(r.t.wakeword)}</span> : null}</div>
             <div className="z-card"><div style={{ padding: "6px 17px" }}>
               <KV k="Score" v={r.wakeword_score != null ? r.wakeword_score.toFixed(3) : "—"} />

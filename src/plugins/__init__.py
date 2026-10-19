@@ -11,3 +11,4 @@ from src.plugins.tts import piper, yandex, fishaudio, silero as tts_silero  # no
 from src.plugins.stt import gigaam, groq as stt_groq, openrouter as stt_openrouter, vosk, yandex as stt_yandex  # noqa: F401
 from src.plugins.llm import openrouter, groq as llm_groq, simple_nlu, jev  # noqa: F401
 from src.plugins.stress import ruaccent as ruaccent_provider  # noqa: F401
+from src.plugins.followup import jev as followup_jev  # noqa: F401

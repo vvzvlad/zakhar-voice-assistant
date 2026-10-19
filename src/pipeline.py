@@ -40,6 +40,7 @@ from src.llm_text import clean_llm_output
 from src.prompt import build_system_prompt
 from src.runs_store import live_row, summary_row
 from src.chime import build_ack_clip
+from src.followup import NoFollowup
 from src.stage_errors import StageError
 from src.wakeword import PassthroughVerifier
 # SAMPLE_RATE now lives in the VAD stage contract module; re-exported here so the
@@ -105,7 +106,7 @@ class Pipeline:
         self._lock = asyncio.Lock()
         self._conversation_id = ""
 
-        # Per-run VAD session, opened in on_start (normal runs only) from the
+        # Per-run VAD session, opened by _reset_run (a wake, a follow-up window) from the
         # swappable vad stage backend (self.rt.vad_backend). The session owns ALL
         # end-pointing state (framing, counters); the pipeline only feeds it
         # chunks and acts on the returned reason.
@@ -144,12 +145,22 @@ class Pipeline:
         # cancels it (see on_start).
         self._run_task: asyncio.Task | None = None
 
+        # The assistant's name for the follow-up check: the word of the session's wake.
+        self._wake_word = ""
+        # (name, recognized request, un-accented spoken reply) while a follow-up
+        # window is open (see _arm_followup); the run of the next utterance takes it,
+        # a wake clears it.
+        self._followup: tuple[str, str, str] | None = None
+
         # Transport hooks, injected by the device server: send_event(event, data)
-        # (sync), play(mime, bytes | async chunks) (returns once the device has
-        # played it) and has_speaker (a device without one gets no TTS at all).
+        # (sync), play(mime, bytes | async chunks) (returns "played" or "dropped" once
+        # the device reports the stream), has_speaker (a device without one gets no
+        # TTS at all) and has_follow_up (the device reopens its microphone on a
+        # follow-up `listening`).
         self.send_event = None
         self.play = None
         self.has_speaker = False
+        self.has_follow_up = False
 
         # Background "filler" play tasks (early "I'll go check it" lines). Kept in a
         # set so a still-playing filler isn't garbage-collected mid-flight; each task
@@ -238,41 +249,14 @@ class Pipeline:
             if task is not None:
                 task.cancel()
         self._run_task = None
-        # The streaming STT sessions of a run that was never finalized; a finalized
-        # run owns (and closes) its own sessions.
-        stale_streams, self._stt_streams = self._stt_streams, {}
-        self._conversation_id = conversation_id or ""
-        self._buffer.clear()
-        self._buffer2.clear()
-        self._wakeword_pending = False
-        self._wakeword_confirmed = False
-        self._wakeword_task = None
-        self._wakeword_t = 0
-        self._wakeword_score = None
-        self._vad_finalize_pending = None
-        self._vad_session = None
-        self._vad_peak = 0
-        self._finalized = False
-        self._audio_logged = False
-        self._mic_fallback_logged = False
-        await self._close_stt_streams(stale_streams)
-        # Open the per-run VAD session. The end-pointing POLICY (generic thresholds)
-        # is read live off core.vad here, while the speech classifier itself is the
-        # swappable vad stage backend. One session per run, so a hot-swapped backend
-        # or a changed policy applies on the next run.
-        vad_cfg = self.core.vad
-        # Capture the identity from the SAME backend ref used to open the session,
-        # so a hot-swap mid-run can't mislabel the finalize log line.
-        vad_backend = self.rt.vad_backend
-        self._vad_desc = self._backend_desc(vad_backend)
-        self._vad_session = vad_backend.open(EndpointPolicy(
-            silence_ms=vad_cfg.silence_ms,
-            min_speech_ms=vad_cfg.min_speech_ms,
-            max_utterance_ms=vad_cfg.max_utterance_ms,
-            no_speech_timeout_ms=vad_cfg.no_speech_timeout_ms,
+        # A wake ends a follow-up window the previous answer opened.
+        self._followup = None
+        self._wake_word = wake_word_phrase or ""
+        await self._reset_run(
+            conversation_id,
             preroll_ms=PREROLL_MS if wake_word_phrase else 0,
-            wake_pause_ms=vad_cfg.wake_pause_ms,
-        ))
+            no_speech_timeout_ms=self.core.vad.no_speech_timeout_ms,
+        )
         logger.info(f"{self.name}: ▶️ run started (cid={conversation_id})")
         self._emit(StageEvent.RUN_START, {})
         self._emit(StageEvent.STT_START, {})
@@ -305,6 +289,62 @@ class Pipeline:
         self._emit(StageEvent.STT_VAD_START, {})
         self._open_stt_streams()
 
+    async def _reset_run(self, conversation_id, *, preroll_ms: int,
+                         no_speech_timeout_ms: int) -> None:
+        """Reset ALL per-run state and open the run's VAD session: a wake (on_start)
+        and a follow-up listen (_arm_followup) start a run the same way. Cancels
+        nothing; synchronous up to closing the stale STT sessions."""
+        # The streaming STT sessions of a run that was never finalized; a finalized
+        # run owns (and closes) its own sessions.
+        stale_streams, self._stt_streams = self._stt_streams, {}
+        self._conversation_id = conversation_id or ""
+        self._buffer.clear()
+        self._buffer2.clear()
+        self._wakeword_pending = False
+        self._wakeword_confirmed = False
+        self._wakeword_task = None
+        self._wakeword_t = 0
+        self._wakeword_score = None
+        self._vad_finalize_pending = None
+        self._vad_session = None
+        self._vad_peak = 0
+        self._finalized = False
+        self._audio_logged = False
+        self._mic_fallback_logged = False
+        await self._close_stt_streams(stale_streams)
+        # Open the per-run VAD session. The end-pointing POLICY (generic thresholds)
+        # is read live off core.vad here, while the speech classifier itself is the
+        # swappable vad stage backend. One session per run, so a hot-swapped backend
+        # or a changed policy applies on the next run.
+        vad_cfg = self.core.vad
+        # Capture the identity from the SAME backend ref used to open the session,
+        # so a hot-swap mid-run can't mislabel the finalize log line.
+        vad_backend = self.rt.vad_backend
+        self._vad_desc = self._backend_desc(vad_backend)
+        self._vad_session = vad_backend.open(EndpointPolicy(
+            silence_ms=vad_cfg.silence_ms,
+            min_speech_ms=vad_cfg.min_speech_ms,
+            max_utterance_ms=vad_cfg.max_utterance_ms,
+            no_speech_timeout_ms=no_speech_timeout_ms,
+            preroll_ms=preroll_ms,
+            wake_pause_ms=vad_cfg.wake_pause_ms,
+        ))
+
+    async def _arm_followup(self, conversation_id, request: str, reply: str) -> None:
+        """Keep the session open after its answer played out and listen again without
+        a wake word (docs/device-protocol.md, "Follow-up"). The per-run reset of a
+        wake, but it cancels nothing (it runs inside the answering run) and has no
+        wake word: no pre-roll, no wake-word gate, and the VAD ends the run with
+        no_speech when speech does not start within the stage's window. The next
+        utterance's run takes the last turn for the follow-up check."""
+        window_ms = self.rt.followup_backend.window_ms
+        await self._reset_run(conversation_id, preroll_ms=0, no_speech_timeout_ms=window_ms)
+        self._followup = (self._wake_word, request, reply)
+        self._wakeword_confirmed = True
+        logger.info(f"{self.name}: 👂 listening for a follow-up ({window_ms} ms)")
+        self._emit(StageEvent.STT_VAD_START, {})
+        self._open_stt_streams()
+
     def _open_stt_streams(self) -> None:
         """Open the live streaming STT sessions for this run (synchronous): one per
         chain whose STT starts at speech (chains.starts_at_speech), so on_audio can
@@ -314,8 +354,8 @@ class Pipeline:
         A batch-only backend (no open_stream(), or one returning None) gets no
         session — NOT an error — and is transcribed in one shot at VAD end; only a
         genuine open failure warns and falls back to that batch route. Shared by
-        on_start's ungated path and _wakeword_confirm so the open logic stays
-        identical.
+        on_start's ungated path, _wakeword_confirm and _arm_followup so the open
+        logic stays identical.
         """
         self._stt_streams = {}
         for chain in chains.starts_at_speech(self.rt, self.core.chains):
@@ -697,10 +737,14 @@ class Pipeline:
         The caller claims the run via _claim() (which sets _finalized, snapshots
         and clears the buffer) and passes the snapshotted pcm here. The lock only
         provides defensive serialization; _claim() already guarantees single entry.
-        RUN_END is always sent. The run takes over the streaming STT sessions of the
+        RUN_END is always sent, unless the played answer opens a follow-up window
+        (_arm_followup). The run takes over the streaming STT sessions of the
         claimed utterance, so a cancelled run's cleanup never touches the next one.
         """
         stt_streams, self._stt_streams = self._stt_streams, {}
+        # The last turn when this utterance was heard in a follow-up window, else
+        # None; taken with the claimed utterance, like its STT sessions.
+        followup, self._followup = self._followup, None
         pending_run = None
         try:
             async with self._lock:
@@ -726,8 +770,9 @@ class Pipeline:
                 # streams, queued in call order on the device.
                 #
                 # A wake-word REJECT aborts the run silently — no ack chime — so the
-                # mis-trigger never beeps at the user.
-                if reason not in ("wakeword_reject", "wakeword_error"):
+                # mis-trigger never beeps at the user. A follow-up phrase gets its
+                # chime only once the follow-up check accepts it (_followup_gate).
+                if reason not in ("wakeword_reject", "wakeword_error") and followup is None:
                     self._schedule_ack()
 
                 # Trim the configured lead-in (wake-word tail / button-press click) off the
@@ -735,9 +780,10 @@ class Pipeline:
                 # downstream consumer in this run uses the trimmed sample: STT, the t_vad
                 # metric, the capture-session WAV and the stored diagnostic audio. Read live
                 # off core.vad so it hot-applies. trim_start_pcm never returns empty audio,
-                # so the non-empty guard above still holds afterwards.
+                # so the non-empty guard above still holds afterwards. A follow-up phrase
+                # has no lead-in: its audio starts at the `listening`, before the phrase.
                 trim_ms = self.core.vad.trim_start_ms
-                if trim_ms > 0:
+                if trim_ms > 0 and followup is None:
                     trimmed = trim_start_pcm(pcm, trim_ms)
                     if len(trimmed) != len(pcm):
                         logger.info(
@@ -769,8 +815,11 @@ class Pipeline:
                 # Optional raw audio capture: save the finalized utterance PCM (already
                 # trimmed by core.vad.trim_start_ms above) as a 16 kHz / mono / 16-bit WAV.
                 # Off by default; enabled per capture session. A capture failure must NEVER
-                # break the run, so it is fully wrapped.
-                if self.core.capture.enabled and reason not in ("wakeword_reject", "wakeword_error"):
+                # break the run, so it is fully wrapped. A follow-up window that heard no
+                # speech is not an utterance and leaves nothing, like in the run log.
+                silent_followup = followup is not None and reason == "no_speech"
+                if (self.core.capture.enabled and not silent_followup
+                        and reason not in ("wakeword_reject", "wakeword_error")):
                     try:
                         capture_dir = self.core.capture.dir
                         safe_name = "".join(
@@ -805,6 +854,9 @@ class Pipeline:
                 # None unless synthesis produced bytes, so a failed/empty TTS stores nothing.
                 tts_audio = None
                 tts_mime = None
+                # False only for a follow-up window that heard no speech: no request,
+                # so no run in the log.
+                keep_record = True
                 record = {
                     "ts": time.time(),
                     "device": self.name,
@@ -862,6 +914,7 @@ class Pipeline:
                         # we never want a transcript for silence.
                         await self._close_stt_streams(stt_streams)
                         stt_streams = {}
+                        keep_record = followup is None
                         self._emit(StageEvent.STT_END, {"text": ""})
                         self._emit(StageEvent.RUN_END, {})
                         return
@@ -905,6 +958,30 @@ class Pipeline:
                         self._emit_live(record)
                         self._emit(StageEvent.INTENT_START, {})
 
+                    # A phrase heard in a follow-up window: the follow-up check of its
+                    # first transcript, asked before anything reaches the device. An
+                    # accepted phrase gets the end-of-phrase chime now and runs like any
+                    # phrase; a rejected one ends the run silently (below). The check
+                    # lands in the run's attempts.
+                    followup_check = None
+
+                    async def _followup_gate(text: str) -> bool:
+                        nonlocal followup_check
+                        gate = self.rt.followup_backend
+                        t = time.perf_counter()
+                        verdict = await gate.check(*followup, text)
+                        if verdict.accepted:
+                            outcome = "accepted"
+                            self._schedule_ack()
+                        else:
+                            outcome = "rejected" if verdict.probability is not None else "error"
+                        followup_check = {
+                            "kind": "followup", "provider": self._backend_desc(gate),
+                            "text": text, "outcome": outcome, "probability": verdict.probability,
+                            "t": int((time.perf_counter() - t) * 1000),
+                        }
+                        return verdict.accepted
+
                     # The recognition chains: each enabled chain's STT then handler, in
                     # order, until one answers. Streaming sessions opened at speech were
                     # fed in on_audio; the runner finishes them. A handler failure is
@@ -918,8 +995,27 @@ class Pipeline:
                         streams=dict(stt_streams),
                         on_text=_on_text,
                         on_filler=_speak_filler,
+                        gate=_followup_gate if followup is not None else None,
                     )
                     self._record_chain_run(record, run)
+                    if followup_check is not None:
+                        record["attempts"].insert(0, followup_check)
+                        if followup_check["outcome"] != "accepted":
+                            # Not a continuation of the dialog, or the check failed: the
+                            # phrase is dropped without a sound — no handler ran, no
+                            # transcript goes to the device, nothing joins the context.
+                            # The log still shows what was heard.
+                            record["stt_text"] = followup_check["text"]
+                            record["result"] = "rejected"
+                            record["reason"] = ("followup_reject"
+                                                if followup_check["outcome"] == "rejected"
+                                                else "followup_error")
+                            logger.info(f"{self.name}: 🚫 follow-up dropped "
+                                        f"({record['reason']}, "
+                                        f"probability={followup_check['probability']})")
+                            self._emit(StageEvent.STT_END, {"text": ""})
+                            self._emit(StageEvent.RUN_END, {})
+                            return
                     if run.reply is None:
                         # No chain heard anything (or every STT failed): nothing is spoken.
                         # Balance the STT_START emitted in on_start with an empty STT_END
@@ -949,13 +1045,7 @@ class Pipeline:
                             # Context persistence failure must not break the run.
                             logger.error(f"{self.name}: context append failed: {e}")
 
-                    self._emit(
-                        StageEvent.INTENT_END,
-                        {
-                            "conversation_id": conversation_id,
-                            "continue_conversation": "0",
-                        },
-                    )
+                    self._emit(StageEvent.INTENT_END, {"conversation_id": conversation_id})
 
                     # Accent (stress) stage: place '+' stress marks on the reply so every TTS
                     # backend pronounces Russian correctly. RuAccent's output IS the canonical
@@ -991,6 +1081,7 @@ class Pipeline:
                         self._emit_live(record)
 
                     self._emit(StageEvent.TTS_START, {"text": reply})
+                    played = None  # the answer stream's outcome: "played" | "dropped"
                     # A device without a speaker gets the reply text only: no synthesis.
                     if self.has_speaker:
                         # The backend of the variant that started: it both synthesizes
@@ -1012,7 +1103,7 @@ class Pipeline:
                             )
                             tts_chunks = []
                             try:
-                                await self.play(mime, self._tee_chunks(audio, tts_chunks))
+                                played = await self.play(mime, self._tee_chunks(audio, tts_chunks))
                             finally:
                                 # The tee only closes `audio` once it has started.
                                 await self._close_stream(audio)
@@ -1048,7 +1139,15 @@ class Pipeline:
                     logger.info(
                         f"{self.name}: ✅ run complete in {time.perf_counter() - t0:.2f}s"
                     )
-                    self._emit(StageEvent.RUN_END, {})
+                    # The answer played out (not dropped by a new wake or play_stop) on
+                    # a device that reopens its microphone, with the stage on: the
+                    # session stays open for a follow-up phrase instead of ending.
+                    fb = self.rt.followup_backend
+                    if (played == "played" and self.has_follow_up
+                            and fb is not None and not isinstance(fb, NoFollowup)):
+                        await self._arm_followup(conversation_id, run.text, run.reply)
+                    else:
+                        self._emit(StageEvent.RUN_END, {})
                 except Exception as e:
                     record["result"] = "error"
                     record["error_stage"] = "pipeline"
@@ -1068,9 +1167,10 @@ class Pipeline:
                     # actually closes the session.
                     await self._close_stt_streams(stt_streams)
                     # Record the run on every non-empty-pcm path (empty-STT return,
-                    # success, TTS-fail, exception). A recording failure must never
-                    # break the run or swallow RUN_END, so it is fully wrapped.
-                    if self.runs_store is not None:
+                    # success, TTS-fail, exception) but a silent follow-up window. A
+                    # recording failure must never break the run or swallow RUN_END,
+                    # so it is fully wrapped.
+                    if self.runs_store is not None and keep_record:
                         record["t_total"] = int((time.perf_counter() - t0) * 1000)
                         try:
                             run_id = await asyncio.to_thread(self.runs_store.insert, record)
@@ -1368,6 +1468,21 @@ class Pipeline:
             return backend, mime, audio
         raise error
 
+    async def _close_followup(self) -> None:
+        """End a follow-up window that has heard no phrase yet the way silence ends it:
+        the device gets `state idle` and turns its microphone off. Proactive speech
+        calls it first, or the speaker would hear itself in the window as a phrase."""
+        if self._followup is None or self._finalized:
+            return
+        # Synchronously, before any await: on_audio drops whatever still arrives.
+        self._followup = None
+        self._finalized = True
+        streams, self._stt_streams = self._stt_streams, {}
+        logger.info(f"{self.name}: follow-up window closed for proactive speech")
+        self._emit(StageEvent.STT_END, {"text": ""})
+        self._emit(StageEvent.RUN_END, {})
+        await self._close_stt_streams(streams)
+
     async def speak(self, text: str, attempts: list | None = None) -> None:
         """Public entry for proactive speech (reminders, external callers) and the
         filler: synthesize via the first TTS variant that starts (see _start_tts) and
@@ -1377,6 +1492,7 @@ class Pipeline:
         """
         if not self.has_speaker:
             return
+        await self._close_followup()
         # The backend of the variant that started both synthesizes and labels the
         # log line, so they can never diverge.
         backend, mime, audio = await self._start_tts(text, attempts)

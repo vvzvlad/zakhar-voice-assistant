@@ -36,8 +36,9 @@ typedef struct {
     int mic_channels;   // 1 or 2, interleaved in the tap
     int preroll_ms;     // audio before the detection sent after a wake
     // The microphone tap: 16 kHz int16, mic_channels interleaved, positions counted in frames
-    // (one sample per channel). mic_position() is the count of frames written so far;
-    // mic_read() copies up to max_frames frames from *pos and advances *pos past them.
+    // (one sample per channel). mic_position() is the count of frames written so far, called from
+    // the detection, the component and the client's task; mic_read() copies up to max_frames
+    // frames from *pos and advances *pos past them.
     uint32_t (*mic_position)(void);
     size_t (*mic_read)(uint32_t *pos, int16_t *out, size_t max_frames);
     // The highest wake-word probability (0..255) since the previous call; resets it.

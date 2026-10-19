@@ -81,6 +81,8 @@ async def main() -> None:
         pools[cat][pid] = svc.create_instance(cat, pid)
     # One TTS backend per enabled variant.
     tts_backends = {pid: svc.create_instance("tts", pid) for pid in svc.tts_variants()}
+    # The follow-up check loads no model, so it is built at boot, not deferred.
+    followup_backend = svc.create("followup")
     # Defer the accent (stress) backend: RuAccent loads an ONNX model from
     # disk/HuggingFace, which would block boot for seconds. Start with no stress
     # backend (the pipeline skips the stage) and load it in the background after the
@@ -96,6 +98,7 @@ async def main() -> None:
     stages = [("vad", vad_backend)]
     stages += [(cat, b) for cat in ("stt", "llm") for b in pools[cat].values()]
     stages += [("tts", b) for b in tts_backends.values()]
+    stages += [("followup", followup_backend)]
     for cat, b in stages:
         logger.info(f"{cat} backend: {getattr(b, 'backend_desc', type(b).__name__)}")
     logger.info("stress/wakeword backends: deferred — load in the background after boot (if enabled)")
@@ -159,6 +162,7 @@ async def main() -> None:
         vad_backend=vad_backend,
         stt_backends=pools["stt"], llm_backends=pools["llm"], tts_backends=tts_backends,
         stress_backend=stress_backend, wakeword_backend=wakeword_backend,
+        followup_backend=followup_backend,
         hub=hub,
         runs_store=runs_store, run_events=run_events,
         prompt_store=prompt_store,

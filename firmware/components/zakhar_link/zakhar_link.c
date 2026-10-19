@@ -5,7 +5,8 @@
 // destroys it and connects a new one after the backoff. It sends everything the device starts:
 // the wake, the session's and the capture's microphone frames, audio_end, wake_peak once a second,
 // `played` of finished streams and `volume`. It also owns the microphone position, so a `capture`
-// and a `capture_resume` are handed to it. A capture outlives a lost link: the next hello names
+// and a `capture_resume` are handed to it; only a follow-up `listening` sets the position on the
+// client's task, under the mutex, together with turning the mic on. A capture outlives a lost link: the next hello names
 // it, and a `capture_resume` sends it on from the frame the server asks for. The client's own task
 // runs the event handler: the hello on connect and every received frame in arrival order, so a
 // play_start, its 0x02 frames and its play_end reach the playback queue in the order sent; a model
@@ -89,11 +90,15 @@ static zl_model_t s_model_kind;
 static char *s_model_name;
 static uint8_t *s_model;
 
-// The component task only: the next microphone frame to send (set by wake(), capture_start() and
-// capture_resume(), advanced by mic_poll(), all on that task), and a microphone frame with its
-// samples always from byte 8, aligned: a session's frame starts at byte 7 with its kind byte, a
-// capture's at byte 3 with its kind byte and the offset at bytes 4..7.
+// The next microphone frame to send: set by wake(), capture_start() and capture_resume() and
+// advanced by mic_poll(), all on the component task; set by on_text() on the client's task, under
+// s_lock, when a follow-up `listening` turns the mic on again: no mic_poll() reads it then (the mic
+// is off from before the `played` this task sent), and the next one reads it after seeing the mic
+// on under s_lock.
 static uint32_t s_mic_pos;
+// The component task only: a microphone frame with its samples always from byte 8, aligned: a
+// session's frame starts at byte 7 with its kind byte, a capture's at byte 3 with its kind byte and
+// the offset at bytes 4..7.
 static int16_t s_tx[4 + ZL_FRAME_FRAMES * 2];
 // The component task only: the held capture's first frame and length (set by capture_start()).
 static uint32_t s_capture_start, s_capture_frames;
@@ -203,6 +208,8 @@ static void on_text(esp_websocket_client_handle_t ws, const char *json, size_t l
         return;
     }
     const bool speaker = s_cfg.play_rate > 0;
+    // Where a follow-up's audio starts: read outside the lock, like every s_cfg callback.
+    const uint32_t mic_now = s_cfg.mic_position();
     uint32_t dropped[ZL_PLAYQ_STREAMS];
     size_t ndropped = 0, overflow = 0;
     bool done = false;
@@ -214,7 +221,7 @@ static void on_text(esp_websocket_client_handle_t ws, const char *json, size_t l
             s_backoff = 1;
             break;
         case ZL_MSG_STATE:
-            zl_sess_state(&s_sess, m.state);
+            if (zl_sess_state(&s_sess, m.state)) s_mic_pos = mic_now;
             break;
         case ZL_MSG_PLAY_START:
             if (speaker && !zl_playq_start(&s_playq, m.id)) dropped[ndropped++] = m.id;

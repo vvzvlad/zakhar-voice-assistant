@@ -200,6 +200,7 @@ char *zl_encode_hello(const zl_config_t *cfg, int volume, uint32_t capture)
               (caps = cJSON_AddObjectToObject(o, "caps")) != NULL &&
               cJSON_AddBoolToObject(caps, "speaker", speaker) != NULL &&
               cJSON_AddBoolToObject(caps, "screen", cfg->screen) != NULL &&
+              cJSON_AddTrueToObject(caps, "follow_up") != NULL &&
               (mic = cJSON_AddObjectToObject(o, "mic")) != NULL &&
               cJSON_AddNumberToObject(mic, "channels", cfg->mic_channels) != NULL;
     if (ok && speaker) {
@@ -343,10 +344,16 @@ bool zl_sess_accepts(const zl_sess_t *s, const zl_msg_t *m)
     return !m->has_session || m->session == s->session;
 }
 
-void zl_sess_state(zl_sess_t *s, zl_state_t state)
+bool zl_sess_state(zl_sess_t *s, zl_state_t state)
 {
-    if (state != ZL_STATE_LISTENING) s->mic = false;
+    if (state == ZL_STATE_LISTENING) {
+        const bool reopen = s->open && !s->mic;
+        if (reopen) s->mic = true;
+        return reopen;
+    }
+    s->mic = false;
     if (state == ZL_STATE_IDLE || state == ZL_STATE_ERROR) s->open = false;
+    return false;
 }
 
 bool zl_sess_capture(zl_sess_t *s)

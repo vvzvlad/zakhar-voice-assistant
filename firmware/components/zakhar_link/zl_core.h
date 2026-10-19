@@ -96,7 +96,8 @@ void zl_put_u32le(uint8_t *p, uint32_t v);
 typedef struct {
     uint32_t session;  // the last wake's number, 0 before the first
     bool open;         // from the wake to its idle or error
-    bool mic;          // the session's audio streams: from the wake to its first state other than listening
+    bool mic;          // the session's audio streams: from the wake or a follow-up listening to the next
+                       // state other than listening
     bool capture;      // a capture is held: from its `capture` until it ends; a lost link keeps it
     bool detect_off;   // a `detect` turned wake words off; zero, so on, with every connection
 } zl_sess_t;
@@ -123,8 +124,10 @@ void zl_sess_detect(zl_sess_t *s, bool on);
 // The session filter: a message without `session` passes, one with it only for the current one.
 bool zl_sess_accepts(const zl_sess_t *s, const zl_msg_t *m);
 
-// A `state` that passed the filter: anything but listening stops the mic, idle and error close.
-void zl_sess_state(zl_sess_t *s, zl_state_t state);
+// A `state` that passed the filter: anything but listening stops the mic, idle and error close. A
+// listening of the open session whose mic is off (a follow-up) turns the mic on again; true only
+// then, so the caller sets where its audio starts.
+bool zl_sess_state(zl_sess_t *s, zl_state_t state);
 
 // A `capture`: false (busy) while a session is open; otherwise the capture is held, in place of
 // one held already.
