@@ -613,16 +613,19 @@ class Pipeline:
         self._buffer2.clear()
         return pcm, pcm2
 
-    async def verify_wake(self, pcm: bytes) -> tuple[bool, float | None, int, bool]:
+    async def verify_wake(self, pcm: bytes, over_answer: bool = False
+                          ) -> tuple[bool, float | None, int, bool]:
         """Run the second-stage wake-word verifier on a pre-roll head: (accepted,
         score, t_ms, error). verify() never raises, but we still bound it with the
         backend's timeout and treat a timeout/None as the configured fail policy
         (fail_open accepts, fail_closed rejects); `error` tells that case (no verdict,
-        score None) from a genuine verdict."""
+        score None) from a genuine verdict. `over_answer`: a wake held over the
+        device's own answer (WakewordVerifier.verify)."""
         t0 = time.perf_counter()
         wb = self.rt.wakeword_backend
         try:
-            verdict = await asyncio.wait_for(wb.verify(pcm), timeout=wb.timeout_ms / 1000)
+            verdict = await asyncio.wait_for(wb.verify(pcm, over_answer=over_answer),
+                                             timeout=wb.timeout_ms / 1000)
         except (asyncio.TimeoutError, Exception):  # noqa: BLE001 - timeout/error -> fail policy
             verdict = None
         t_ms = int((time.perf_counter() - t0) * 1000)
