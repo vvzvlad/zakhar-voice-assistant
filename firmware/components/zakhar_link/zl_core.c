@@ -375,11 +375,12 @@ void zl_sess_lost(zl_sess_t *s, bool *was_open)
 
 // ---------------------------------------------------------------- the playback queue
 
-void zl_playq_init(zl_playq_t *q, int16_t *buf, size_t cap)
+void zl_playq_init(zl_playq_t *q, int16_t *buf, size_t cap, size_t prime)
 {
     memset(q, 0, sizeof *q);
     q->buf = buf;
     q->cap = cap;
+    q->prime = prime;
 }
 
 // The leading streams that are fully out and ended move to `done`.
@@ -440,8 +441,13 @@ size_t zl_playq_read(zl_playq_t *q, int16_t *out, size_t max)
     size_t n = 0;
     while (n < max && q->nstreams > 0) {
         zl_stream_t *s = &q->streams[0];
+        if (!s->playing && !s->ended && s->left < q->prime) break;  // not primed yet
+        s->playing = true;
         if (s->left == 0) {
-            if (!s->ended) break;  // it is still arriving
+            if (!s->ended) {
+                s->playing = false;  // ran dry while the rest is still arriving: prime again
+                break;
+            }
             collect(q);
             continue;
         }
