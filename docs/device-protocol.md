@@ -99,6 +99,9 @@ The owner's words:
   фразу и проиграли» and «всем устройствам без динамика — каждый ответ», «первый вариант наверное,
   да» — the answer of the kept session is shown on the screens of the devices without a speaker
   that lost that phrase.
+- «давай сбрасывать только если сервер подтвердил» — a wake word heard over the speaker's own
+  playback no longer flushes it on the device; the playback is dropped only once the server's
+  second wake-word check confirms the wake, and a rejected wake leaves it playing to the end.
 
 ## Transport
 
@@ -228,22 +231,34 @@ device                                   server
 - `state`: `{"type": "state", "session": 17, "value": "listening"}`. Values: `listening`,
   `transcribing`, `thinking`, `speaking`, `idle`, `error` (`error` carries `text`). The device
   draws its indication from these only. Between `wake` and `listening` it shows nothing: the
-  server may still reject the wake word with `state idle`.
+  server may still reject the wake word with `state idle`, or over a running answer with that
+  answer's `state`.
 - `transcript` and `reply` carry the recognised phrase and the answer text, for devices with a
   screen. `reply` without `session` is an announcement (a reminder, an agent's `speak`).
 - Every server message of a session carries its `session`; the device drops messages whose
-  `session` is not its current one. While a session's microphone streams (from `wake` or a
-  follow-up `listening` to the next `state` other than `listening`) a wake word starts no new
-  session: the phrase is still being said,
-  and a detection inside it must not cut it off. After that a new `wake` replaces the current
-  session on both sides: the device flushes its playback, the server cancels the older run and,
-  before anything else of the new session, sends `play_stop` — a stream the server started before
-  it saw the `wake` is dropped on the device too.
+  `session` is not its current one, except `play_start` and `play_end`, which it takes whatever
+  their `session`: the playback of a session a new `wake` replaced plays on until `play_stop`.
+  While a session's microphone streams (from `wake` or a follow-up `listening` to the next
+  `state` other than `listening`) a wake word starts no new session: the phrase is still being
+  said, and a detection inside it must not cut it off.
+- After that a new `wake` replaces the current session. The device leaves its playback alone: the
+  detection may be its own voice. The server takes the `wake` at once when its second wake-word
+  check is off or nothing is to protect (no run of the device is going and no stream is playing):
+  it cancels the older run and, before anything else of the new session, sends `play_stop`, which
+  flushes the device's playback, a stream the server started before it saw the `wake` included.
+  Otherwise the server holds the `wake`, and the older run goes on until the check rules on the
+  new session's microphone audio. A confirmed wake is taken as above, and the audio held
+  meanwhile goes to its run. A rejected one gets the older run's last `state` stamped with the
+  new `session` (`state idle` when no run is going): the microphone stops, the playback goes on
+  to its end, and the older run carries on under the new number. The run log shows the rejected
+  wake as `rejected`, reason `wakeword_reject` (`wakeword_error` when the check timed out or
+  failed and its policy rejects).
 - One phrase heard by several devices: the server holds a `wake` for `core.arbitration.window_ms`
   (default 500 ms) to collect the wakes of the other online devices, or less once every online
   device has woken; a lone online device is not held. With several wakes it rules only once
   each of them has its pre-roll in, or `window_ms` after that device's own `wake`, and the
-  server's second wake-word check has ruled on it; a wake that check rejects takes no part. It
+  server's second wake-word check has ruled on it; a wake that check rejects takes no part, and
+  a `wake` the server holds over a running answer (above) joins only once the check confirms it. It
   keeps one session — a device with a speaker over one without, between equals the higher
   signal-to-noise ratio of the pre-roll, then the earlier wake. The others get no `listening`:
   their microphone streams on silently until the server's VAD finds the end of the phrase, and
@@ -258,8 +273,8 @@ device                                   server
   stop model from 1 s after its playback starts until the playback ends; a detection flushes the
   playback and sends `stop`, then `played {id, "dropped": true}` for each stream it dropped.
   `session` is the open session's number, absent outside a session. A stop word starts no session.
-  The server drops the playback as for a `wake` and sends `play_stop`; in a session it then
-  cancels the run and ends the session with `state idle`, outside one (an announcement, an
+  The server drops the playback as for a `wake` it takes and sends `play_stop`; in a session it
+  then cancels the run and ends the session with `state idle`, outside one (an announcement, an
   agent's `speak`) only the playback stops.
 - A device without a speaker (`caps.speaker: false`) never gets playback: the server skips TTS for
   it and sends the text only.
@@ -304,9 +319,10 @@ the answer, so the next phrase needs no wake word:
   counted. Both are optional: a device that does not count them (an older firmware) sends
   `played {id}`, and the server then records nothing for the stream.
 - `play_stop` flushes everything queued and playing; the device answers `played {id, "dropped":
-  true}` for each stream it dropped. A new `wake` and the stop word flush the same way, and the
-  server answers either with `play_stop`. `0x02` frames and `play_end` of a dropped stream that
-  are still on the way are discarded.
+  true}` for each stream it dropped. The stop word flushes the same way, and the server answers it
+  with `play_stop`; a new `wake` flushes nothing on the device, and the server sends `play_stop`
+  once it takes the wake (see [Voice session](#voice-session)). `0x02` frames and `play_end` of a
+  dropped stream that are still on the way are discarded.
 - The server stops waiting for `played` of a stream after its duration plus `buffer_ms` plus 5 s
   and treats it as dropped.
 - Pacing: the server keeps at most `buffer_ms − 500` ms of audio ahead of the device's playback,

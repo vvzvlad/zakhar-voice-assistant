@@ -128,6 +128,8 @@ zl_wake_t zl_sess_wake(zl_sess_t *s);
 void zl_sess_detect(zl_sess_t *s, bool on);
 
 // The session filter: a message without `session` passes, one with it only for the current one.
+// play_start and play_end pass whatever their `session`: the playback of the session a wake
+// replaced keeps playing until the server's play_stop, which it sends once it confirms the wake.
 bool zl_sess_accepts(const zl_sess_t *s, const zl_msg_t *m);
 
 // A `state` that passed the filter: anything but listening stops the mic, idle and error close. A
@@ -194,7 +196,7 @@ void zl_playq_end(zl_playq_t *q, uint32_t id);
 // last sample went out after its play_end moves to `done`. The caller plays silence for the
 // samples it did not get: when the head stream has started, they count as its `gap`.
 size_t zl_playq_read(zl_playq_t *q, int16_t *out, size_t max);
-// play_stop or a wake: empties the buffer; writes the ids of the dropped streams to `dropped`
+// play_stop or the stop word: empties the buffer; writes the ids of the dropped streams to `dropped`
 // (ZL_PLAYQ_STREAMS slots) and returns their count. `done` is kept.
 size_t zl_playq_flush(zl_playq_t *q, uint32_t *dropped);
 // Moves the `done` streams into out (ZL_PLAYQ_STREAMS slots); returns their count.

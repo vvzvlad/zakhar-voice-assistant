@@ -13,6 +13,8 @@ each test awaits that task before asserting on the post-verdict state.
 """
 
 import asyncio
+import io
+import wave
 
 import pytest
 
@@ -22,6 +24,7 @@ from src.wakeword import PassthroughVerifier, WakewordVerdict, WakewordVerifier
 # Reuse the existing pipeline test harness (fakes + helpers) verbatim.
 from tests.test_pipeline import (
     FRAME,
+    FakeRunEvents,
     FakeRunsStore,
     FakeSttBackend,
     install_fake_vad,
@@ -376,6 +379,48 @@ async def test_no_gate_for_phraseless_start_with_real_verifier(tmp_path, monkeyp
     await pipeline.on_audio(b"\x01\x02" * 30000)
     assert pipeline._wakeword_task is None  # verifier never engaged
     assert verifier.calls == []
+
+
+# --- a wake the device server verified (over a running answer) ---------------
+
+
+async def test_a_wake_verified_by_the_device_server_is_not_gated(tmp_path, monkeypatch):
+    patch_llm(monkeypatch, reply="готово")
+    store = FakeRunsStore()
+    verifier = FakeWakewordVerifier(accepted=False)  # would reject if it ran
+    pipeline, events = _make_gated(
+        tmp_path, monkeypatch, verifier=verifier, stt_text="включи свет", runs_store=store,
+    )
+
+    await pipeline.on_start("cid", WAKE, verified=(0.7, 120))
+    assert types_of(events) == [StageEvent.RUN_START, StageEvent.STT_START, StageEvent.STT_VAD_START]
+    await pipeline.on_audio(b"\x01\x02" * 30000)
+    assert pipeline._wakeword_task is None and verifier.calls == []
+    await pipeline.on_stop(False)
+    rec = store.records[-1]
+    assert rec["result"] in ("ok", "tool")
+    # The record carries the device server's verify.
+    assert (rec["t_wakeword"], rec["wakeword_score"]) == (120, 0.7)
+
+
+async def test_a_rejected_wake_is_recorded_without_events(tmp_path, monkeypatch):
+    store, hub = FakeRunsStore(), FakeRunEvents()
+    pipeline, events = _make_gated(
+        tmp_path, monkeypatch, verifier=FakeWakewordVerifier(), runs_store=store, run_events=hub,
+    )
+
+    await pipeline.record_rejected_wake(
+        "wakeword_reject", b"\x01\x00" * 16000, b"\x02\x00" * 16000, 0.0, 42)
+    assert events == []
+    [rec] = store.records
+    # The lead-in is trimmed (trim_start_ms 200) as for any run.
+    assert (rec["result"], rec["reason"], rec["t_wakeword"], rec["wakeword_score"], rec["t_vad"]) == (
+        "rejected", "wakeword_reject", 42, 0.0, 800)
+    [(run_id, wav, _keep)] = store.audio_calls
+    with wave.open(io.BytesIO(wav)) as w:
+        assert (w.getnchannels(), w.getnframes()) == (2, 12800)
+    [msg] = hub.broadcasts
+    assert (msg["run"]["id"], msg["run"]["result"], msg["run"]["has_audio"]) == (run_id, "rejected", 1)
 
 
 # --- streaming STT: backlog is fed once on confirm, then normally ------------
