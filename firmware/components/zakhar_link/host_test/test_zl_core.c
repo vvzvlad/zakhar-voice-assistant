@@ -27,30 +27,35 @@ static void test_decode(void)
     zl_msg_t m;
     assert(decode("{\"type\": \"config\", \"wake_cutoff\": 80, \"vad_cutoff\": 30}", &m));
     assert(m.type == ZL_MSG_CONFIG && m.wake == 204 && m.vad == 76 && !m.has_session);
-    assert(m.echo_cancel == -1 && m.echo_mode == -1 && m.echo_filter == -1);
+    assert(m.echo_cancel == -1 && m.echo_mode == -1 && m.echo_filter == -1 && m.play_prime_ms == -1);
     zl_msg_free(&m);
     assert(decode("{\"type\": \"config\", \"wake_cutoff\": 100, \"vad_cutoff\": 0}", &m));
     assert(m.wake == 255 && m.vad == 0);
     zl_msg_free(&m);
     assert(!decode("{\"type\": \"config\", \"wake_cutoff\": 101, \"vad_cutoff\": 30}", &m));
-    // The echo cancellation settings: absent (above), out of range or not an integer, -1, and the
-    // cutoffs apply.
+    // The echo cancellation settings and the playback reserve: absent (above), out of range or not
+    // an integer, -1, and the cutoffs apply.
     const struct {
         const char *json;
-        int level, mode, filter;
-    } echo[] = {
-        {"\"echo_cancel\": 0, \"echo_cancel_mode\": 3, \"echo_cancel_filter\": 1", 0, 3, 1},
-        {"\"echo_cancel\": 3, \"echo_cancel_mode\": 0, \"echo_cancel_filter\": 8", 3, 0, 8},
-        {"\"echo_cancel\": 4, \"echo_cancel_mode\": -1, \"echo_cancel_filter\": 0", -1, -1, -1},
-        {"\"echo_cancel\": 1.5, \"echo_cancel_mode\": \"2\", \"echo_cancel_filter\": 9", -1, -1, -1},
-        {"\"echo_cancel_filter\": 6", -1, -1, 6},
+        int level, mode, filter, prime;
+    } optional[] = {
+        {"\"echo_cancel\": 0, \"echo_cancel_mode\": 3, \"echo_cancel_filter\": 1, \"play_prime_ms\": 0", 0, 3, 1, 0},
+        {"\"echo_cancel\": 3, \"echo_cancel_mode\": 0, \"echo_cancel_filter\": 8, \"play_prime_ms\": 2000", 3, 0, 8,
+         2000},
+        {"\"echo_cancel\": 4, \"echo_cancel_mode\": -1, \"echo_cancel_filter\": 0, \"play_prime_ms\": 2001", -1, -1, -1,
+         -1},
+        {"\"echo_cancel\": 1.5, \"echo_cancel_mode\": \"2\", \"echo_cancel_filter\": 9, \"play_prime_ms\": -50", -1, -1,
+         -1, -1},
+        {"\"echo_cancel_filter\": 6, \"play_prime_ms\": 700.5", -1, -1, 6, -1},
+        {"\"play_prime_ms\": 700", -1, -1, -1, 700},
     };
-    for (size_t i = 0; i < sizeof echo / sizeof echo[0]; i++) {
-        char json[160];
+    for (size_t i = 0; i < sizeof optional / sizeof optional[0]; i++) {
+        char json[200];
         snprintf(json, sizeof json, "{\"type\": \"config\", \"wake_cutoff\": 80, \"vad_cutoff\": 30, %s}",
-                 echo[i].json);
+                 optional[i].json);
         assert(decode(json, &m) && m.wake == 204);
-        assert(m.echo_cancel == echo[i].level && m.echo_mode == echo[i].mode && m.echo_filter == echo[i].filter);
+        assert(m.echo_cancel == optional[i].level && m.echo_mode == optional[i].mode &&
+               m.echo_filter == optional[i].filter && m.play_prime_ms == optional[i].prime);
         zl_msg_free(&m);
     }
 
