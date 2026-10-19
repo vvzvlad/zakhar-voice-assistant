@@ -243,7 +243,7 @@ With the server stage `followup` on, a device with `caps.follow_up` keeps the se
 the answer, so the next phrase needs no wake word:
 
 ```
-  played {id}                     ──►    (the answer is out, not dropped)
+  played {id, dry, gap_ms}        ──►    (the answer is out, not dropped)
                                   ◄──    state listening
   0x01 mic: live, no pre-roll     ─►
                                   ◄──    state transcribing     (end of phrase)

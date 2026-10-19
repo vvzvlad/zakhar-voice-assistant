@@ -154,10 +154,10 @@ class Pipeline:
         self._followup: tuple[str, str, str] | None = None
 
         # Transport hooks, injected by the device server: send_event(event, data)
-        # (sync), play(mime, bytes | async chunks) (returns {"outcome", "dry", "gap_ms"}
-        # once the device reports the stream, see Connection.play), has_speaker (a device without one gets no
-        # TTS at all) and has_follow_up (the device reopens its microphone on a
-        # follow-up `listening`).
+        # (sync), play(mime, bytes | async chunks) (returns {"outcome", "dry",
+        # "gap_ms"} once the device reports the stream, see Connection.play),
+        # has_speaker (a device without one gets no TTS at all) and has_follow_up
+        # (the device reopens its microphone on a follow-up `listening`).
         self.send_event = None
         self.play = None
         self.has_speaker = False
