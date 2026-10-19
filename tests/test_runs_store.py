@@ -355,6 +355,11 @@ def test_metrics_rejected_runs_dont_skew_served_kpis(tmp_path):
     assert m["per_stage_avg_ms"]["stt"] == (20 + 24) / 2
     assert m["per_stage_avg_ms"]["llm"] == (30 + 34) / 2
     assert m["per_stage_avg_ms"]["tts"] == (40 + 44) / 2
+
+    # A duplicate (another device kept the phrase) is no false trigger and no request.
+    store.insert(_rec(result="rejected", reason="duplicate", ts=now, t_total=None))
+    m = store.metrics(now=now)
+    assert (m["rejected_24h"], m["requests_24h"]) == (1, 2)
     store.close()
 
 

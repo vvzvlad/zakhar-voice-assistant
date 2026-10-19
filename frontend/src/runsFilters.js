@@ -18,7 +18,7 @@ export function matchesFilters(row, { result, search, device, chain = "" }) {
   if (chain.trim() && row.chain !== chain.trim()) return false;
   if (result === "errors" && row.result !== "error") return false;
   if (result === "ok" && !(row.result === "ok" || row.result === "tool")) return false;
-  // "rejected" surfaces only runs the wake-word verifier blocked.
+  // "rejected" surfaces only runs ended before STT: verifier rejects and duplicates.
   if (result === "rejected" && row.result !== "rejected") return false;
   const s = search.trim().toLowerCase();
   if (s) {
