@@ -236,6 +236,7 @@ def set_small_vad_thresholds(pipeline):
     vad.silence_ms = 100           # 5 frames of trailing silence to end
     vad.max_utterance_ms = 400     # 20 frames hard cap
     vad.no_speech_timeout_ms = 200  # 10 frames with no speech -> finalize
+    vad.wake_pause_ms = 0          # a wake-word run ends after silence_ms too
 
 
 def make_llm_result(reply="ответ", **overrides):
@@ -538,6 +539,19 @@ async def test_vad_endpoint_finalize(tmp_path, monkeypatch):
     await pipeline.on_stop(False)
     assert len(events) == before
     assert_all_str(events)
+
+
+async def test_vad_waits_out_pause_after_wake_word(tmp_path, monkeypatch):
+    # A wake-word run: the speech is the wake word in the pre-roll, and 180 ms of
+    # silence after it (over silence_ms, under wake_pause_ms) does not end the phrase.
+    pipeline, events = make_pipeline(tmp_path, monkeypatch)
+    set_small_vad_thresholds(pipeline)
+    pipeline.rt.core.vad.wake_pause_ms = 300
+    install_fake_vad(pipeline, [True] * 3 + [False] * 9)
+
+    await pipeline.on_start("cid", "Захар")
+    await pipeline.on_audio(FRAME * 12)
+    assert pipeline._finalized is False
 
 
 async def test_vad_maxlen_finalize(tmp_path, monkeypatch):

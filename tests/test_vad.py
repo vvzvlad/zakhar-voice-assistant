@@ -144,6 +144,51 @@ def test_maxlen_wins_over_no_speech_when_timeouts_coincide():
     assert drive(tracker, "." * 10) == "maxlen"  # 200 ms hits both caps -> maxlen
 
 
+# --- pause after the wake word -------------------------------------------------------
+
+# The first 100 ms are pre-roll ending at the wake word; the command may follow it
+# after up to 300 ms of silence, while the phrase itself ends after 100 ms.
+WAKE_POLICY = EndpointPolicy(
+    silence_ms=100, min_speech_ms=40,
+    max_utterance_ms=2000, no_speech_timeout_ms=1000,
+    preroll_ms=100, wake_pause_ms=300,
+)
+
+
+def test_pause_after_wake_word_does_not_end_the_phrase():
+    # Wake word in the pre-roll, a 200 ms pause, then the command: the pause is
+    # longer than silence_ms but the phrase goes on; after the command the usual
+    # 100 ms of silence ends it.
+    tracker = EndpointTracker(WAKE_POLICY)
+    assert drive(tracker, "sss" + "." * 10 + "ss" + "....") is None
+    assert tracker.update(False, 20) == "endpoint"
+
+
+def test_bare_wake_word_ends_after_the_wake_pause():
+    tracker = EndpointTracker(WAKE_POLICY)
+    assert drive(tracker, "sss" + "." * 14) is None  # 280 ms of silence
+    assert tracker.update(False, 20) == "endpoint"   # 300 ms
+
+
+def test_short_command_after_wake_word_is_not_delayed():
+    # One speech window past the pre-roll (20 ms, under min_speech_ms) is already
+    # the command: the usual pause applies.
+    tracker = EndpointTracker(WAKE_POLICY)
+    assert drive(tracker, "s" * 6 + "....") is None
+    assert tracker.update(False, 20) == "endpoint"
+
+
+def test_wake_pause_needs_a_preroll():
+    # A run without pre-roll (no wake word) ends after silence_ms as before.
+    policy = EndpointPolicy(
+        silence_ms=100, min_speech_ms=40,
+        max_utterance_ms=2000, no_speech_timeout_ms=1000, wake_pause_ms=300,
+    )
+    tracker = EndpointTracker(policy)
+    assert drive(tracker, "ss....") is None
+    assert tracker.update(False, 20) == "endpoint"
+
+
 # --- debug_state ---------------------------------------------------------------------
 
 def test_debug_state_keys_and_values():
