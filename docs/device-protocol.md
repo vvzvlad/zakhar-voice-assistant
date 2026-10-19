@@ -55,10 +55,15 @@ The owner's words:
   and is "recording" only from its first audio; a capture has an id and its audio carries the
   offset, the device keeps it across a lost link and the server tells it where to go on. The
   proposed `capture_stop` (end a capture early) was not taken.
-- On the loss that remains (a dropped link costs a capture 1–2 s: the speaker notices a dead
-  link after its 3 s send timeout, then waits the 1 s backoff and ~1 s to reconnect, against a
-  ~3 s tap), option chosen: «Оставить как есть» — no larger tap, no faster reconnect; the
-  hole shows in the capture's `gaps`.
+- On a capture across a dropped link (the speaker notices a dead link after its 3 s send timeout,
+  then waits the 1 s backoff and ~1 s to reconnect), option chosen: «Оставить как есть» — no
+  faster reconnect; audio the tap no longer holds shows as a hole in the capture's `gaps`.
+- «у панели просралась часть аудио в центре. почему? мы фиксили чет такое у колонки» — a Wi-Fi
+  stall longer than the room the tap had left after the 2 s pre-roll (about 1 s) made the device
+  skip ahead and cut audio out of the phrase without a trace. Option chosen: «Буфер 8 с + TCP 32
+  КБ» — the microphone tap of the Voice PE and the panel holds 8.192 s, so a send stalled up to
+  the 3 s send timeout while the pre-roll goes out loses nothing, and the rectangular panel
+  (JC4880P443) gets the 32 KB TCP send buffer the speaker and the round panel have.
 - «надо еще некоторое время слушать после окончания фразы которую говорит колонка, если я хочу
   продолжить диалог без активационной фразы», «еще одна стадия в конце, которую можно включить?»,
   «через jev стоит оценивать, продолжение это диалога или нет», then «го делать» — after the
@@ -453,15 +458,14 @@ outside any voice session.
 
 A lost link does not end a capture:
 
-- The device keeps the capture and its audio in the microphone tap (about 3 s on the Voice PE and
+- The device keeps the capture and its audio in the microphone tap (about 7 s on the Voice PE and
   the panel) and sends nothing; its next `hello` carries `"capture": <id>`.
 - The server that knows the capture answers `capture_resume {id, from}`, `from` being the offset of
   the first frame it lacks. The device goes on sending from there, or from its oldest frame still
   in the tap when that one is overwritten already. A `capture_resume` for any other capture is
   ignored.
 - A server that does not know the capture does not answer. A capture the device cannot send
-  ends 2 s after its last frame was recorded, without `audio_end`: past that its audio leaves the
-  tap.
+  ends 2 s after its last frame was recorded, without `audio_end`.
 - When the device comes back without the capture (it restarted), the server sends a new `capture`
   for the time that is left and puts its audio after the hole.
 

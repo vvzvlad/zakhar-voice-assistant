@@ -36,10 +36,11 @@ static const char *TAG = "zakhar_link";
 #define MAX_FRAMES_PER_PASS 8  // at most 8 microphone frames (256 ms) per pass
 // A send that cannot go out in this long fails and the link drops. Long enough to wait out the
 // ~1.6 s retransmission timeout after a segment lost on Wi-Fi, short enough that the microphone
-// frames waiting meanwhile still fit the device's tap (3.1 s on the Voice PE and the panel; about
-// 1 s while a session's 2 s pre-roll is still going out): a longer wait would skip the oldest of
-// them, splicing a session's audio and leaving a hole in a capture's, instead of dropping the link,
-// which a capture outlives with its frames still in the tap to resume from.
+// frames waiting meanwhile still fit the device's tap (7.2 s on the Voice PE and the panel; 5.2 s
+// while a session's 2 s pre-roll is still going out): a longer wait would skip the oldest of them,
+// splicing a session's audio and leaving a hole in a capture's, instead of dropping the link, which
+// a capture outlives with its frames still in the tap to resume from. Both taps assert that they
+// hold the pre-roll plus this timeout (the Voice PE's audio.c, the panel's wake_word.cpp).
 #define SEND_TIMEOUT_MS 3000
 #define SILENCE_MS 30000       // nothing heard for this long drops the link
 #define RX_CAP 4096            // a text frame larger than this is skipped; fits a long reply

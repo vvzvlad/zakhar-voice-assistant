@@ -42,10 +42,14 @@ static const char *TAG = "audio";
 
 #define MIC_RATE 16000
 #define WAKE_GAIN 4     // the stock micro_wake_word gain_factor on channel 1
-// The tap: 65536 frames = 4.096 s (2000 ms pre-roll plus the wait for the server), a power of two;
-// readers keep 1 s away from the end being overwritten.
-#define TAP_FRAMES (1u << 16)
+// The tap: 131072 frames = 8.192 s, a power of two; readers keep 1 s away from the end being
+// overwritten. What is left holds the 2000 ms pre-roll plus a send that zakhar_link waits for up to
+// its 3000 ms SEND_TIMEOUT_MS: with less, a stall while the pre-roll goes out makes the reader skip
+// forward and silently cuts audio out of the phrase.
+#define TAP_FRAMES (1u << 17)
 #define TAP_MARGIN MIC_RATE
+_Static_assert(TAP_FRAMES - TAP_MARGIN >= (2000 + 3000) * MIC_RATE / 1000,
+               "the tap must hold the pre-roll plus zakhar_link's send timeout");
 
 #define SPK_RATE 48000
 #define SPK_BLOCK 720  // frames per write: 15 ms, the stock DMA buffer
