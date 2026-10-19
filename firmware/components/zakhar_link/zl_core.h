@@ -34,6 +34,7 @@ typedef enum {
     ZL_MSG_CAPTURE_RESUME,
     ZL_MSG_DETECT,
     ZL_MSG_MODEL,
+    ZL_MSG_LOG_STREAM,
 } zl_msg_type_t;
 
 typedef struct {
@@ -45,7 +46,7 @@ typedef struct {
     uint32_t id;          // PLAY_START, PLAY_END, CAPTURE (> 0), CAPTURE_RESUME
     uint8_t wake, vad;    // CONFIG, as uint8 cutoffs
     int value;            // SET_VOLUME, percent
-    bool on;              // WAKE_PEAK_STREAM, DETECT
+    bool on;              // WAKE_PEAK_STREAM, DETECT, LOG_STREAM
     uint32_t capture_ms;  // CAPTURE
     uint32_t from;        // CAPTURE_RESUME: the offset of the first frame the server lacks
     zl_model_t model;     // MODEL: its kind
@@ -65,13 +66,16 @@ void zl_msg_free(zl_msg_t *m);
 // capture: the held capture's id, 0 when none is held.
 char *zl_encode_hello(const zl_config_t *cfg, int volume, uint32_t capture);
 char *zl_encode_wake(uint32_t session, const char *word);
-char *zl_encode_played(uint32_t id, bool dropped);
+// A stream that played out carries `dry` and `gap_ms`; a dropped one only `dropped`.
+char *zl_encode_played(uint32_t id, bool dropped, uint32_t dry, uint32_t gap_ms);
 char *zl_encode_volume(int percent);
 char *zl_encode_wake_peak(int percent);
 char *zl_encode_audio_end(const char *reason, uint32_t id);
 char *zl_encode_model_loaded(zl_model_t kind, const char *name, bool ok);
 // session goes out only with has_session (a stop word outside a session has none).
 char *zl_encode_stop(bool has_session, uint32_t session);
+// len bytes of log lines, not NUL-terminated.
+char *zl_encode_log(const char *text, size_t len);
 void zl_free(char *json);
 
 // ---------------------------------------------------------------- numbers
@@ -148,12 +152,23 @@ typedef struct {
     size_t left;   // its samples still in the buffer
     bool ended;    // play_end arrived
     bool playing;  // primed: read out from now until it runs dry before its play_end
+    bool started;  // at least one of its samples went out
+    uint32_t dry;  // times it ran dry after it started, before its play_end
+    size_t gap;    // silence samples played mid-stream: reads that came short while it led and had started
 } zl_stream_t;
+
+// A stream whose last sample is out, with its `dry` and `gap` for `played`.
+typedef struct {
+    uint32_t id;
+    uint32_t dry;
+    size_t gap;
+} zl_played_t;
 
 // A ring of mono samples holding streams back to back. Only the newest stream can be receiving
 // (between play_start and play_end); 0x02 payload bytes go to it, anything else is discarded.
 // A stream starts, and resumes after running dry, only once it holds `prime` samples or has
-// ended: a stream that arrives late plays with a pause instead of a run of clicks.
+// ended: a stream that arrives late plays with a pause instead of a run of clicks. The pause
+// mid-stream is counted on the stream (`dry`, `gap`); the wait before its first sample is not.
 typedef struct {
     int16_t *buf;
     size_t cap, head, count, prime;
@@ -162,7 +177,7 @@ typedef struct {
     bool receiving;
     bool has_odd;  // a frame ended inside a sample: its low byte waits for the next one
     uint8_t odd;
-    uint32_t done[ZL_PLAYQ_STREAMS];  // streams whose last sample is out, to report `played`
+    zl_played_t done[ZL_PLAYQ_STREAMS];  // streams whose last sample is out, to report `played`
     size_t ndone;
     size_t overflow;  // samples discarded since the buffer was full
 } zl_playq_t;
@@ -176,13 +191,14 @@ void zl_playq_write(zl_playq_t *q, const uint8_t *data, size_t len);
 // play_end of the receiving stream; any other id is ignored.
 void zl_playq_end(zl_playq_t *q, uint32_t id);
 // Copies up to max samples out in stream order, stopping at a stream not primed; a stream whose
-// last sample went out after its play_end moves to `done`.
+// last sample went out after its play_end moves to `done`. The caller plays silence for the
+// samples it did not get: when the head stream has started, they count as its `gap`.
 size_t zl_playq_read(zl_playq_t *q, int16_t *out, size_t max);
 // play_stop or a wake: empties the buffer; writes the ids of the dropped streams to `dropped`
 // (ZL_PLAYQ_STREAMS slots) and returns their count. `done` is kept.
 size_t zl_playq_flush(zl_playq_t *q, uint32_t *dropped);
-// Moves the `done` ids into ids (ZL_PLAYQ_STREAMS slots); returns their count.
-size_t zl_playq_take_done(zl_playq_t *q, uint32_t *ids);
+// Moves the `done` streams into out (ZL_PLAYQ_STREAMS slots); returns their count.
+size_t zl_playq_take_done(zl_playq_t *q, zl_played_t *out);
 
 // ---------------------------------------------------------------- the model receiver
 

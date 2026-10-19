@@ -80,6 +80,13 @@ The owner's words:
   findings: [echo-cancellation.md](echo-cancellation.md). Asked again for the stop word
   («можешь восстановить код, надо для слова стоп»), option chosen: «Только сохранить код» — the
   code is kept on the branch `echo-cancel`, not merged; the stop word does not get a raw microphone.
+- «наверное надо на сервере сделать отдельную фичу, которая пишет непрерывно лог колонки за
+  последние сколько-то дней», option chosen: «Колонка шлёт лог сама» — the speaker sends its log
+  lines over this connection (`log`), port 23 stays free for watching by hand, and what it logs
+  before it reaches the server is not kept; the server keeps 7 days. Then «сделать тока
+  переключатель в прошивке, вкл дебаг или нет», option chosen: «В панели, без перепрошивки» — a
+  per-device switch in the panel's device dialog (`core.devices[].log`), applied on the fly
+  through `log_stream`; off, the device sends nothing.
 - «поисследуй, как можно отбрасывать копии с разных колонок», then «давай сделаем 3, да» — when
   several devices wake on one phrase, the server keeps one session and ends the others with
   `state idle` before `listening`. Of the rules offered (the first wake wins; the cleanest wake
@@ -144,8 +151,11 @@ The owner's words:
    Both are percent, 0..100. The device applies them as `uint8 = trunc(percent / 100 * 255)` to the
    wake-word model and to the on-device VAD gate. They live in the server config, not on the
    device; until the first `config` the device uses its compiled-in defaults.
-4. Server → the wake-word and VAD models, and to a device with a speaker the stop model, right
-   after `config`: see [Models](#models).
+4. Server → `log_stream {on}` with the device's `core.devices[].log`, on or off, after `config`
+   (and after what a capture the device holds needs, see [Capture](#capture)): see
+   [Settings and diagnostics](#settings-and-diagnostics).
+5. Server → the wake-word and VAD models, and to a device with a speaker the stop model, right
+   after `log_stream`: see [Models](#models).
 
 ## Models
 
@@ -194,7 +204,7 @@ device                                   server
                                   ◄──    reply {text}
                                   ◄──    state speaking
                                   ◄──    play_start / 0x02 … / play_end
-  played {id}                     ──►
+  played {id, dry, gap_ms}        ──►
                                   ◄──    state idle             (or state error {text})
                                          or, with follow-up on, state listening (see Follow-up)
 ```
@@ -249,7 +259,7 @@ With the server stage `followup` on, a device with `caps.follow_up` keeps the se
 the answer, so the next phrase needs no wake word:
 
 ```
-  played {id}                     ──►    (the answer is out, not dropped)
+  played {id, dry, gap_ms}        ──►    (the answer is out, not dropped)
                                   ◄──    state listening
   0x01 mic: live, no pre-roll     ─►
                                   ◄──    state transcribing     (end of phrase)
@@ -276,7 +286,12 @@ the answer, so the next phrase needs no wake word:
 - `play_start {id}`, then `0x02` frames of up to 4096 payload bytes, then `play_end {id}`. `id` is
   a server counter. The audio is mono at `hello.play.rate`; the server resamples to it.
 - The device plays streams back to back in arrival order (the end-of-phrase chime, a filler, the
-  answer) and sends `played {id}` when the last sample of a stream is out.
+  answer) and sends `played {id, dry, gap_ms}` when the last sample of a stream is out: `dry` is
+  how many times the stream ran dry after it had started and before its `play_end` came (a
+  `play_end` that comes after the last sample is out counts too), `gap_ms` the silence the speaker
+  played meanwhile, in ms. The wait before a stream's first sample is not
+  counted. Both are optional: a device that does not count them (an older firmware) sends
+  `played {id}`, and the server then records nothing for the stream.
 - `play_stop` flushes everything queued and playing; the device answers `played {id, "dropped":
   true}` for each stream it dropped. A new `wake` and the stop word flush the same way, and the
   server answers either with `play_stop`. `0x02` frames and `play_end` of a dropped stream that
@@ -302,6 +317,8 @@ the answer, so the next phrase needs no wake word:
 | `capture {id, seconds}` | server → device | record a sample, see [Capture](#capture) |
 | `capture_resume {id, from}` | server → device | go on with a capture the device kept across a lost link |
 | `audio_end {reason, id}` | device → server | a capture ended on the device: `capture` (all its audio is out) or `busy` (refused, a session is running) |
+| `log_stream {on}` | server → device | send the device log in `log` messages or stop; after every `hello` and whenever `core.devices[].log` changes. Off from boot. A lost link does not turn it off on the device: the lines logged meanwhile wait (16 KB on the Voice PE, a line that does not fit is dropped) for the next connection's `log_stream`, and off drops them |
+| `log {text}` | device → server | one or more whole lines of the device's ESP log, each ending in `\n` (on the Voice PE up to 2 KB a message, a line cut at 512 bytes). The server appends them to `data/device_logs/<id>/<YYYY-MM-DD>.log` (its local day), each behind its own time of arrival `HH:MM:SS.mmm`, and deletes a day's file once that day ended more than `core.device_log_days` (7) days ago |
 
 ## Capture
 

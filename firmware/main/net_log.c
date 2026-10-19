@@ -9,6 +9,10 @@
 //
 // No recursion: the net_log task's own lines never enter the ring, and it logs nothing while a
 // client is connected.
+//
+// Independently of the TCP client, while forwarding is on (net_log_forward) the hook formats each
+// line into a second ring, the server ring, the same way; the zakhar_link task takes the lines
+// from it (net_log_take) and sends them to the server.
 #include "net_log.h"
 
 #include <errno.h>
@@ -18,6 +22,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/ringbuf.h"
@@ -30,12 +35,16 @@ static const char *TAG = "net_log";
 #define LOG_LINE_MAX 512      // a longer line is cut at a UTF-8 character boundary
 #define RING_BYTES (8 * 1024) // a dozen of the longest lines with their item headers
 #define SEND_TIMEOUT_S 1      // a client that stops reading is dropped, so a new one can come in
+// The lines waiting for the server: what a few seconds without a link produce, in PSRAM.
+#define SERVER_RING_BYTES (16 * 1024)
 
 static vprintf_like_t s_prev = vprintf;  // esp_log's default until the hook returns the real one
 static RingbufHandle_t s_ring;
 static TaskHandle_t s_task;
 static int s_listener;
 static _Atomic bool s_client;  // a client is connected: lines go to the ring
+static RingbufHandle_t s_server_ring;
+static _Atomic bool s_forward;  // the server asks for the log: lines go to the server ring
 
 // A line cut at `len` bytes ends with '\n' on a character boundary: the last byte kept before
 // the '\n' is the last of a whole UTF-8 character.
@@ -47,22 +56,33 @@ static void cut(char *line, int len)
     line[end + 1] = '\0';
 }
 
+// Formats a line of `len` bytes (measured, at most LOG_LINE_MAX) straight into a slot of `ring`,
+// without waiting: when no slot is free the line is dropped.
+static void ring_put(RingbufHandle_t ring, int len, const char *fmt, va_list args)
+{
+    char *line;
+    if (xRingbufferSendAcquire(ring, (void **)&line, (size_t)len + 1, 0) != pdTRUE) return;
+    if (vsnprintf(line, (size_t)len + 1, fmt, args) > len) cut(line, len);
+    xRingbufferSendComplete(ring, line);
+}
+
 static int net_vprintf(const char *fmt, va_list args)
 {
-    va_list measure, format;
+    va_list measure, tcp, server;
     va_copy(measure, args);
-    va_copy(format, args);
+    va_copy(tcp, args);
+    va_copy(server, args);
     const int n = s_prev(fmt, args);
-    if (atomic_load(&s_client) && xTaskGetCurrentTaskHandle() != s_task) {
+    const bool to_tcp = atomic_load(&s_client) && xTaskGetCurrentTaskHandle() != s_task;
+    const bool to_server = atomic_load(&s_forward);
+    if (to_tcp || to_server) {
         int len = vsnprintf(NULL, 0, fmt, measure);
         if (len > LOG_LINE_MAX) len = LOG_LINE_MAX;
-        char *line;
-        if (len > 0 && xRingbufferSendAcquire(s_ring, (void **)&line, (size_t)len + 1, 0) == pdTRUE) {
-            if (vsnprintf(line, (size_t)len + 1, fmt, format) > len) cut(line, len);
-            xRingbufferSendComplete(s_ring, line);
-        }
+        if (len > 0 && to_tcp) ring_put(s_ring, len, fmt, tcp);
+        if (len > 0 && to_server) ring_put(s_server_ring, len, fmt, server);
     }
-    va_end(format);
+    va_end(server);
+    va_end(tcp);
     va_end(measure);
     return n;
 }
@@ -78,12 +98,13 @@ static bool send_all(int fd, const char *p, size_t n)
     return true;
 }
 
-// The lines queued for a client that is gone are not for the next one.
-static void drop_queued(void)
+// The lines queued for a client that is gone are not for the next one; nor are those queued for
+// the server once it no longer asks for the log.
+static void drop_queued(RingbufHandle_t ring)
 {
     size_t n;
     void *line;
-    while ((line = xRingbufferReceive(s_ring, &n, 0)) != NULL) vRingbufferReturnItem(s_ring, line);
+    while ((line = xRingbufferReceive(ring, &n, 0)) != NULL) vRingbufferReturnItem(ring, line);
 }
 
 static void net_log_task(void *arg)
@@ -116,17 +137,18 @@ static void net_log_task(void *arg)
             atomic_store(&s_client, false);
             close(client);
             client = -1;
-            drop_queued();
+            drop_queued(s_ring);
         }
     }
 }
 
-void net_log_start(void)
+// The TCP ring, the listener on PORT and the net_log task; false when one of them failed (logged).
+static bool tcp_start(void)
 {
     s_ring = xRingbufferCreate(RING_BYTES, RINGBUF_TYPE_NOSPLIT);
     if (s_ring == NULL) {
         ESP_LOGE(TAG, "ring buffer: out of memory");
-        return;
+        return false;
     }
     s_listener = socket(AF_INET, SOCK_STREAM, IPPROTO_IP);
     const int one = 1;
@@ -138,12 +160,44 @@ void net_log_start(void)
     if (s_listener < 0 || setsockopt(s_listener, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one) != 0 ||
         bind(s_listener, (const struct sockaddr *)&addr, sizeof addr) != 0 || listen(s_listener, 1) != 0) {
         ESP_LOGE(TAG, "listening on port %d failed: errno %d", PORT, errno);
-        return;
+        return false;
     }
     if (xTaskCreatePinnedToCore(net_log_task, "net_log", 3 * 1024, NULL, 1, &s_task, 0) != pdPASS) {
         ESP_LOGE(TAG, "task create failed");
-        return;
+        return false;
     }
+    return true;
+}
+
+void net_log_start(void)
+{
+    s_server_ring = xRingbufferCreateWithCaps(SERVER_RING_BYTES, RINGBUF_TYPE_NOSPLIT, MALLOC_CAP_SPIRAM);
+    if (s_server_ring == NULL) ESP_LOGE(TAG, "server ring buffer: out of PSRAM");
+    const bool tcp = tcp_start();
+    if (!tcp && s_server_ring == NULL) return;
     s_prev = esp_log_set_vprintf(net_vprintf);
-    ESP_LOGI(TAG, "log on TCP port %d", PORT);
+    if (tcp) ESP_LOGI(TAG, "log on TCP port %d", PORT);
+}
+
+void net_log_forward(bool on)
+{
+    if (s_server_ring == NULL) return;
+    if (atomic_exchange(&s_forward, on) && !on) drop_queued(s_server_ring);
+}
+
+size_t net_log_take(char *buf, size_t max)
+{
+    size_t n = 0;
+    if (s_server_ring == NULL) return 0;
+    // A line is at most LOG_LINE_MAX bytes, so the next one is taken only while it surely fits.
+    while (max - n >= LOG_LINE_MAX) {
+        size_t size;
+        char *line = xRingbufferReceive(s_server_ring, &size, 0);
+        if (line == NULL) break;
+        const size_t len = strlen(line);
+        memcpy(buf + n, line, len);
+        n += len;
+        vRingbufferReturnItem(s_server_ring, line);
+    }
+    return n;
 }

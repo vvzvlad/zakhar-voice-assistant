@@ -10,7 +10,7 @@ import httpx
 from loguru import logger
 
 import src.plugins  # noqa: F401  triggers provider registration
-from src import config_store
+from src import config_store, device_logs
 from src.agent_mcp import AgentMcpEndpoint
 from src.assistant_tasks import AssistantTasks, AssistantTasksStore
 from src.chains import referenced_instances
@@ -109,6 +109,9 @@ async def main() -> None:
     if core.runs.enabled:
         runs_store = RunsStore(os.path.join(config_store.DATA_DIR, "runs.db"))
         runs_store.prune(now=time.time(), retention_days=core.runs.retention_days)
+    # A device's log files are pruned when its new day's file starts, and here for every device,
+    # so one that stopped sending does not keep its old days.
+    device_logs.prune(core.device_log_days)
 
     # Named system-prompt profiles (always on — the pipeline reads the active
     # profile's text as the LLM system prompt). On first boot the empty DB is

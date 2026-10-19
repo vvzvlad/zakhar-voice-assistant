@@ -35,7 +35,8 @@ CREATE TABLE IF NOT EXISTS runs (
   rounds_json TEXT,
   request_json TEXT,
   chain TEXT,
-  attempts_json TEXT
+  attempts_json TEXT,
+  play_dry INTEGER, play_gap_ms INTEGER
 );
 """
 
@@ -67,6 +68,7 @@ _INSERT_COLS = [
     "t_vad", "t_stt", "t_llm", "t_stress", "t_tts", "t_filler", "t_total",
     "audio_ms", "audio_bytes", "audio_fmt", "error_stage", "error_text",
     "chain",
+    "play_dry", "play_gap_ms",
 ]
 
 # Summary columns returned by list() (rounds_json is intentionally omitted).
@@ -76,6 +78,7 @@ _LIST_COLS = [
     "t_wakeword", "wakeword_score",
     "t_vad", "t_stt", "t_llm", "t_stress", "t_tts", "t_filler", "t_total",
     "chain",
+    "play_dry", "play_gap_ms",
 ]
 
 _DAY_SECONDS = 86400
@@ -120,7 +123,8 @@ class RunsStore:
                           ("request_json", "TEXT"), ("t_stress", "INTEGER"),
                           ("stress_text", "TEXT"),
                           ("t_wakeword", "INTEGER"), ("wakeword_score", "REAL"),
-                          ("chain", "TEXT"), ("attempts_json", "TEXT")):
+                          ("chain", "TEXT"), ("attempts_json", "TEXT"),
+                          ("play_dry", "INTEGER"), ("play_gap_ms", "INTEGER")):
             if col not in existing:
                 self._conn.execute(f"ALTER TABLE runs ADD COLUMN {col} {decl}")
         self._conn.commit()

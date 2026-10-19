@@ -55,7 +55,7 @@ class OutcomePlayer(FakePlayer):
 
     async def __call__(self, mime, audio):
         await super().__call__(mime, audio)
-        return self.outcome
+        return {"outcome": self.outcome, "dry": None, "gap_ms": None}
 
 
 def _make(tmp_path, monkeypatch, *, gate=None, outcome="played", capable=True, **kw):

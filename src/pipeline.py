@@ -167,10 +167,11 @@ class Pipeline:
         self._followup: tuple[str, str, str] | None = None
 
         # Transport hooks, injected by the device server: send_event(event, data)
-        # (sync), play(mime, bytes | async chunks) (returns "played" or "dropped" once
-        # the device reports the stream), has_speaker (a device without one gets no
-        # TTS at all) and has_follow_up (the device reopens its microphone on a
-        # follow-up `listening`). arbiter is the cross-device WakeArbiter
+        # (sync), play(mime, bytes | async chunks) (returns {"outcome", "dry",
+        # "gap_ms"} once the device reports the stream, see Connection.play),
+        # has_speaker (a device without one gets no TTS at all) and has_follow_up
+        # (the device reopens its microphone on a follow-up `listening`). arbiter is
+        # the cross-device WakeArbiter
         # (src/wake_arbiter.py) a wake run registers with and reports to — its
         # pre-roll is in, its verifier ruled, it stopped waiting (sync calls); None
         # runs every wake unarbitrated.
@@ -1007,6 +1008,9 @@ class Pipeline:
                     # for ungated (non-wake / disabled / passthrough) runs.
                     "t_wakeword": self._wakeword_t,
                     "wakeword_score": self._wakeword_score,
+                    # The reply's playback as the device reports it: times it ran dry
+                    # and the ms of silence played meanwhile. None when it does not count.
+                    "play_dry": None, "play_gap_ms": None,
                 }
                 try:
                     # REJECT: the second-stage verifier did not confirm the wake word,
@@ -1216,7 +1220,7 @@ class Pipeline:
                         self._emit_live(record)
 
                     self._emit(StageEvent.TTS_START, {"text": reply})
-                    played = None  # the answer stream's outcome: "played" | "dropped"
+                    played = None  # what the play hook returned for the answer stream
                     # A device without a speaker gets the reply text only: no synthesis.
                     if self.has_speaker:
                         # The backend of the variant that started: it both synthesizes
@@ -1242,6 +1246,9 @@ class Pipeline:
                             finally:
                                 # The tee only closes `audio` once it has started.
                                 await self._close_stream(audio)
+                            if played is not None:
+                                record["play_dry"] = played["dry"]
+                                record["play_gap_ms"] = played["gap_ms"]
                             clip = b"".join(tts_chunks)
                             record["audio_bytes"] = len(clip)
                             record["audio_fmt"] = mime.partition(";")[0].rpartition("/")[2]
@@ -1279,7 +1286,8 @@ class Pipeline:
                     # proactive speech queued behind it: the session stays open for a
                     # follow-up phrase instead of ending.
                     fb = self.rt.followup_backend
-                    if (played == "played" and self.has_follow_up and not self._speaking
+                    if (played is not None and played["outcome"] == "played"
+                            and self.has_follow_up and not self._speaking
                             and fb is not None and not isinstance(fb, NoFollowup)):
                         await self._arm_followup(conversation_id, run.text, run.reply)
                     else:
@@ -1420,6 +1428,7 @@ class Pipeline:
                     "request": None,
                     "chain": None,
                     "attempts": [],
+                    "play_dry": None, "play_gap_ms": None,
                 }
                 try:
                     # The recognition chains, entered at the handler step (no STT): each
@@ -1477,11 +1486,14 @@ class Pipeline:
 
                     if speak and reply:
                         try:
-                            await self.speak(spoken, record["attempts"])
+                            played = await self.speak(spoken, record["attempts"])
                             # The variants were tried back to back, so their times add
                             # up to the time from the first attempt to the start.
                             record["t_tts"] = sum(
                                 a["t"] for a in record["attempts"] if a["kind"] == "tts")
+                            if played is not None:
+                                record["play_dry"] = played["dry"]
+                                record["play_gap_ms"] = played["gap_ms"]
                         except Exception as e:
                             # Same precedence rule as `_run`: a TTS failure must
                             # not overwrite an earlier (LLM) root cause. The reply
@@ -1620,15 +1632,18 @@ class Pipeline:
         self._emit(StageEvent.RUN_END, {})
         await self._close_stt_streams(streams)
 
-    async def speak(self, text: str, attempts: list | None = None) -> None:
+    async def speak(self, text: str, attempts: list | None = None) -> dict | None:
         """Public entry for proactive speech (reminders, external callers) and the
         filler: synthesize via the first TTS variant that starts (see _start_tts) and
         play it on the device, returning once it has played. A device without a
         speaker gets no synthesis at all. `attempts` collects the variants tried (a
         text run records them). Raises on failure (callers decide isolation).
+
+        Returns what the play hook does ({"outcome", "dry", "gap_ms"}); None for a
+        device without a speaker.
         """
         if not self.has_speaker:
-            return
+            return None
         # Counted until it has played: a speech started while an answer still plays is
         # queued behind it on the device, so that answer opens no follow-up window.
         self._speaking += 1
@@ -1638,7 +1653,7 @@ class Pipeline:
             # log line, so they can never diverge.
             backend, mime, audio = await self._start_tts(text, attempts)
             logger.info(f"{self.name}: 🔔 speak [tts={self._backend_desc(backend)}]: {text!r}")
-            await self.play(mime, audio)
+            return await self.play(mime, audio)
         finally:
             self._speaking -= 1
 

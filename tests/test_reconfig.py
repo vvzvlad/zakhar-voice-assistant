@@ -96,6 +96,8 @@ def test_action_for_representative_paths():
         "core.runs.retention_days": "rebuild_runs",
         "core.devices": "rebuild_devices",
         "core.devices.0.wake_cutoff": "rebuild_devices",
+        "core.devices.0.log": "rebuild_devices",
+        "core.device_log_days": "live",
         "core.chains": "rebuild_backends",
         "llm.instances.openrouter.temperature": "rebuild_backends",
         "llm.instances.openrouter.reply_empty": "live",

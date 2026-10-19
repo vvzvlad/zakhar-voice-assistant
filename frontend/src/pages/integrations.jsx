@@ -562,14 +562,16 @@ export function Prompt() {
 
 // ── Devices ───────────────────────────────────────────────────────────────
 // Add mode (`onSave({name, enabled})`) asks for a device id. Edit mode (`device`, the
-// saved id) edits the display label and the wake-word model (`onSave` gets only the
-// changed ones of {label, wake_model}; wake_model "" = the release default; an uploaded
-// .tflite becomes the selected model), shows the id read-only — it is what the firmware
-// sends in hello — and hosts the live controls; `online` says whether the device is reachable.
-function DeviceModal({ onSave, onClose, title, device, label: savedLabel = "", wakeModel: savedWakeModel = "", online }) {
+// saved id) edits the display label, the wake-word model and the device log switch (`onSave`
+// gets only the changed ones of {label, wake_model, log}; wake_model "" = the release default;
+// an uploaded .tflite becomes the selected model), shows the id read-only — it is what the
+// firmware sends in hello — and hosts the live controls; `online` says whether the device is
+// reachable, `logDays` how many days of device log the server keeps.
+function DeviceModal({ onSave, onClose, title, device, label: savedLabel = "", wakeModel: savedWakeModel = "", log: savedLog = false, logDays, online }) {
   const [name, setName] = useState("");
   const [label, setLabel] = useState(savedLabel);
   const [wakeModel, setWakeModel] = useState(savedWakeModel);
+  const [log, setLog] = useState(savedLog);
   const [wakeModels, setWakeModels] = useState(null); // {options, release} from GET /api/wake-models
   const [uploadErr, setUploadErr] = useState(null);
   const fileRef = useRef(null);
@@ -596,13 +598,14 @@ function DeviceModal({ onSave, onClose, title, device, label: savedLabel = "", w
     }
   }
   if (device) {
-    const unchanged = label.trim() === savedLabel && wakeModel === savedWakeModel;
+    const unchanged = label.trim() === savedLabel && wakeModel === savedWakeModel && log === savedLog;
     return <Modal title={title} onClose={onClose}
       footer={<><button className="z-btn g" onClick={onClose}>Close</button>
         <button className="z-btn p" disabled={unchanged} onClick={() => onSave({
           // Only the edited fields: the rest stays as in the server's fresh list (saveList).
           ...(label.trim() !== savedLabel && { label: label.trim() }),
           ...(wakeModel !== savedWakeModel && { wake_model: wakeModel }),
+          ...(log !== savedLog && { log }),
         })}>Save</button></>}>
       <Field label="Name" hint="Shown in the panel instead of the device id; empty shows the id."><div className="z-inp"><input value={label} placeholder={device} onChange={(e) => setLabel(e.target.value)} /></div></Field>
       <Field label="Device id" hint="Sent by the firmware when it connects — keys the device's settings and dialog context."><div className="z-inp"><input value={device} readOnly /></div></Field>
@@ -617,6 +620,9 @@ function DeviceModal({ onSave, onClose, title, device, label: savedLabel = "", w
         </div>
         {uploadErr && <div className="z-fh" style={{ color: "#b91c1c" }}>{uploadErr}</div>}
       </Field>}
+      <Field row label="Device log" hint={`On: the speaker streams its whole log to the server, which keeps the last ${logDays} days in data/device_logs/${device}/. Off: the speaker sends nothing. Applies on save, no reflash.`}>
+        <Toggle on={log} onChange={setLog} />
+      </Field>
       <CaptureControl device={device} online={online} />
       <DeviceControls device={device} />
       <WakeProbabilityMeter device={device} online={online} />
@@ -950,6 +956,7 @@ export function Devices() {
     {modal?.mode === "edit" && <DeviceModal key={modal.name} title="Edit speaker" onClose={() => setModal(null)}
       device={modal.name} label={devices.find((d) => d.name === modal.name)?.label || ""}
       wakeModel={devices.find((d) => d.name === modal.name)?.wake_model || ""}
+      log={!!devices.find((d) => d.name === modal.name)?.log} logDays={catalog.core.values.device_log_days}
       onSave={(edit) => onEdit(modal.name, edit)} online={statusOf(modal.name) === "online"} />}
   </div>;
 }

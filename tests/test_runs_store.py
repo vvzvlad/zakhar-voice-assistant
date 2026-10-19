@@ -169,11 +169,17 @@ def test_migration_adds_filler_columns_to_old_db(tmp_path):
     assert "stress_text" in cols
 
     assert "chain" in cols and "attempts_json" in cols
+    assert "play_dry" in cols and "play_gap_ms" in cols
 
     rid = store.insert(_rec(filler_text="Ну, погуглю…", t_filler=77, stress_text="Гот+ово.",
                             request={"system_prompt": "p", "context": [], "user_text": "u", "tools": []},
-                            chain="main", attempts=[{"kind": "tts", "provider": "piper"}]))
+                            chain="main", attempts=[{"kind": "tts", "provider": "piper"}],
+                            play_dry=3, play_gap_ms=420))
     got = store.get(rid)
+    assert (got["play_dry"], got["play_gap_ms"]) == (3, 420)
+    # The run log list (the panel, the agent MCP list_runs) carries them too.
+    [row] = store.list()
+    assert (row["play_dry"], row["play_gap_ms"]) == (3, 420)
     assert got["chain"] == "main"
     assert got["attempts"] == [{"kind": "tts", "provider": "piper"}]
     assert got["filler_text"] == "Ну, погуглю…"
