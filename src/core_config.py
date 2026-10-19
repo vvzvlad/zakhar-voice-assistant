@@ -96,7 +96,7 @@ class VadConfig(BaseModel):
         ge=0,
         title="Trim from start",
         json_schema_extra={"unit": "ms", "multipleOf": 100},
-        description="Drop this many ms off the start of the captured sample before STT (cuts the wake-word tail / button-press click). 0 disables.",
+        description="Drop this many ms off the start of the captured sample before STT: the oldest part of the 2000 ms pre-roll, before the wake word. 0 disables.",
     )
     mic_channel: Literal[0, 1] = Field(
         0,

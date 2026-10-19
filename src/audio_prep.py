@@ -104,8 +104,8 @@ def normalize_peak(pcm: bytes, target_dbfs: float = -3.0, max_gain: float = 30.0
 def trim_start_pcm(pcm: bytes, trim_ms: int) -> bytes:
     """Drop the first ``trim_ms`` of 16 kHz / mono / 16-bit PCM from an utterance.
 
-    Used to cut the wake-word tail / button-press lead-in off the captured sample
-    before STT, so it does not pollute the transcription. The cut is sample-aligned
+    Used to cut the oldest pre-roll audio (before the wake word) off the captured
+    sample before STT, so it does not pollute the transcription. The cut is sample-aligned
     (SAMPLE_RATE * 2 / 1000 = 32 bytes/ms is always even). If the trim would consume
     the whole sample (or more), the PCM is returned unchanged so we never hand empty
     audio to STT.
