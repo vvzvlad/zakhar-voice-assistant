@@ -329,7 +329,8 @@ device                                   server
   (default 500 ms) to collect the wakes of the other online devices, or less once every online
   device has woken; a lone online device is not held. With several wakes it rules only once
   each of them has its pre-roll in, or `window_ms` after that device's own `wake`, and the
-  server's second wake-word check has ruled on it; a wake that check rejects takes no part. A
+  server's second wake-word check has ruled on it; a wake that check rejects takes no part. Once
+  a device with a speaker is ready, a device without one is not waited for: it cannot win. A
   `wake` the server holds over a running answer (above) joins only once the check confirms it,
   and until the check rules on it no open group is ruled: the held wake may be the same phrase.
   The server keeps one session — a device with a speaker over one without, between equals the
@@ -338,7 +339,9 @@ device                                   server
   phrase, and then they get `state idle`. For `core.arbitration.cooldown_ms` (default 2000 ms) after the
   first of those wakes, a `wake` from any other device is ended the same way. The ended runs
   show in the run log as `rejected`, reason `duplicate`, with the phrase recognized by the STT
-  of the first enabled chain; the device gets no `transcript` of it. When the kept session
+  of the first enabled chain; the device gets no `transcript` of it. A device ended before the
+  check ruled on it gets `state idle` as soon as the check rejects it instead, and its run shows
+  as `rejected`, reason `wakeword_reject`, untranscribed. When the kept session
   answers, each ended device without a speaker gets that answer as a `reply` without `session`,
   so its screen shows it; a device with a speaker gets nothing, nor does a later answer of the
   same session (a follow-up).
