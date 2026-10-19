@@ -45,6 +45,14 @@ static bool get_percent(const cJSON *v, double *out)
     return true;
 }
 
+// An optional integer field in lo..hi: its value, or -1 when it is absent or anything else.
+static int get_setting(const cJSON *v, int lo, int hi)
+{
+    if (!cJSON_IsNumber(v)) return -1;
+    const double d = v->valuedouble;
+    return d >= lo && d <= hi && d == floor(d) ? (int)d : -1;
+}
+
 // A string field: *out is its text, `absent` when the field is missing.
 static bool get_text(const cJSON *o, const char *name, const char *absent, const char **out)
 {
@@ -66,6 +74,10 @@ static bool decode_fields(const cJSON *o, const char *type, zl_msg_t *m)
         if (!get_percent(field(o, "wake_cutoff"), &a) || !get_percent(field(o, "vad_cutoff"), &b)) return false;
         m->wake = zl_cutoff_u8(a);
         m->vad = zl_cutoff_u8(b);
+        // Optional: a setting this device cannot take leaves its own, and the cutoffs apply.
+        m->echo_cancel = get_setting(field(o, "echo_cancel"), 0, 3);
+        m->echo_mode = get_setting(field(o, "echo_cancel_mode"), 0, 3);
+        m->echo_filter = get_setting(field(o, "echo_cancel_filter"), 1, 8);
         return true;
     }
     if (strcmp(type, "state") == 0) {

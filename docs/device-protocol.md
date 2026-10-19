@@ -79,7 +79,20 @@ The owner's words:
   the server use; hearing over the reply would mean taking a raw microphone from the XMOS. The
   findings: [echo-cancellation.md](echo-cancellation.md). Asked again for the stop word
   («можешь восстановить код, надо для слова стоп»), option chosen: «Только сохранить код» — the
-  code is kept on the branch `echo-cancel`, not merged; the stop word does not get a raw microphone.
+  code is kept on the branch `echo-cancel`. Then, to the plan that while the speaker plays the
+  XMOS channel 0 is switched to the raw microphone, the speaker's own playback is cancelled in it
+  and the stop word listens to it, with «Захар» on channel 1 and the server getting that cleaned
+  channel 0 for the pre-roll of a wake word said over the reply: «ну ок, давай попробуем» — while
+  the speaker plays, channel 0 (to the stop word and to the server) is the raw microphone with the
+  playback cancelled; channel 1 and the wake word stay as they are.
+- «сделал бы переключалку, чтобы с сервера можно было настраивать, хотя бы вкл/выкл» —
+  `echo_cancel` in `config`, a 0..3 control among the device's controls in the admin panel: 0 turns
+  the device's cancellation of its own playback off, 1..3 set how hard it suppresses the echo left
+  over.
+- «так а можно ее перезапускать? хотелось бы потом потестировать на разных вариантах» (about the
+  canceller's mode and filter length, fixed when it is created) — `echo_cancel_mode` and
+  `echo_cancel_filter` in `config` and among the device's controls; the device re-creates its
+  canceller when either changes, without a restart.
 - «наверное надо на сервере сделать отдельную фичу, которая пишет непрерывно лог колонки за
   последние сколько-то дней», option chosen: «Колонка шлёт лог сама» — the speaker sends its log
   lines over this connection (`log`), port 23 stays free for watching by hand, and what it logs
@@ -155,11 +168,25 @@ The owner's words:
    closes an older connection of the same `id` with code 4001 when a new one says `hello`.
 3. Server → `config`, right after `hello` and again whenever the values change:
    ```json
-   {"type": "config", "wake_cutoff": 80, "vad_cutoff": 30}
+   {"type": "config", "wake_cutoff": 80, "vad_cutoff": 30,
+    "echo_cancel": 1, "echo_cancel_mode": 2, "echo_cancel_filter": 4}
    ```
-   Both are percent, 0..100. The device applies them as `uint8 = trunc(percent / 100 * 255)` to the
-   wake-word model and to the on-device VAD gate. They live in the server config, not on the
-   device; until the first `config` the device uses its compiled-in defaults.
+   The cutoffs are percent, 0..100. The device applies them as `uint8 = trunc(percent / 100 * 255)`
+   to the wake-word model and to the on-device VAD gate. The `echo_cancel` fields set the device's
+   cancellation of its own playback in the microphone its stop word hears (on the Voice PE: while
+   it plays, the XMOS channel 0 is the raw microphone and ESP-SR's AEC runs on it):
+   - `echo_cancel`: 0 off, the stop word hears the wake word's input; 1..3 on, with the suppression
+     of the echo left over from mild to strongest; default 1. The suppression exists in the
+     full-duplex modes only; in the others 1..3 just mean on.
+   - `echo_cancel_mode`: 0 SR low cost, 1 SR high performance, 2 FD (full-duplex) low cost, 3 FD
+     high performance; default 2.
+   - `echo_cancel_filter`: the filter length, 1..8; default 4.
+
+   A new mode or filter length re-creates the canceller on the device; when it cannot be created
+   the device works as with `echo_cancel` 0. The three are optional: a device without echo
+   cancellation ignores them, and an absent field or one out of its range leaves the device's own.
+   All these values live in the server config, not on the device; until the first `config` the
+   device uses its compiled-in defaults.
 4. Server → `log_stream {on}` with the device's `core.devices[].log`, on or off, after `config`
    (and after what a capture the device holds needs, see [Capture](#capture)): see
    [Settings and diagnostics](#settings-and-diagnostics).
@@ -225,7 +252,9 @@ device                                   server
   interleaved when `mic.channels` is 2). On the Voice PE
   channel 0 is the XMOS AGC output and channel 1 the XMOS noise-suppressed output at the wake-word
   gain ×4 (applied before the cut to 16 bits, saturating): exactly the samples the wake-word model
-  gets.
+  gets. While the Voice PE plays with `echo_cancel` on, channel 0 is instead the raw microphone 0
+  with the speaker's own playback cancelled, at gain 1, the stop word's input before its ×4; the
+  switch each way takes the device two 32 ms frames.
 - The device keeps streaming until a `state` of this session other than `listening` arrives. The
   end of the phrase is found by the server's VAD; the device has no end-pointing.
 - `state`: `{"type": "state", "session": 17, "value": "listening"}`. Values: `listening`,

@@ -63,8 +63,18 @@ CAPTURE_WAIT_MARGIN = 8.0
 # Panel control ids.
 WAKE_CUTOFF = "wake_probability_cutoff"
 VAD_CUTOFF = "vad_cutoff"
+ECHO_CANCEL = "echo_cancel"
+ECHO_CANCEL_MODE = "echo_cancel_mode"
+ECHO_CANCEL_FILTER = "echo_cancel_filter"
 SPEAKER_VOLUME = "speaker_volume"
-_CUTOFF_FIELDS = {WAKE_CUTOFF: "wake_cutoff", VAD_CUTOFF: "vad_cutoff"}
+# The controls kept in the device config: control id -> (field, its minimum, its maximum).
+_CONFIG_FIELDS = {
+    WAKE_CUTOFF: ("wake_cutoff", 0, 100),
+    VAD_CUTOFF: ("vad_cutoff", 0, 100),
+    ECHO_CANCEL: ("echo_cancel", 0, 3),
+    ECHO_CANCEL_MODE: ("echo_cancel_mode", 0, 3),
+    ECHO_CANCEL_FILTER: ("echo_cancel_filter", 1, 8),
+}
 
 # StageEvents that map onto a plain `state` message; TTS_START, STT_END and ERROR
 # carry text and are handled in Device._send_event, the rest send nothing.
@@ -86,6 +96,11 @@ def _spawn(coro) -> None:
     task = asyncio.create_task(coro)
     _background.add(task)
     task.add_done_callback(_background.discard)
+
+
+def _config_fields(cfg) -> dict[str, int]:
+    """The device config's fields that `config` carries: those of the config controls."""
+    return {field: getattr(cfg, field) for field, _, _ in _CONFIG_FIELDS.values()}
 
 
 def _model_paths(cfg, speaker: bool) -> dict[str, tuple[str, str]]:
@@ -251,7 +266,7 @@ class Connection:
         self.session_open = False
         # The value of the last `state` sent in the current session.
         self.last_state = None
-        self.cutoffs = None  # (wake, vad) last sent in `config`
+        self.config_sent = None  # _config_fields() last sent in `config`
         self.log_on = None  # `on` last sent in `log_stream`
         self.models: dict[str, str] = {}  # kind -> the name last sent in `model`
         self.closed = False
@@ -296,8 +311,8 @@ class Connection:
         self.send({**msg, "session": self.session})
 
     def send_config(self, cfg) -> None:
-        self.cutoffs = (cfg.wake_cutoff, cfg.vad_cutoff)
-        self.send({"type": "config", "wake_cutoff": cfg.wake_cutoff, "vad_cutoff": cfg.vad_cutoff})
+        self.config_sent = _config_fields(cfg)
+        self.send({"type": "config", **self.config_sent})
 
     def send_log_stream(self, on: bool) -> None:
         self.log_on = on
@@ -658,14 +673,21 @@ class Device:
         ]
 
     def controls(self) -> list[dict]:
-        """Panel controls: the cutoffs (server config) and, on a connected device
-        with a speaker, its volume."""
+        """Panel controls: the cutoffs and the stop word's echo cancellation (server config)
+        and, on a connected device with a speaker, its volume."""
         cfg = self.cfg
         out = [
             {"id": WAKE_CUTOFF, "name": "Wake word cutoff", "value": cfg.wake_cutoff,
              "min": 0, "max": 100, "step": 1, "unit": "%"},
             {"id": VAD_CUTOFF, "name": "VAD cutoff", "value": cfg.vad_cutoff,
              "min": 0, "max": 100, "step": 1, "unit": "%"},
+            {"id": ECHO_CANCEL, "name": "Stop word echo cancellation (0 off, 1..3 echo suppression)",
+             "value": cfg.echo_cancel, "min": 0, "max": 3, "step": 1, "unit": ""},
+            {"id": ECHO_CANCEL_MODE,
+             "name": "Stop word echo cancellation mode (0 SR low, 1 SR high, 2 FD low, 3 FD high)",
+             "value": cfg.echo_cancel_mode, "min": 0, "max": 3, "step": 1, "unit": ""},
+            {"id": ECHO_CANCEL_FILTER, "name": "Stop word echo cancellation filter length",
+             "value": cfg.echo_cancel_filter, "min": 1, "max": 8, "step": 1, "unit": ""},
         ]
         conn = self.conn
         if conn is not None and conn.speaker:
@@ -674,18 +696,20 @@ class Device:
         return out
 
     def set_control(self, control_id: str, value: float) -> None:
-        """A cutoff is written to the config (the reconfigure that follows sends
-        `config` to a connected device); the volume goes to the device.
+        """A cutoff or a stop word echo cancellation setting is written to the config (the
+        reconfigure that follows sends `config` to a connected device); the volume goes to
+        the device.
         Raises LookupError (unknown control / no speaker) or RuntimeError (offline)."""
-        pct = max(0, min(100, round(value)))
-        field = _CUTOFF_FIELDS.get(control_id)
-        if field is not None:
+        config = _CONFIG_FIELDS.get(control_id)
+        if config is not None:
+            field, low, high = config
             devices = [d.model_dump(mode="json") for d in self.rt.core.devices]
             for d in devices:
                 if d["name"] == self.name:
-                    d[field] = pct
+                    d[field] = max(low, min(high, round(value)))
             self.rt.svc.apply({"core": {"devices": devices}})
             return
+        pct = max(0, min(100, round(value)))
         if control_id != SPEAKER_VOLUME:
             raise LookupError(f"{self.name} has no control {control_id!r}")
         conn = self.conn
@@ -1074,7 +1098,7 @@ class DeviceManager:
 
     async def reconfigure(self) -> None:
         """Apply the device config to live connections: close a device that left the
-        config or got disabled, send `config` to one whose cutoffs changed, `log_stream`
+        config or got disabled, send `config` to one whose `config` values changed, `log_stream`
         to one whose log switch changed and a model whose name changed."""
         names = {cfg.name for cfg in self.rt.core.devices}
         for name, device in self._devices.items():
@@ -1090,7 +1114,7 @@ class DeviceManager:
                 logger.info(f"{cfg.name}: disabled; closing its connection")
                 conn.close(CLOSE_DISABLED)
                 continue
-            if conn.cutoffs != (cfg.wake_cutoff, cfg.vad_cutoff):
+            if conn.config_sent != _config_fields(cfg):
                 conn.send_config(cfg)
             if conn.log_on != cfg.log:
                 conn.send_log_stream(cfg.log)

@@ -200,7 +200,7 @@ fw-logs: ## Stream a running speaker's log over Wi-Fi: make fw-logs HOST=<addres
 fw-voicepe-host-test: ## Host-test the Voice PE firmware's pure cores (audio, indication, dial, button)
 	@mkdir -p $(FW_HOST)
 	cc -std=gnu17 -Wall -Wextra -Werror -I firmware/main firmware/main/host_test/test_audio_core.c \
-		firmware/main/audio_core.c -o $(FW_HOST)/test_audio_core
+		firmware/main/audio_core.c -lm -o $(FW_HOST)/test_audio_core
 	cc -std=gnu17 -Wall -Wextra -Werror -I firmware/main firmware/main/host_test/test_ui_core.c \
 		firmware/main/ui_core.c -o $(FW_HOST)/test_ui_core
 	$(FW_HOST)/test_audio_core
