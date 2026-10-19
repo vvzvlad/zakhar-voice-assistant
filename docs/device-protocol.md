@@ -102,7 +102,7 @@ The owner's words:
   through `log_stream`; off, the device sends nothing.
 - «поисследуй, как можно отбрасывать копии с разных колонок», then «давай сделаем 3, да» — when
   several devices wake on one phrase, the server keeps one session and ends the others with
-  `state idle` before `listening`. Of the rules offered (the first wake wins; the cleanest wake
+  `state idle`. Of the rules offered (the first wake wins; the cleanest wake
   word wins; device priority; compare the texts after recognition), option 3: a device with a
   speaker beats one without, between equals the device that heard the wake word with the higher
   signal-to-noise ratio, then the earlier wake. Then «пусть тоже распознается» — a dropped

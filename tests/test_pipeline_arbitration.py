@@ -98,28 +98,30 @@ async def test_a_winner_the_verifier_rejects_leaves_the_phrase_to_the_other_devi
     assert (store.records[-1]["result"], store.records[-1]["reason"]) == ("rejected", "wakeword_reject")
 
 
-async def test_a_panel_that_loses_by_its_own_confirmation_is_not_shown_listening(
+async def test_a_device_that_loses_by_its_own_confirmation_is_not_shown_listening(
         tmp_path, monkeypatch):
-    # The speaker's wake is confirmed first and shown at once; the panel's confirmation
-    # completes the group, which the speaker wins: the panel never lights up.
+    # Two speakers with equal pre-rolls: the first wake's is confirmed first and shown at
+    # once; the second's confirmation completes the group, which the earlier wake wins:
+    # the second never lights up.
     patch_llm(monkeypatch)
-    speaker, speaker_events = make_pipeline(tmp_path, monkeypatch, name="speaker")
-    panel, panel_events = make_pipeline(tmp_path, monkeypatch, name="panel")
-    for p in (speaker, panel):
+    first, first_events = make_pipeline(tmp_path, monkeypatch, name="first")
+    second, second_events = make_pipeline(tmp_path, monkeypatch, name="second")
+    for p in (first, second):
         p.rt.wakeword_backend = FakeWakewordVerifier(accepted=True, window_ms=2500)
-    panel.has_speaker = False
-    speaker.arbiter = panel.arbiter = WakeArbiter(speaker.rt, online_count=lambda: 2)
+        install_fake_vad(p, [True] * 400)  # no end-point: each check waits for its window
+    first.arbiter = second.arbiter = WakeArbiter(first.rt, online_count=lambda: 2)
 
-    for p in (speaker, panel):
+    for p in (first, second):
         await p.on_start("cid", WAKE)
         await p.on_audio(preroll(100, 1000))
-    await speaker.on_audio(bytes(16000))  # 500 ms of live audio fills the verify window
-    await _drain_verify(speaker)
-    assert StageEvent.STT_VAD_START in types_of(speaker_events)
-    await panel.on_audio(bytes(16000))
-    await _drain_verify(panel)
-    assert panel._duplicate
-    assert StageEvent.STT_VAD_START not in types_of(panel_events)
+    await first.on_audio(bytes(16000))  # 500 ms of live audio fills the verify window
+    await _drain_verify(first)
+    assert StageEvent.STT_VAD_START in types_of(first_events)
+    assert not second._duplicate  # its check still holds the group open
+    await second.on_audio(bytes(16000))
+    await _drain_verify(second)
+    assert second._duplicate
+    assert StageEvent.STT_VAD_START not in types_of(second_events)
 
 
 async def test_a_lone_false_wake_leaves_no_cooldown_for_another_device(tmp_path, monkeypatch):
