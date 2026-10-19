@@ -33,7 +33,7 @@ configured under `core.mcp_servers` in `data/config.json`.
   device side of the protocol and is vendored into the espanel repo (esp-svgpanel); this copy
   is the source of truth.
 - `microWakeWord/` — wake-word model training research and the deployed models.
-- `data/` — runtime state: `config.json`, per-device context files, `prompts.db` (SQLite store of named system-prompt profiles), `captures/` and `datasets/` (device recordings, `src/captures.py`) (gitignored, docker volume)
+- `data/` — runtime state: `config.json`, per-device context files, `prompts.db` (SQLite store of named system-prompt profiles), `captures/` and `datasets/` (device recordings, `src/captures.py`), `device_logs/` (the speakers' own logs, `src/device_logs.py`) (gitignored, docker volume)
 - `templates/` — committed reference assets seeded into `data/` on first boot (`default_prompt.md`, `default_config.json`)
 - `main.py` — thin entry point over `src/`
 
@@ -92,7 +92,7 @@ only setting is `core.agent_mcp.enabled`, panel-editable and read live per reque
 - `core.*` holds non-provider settings (context, audio, vad — end-pointing thresholds +
   mic conditioning, network, openweathermap, mcp_servers,
   calendar, assistant_tasks, agent_mcp, prompt, runs, reminders, capture, ack, devices, tts_timeout,
-  log_level) as plain `CoreConfig` pydantic sections.
+  log_level, device_log_days) as plain `CoreConfig` pydantic sections.
 - API keys are plain string fields in the JSON (trusted-LAN service, no masking). `data/`
   is gitignored so `config.json` never gets committed.
 

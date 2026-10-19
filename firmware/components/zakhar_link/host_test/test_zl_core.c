@@ -69,6 +69,12 @@ static void test_decode(void)
     assert(decode("{\"type\": \"detect\", \"on\": true}", &m) && m.type == ZL_MSG_DETECT && m.on);
     zl_msg_free(&m);
     assert(!decode("{\"type\": \"detect\", \"on\": 1}", &m));
+    assert(decode("{\"type\": \"log_stream\", \"on\": true}", &m) && m.type == ZL_MSG_LOG_STREAM && m.on);
+    zl_msg_free(&m);
+    assert(decode("{\"type\": \"log_stream\", \"on\": false}", &m) && m.type == ZL_MSG_LOG_STREAM && !m.on);
+    zl_msg_free(&m);
+    assert(!decode("{\"type\": \"log_stream\", \"on\": \"yes\"}", &m));
+    assert(!decode("{\"type\": \"log_stream\"}", &m));
     assert(decode("{\"type\": \"capture\", \"id\": 7, \"seconds\": 5}", &m) && m.type == ZL_MSG_CAPTURE);
     assert(m.id == 7 && m.capture_ms == 5000);
     zl_msg_free(&m);
@@ -132,6 +138,12 @@ static void test_encode(void)
                "{\"type\":\"model_loaded\",\"kind\":\"vad\",\"name\":\"vad.tflite\",\"ok\":false}");
     encoded_is(zl_encode_stop(true, 17), "{\"type\":\"stop\",\"session\":17}");
     encoded_is(zl_encode_stop(false, 17), "{\"type\":\"stop\"}");  // outside a session
+    // Only `len` bytes go out; quotes, newlines and the colour escapes are JSON-escaped.
+    const char *lines = "I (12) zakhar_link: \"капча\"\n\033[0;33mW (13) x: y\033[0m\nnot yet";
+    encoded_is(zl_encode_log(lines, strlen(lines) - strlen("not yet")),
+               "{\"type\":\"log\",\"text\":\"I (12) zakhar_link: \\\"капча\\\"\\n"
+               "\\u001b[0;33mW (13) x: y\\u001b[0m\\n\"}");
+    encoded_is(zl_encode_log("", 0), "{\"type\":\"log\",\"text\":\"\"}");
     printf("ok: encode\n");
 }
 

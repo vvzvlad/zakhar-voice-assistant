@@ -332,6 +332,7 @@ void app_main(void)
         .play_rate = 48000,
         .play_buffer_ms = 4000,
         .volume = volume_get(),
+        .log_read = net_log_take,
     };
     const zl_callbacks_t cb = {
         .on_connection = leds_set_link,
@@ -341,6 +342,7 @@ void app_main(void)
         .on_capture = leds_set_capture,
         .can_start = can_start,
         .on_model = on_model,
+        .on_log_stream = net_log_forward,
     };
     zl_start(&cfg, &cb);
     // zl_start() reports no failure; its task exists only when the start got through (the playback

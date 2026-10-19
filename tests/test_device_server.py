@@ -6,7 +6,9 @@ import asyncio
 import io
 import itertools
 import json
+import re
 import wave
+from datetime import date
 from pathlib import Path
 
 import aiohttp
@@ -70,6 +72,14 @@ def is_model(msg) -> bool:
     return msg.type == aiohttp.WSMsgType.TEXT and json.loads(msg.data)["type"] == "model"
 
 
+def log_switch(msg) -> bool | None:
+    """The `on` of a `log_stream` message, None for any other frame."""
+    if msg.type != aiohttp.WSMsgType.TEXT:
+        return None
+    data = json.loads(msg.data)
+    return data["on"] if data["type"] == "log_stream" else None
+
+
 class FakeDevice:
     """The device end of the protocol. Play frames are collected per stream id."""
 
@@ -80,11 +90,12 @@ class FakeDevice:
         self._stream = None
 
     async def recv(self, timeout=5.0) -> dict:
-        """The next text message other than `model`; play frames before it go into
-        self.plays, models are skipped (model() reads them)."""
+        """The next text message other than `model` and `log_stream`; play frames before it
+        go into self.plays, models and log switches are skipped (model() and log_switch()
+        read them)."""
         while True:
             msg = await asyncio.wait_for(self.ws.receive(), timeout)
-            if is_model(msg):
+            if is_model(msg) or log_switch(msg) is not None:
                 continue
             if msg.type == aiohttp.WSMsgType.BINARY:
                 assert msg.data[0] == PLAY
@@ -99,8 +110,11 @@ class FakeDevice:
             return data
 
     async def model(self, timeout=5.0) -> tuple[dict, bytes]:
-        """The next frame must start a `model`: it and the 0x03 payload that follows."""
+        """The next frame other than a `log_stream` must start a `model`: it and the 0x03
+        payload that follows."""
         msg = await asyncio.wait_for(self.ws.receive(), timeout)
+        while log_switch(msg) is not None:
+            msg = await asyncio.wait_for(self.ws.receive(), timeout)
         assert msg.type == aiohttp.WSMsgType.TEXT, (msg.type, msg.data)
         model = json.loads(msg.data)
         assert model["type"] == "model", model
@@ -140,9 +154,18 @@ class FakeDevice:
                 await self.send(type="played", id=got[-1]["id"])
         return got
 
+    async def log_switch(self, timeout=5.0) -> bool:
+        """The `on` of the next `log_stream`; only models may come before it."""
+        while True:
+            msg = await asyncio.wait_for(self.ws.receive(), timeout)
+            if not is_model(msg):
+                on = log_switch(msg)
+                assert on is not None, (msg.type, msg.data)
+                return on
+
     async def closed_with(self) -> int:
         msg = await asyncio.wait_for(self.ws.receive(), 5.0)
-        while is_model(msg):
+        while is_model(msg) or log_switch(msg) is not None:
             msg = await asyncio.wait_for(self.ws.receive(), 5.0)
         assert msg.type == aiohttp.WSMsgType.CLOSE, (msg.type, msg.data)
         return msg.data
@@ -832,6 +855,57 @@ async def test_set_detect_sends_switch_and_refuses_offline(srv):
     assert await dev.recv() == {"type": "detect", "on": False}
     srv.manager.set_detect("kitchen", True)
     assert await dev.recv() == {"type": "detect", "on": True}
+
+
+async def test_the_log_switch_reaches_the_device_and_its_log_the_disk(srv, tmp_path):
+    # Every hello gets `log_stream` with the device's setting, off as well, before the models.
+    dev = await srv.connect()
+    assert (await dev.recv())["type"] == "config"
+    assert await dev.log_switch() is False
+    # Switched on and off while connected: sent at once; a reconfigure that changes nothing
+    # else sends nothing.
+    srv.svc.apply({"core": {"devices": [{"name": "kitchen", "log": True}]}})
+    await srv.manager.reconfigure()
+    assert await dev.log_switch() is True
+    await srv.manager.reconfigure()
+    with pytest.raises(asyncio.TimeoutError):
+        await dev.log_switch(timeout=0.2)
+
+    # The device's lines land in today's file, each behind the server's time.
+    await dev.send(type="log", text="I (1200) zakhar_link: connected\nW (1300) x: тихо\n")
+    await dev.send(type="log", text="I (1400) y: z\n")
+    path = tmp_path / "device_logs" / "kitchen" / f"{date.today():%Y-%m-%d}.log"
+    await until(lambda: path.exists() and len(path.read_text(encoding="utf-8").splitlines()) == 3)
+    lines = path.read_text(encoding="utf-8").splitlines()
+    assert [line[13:] for line in lines] == [
+        "I (1200) zakhar_link: connected", "W (1300) x: тихо", "I (1400) y: z"]
+    assert all(re.fullmatch(r"\d\d:\d\d:\d\d\.\d{3} ", line[:13]) for line in lines)
+
+    # A new connection gets the setting as it is now.
+    again = await srv.connect()
+    assert (await again.recv())["type"] == "config"
+    assert await again.log_switch() is True
+    srv.svc.apply({"core": {"devices": [{"name": "kitchen", "log": False}]}})
+    await srv.manager.reconfigure()
+    assert await again.log_switch() is False
+
+
+async def test_an_unwritable_device_log_keeps_the_link(srv, monkeypatch):
+    tried = []
+
+    def full(*args):
+        tried.append(args)
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(device_server.device_logs, "append", full)
+    dev = await srv.connect()
+    assert (await dev.recv())["type"] == "config"
+    assert await dev.log_switch() is False
+    await dev.send(type="log", text="I (1200) x: y\n")
+    await until(lambda: tried)
+    srv.svc.apply({"core": {"devices": [{"name": "kitchen", "log": True}]}})
+    await srv.manager.reconfigure()
+    assert await dev.log_switch() is True
 
 
 async def test_unknown_disabled_and_replaced_ids(srv):

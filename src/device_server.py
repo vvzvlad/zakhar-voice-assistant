@@ -22,7 +22,7 @@ import soxr
 from aiohttp import WSCloseCode, WSMsgType, web
 from loguru import logger
 
-from src import captures, config_store, context
+from src import captures, config_store, context, device_logs
 from src.chime import build_ack_clip
 from src.pipeline import Pipeline
 from src.pipeline_events import StageEvent
@@ -247,6 +247,7 @@ class Connection:
         self.session = None
         self.session_open = False
         self.cutoffs = None  # (wake, vad) last sent in `config`
+        self.log_on = None  # `on` last sent in `log_stream`
         self.models: dict[str, str] = {}  # kind -> the name last sent in `model`
         self.closed = False
         self.held_capture = hello.get("capture")  # the id of the capture the device holds
@@ -290,6 +291,10 @@ class Connection:
     def send_config(self, cfg) -> None:
         self.cutoffs = (cfg.wake_cutoff, cfg.vad_cutoff)
         self.send({"type": "config", "wake_cutoff": cfg.wake_cutoff, "vad_cutoff": cfg.vad_cutoff})
+
+    def send_log_stream(self, on: bool) -> None:
+        self.log_on = on
+        self.send({"type": "log_stream", "on": on})
 
     def send_model(self, kind: str, name: str, path: str) -> bool:
         """Send the .tflite file at `path` as the device's `kind` model named `name`: `model`,
@@ -437,6 +442,8 @@ class Device:
         self.pipeline.play = self.play
         self.capture: captures.Capture | None = None
         self._capture_watchdog: asyncio.TimerHandle | None = None
+        # The device log could not be written last time: warned once until a write succeeds.
+        self._log_write_failed = False
 
     @property
     def cfg(self):
@@ -513,6 +520,16 @@ class Device:
             conn.volume = msg["value"]
         elif kind == "wake_peak":
             conn.wake_peak = msg["value"]
+        elif kind == "log":
+            # A log that cannot be written (a full or read-only volume) drops its lines, not the
+            # link: the device would resend its queued lines on every reconnect.
+            try:
+                device_logs.append(self.name, msg["text"], self.rt.core.device_log_days)
+                self._log_write_failed = False
+            except OSError as e:
+                if not self._log_write_failed:
+                    logger.warning(f"{self.name}: device log not written: {e}")
+                self._log_write_failed = True
         elif kind == "audio_end":
             if self.capture is not None and msg.get("id") == self.capture.id:
                 busy = msg.get("reason") == "busy"
@@ -873,8 +890,8 @@ class DeviceManager:
 
     async def _hello(self, ws, hello: dict):
         """Admit a device: add an unknown id to the config, refuse a disabled one,
-        replace an older connection of the same id, then send `config`, the models and
-        what the device's capture needs."""
+        replace an older connection of the same id, then send `config`, what the device's
+        capture needs, `log_stream` and the models."""
         name = hello["id"]
         cfg = next((d for d in self.rt.core.devices if d.name == name), None)
         if cfg is None:
@@ -899,6 +916,8 @@ class DeviceManager:
             device.resume_capture(conn)
         except Exception as e:
             logger.error(f"{name}: captures not taken up: {e}")
+        # Off too: the device keeps collecting its log across a lost link until told.
+        conn.send_log_stream(cfg.log)
         for kind, (model, path) in _model_paths(cfg, conn.speaker).items():
             conn.send_model(kind, model, path)
         logger.info(
@@ -909,8 +928,8 @@ class DeviceManager:
 
     async def reconfigure(self) -> None:
         """Apply the device config to live connections: close a device that left the
-        config or got disabled, send `config` to one whose cutoffs changed and a model
-        whose name changed."""
+        config or got disabled, send `config` to one whose cutoffs changed, `log_stream`
+        to one whose log switch changed and a model whose name changed."""
         names = {cfg.name for cfg in self.rt.core.devices}
         for name, device in self._devices.items():
             if name not in names and device.conn is not None:
@@ -927,6 +946,8 @@ class DeviceManager:
                 continue
             if conn.cutoffs != (cfg.wake_cutoff, cfg.vad_cutoff):
                 conn.send_config(cfg)
+            if conn.log_on != cfg.log:
+                conn.send_log_stream(cfg.log)
             for kind, (model, path) in _model_paths(cfg, conn.speaker).items():
                 if conn.models.get(kind) != model:
                     conn.send_model(kind, model, path)

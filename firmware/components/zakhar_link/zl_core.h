@@ -34,6 +34,7 @@ typedef enum {
     ZL_MSG_CAPTURE_RESUME,
     ZL_MSG_DETECT,
     ZL_MSG_MODEL,
+    ZL_MSG_LOG_STREAM,
 } zl_msg_type_t;
 
 typedef struct {
@@ -45,7 +46,7 @@ typedef struct {
     uint32_t id;          // PLAY_START, PLAY_END, CAPTURE (> 0), CAPTURE_RESUME
     uint8_t wake, vad;    // CONFIG, as uint8 cutoffs
     int value;            // SET_VOLUME, percent
-    bool on;              // WAKE_PEAK_STREAM, DETECT
+    bool on;              // WAKE_PEAK_STREAM, DETECT, LOG_STREAM
     uint32_t capture_ms;  // CAPTURE
     uint32_t from;        // CAPTURE_RESUME: the offset of the first frame the server lacks
     zl_model_t model;     // MODEL: its kind
@@ -73,6 +74,8 @@ char *zl_encode_audio_end(const char *reason, uint32_t id);
 char *zl_encode_model_loaded(zl_model_t kind, const char *name, bool ok);
 // session goes out only with has_session (a stop word outside a session has none).
 char *zl_encode_stop(bool has_session, uint32_t session);
+// len bytes of log lines, not NUL-terminated.
+char *zl_encode_log(const char *text, size_t len);
 void zl_free(char *json);
 
 // ---------------------------------------------------------------- numbers

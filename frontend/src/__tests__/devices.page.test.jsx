@@ -2,7 +2,7 @@
 // Devices page: every write of the device list starts from the server's current
 // list (a cutoff set from a slider, a device that connected while the page was
 // open), the Edit dialog opens from the re-read config, shows the id read-only, saves a
-// display label and a wake-word model (a listed or an uploaded one), and shows why its controls cannot load, and a slider write or a
+// display label, a wake-word model (a listed or an uploaded one) and the device log switch, and shows why its controls cannot load, and a slider write or a
 // newly connected device refreshes the app's config snapshot.
 import React from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
@@ -146,6 +146,25 @@ describe("Devices page", () => {
     await waitFor(() => expect(data.patch).toHaveBeenCalledTimes(1));
     expect(data.patch).toHaveBeenCalledWith({ core: { devices: [
       { ...FRESH[0], wake_model: "uploaded/zakhar_v34" },
+      FRESH[1],
+    ] } });
+  });
+
+  it("edit switches the device log on and saves it onto the server's current list", async () => {
+    api.getDeviceControls.mockResolvedValue({ device: "kitchen", online: true, versions: [], controls: [] });
+    data.catalog.core.values.device_log_days = 7;
+    render(<Devices />);
+    fireEvent.click(screen.getByText("Edit"));
+    const sw = await screen.findByRole("switch");
+    expect(sw).toHaveAttribute("aria-checked", "false");
+    expect(screen.getByText(/keeps the last 7 days in data\/device_logs\/kitchen\//)).toBeInTheDocument();
+    expect(screen.getByText("Save")).toBeDisabled();
+    fireEvent.click(sw);
+    expect(sw).toHaveAttribute("aria-checked", "true");
+    fireEvent.click(screen.getByText("Save"));
+    await waitFor(() => expect(data.patch).toHaveBeenCalledTimes(1));
+    expect(data.patch).toHaveBeenCalledWith({ core: { devices: [
+      { ...FRESH[0], log: true },
       FRESH[1],
     ] } });
   });

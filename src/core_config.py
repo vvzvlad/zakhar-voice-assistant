@@ -216,6 +216,13 @@ class DeviceConfig(BaseModel):
     # into the stored config and outlive its file in a later release.
     wake_model: str = ""
     vad_model: str = ""
+    # Sent to the device in `log_stream` after every hello and whenever it changes.
+    log: bool = Field(
+        False,
+        title="Device log",
+        description="The speaker streams its whole log to the server, which keeps it "
+        "core.device_log_days days under data/device_logs/. Off: the speaker sends nothing.",
+    )
 
 
 class PromptConfig(BaseModel):
@@ -310,3 +317,5 @@ class CoreConfig(BaseModel):
     chains: list[ChainConfig] = []
     tts_timeout: int = 30
     log_level: str = "INFO"
+    # How many days of device log files (core.devices[].log) are kept.
+    device_log_days: int = 7

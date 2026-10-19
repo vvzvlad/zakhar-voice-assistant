@@ -46,6 +46,10 @@ typedef struct {
     int play_rate;       // playback sample rate, Hz; 0: no speaker
     int play_buffer_ms;  // the playback buffer (PSRAM), hello.play.buffer_ms
     int volume;          // speaker volume at start, percent
+    // Optional: the device log for `log` messages. Copies whole log lines (each ending in '\n')
+    // into buf without blocking, up to max bytes, and returns the bytes copied. Called on the
+    // component task while the server asks for the log (see on_log_stream).
+    size_t (*log_read)(char *buf, size_t max);
 } zl_config_t;
 
 // Every callback may be NULL. They run on the component task or on the WebSocket client's task,
@@ -76,6 +80,10 @@ typedef struct {
     // model loaded; the answer goes to the server as `model_loaded`. Runs on the client's task
     // and, unlike the others, may take a few milliseconds there.
     bool (*on_model)(zl_model_t kind, uint8_t *data, size_t size);
+    // A `log_stream`: the server wants the device log (true) or no longer (false). A lost link
+    // does not call it: the device keeps collecting its lines meanwhile, and the next
+    // connection's `log_stream` decides.
+    void (*on_log_stream)(bool on);
 } zl_callbacks_t;
 
 // Copies cfg (its strings too) and cb, allocates the playback buffer, starts mDNS and the component

@@ -4,7 +4,8 @@
 // Two tasks. The component task owns the client: it creates it, and when the link is lost
 // destroys it and connects a new one after the backoff. It sends everything the device starts:
 // the wake, `stop`, the session's and the capture's mic frames, audio_end, wake_peak once a second,
-// `played` of finished streams and `volume`. It also owns the microphone position, so a `capture`
+// `played` of finished streams, `volume` and, while the server asks for it, the device log in
+// `log` messages. It also owns the microphone position, so a `capture`
 // and a `capture_resume` are handed to it. A capture outlives a lost link: the next hello names
 // it, and a `capture_resume` sends it on from the frame the server asks for. The client's own task
 // runs the event handler: the hello on connect and every received frame in arrival order, so a
@@ -47,6 +48,7 @@ static const char *TAG = "zakhar_link";
 // is a gap of silence mid-word, heard as a click. The wait stays inside the server's 500 ms pacing
 // margin (docs/device-protocol.md), so the buffer does not overflow.
 #define PLAY_PRIME_MS 300
+#define LOG_CHUNK 2048  // the most log text one `log` message carries; one goes out per pass
 // Core 0, priority 3, for both tasks: next to the wake-word task, away from the UI on core 1.
 #define TASK_STACK (6 * 1024)
 #define TASK_PRIO 3
@@ -81,6 +83,7 @@ static uint32_t s_resume_id, s_resume_from;   // the last `capture_resume`
 static uint32_t s_capture_id;
 static bool s_capture_sending;
 static bool s_peak_on;
+static bool s_log_on;  // the server asked for the log on this link
 static int s_volume;
 static zl_playq_t s_playq;
 
@@ -106,6 +109,8 @@ static uint32_t s_capture_start, s_capture_frames;
 // The server's URL found by mDNS: written by the component task before it creates a client, read
 // while that client lives.
 static char s_url[sizeof "ws://255.255.255.255:65535/device"];
+// The component task only: log text for one `log` message (PSRAM, only with log_read).
+static char *s_log;
 
 static void lock(void)
 {
@@ -249,6 +254,9 @@ static void on_text(esp_websocket_client_handle_t ws, const char *json, size_t l
         case ZL_MSG_DETECT:
             zl_sess_detect(&s_sess, m.on);
             break;
+        case ZL_MSG_LOG_STREAM:
+            s_log_on = m.on;
+            break;
         default:
             break;
         }
@@ -296,6 +304,11 @@ static void on_text(esp_websocket_client_handle_t ws, const char *json, size_t l
         break;
     case ZL_MSG_DETECT:
         ESP_LOGI(TAG, "wake word detection %s", m.on ? "on" : "off");
+        break;
+    case ZL_MSG_LOG_STREAM:
+        // The callback first, so this line itself is queued for the server.
+        if (s_cb.on_log_stream != NULL) s_cb.on_log_stream(m.on);
+        ESP_LOGI(TAG, "log stream %s", m.on ? "on" : "off");
         break;
     case ZL_MSG_MODEL:
         model_start(&m);
@@ -378,7 +391,8 @@ static uint32_t backoff_take(void)
 }
 
 // The link is gone (or silent): the client goes, the session and the playback end. A held capture
-// stays held and stops sending until a `capture_resume`.
+// stays held and stops sending until a `capture_resume`. The log stops draining but on_log_stream
+// is not called: the lines around the drop stay queued for the next link's `log_stream`.
 // Returns the delay to the next connect.
 static uint32_t link_lost(void)
 {
@@ -396,6 +410,7 @@ static uint32_t link_lost(void)
     zl_sess_lost(&s_sess, &was_open);
     s_capture_sending = false;
     s_peak_on = false;
+    s_log_on = false;
     (void)zl_playq_flush(&s_playq, ids);
     (void)zl_playq_take_done(&s_playq, done);
     unlock();
@@ -698,6 +713,26 @@ static void send_volume(void)
     if (online) send_json(s_ws, zl_encode_volume(volume));
 }
 
+// The device log while the server asks for it: up to LOG_CHUNK bytes of whole lines a pass, in
+// one `log`. Not through send_json: its failure line carries the message, which would feed the
+// log into itself; a failure here logs only a fixed line.
+static void log_poll(void)
+{
+    if (s_log == NULL) return;
+    lock();
+    const bool on = s_online && s_log_on;
+    unlock();
+    if (!on) return;
+    const size_t n = s_cfg.log_read(s_log, LOG_CHUNK);
+    if (n == 0) return;
+    char *json = zl_encode_log(s_log, n);
+    if (json == NULL ||
+        esp_websocket_client_send_text(s_ws, json, (int)strlen(json), pdMS_TO_TICKS(SEND_TIMEOUT_MS)) < 0) {
+        ESP_LOGW(TAG, "%u B of log not sent", (unsigned)n);
+    }
+    zl_free(json);
+}
+
 static void link_task(void *arg)
 {
     (void)arg;
@@ -727,6 +762,7 @@ static void link_task(void *arg)
             peak_at = now;
             peak_poll();
         }
+        log_poll();
     }
 }
 
@@ -751,6 +787,10 @@ void zl_start(const zl_config_t *cfg, const zl_callbacks_t *cb)
             return;
         }
         zl_playq_init(&s_playq, buf, cap, (size_t)cfg->play_rate * PLAY_PRIME_MS / 1000);
+    }
+    if (cfg->log_read != NULL) {
+        s_log = heap_caps_malloc(LOG_CHUNK, MALLOC_CAP_SPIRAM);
+        if (s_log == NULL) ESP_LOGE(TAG, "log buffer of %d B: out of PSRAM; no `log` messages", LOG_CHUNK);
     }
     const esp_err_t err = mdns_init();
     if (err != ESP_OK) ESP_LOGE(TAG, "mDNS init failed: %s", esp_err_to_name(err));

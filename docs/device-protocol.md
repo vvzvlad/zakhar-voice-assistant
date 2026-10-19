@@ -69,6 +69,13 @@ The owner's words:
   microphone (XMOS stage NONE) and by about 1 dB on the XMOS-processed channels the wake word and
   the server use; hearing over the reply would mean taking a raw microphone from the XMOS. The
   findings: [echo-cancellation.md](echo-cancellation.md).
+- «наверное надо на сервере сделать отдельную фичу, которая пишет непрерывно лог колонки за
+  последние сколько-то дней», option chosen: «Колонка шлёт лог сама» — the speaker sends its log
+  lines over this connection (`log`), port 23 stays free for watching by hand, and what it logs
+  before it reaches the server is not kept; the server keeps 7 days. Then «сделать тока
+  переключатель в прошивке, вкл дебаг или нет», option chosen: «В панели, без перепрошивки» — a
+  per-device switch in the panel's device dialog (`core.devices[].log`), applied on the fly
+  through `log_stream`; off, the device sends nothing.
 
 ## Transport
 
@@ -125,8 +132,11 @@ The owner's words:
    Both are percent, 0..100. The device applies them as `uint8 = trunc(percent / 100 * 255)` to the
    wake-word model and to the on-device VAD gate. They live in the server config, not on the
    device; until the first `config` the device uses its compiled-in defaults.
-4. Server → the wake-word and VAD models, and to a device with a speaker the stop model, right
-   after `config`: see [Models](#models).
+4. Server → `log_stream {on}` with the device's `core.devices[].log`, on or off, after `config`
+   (and after what a capture the device holds needs, see [Capture](#capture)): see
+   [Settings and diagnostics](#settings-and-diagnostics).
+5. Server → the wake-word and VAD models, and to a device with a speaker the stop model, right
+   after `log_stream`: see [Models](#models).
 
 ## Models
 
@@ -247,6 +257,8 @@ device                                   server
 | `capture {id, seconds}` | server → device | record a sample, see [Capture](#capture) |
 | `capture_resume {id, from}` | server → device | go on with a capture the device kept across a lost link |
 | `audio_end {reason, id}` | device → server | a capture ended on the device: `capture` (all its audio is out) or `busy` (refused, a session is running) |
+| `log_stream {on}` | server → device | send the device log in `log` messages or stop; after every `hello` and whenever `core.devices[].log` changes. Off from boot. A lost link does not turn it off on the device: the lines logged meanwhile wait (16 KB on the Voice PE, a line that does not fit is dropped) for the next connection's `log_stream`, and off drops them |
+| `log {text}` | device → server | one or more whole lines of the device's ESP log, each ending in `\n` (on the Voice PE up to 2 KB a message, a line cut at 512 bytes). The server appends them to `data/device_logs/<id>/<YYYY-MM-DD>.log` (its local day), each behind its own time of arrival `HH:MM:SS.mmm`, and deletes a day's file once that day ended more than `core.device_log_days` (7) days ago |
 
 ## Capture
 

@@ -88,6 +88,8 @@ def action_for(path: str) -> str:
         return "rebuild_runs"
     if path.startswith("core.devices"):
         return "rebuild_devices"
+    if path == "core.device_log_days":
+        return "live"          # read at every prune (src/device_logs.py)
     if path == "core.chains":
         return "rebuild_backends"   # builds newly referenced STT/handler backends, drops unreferenced
     # stage providers

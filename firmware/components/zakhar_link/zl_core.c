@@ -2,6 +2,7 @@
 #include "zl_core.h"
 
 #include <math.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "cJSON.h"
@@ -112,6 +113,13 @@ static bool decode_fields(const cJSON *o, const char *type, zl_msg_t *m)
     }
     if (strcmp(type, "detect") == 0) {
         m->type = ZL_MSG_DETECT;
+        const cJSON *v = field(o, "on");
+        if (!cJSON_IsBool(v)) return false;
+        m->on = cJSON_IsTrue(v);
+        return true;
+    }
+    if (strcmp(type, "log_stream") == 0) {
+        m->type = ZL_MSG_LOG_STREAM;
         const cJSON *v = field(o, "on");
         if (!cJSON_IsBool(v)) return false;
         m->on = cJSON_IsTrue(v);
@@ -268,6 +276,18 @@ char *zl_encode_stop(bool has_session, uint32_t session)
     bool ok = o != NULL;
     if (ok && has_session) ok = cJSON_AddNumberToObject(o, "session", session) != NULL;
     return finish(o, ok);
+}
+
+char *zl_encode_log(const char *text, size_t len)
+{
+    char *s = malloc(len + 1);  // cJSON takes NUL-terminated strings
+    if (s == NULL) return NULL;
+    memcpy(s, text, len);
+    s[len] = '\0';
+    cJSON *o = message("log");
+    char *json = finish(o, o != NULL && cJSON_AddStringToObject(o, "text", s) != NULL);
+    free(s);
+    return json;
 }
 
 void zl_free(char *json)
