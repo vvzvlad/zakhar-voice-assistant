@@ -31,12 +31,13 @@ bool wake_word_init(void);
 // the kind then has no model and `data` is released.
 bool wake_word_load(wake_word_model_t kind, uint8_t *data, size_t size);
 
-// Runs n samples through the frontend and each loaded model; detection runs only while the wake
-// and VAD models are loaded. A detection is logged and handed to the callback of
+// Runs n samples of `wake` through the frontend and each loaded model; detection runs only while
+// the wake and VAD models are loaded. A detection is logged and handed to the callback of
 // wake_word_set_detect_cb, on the calling task. The stop model runs only from 1 s of playback on
 // (wake_word_set_stop) until the playback ends; its detection, gated by the VAD model too, goes to
-// the stop callback.
-void wake_word_feed(const int16_t *samples, size_t n);
+// the stop callback, and the end of the playback logs its highest window mean. It hears n samples
+// of `stop` through a frontend of its own, or the wake input when `stop` is NULL.
+void wake_word_feed(const int16_t *wake, const int16_t *stop, size_t n);
 
 // The detection cutoffs of the wake and VAD models, 0..255 (probability * 255). Safe from any task.
 void wake_word_set_cutoffs(uint8_t wake, uint8_t vad);

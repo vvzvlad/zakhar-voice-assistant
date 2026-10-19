@@ -18,12 +18,17 @@ static const char *TAG = "xmos";
 #define CMD_READ 0x80
 #define CMD_CH0_STAGE 0x30
 #define CMD_CH1_STAGE 0x40
+// The stages of the XMOS firmware's enum e_pipeline_processing_stages
+// (src/ffva/src/configuration/configuration_servicer.h); NONE is the microphone as it comes in.
+#define STAGE_NONE 0
 #define STAGE_NS 3
 #define STAGE_AGC 4
 #define STATUS_DONE 0
 
 #define I2C_TIMEOUT_MS 100
 #define POLL_MS 200  // GETVERSION retries while the XMOS boots
+
+static i2c_master_dev_handle_t s_dev;
 
 static bool read_version(i2c_master_dev_handle_t dev, uint8_t version[3])
 {
@@ -60,20 +65,24 @@ esp_err_t xmos_boot(i2c_master_bus_handle_t bus)
         .device_address = I2C_ADDR_XMOS,
         .scl_speed_hz = 400000,
     };
-    i2c_master_dev_handle_t dev;
-    err = i2c_master_bus_add_device(bus, &dc, &dev);
+    err = i2c_master_bus_add_device(bus, &dc, &s_dev);
     if (err != ESP_OK) return err;
 
     ESP_LOGI(TAG, "waiting for the XMOS to boot");
     uint8_t v[3];
-    while (!read_version(dev, v)) vTaskDelay(pdMS_TO_TICKS(POLL_MS));
+    while (!read_version(s_dev, v)) vTaskDelay(pdMS_TO_TICKS(POLL_MS));
     if (v[0] == 1 && v[1] == 3 && v[2] == 1) {
         ESP_LOGI(TAG, "firmware %u.%u.%u", v[0], v[1], v[2]);
     } else {
         ESP_LOGW(TAG, "firmware %u.%u.%u, not the 1.3.1 this firmware is made for", v[0], v[1], v[2]);
     }
 
-    err = write_stage(dev, CMD_CH0_STAGE, STAGE_AGC);
-    if (err == ESP_OK) err = write_stage(dev, CMD_CH1_STAGE, STAGE_NS);
+    err = write_stage(s_dev, CMD_CH0_STAGE, STAGE_AGC);
+    if (err == ESP_OK) err = write_stage(s_dev, CMD_CH1_STAGE, STAGE_NS);
     return err;
+}
+
+esp_err_t xmos_ch0_raw(bool raw)
+{
+    return write_stage(s_dev, CMD_CH0_STAGE, raw ? STAGE_NONE : STAGE_AGC);
 }

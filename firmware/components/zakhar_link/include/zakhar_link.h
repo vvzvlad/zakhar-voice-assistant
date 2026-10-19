@@ -76,6 +76,11 @@ typedef struct {
     // model loaded; the answer goes to the server as `model_loaded`. Runs on the client's task
     // and, unlike the others, may take a few milliseconds there.
     bool (*on_model)(zl_model_t kind, uint8_t *data, size_t size);
+    // The `config` echo cancellation: level (echo_cancel) 0 off, 1..3 the echo suppression from mild
+    // to strongest; mode (echo_cancel_mode) 0..3 SR low cost, SR high performance, FD low cost, FD
+    // high performance; filter (echo_cancel_filter) 1..8, the filter length. Each is -1 when its
+    // field is absent or out of its range, for the device to keep its own; called when any is not.
+    void (*on_echo_cancel)(int level, int mode, int filter);
 } zl_callbacks_t;
 
 // Copies cfg (its strings too) and cb, allocates the playback buffer, starts mDNS and the component

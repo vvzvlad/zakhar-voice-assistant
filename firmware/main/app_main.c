@@ -12,6 +12,7 @@
 #include "driver/i2c_master.h"
 #include "esp_app_desc.h"
 #include "esp_event.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_mac.h"
 #include "esp_netif.h"
@@ -341,6 +342,7 @@ void app_main(void)
         .on_capture = leds_set_capture,
         .can_start = can_start,
         .on_model = on_model,
+        .on_echo_cancel = audio_set_echo_cancel,
     };
     zl_start(&cfg, &cb);
     // zl_start() reports no failure; its task exists only when the start got through (the playback
@@ -357,5 +359,6 @@ void app_main(void)
         ESP_LOGE(TAG, "bring-up failed: %s", esp_err_to_name(err));
         return;
     }
-    ESP_LOGI(TAG, "%s up as %s", fw, id);
+    ESP_LOGI(TAG, "%s up as %s, %u B of internal RAM free", fw, id,
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
 }

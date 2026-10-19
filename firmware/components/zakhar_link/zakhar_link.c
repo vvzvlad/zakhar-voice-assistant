@@ -261,8 +261,12 @@ static void on_text(esp_websocket_client_handle_t ws, const char *json, size_t l
     }
     switch (m.type) {
     case ZL_MSG_CONFIG:
-        ESP_LOGI(TAG, "config: wake %u, vad %u", m.wake, m.vad);
+        ESP_LOGI(TAG, "config: wake %u, vad %u, echo_cancel %d mode %d filter %d", m.wake, m.vad, m.echo_cancel,
+                 m.echo_mode, m.echo_filter);
         if (s_cb.on_config != NULL) s_cb.on_config(m.wake, m.vad);
+        if ((m.echo_cancel >= 0 || m.echo_mode >= 0 || m.echo_filter >= 0) && s_cb.on_echo_cancel != NULL) {
+            s_cb.on_echo_cancel(m.echo_cancel, m.echo_mode, m.echo_filter);
+        }
         break;
     case ZL_MSG_STATE:
         ESP_LOGI(TAG, "session %u: %s%s%s", (unsigned)m.session, zl_state_name(m.state), m.text != NULL ? ": " : "",

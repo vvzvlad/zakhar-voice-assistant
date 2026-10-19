@@ -69,6 +69,15 @@ def test_device_config_cutoffs_default_and_are_percent():
         DeviceConfig(name="a", vad_cutoff=-1)
 
 
+def test_device_config_echo_cancel_defaults_and_ranges():
+    d = DeviceConfig(name="a")
+    assert (d.echo_cancel, d.echo_cancel_mode, d.echo_cancel_filter) == (1, 2, 4)
+    for field, bad in (("echo_cancel", -1), ("echo_cancel", 4), ("echo_cancel_mode", 4),
+                       ("echo_cancel_filter", 0), ("echo_cancel_filter", 9)):
+        with pytest.raises(ValidationError):
+            DeviceConfig(name="a", **{field: bad})
+
+
 def test_vad_trim_start_ms_defaults_to_200():
     assert CoreConfig().vad.trim_start_ms == 200
 

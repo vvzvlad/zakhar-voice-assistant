@@ -241,7 +241,8 @@ def session_msgs(session, *rest):
 
 async def test_hello_gets_config_and_the_models(srv):
     dev = await srv.connect()
-    assert await dev.recv() == {"type": "config", "wake_cutoff": 80, "vad_cutoff": 30}
+    assert await dev.recv() == {"type": "config", "wake_cutoff": 80, "vad_cutoff": 30, "echo_cancel": 1,
+                                "echo_cancel_mode": 2, "echo_cancel_filter": 4}
     # wake_model / vad_model are empty: the release's files go out, and the stop model always.
     for kind, path in (("wake", device_server.RELEASE_WAKE_MODEL), ("vad", device_server.RELEASE_VAD_MODEL),
                        ("stop", device_server.RELEASE_STOP_MODEL)):
@@ -781,20 +782,30 @@ async def test_controls(srv):
     dev = await srv.connect()
     await dev.recv()  # config
     controls = srv.manager.device_controls("kitchen")["controls"]
-    assert [(c["id"], c["value"]) for c in controls] == [
-        ("wake_probability_cutoff", 80), ("vad_cutoff", 30), ("speaker_volume", 60),
+    assert [(c["id"], c["value"], c["min"], c["max"]) for c in controls] == [
+        ("wake_probability_cutoff", 80, 0, 100), ("vad_cutoff", 30, 0, 100), ("echo_cancel", 1, 0, 3),
+        ("echo_cancel_mode", 2, 0, 3), ("echo_cancel_filter", 4, 1, 8), ("speaker_volume", 60, 0, 100),
     ]
 
     # A cutoff is written to the config; the reconfigure that follows sends `config`.
     srv.manager.set_device_control("kitchen", "wake_probability_cutoff", 55)
     assert srv.svc.core.devices[0].wake_cutoff == 55
     await srv.manager.reconfigure()
-    assert await dev.recv() == {"type": "config", "wake_cutoff": 55, "vad_cutoff": 30}
+    echo = {"echo_cancel": 1, "echo_cancel_mode": 2, "echo_cancel_filter": 4}
+    assert await dev.recv() == {"type": "config", "wake_cutoff": 55, "vad_cutoff": 30, **echo}
+    # So are the echo cancellation settings, each clamped to its range.
+    for control, value, stored in (("echo_cancel", 7, 3), ("echo_cancel_mode", -2, 0), ("echo_cancel_filter", 0, 1),
+                                   ("echo_cancel_filter", 9, 8)):
+        srv.manager.set_device_control("kitchen", control, value)
+        assert getattr(srv.svc.core.devices[0], control) == stored
+        await srv.manager.reconfigure()
+        echo[control] = stored
+        assert await dev.recv() == {"type": "config", "wake_cutoff": 55, "vad_cutoff": 30, **echo}
 
     srv.manager.set_device_control("kitchen", "speaker_volume", 40)
     assert await dev.recv() == {"type": "set_volume", "value": 40}
     await dev.send(type="volume", value=70)
-    await until(lambda: srv.manager.device_controls("kitchen")["controls"][2]["value"] == 70)
+    await until(lambda: srv.manager.device_controls("kitchen")["controls"][5]["value"] == 70)
 
     srv.manager.set_wake_prob_stream("kitchen", True)
     assert await dev.recv() == {"type": "wake_peak_stream", "on": True}

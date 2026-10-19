@@ -206,6 +206,16 @@ class DeviceConfig(BaseModel):
     # its on-device VAD gate.
     wake_cutoff: int = Field(80, ge=0, le=100)
     vad_cutoff: int = Field(30, ge=0, le=100)
+    # Sent to the device in `config`: its cancellation of its own playback in the
+    # microphone its stop word hears while it plays (the Voice PE switches its XMOS channel 0
+    # to the raw microphone for it). 0 off, the stop word hears the wake word's input; 1..3
+    # on, with the residual echo suppression from mild to strongest (the full-duplex modes
+    # only; in the others any of 1..3 just means on). The mode: 0 SR low cost, 1 SR high
+    # performance, 2 FD low cost, 3 FD high performance; the filter length 1..8. The device
+    # re-creates its canceller when the mode or the filter length changes.
+    echo_cancel: int = Field(1, ge=0, le=3)
+    echo_cancel_mode: int = Field(2, ge=0, le=3)
+    echo_cancel_filter: int = Field(4, ge=1, le=8)
     # The .tflite models sent to the device: its wake-word model and the VAD model that gates
     # it. Empty: the model the release ships (device_server.RELEASE_WAKE_MODEL /
     # RELEASE_VAD_MODEL). wake_model is otherwise a model name from GET /api/wake-models

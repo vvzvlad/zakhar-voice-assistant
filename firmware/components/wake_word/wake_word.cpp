@@ -62,15 +62,18 @@ static Model s_vad(76);
 static Model s_stop(127);
 
 static FrontendState s_fs;
+static FrontendState s_fs_stop;  // the stop model's own input, when wake_word_feed() gets one
 // Held by wake_word_feed() while it runs the models and by wake_word_load() while it swaps one.
 static SemaphoreHandle_t s_lock;
 static std::atomic<uint8_t> s_peak{0};  // the highest wake probability since wake_word_take_peak()
 static std::atomic<void (*)(void)> s_detect_cb{nullptr};
 static std::atomic<bool (*)(void)> s_playing{nullptr};
 static std::atomic<void (*)(void)> s_stop_cb{nullptr};
-// Under s_lock: the consecutive slices fed while playing, and whether the stop model runs.
+// Under s_lock: the consecutive slices fed while playing, whether the stop model runs, and the
+// stop model's highest window sum since it was armed.
 static int s_playing_slices = 0;
 static bool s_stop_armed = false;
+static uint32_t s_stop_peak = 0;
 
 struct Lock {
   Lock() { xSemaphoreTake(s_lock, portMAX_DELAY); }
@@ -138,10 +141,54 @@ static bool model_feed(Model &m, const int8_t *features) {
   return true;
 }
 
-static bool model_above_cutoff(const Model &m) {
+static uint32_t window_sum(const Model &m) {
   uint32_t sum = 0;
   for (uint8_t p : m.probs) sum += p;
-  return sum > (uint32_t) m.cutoff.load(std::memory_order_relaxed) * WINDOW;
+  return sum;
+}
+
+static bool model_above_cutoff(const Model &m) {
+  return window_sum(m) > (uint32_t) m.cutoff.load(std::memory_order_relaxed) * WINDOW;
+}
+
+// The next feature slice of fs from *samples (advanced past what it used, *n counted down), as
+// the models take it; false when the samples ran out before a slice completed.
+static bool next_slice(FrontendState *fs, const int16_t **samples, size_t *n, int8_t *features) {
+  while (*n > 0) {
+    size_t used = 0;
+    FrontendOutput out = FrontendProcessSamples(fs, *samples, *n, &used);
+    *samples += used;
+    *n -= used;
+    if (out.size == 0) continue;
+    for (size_t i = 0; i < out.size; i++) {
+      int32_t v = ((out.values[i] * 256) + 333) / 666 - 128;  // 666 = 25.6 * 26.0, rounded
+      features[i] = (int8_t) std::clamp<int32_t>(v, INT8_MIN, INT8_MAX);
+    }
+    return true;
+  }
+  return false;
+}
+
+// Under s_lock: one slice into the stop model while it is armed, and its detection by the same
+// rule as "Zakhar" in wake_word_feed().
+static void stop_feed(const int8_t *features) {
+  if (!s_stop_armed || s_stop.interp == nullptr) return;
+  if (!model_feed(s_stop, features)) {
+    ESP_LOGW(TAG, "invoke failed");
+    return;
+  }
+  s_stop_peak = std::max(s_stop_peak, window_sum(s_stop));
+  if (s_vad.interp == nullptr || !s_stop.fresh || s_stop.ignore < 0) return;
+  s_stop.fresh = false;
+  if (!model_above_cutoff(s_stop)) return;
+  if (!model_above_cutoff(s_vad)) {
+    ESP_LOGI(TAG, "\"Stop\" blocked by VAD");
+    return;
+  }
+  ESP_LOGI(TAG, "\"Stop\" detected");
+  if (void (*cb)(void) = s_stop_cb.load(std::memory_order_acquire)) cb();
+  memset(s_stop.probs, 0, sizeof(s_stop.probs));
+  s_stop.ignore = -MIN_SLICES_BEFORE_DETECTION;
 }
 
 extern "C" bool wake_word_init(void) {
@@ -162,8 +209,9 @@ extern "C" bool wake_word_init(void) {
   fc.log_scale.enable_log = 1;
   fc.log_scale.scale_shift = 6;
   s_lock = xSemaphoreCreateMutex();
-  if (s_lock == nullptr || !FrontendPopulateState(&fc, &s_fs, SAMPLE_RATE) || !model_init(s_wake) ||
-      !model_init(s_vad) || !model_init(s_stop)) {
+  if (s_lock == nullptr || !FrontendPopulateState(&fc, &s_fs, SAMPLE_RATE) ||
+      !FrontendPopulateState(&fc, &s_fs_stop, SAMPLE_RATE) || !model_init(s_wake) || !model_init(s_vad) ||
+      !model_init(s_stop)) {
     ESP_LOGE(TAG, "frontend/arena init failed");
     return false;
   }
@@ -188,23 +236,20 @@ extern "C" bool wake_word_load(wake_word_model_t kind, uint8_t *data, size_t siz
   return ok;
 }
 
-extern "C" void wake_word_feed(const int16_t *samples, size_t n) {
+extern "C" void wake_word_feed(const int16_t *wake, const int16_t *stop, size_t n) {
   // Asked before s_lock is taken: it takes the playback owner's lock.
   bool (*playing_cb)(void) = s_playing.load(std::memory_order_acquire);
   const bool playing = playing_cb != nullptr && playing_cb();
   int8_t features[FEATURES];
-  while (n > 0) {
-    size_t used = 0;
-    FrontendOutput out = FrontendProcessSamples(&s_fs, samples, n, &used);
-    samples += used;
-    n -= used;
-    if (out.size == 0) continue;
-    for (size_t i = 0; i < out.size; i++) {
-      int32_t v = ((out.values[i] * 256) + 333) / 666 - 128;  // 666 = 25.6 * 26.0, rounded
-      features[i] = (int8_t) std::clamp<int32_t>(v, INT8_MIN, INT8_MAX);
-    }
+  const int16_t *samples = wake;
+  size_t left = n;
+  while (next_slice(&s_fs, &samples, &left, features)) {
     Lock lock;
     if (!playing) {
+      if (s_stop_armed) {
+        ESP_LOGI(TAG, "\"Stop\" off with the playback: its highest window mean %.2f, cutoff %.2f",
+                 s_stop_peak / (WINDOW * 255.0), s_stop.cutoff.load(std::memory_order_relaxed) / 255.0);
+      }
       s_playing_slices = 0;
       s_stop_armed = false;
     } else if (!s_stop_armed && ++s_playing_slices >= STOP_ARM_SLICES) {
@@ -215,29 +260,15 @@ extern "C" void wake_word_feed(const int16_t *samples, size_t n) {
       s_stop.idx = 0;
       s_stop.fresh = false;
       s_stop.ignore = -MIN_SLICES_BEFORE_DETECTION;
+      s_stop_peak = 0;
     }
-    const bool wake = s_wake.interp != nullptr, vad = s_vad.interp != nullptr;
-    const bool stop = s_stop_armed && s_stop.interp != nullptr;
-    if ((wake && !model_feed(s_wake, features)) || (vad && !model_feed(s_vad, features)) ||
-        (stop && !model_feed(s_stop, features))) {
+    const bool wake_on = s_wake.interp != nullptr, vad = s_vad.interp != nullptr;
+    if ((wake_on && !model_feed(s_wake, features)) || (vad && !model_feed(s_vad, features))) {
       ESP_LOGW(TAG, "invoke failed");
       continue;
     }
-    // The same rule as "Zakhar" below.
-    if (stop && vad && s_stop.fresh && s_stop.ignore >= 0) {
-      s_stop.fresh = false;
-      if (model_above_cutoff(s_stop)) {
-        if (!model_above_cutoff(s_vad)) {
-          ESP_LOGI(TAG, "\"Stop\" blocked by VAD");
-        } else {
-          ESP_LOGI(TAG, "\"Stop\" detected");
-          if (void (*cb)(void) = s_stop_cb.load(std::memory_order_acquire)) cb();
-          memset(s_stop.probs, 0, sizeof(s_stop.probs));
-          s_stop.ignore = -MIN_SLICES_BEFORE_DETECTION;
-        }
-      }
-    }
-    if (!wake || !vad) continue;
+    if (stop == nullptr) stop_feed(features);
+    if (!wake_on || !vad) continue;
     // As WakeWordModel::determine_detected: during the cool-off the probability stays unprocessed,
     // so the window is checked on the very slice the cool-off ends.
     if (!s_wake.fresh || s_wake.ignore < 0) continue;
@@ -251,6 +282,14 @@ extern "C" void wake_word_feed(const int16_t *samples, size_t n) {
     if (void (*cb)(void) = s_detect_cb.load(std::memory_order_acquire)) cb();
     memset(s_wake.probs, 0, sizeof(s_wake.probs));
     s_wake.ignore = -MIN_SLICES_BEFORE_DETECTION;
+  }
+  // The stop input's own frontend runs on every sample given, armed or not, so its noise
+  // estimate is current when the model is armed.
+  samples = stop;
+  left = stop != nullptr ? n : 0;
+  while (next_slice(&s_fs_stop, &samples, &left, features)) {
+    Lock lock;
+    stop_feed(features);
   }
 }
 

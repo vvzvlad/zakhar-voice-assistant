@@ -1,9 +1,28 @@
 #include "audio_core.h"
 
+#include <math.h>
 #include <string.h>
 
 #define Q25_MAX ((1 << 25) - 1)
 #define Q25_MIN (-(1 << 25))
+
+// The lag estimator's clear peak: at least this correlation, and this much above every lag more
+// than LAG_PEAK_AWAY bins (100 ms) from it, so a broad or doubled maximum keeps the lag in use.
+#define LAG_CORR_MIN 0.7f
+#define LAG_CORR_MARGIN 0.2f
+#define LAG_PEAK_AWAY 25
+
+// The first half of the decimator's symmetric Q15 taps; they sum to 32768 in all.
+static const int16_t DEC3_H[DEC3_TAPS / 2] = {
+    21, 5, -18, -31, -20, 14, 48, 50, 5, -65, -100, -53,
+    62, 160, 142, -14, -209, -272, -105, 207, 424, 318, -107, -558,
+    -636, -158, 613, 1072, 697, -478, -1700, -1858, -191, 3102, 6792, 9225,
+};
+
+static int16_t sat16(int32_t v)
+{
+    return v > INT16_MAX ? INT16_MAX : v < INT16_MIN ? INT16_MIN : (int16_t)v;
+}
 
 int16_t pcm_s32_to_s16(int32_t sample, int gain)
 {
@@ -61,6 +80,165 @@ size_t tap_read(tap_t *t, uint32_t *pos, int16_t *out, size_t max)
     }
     *pos += (uint32_t)n;
     return n;
+}
+
+// Frame p is in the readable window: 1 <= written - p <= cap - margin.
+static bool tap_holds(const tap_t *t, uint32_t written, uint32_t p)
+{
+    return written - p - 1u < t->cap - t->margin;
+}
+
+void tap_read_at(tap_t *t, uint32_t pos, int16_t *out, size_t n)
+{
+    const uint32_t written = atomic_load_explicit(&t->written, memory_order_acquire);
+    const size_t ch = (size_t)t->channels;
+    for (size_t i = 0; i < n; i++) {
+        const uint32_t p = pos + (uint32_t)i;
+        if (tap_holds(t, written, p)) {
+            memcpy(&out[i * ch], &t->buf[(p % t->cap) * ch], ch * sizeof(int16_t));
+        } else {
+            memset(&out[i * ch], 0, ch * sizeof(int16_t));
+        }
+    }
+}
+
+void dec3_init(dec3_t *d)
+{
+    memset(d, 0, sizeof *d);
+}
+
+size_t dec3_run(dec3_t *d, const int16_t *in, size_t n, int16_t *out)
+{
+    size_t m = 0;
+    for (size_t i = 0; i < n; i++) {
+        d->win[d->pos] = d->win[d->pos + DEC3_TAPS] = in[i];
+        d->pos = d->pos + 1 == DEC3_TAPS ? 0 : d->pos + 1;
+        if (++d->phase < 3) continue;
+        d->phase = 0;
+        const int16_t *x = &d->win[d->pos];  // the newest DEC3_TAPS inputs, oldest first
+        int32_t acc = 1 << 14;               // rounds the Q15 sum
+        for (int k = 0; k < DEC3_TAPS / 2; k++) acc += DEC3_H[k] * (x[k] + x[DEC3_TAPS - 1 - k]);
+        out[m++] = sat16(acc >> 15);
+    }
+    return m;
+}
+
+bool aec_skip(tap_t *ref, uint32_t aligned, size_t chunk, size_t tail)
+{
+    const uint32_t written = atomic_load_explicit(&ref->written, memory_order_acquire);
+    const size_t ch = (size_t)ref->channels;
+    const uint32_t from = aligned - (uint32_t)tail;
+    for (size_t i = 0; i < tail + chunk; i++) {
+        const uint32_t p = from + (uint32_t)i;
+        if (!tap_holds(ref, written, p)) continue;
+        const int16_t *s = &ref->buf[(p % ref->cap) * ch];
+        for (size_t c = 0; c < ch; c++) {
+            if (s[c] != 0) return false;
+        }
+    }
+    return true;
+}
+
+// log(1 + mean square) of LAG_BIN samples, every stride-th of x.
+static float bin_env(const int16_t *x, size_t stride)
+{
+    int64_t sum = 0;
+    for (size_t i = 0; i < LAG_BIN; i++) {
+        const int32_t v = x[i * stride];
+        sum += v * v;
+    }
+    return logf(1.0f + (float)sum / LAG_BIN);
+}
+
+void lag_track_init(lag_track_t *t)
+{
+    memset(t, 0, sizeof *t);
+}
+
+void lag_track_push(lag_track_t *t, const int16_t *x, size_t n, size_t stride)
+{
+    for (size_t i = 0; i + LAG_BIN <= n; i += LAG_BIN) t->env[t->bins++ % LAG_HIST] = bin_env(&x[i * stride], stride);
+}
+
+int lag_track_run(lag_track_t *t, tap_t *ref, uint32_t mic_end, uint32_t offset, float *corr)
+{
+    // ref_env[j] is the reference paired at lag 0 with microphone bin first - LAG_MAX + j, where
+    // `first` is the window's first bin; microphone bin b starts at mic_end - (bins - b) * LAG_BIN.
+    const uint32_t first = t->bins - LAG_DELAY - LAG_WINDOW;
+    const uint32_t start = mic_end - (uint32_t)((LAG_DELAY + LAG_WINDOW + LAG_MAX) * LAG_BIN) + offset;
+    int16_t buf[LAG_BIN];
+    for (size_t j = 0; j < LAG_WINDOW + LAG_MAX; j++) {
+        tap_read_at(ref, start + (uint32_t)(j * LAG_BIN), buf, LAG_BIN);
+        t->ref_env[j] = bin_env(buf, 1);
+    }
+    float mean = 0;
+    for (size_t i = 0; i < LAG_WINDOW; i++) mean += t->env[(first + i) % LAG_HIST];
+    mean /= LAG_WINDOW;
+    float sxx = 0;
+    for (size_t i = 0; i < LAG_WINDOW; i++) {
+        const float d = t->env[(first + i) % LAG_HIST] - mean;
+        sxx += d * d;
+    }
+    // Lag L pairs microphone bin first + i with ref_env[LAG_MAX - L + i].
+    int best = 0;
+    for (int lag = 0; lag <= LAG_MAX; lag++) {
+        const float *y = &t->ref_env[LAG_MAX - lag];
+        float ym = 0;
+        for (size_t i = 0; i < LAG_WINDOW; i++) ym += y[i];
+        ym /= LAG_WINDOW;
+        float sxy = 0, syy = 0;
+        for (size_t i = 0; i < LAG_WINDOW; i++) {
+            const float dx = t->env[(first + i) % LAG_HIST] - mean, dy = y[i] - ym;
+            sxy += dx * dy;
+            syy += dy * dy;
+        }
+        corr[lag] = sxx > 0 && syy > 0 ? sxy / sqrtf(sxx * syy) : 0;
+        if (corr[lag] > corr[best]) best = lag;
+    }
+    float away = -1;
+    for (int lag = 0; lag <= LAG_MAX; lag++) {
+        if ((lag < best - LAG_PEAK_AWAY || lag > best + LAG_PEAK_AWAY) && corr[lag] > away) away = corr[lag];
+    }
+    return corr[best] >= LAG_CORR_MIN && corr[best] - away >= LAG_CORR_MARGIN ? best * LAG_BIN : -1;
+}
+
+void mic_chunks_init(mic_chunks_t *c, uint32_t frames, uint32_t ref_settle)
+{
+    memset(c, 0, sizeof *c);
+    c->frames = frames;
+    c->ref_settle = ref_settle;
+    c->span = ((LAG_DELAY + LAG_WINDOW) * LAG_BIN + frames - 1) / frames;
+}
+
+mic_chunk_t mic_chunks_step(mic_chunks_t *c, uint32_t dropped, bool want_raw, bool wrote, uint32_t ref_written)
+{
+    c->pos += dropped;
+    if (dropped > 0) c->raw_run = 0;
+    // The write the previous step asked for went out right after that chunk was read, so this chunk
+    // is the first after it.
+    if (c->asked && wrote) {
+        c->none_written = c->asked_raw;
+        c->settle = MIC_STAGE_SETTLE;
+    }
+    if (c->settle > 0 && --c->settle == 0) c->raw = c->none_written;
+    c->asked = want_raw != c->none_written;
+    c->asked_raw = want_raw;
+    if (!c->have_offset && ref_written >= c->ref_settle) {
+        c->offset = ref_written - (c->pos + c->frames);
+        c->have_offset = true;
+    }
+    c->raw_run = c->raw ? c->raw_run + 1 : 0;
+    const mic_chunk_t out = {
+        .pos = c->pos,
+        .raw = c->raw,
+        .write = c->asked,
+        .write_raw = want_raw,
+        .have_offset = c->have_offset,
+        .offset = c->offset,
+        .lag_ok = c->raw && c->raw_run >= c->span,
+    };
+    c->pos += c->frames;
+    return out;
 }
 
 uint8_t volume_dac_byte(int percent)
