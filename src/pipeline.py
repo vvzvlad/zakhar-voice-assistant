@@ -55,6 +55,13 @@ HARD_CAP_BYTES = SAMPLE_RATE * 2 * 60
 # A wake session's stream opens with this much pre-roll, ending where the device
 # detected the wake word (docs/device-protocol.md, "Voice session").
 PREROLL_MS = 2000
+PREROLL_BYTES = PREROLL_MS * SAMPLE_RATE * 2 // 1000
+
+# Run reasons that end a wake run before STT: the wake-word verifier rejected it
+# (or timed out under fail-closed), or another device's wake of the same phrase won
+# the cross-device arbitration. Such a run is recorded as "rejected", without the
+# ack chime or a capture file.
+REJECT_REASONS = ("wakeword_reject", "wakeword_error", "duplicate")
 
 
 class _PrefetchedChunks:
@@ -129,6 +136,12 @@ class Pipeline:
         # VAD endpoint reason seen WHILE the gate is still verifying: the utterance
         # ended before the verdict landed, so the finalize is deferred until confirm.
         self._vad_finalize_pending: str | None = None
+        # Cross-device wake arbitration (src/wake_arbiter.py) holds a wake run the
+        # same way as the gate until the arbiter's verdict (arbitration_verdict). The
+        # token is bumped for every registered run, so a verdict meant for an older
+        # run of this device is told apart and ignored.
+        self._arbitration_pending = False
+        self._arbitration_token = 0
         # Running utterance peak driving the optional decision-only VAD boost
         # (core.vad.mic_auto_gain); reset per run in on_start.
         self._vad_peak = 0
@@ -148,9 +161,13 @@ class Pipeline:
         # Transport hooks, injected by the device server: send_event(event, data)
         # (sync), play(mime, bytes | async chunks) (returns once the device has
         # played it) and has_speaker (a device without one gets no TTS at all).
+        # arbiter is the cross-device WakeArbiter (src/wake_arbiter.py) a wake run
+        # registers with and reports to — its pre-roll is in, its verifier ruled, it
+        # stopped waiting (sync calls); None runs every wake unarbitrated.
         self.send_event = None
         self.play = None
         self.has_speaker = False
+        self.arbiter = None
 
         # Background "filler" play tasks (early "I'll go check it" lines). Kept in a
         # set so a still-playing filler isn't garbage-collected mid-flight; each task
@@ -289,20 +306,30 @@ class Pipeline:
             self._wakeword_confirmed = False
             self._stt_streams = {}
             logger.info(f"{self.name}: 🛡️ wake-word gate pending (cid={conversation_id})")
-            return
-        # Ungated (disabled/None/passthrough/non-wake): proceed exactly as
-        # before — confirm immediately, emit STT_VAD_START and open the STT streams.
-        self._wakeword_confirmed = True
-        # Speech is already in-stream (pre-roll captured the command), so the device
-        # should show the active "listening for command" LED right away; the matching
-        # STT_VAD_END (thinking) is emitted in _run once VAD finalizes the utterance.
-        self._emit(StageEvent.STT_VAD_START, {})
-        self._open_stt_streams()
+        else:
+            # Ungated (disabled/None/passthrough/non-wake): the verifier's part of
+            # the hold is satisfied at once.
+            self._wakeword_confirmed = True
+        if wake_word_phrase and self.arbiter is not None:
+            # Cross-device arbitration holds a wake run the same way until its
+            # verdict (arbitration_verdict). Registering is the last synchronous
+            # step: the arbiter may rule inside the call.
+            self._arbitration_pending = True
+            self._arbitration_token += 1
+            self.arbiter.register(self, self._arbitration_token)
+        elif not gate:
+            # Speech is already in-stream (pre-roll captured the command), so the
+            # device should show the active "listening for command" LED right away;
+            # the matching STT_VAD_END (thinking) is emitted in _run once VAD
+            # finalizes the utterance.
+            self._emit(StageEvent.STT_VAD_START, {})
+            self._open_stt_streams()
 
     def cancel_run(self) -> None:
         """Cancel the running run: its run task, the wake-word verify (and a run it
         started) and its ack/filler plays. Synchronous; the cancelled run emits no
-        RUN_END (its stages catch Exception, which a cancellation is not)."""
+        RUN_END (its stages catch Exception, which a cancellation is not). The run
+        stops waiting for the arbitration, so the arbiter skips it."""
         # Cancellation of an already-finished task is a no-op. Not awaited: each
         # cancelled task unwinds on its own (the ack/filler sets self-clean via their
         # done-callbacks); snapshot the sets first since those callbacks mutate them.
@@ -311,6 +338,15 @@ class Pipeline:
             if task is not None:
                 task.cancel()
         self._run_task = None
+        self._leave_arbitration()
+
+    def _leave_arbitration(self) -> None:
+        """Stop waiting for the arbitration verdict (the run was cancelled or its
+        device vanished, which ends a pending verifier gate too): the arbiter
+        re-checks the group without this run."""
+        if self._arbitration_pending:
+            self._arbitration_pending = False
+            self.arbiter.run_changed(self, self._arbitration_token)
 
     def _open_stt_streams(self) -> None:
         """Open the live streaming STT sessions for this run (synchronous): one per
@@ -382,18 +418,22 @@ class Pipeline:
         else:
             other = data2  # may be None when the device streams a single channel
 
-        # Wake-word gate pending: the verifier hasn't ruled yet. Keep accumulating
-        # the buffer (channel-select below feeds _buffer/_buffer2) but DON'T feed the
-        # STT streams (there are none yet) and DON'T finalize the utterance — if VAD
-        # end-points, stash the reason and stop feeding VAD; the finalize is deferred
-        # until the verdict (_wakeword_confirm replays it). Trigger the verify task
-        # EXACTLY once, when enough pre-roll is buffered (window_bytes) or the
-        # utterance already ended. This branch is fully SYNCHRONOUS (every await lives
-        # inside the task) so the eager-on_audio atomicity invariant holds.
-        if self._wakeword_pending and not self._wakeword_confirmed:
+        # Held: the wake-word verifier or the cross-device arbitration hasn't ruled
+        # yet. Keep accumulating the buffer (channel-select below feeds
+        # _buffer/_buffer2) but DON'T feed the STT streams (there are none yet) and
+        # DON'T finalize the utterance — if VAD end-points, stash the reason and stop
+        # feeding VAD; the finalize is deferred until the hold is lifted
+        # (_release_hold replays it). While the verifier gate is active, trigger the
+        # verify task EXACTLY once, when enough pre-roll is buffered (window_bytes) or
+        # the utterance already ended. While the arbitration is pending, tell the
+        # arbiter once when the whole pre-roll is in. This branch is fully SYNCHRONOUS
+        # (every await lives inside the task) so the eager-on_audio atomicity
+        # invariant holds.
+        if (self._wakeword_pending and not self._wakeword_confirmed) or self._arbitration_pending:
             if not self._audio_logged:
                 self._audio_logged = True
-                logger.info(f"{self.name}: 🎤 receiving audio (gate pending)...")
+                logger.info(f"{self.name}: 🎤 receiving audio (held)...")
+            buffered = len(self._buffer)
             self._buffer.extend(data)
             if other:
                 self._buffer2.extend(other)
@@ -410,7 +450,7 @@ class Pipeline:
                 if reason is not None:
                     self._vad_finalize_pending = reason
             wb = self.rt.wakeword_backend
-            if self._wakeword_task is None and wb is not None:
+            if self._wakeword_pending and self._wakeword_task is None and wb is not None:
                 window_bytes = wb.window_ms * SAMPLE_RATE * 2 // 1000
                 if len(self._buffer) >= window_bytes or self._vad_finalize_pending is not None:
                     # Snapshot the pre-roll head SYNCHRONOUSLY; the task then awaits.
@@ -418,6 +458,10 @@ class Pipeline:
                     self._wakeword_task = asyncio.create_task(
                         self._run_wakeword_verify(pcm)
                     )
+            # Last: the buffer just reached the whole pre-roll. The arbiter may rule
+            # inside the call, on this run too, so nothing follows it.
+            if self._arbitration_pending and buffered < PREROLL_BYTES <= len(self._buffer):
+                self.arbiter.preroll_in(self, self._arbitration_token)
             return
 
         # Log once per run on the first chunk; the speaker streams many chunks.
@@ -547,37 +591,100 @@ class Pipeline:
             await self._wakeword_reject(error=(verdict is None))
 
     async def _wakeword_confirm(self) -> None:
-        """Accept verdict: lift the gate and resume the normal streaming path.
+        """Accept verdict: the verifier lets the run through.
 
-        Synchronously flips the gate, emits the held-back STT_VAD_START, opens the
-        STT streams and replays the whole buffered backlog into each once — no await
-        between opening, feeding and clearing _pending, so a concurrent on_audio can't
-        double-feed or lose the chunk. THEN, if the utterance already ended while we
-        were verifying (_vad_finalize_pending), finalize it now; otherwise subsequent
+        Synchronously flips the gate. While the cross-device arbitration is still
+        pending, the arbiter is told the verifier has ruled — it may rule inside the
+        call, on this run too — and arbitration_verdict releases the run. Otherwise
+        the hold is lifted here (_release_hold) and, if the utterance already ended
+        while we were verifying, its finalize is awaited now; otherwise subsequent
         on_audio drives the normal VAD finalize.
         """
         if self._finalized:
             return
-        # --- synchronous gate lift (no await) ---
         self._wakeword_pending = False
         self._wakeword_confirmed = True
+        if self._arbitration_pending:
+            self.arbiter.run_changed(self, self._arbitration_token)
+            return
+        finalize = self._release_hold()
+        if finalize is not None:
+            await finalize
+
+    def _release_hold(self):
+        """Lift the hold on a wake run once both the verifier and the arbitration let
+        it through; shared by _wakeword_confirm and arbitration_verdict.
+
+        Synchronously emits the held-back STT_VAD_START, opens the STT streams and
+        replays the whole buffered backlog into each once — no await between the
+        caller clearing its pending flag, opening, and feeding, so a concurrent
+        on_audio can't double-feed or lose the chunk. If the utterance already ended
+        during the hold (_vad_finalize_pending), the run is claimed here as well and
+        the un-awaited coroutine of its _run is returned for the caller to await or
+        schedule; otherwise None.
+        """
         self._emit(StageEvent.STT_VAD_START, {})
         self._open_stt_streams()
-        # Feed the whole backlog buffered during verification once, so streaming
-        # STT sees the same audio the batch path would.
+        # Feed the whole backlog buffered during the hold once, so streaming STT sees
+        # the same audio the batch path would.
         backlog = bytes(self._buffer)
         for stream in self._stt_streams.values():
             stream.feed(backlog)
-        # --- now (await allowed): replay a deferred utterance end, if any ---
-        if self._vad_finalize_pending is not None:
+        if self._vad_finalize_pending is None:
+            return None
+        claimed = self._claim()
+        if claimed is None:
+            return None
+        return self._run(
+            self._vad_finalize_pending, claimed[0], self._conversation_id, pcm2=claimed[1]
+        )
+
+    @property
+    def preroll_pcm(self) -> bytes:
+        """The pre-roll of the current wake run received so far (the selected mic
+        channel), for the arbiter's signal-to-noise comparison."""
+        return bytes(self._buffer[:PREROLL_BYTES])
+
+    @property
+    def verifier_pending(self) -> bool:
+        """Whether the wake-word verifier has yet to rule on this run; the arbiter
+        rules on a run only after its verifier."""
+        return self._wakeword_pending
+
+    def awaits_arbitration(self, token: int) -> bool:
+        """Whether this run still waits for the arbitration verdict registered under
+        `token`: not an older run's token, not finalized, still held for it."""
+        return (
+            token == self._arbitration_token
+            and self._arbitration_pending
+            and not self._finalized
+        )
+
+    def arbitration_verdict(self, token: int, won: bool) -> None:
+        """The cross-device arbiter's verdict on the run registered under `token`.
+
+        Synchronous, and possibly called inside a call this or another pipeline made
+        to the arbiter, or from one of its timers — the module docstring of
+        src/wake_arbiter.py lists them. A verdict the run no longer awaits is ignored.
+        Lost: the run is claimed and ended as a duplicate, its _run started as
+        _run_task like on_audio's finalize. Won: the arbitration hold is lifted and
+        the run released, unless the wake-word verifier is still pending — its
+        _wakeword_confirm then releases it.
+        """
+        if not self.awaits_arbitration(token):
+            return
+        if not won:
             claimed = self._claim()
-            if claimed is not None:
-                await self._run(
-                    self._vad_finalize_pending,
-                    claimed[0],
-                    self._conversation_id,
-                    pcm2=claimed[1],
-                )
+            self._run_task = asyncio.create_task(
+                self._run("duplicate", claimed[0], self._conversation_id, pcm2=claimed[1])
+            )
+            return
+        self._arbitration_pending = False
+        if self._wakeword_pending:
+            return
+        finalize = self._release_hold()
+        if finalize is not None:
+            self._run_task = asyncio.create_task(finalize)
 
     async def _wakeword_reject(self, error: bool) -> None:
         """Reject verdict: abort the run silently and stop the device.
@@ -595,6 +702,10 @@ class Pipeline:
         claimed = self._claim()
         if claimed is None:
             return  # already finalized by a concurrent path.
+        if self._arbitration_pending:
+            # The rejected run drops out of its arbitration group (awaits_arbitration
+            # is now False); the arbiter may rule on the other candidates.
+            self.arbiter.run_changed(self, self._arbitration_token)
         await self._run(reason, claimed[0], self._conversation_id, pcm2=claimed[1])
 
     def _emit_live(self, record) -> None:
@@ -694,6 +805,8 @@ class Pipeline:
         # a late verdict can't act on (confirm/reject) a dead run. No-op if already done.
         if self._wakeword_task is not None:
             self._wakeword_task.cancel()
+        # A vanished device no longer waits for the arbitration: the arbiter skips it.
+        self._leave_arbitration()
         if not self._finalized:
             streams, self._stt_streams = self._stt_streams, {}
             await self._close_stt_streams(streams)
@@ -718,7 +831,9 @@ class Pipeline:
                     f"(~{len(pcm) / (SAMPLE_RATE * 2):.1f}s), reason={reason}, "
                     f"vad={self._vad_desc}"
                 )
-                if not pcm:
+                # A rejected run is recorded even without audio: a wake that loses the
+                # arbitration at once is ended before any of its pre-roll arrives.
+                if not pcm and reason not in REJECT_REASONS:
                     # Truly-empty audio: nothing to transcribe and nothing to record.
                     logger.info(f"{self.name}: empty audio, ending run")
                     await self._close_stt_streams(stt_streams)
@@ -732,9 +847,9 @@ class Pipeline:
                 # mid-playback. The ack, a filler and the reply are separate play()
                 # streams, queued in call order on the device.
                 #
-                # A wake-word REJECT aborts the run silently — no ack chime — so the
-                # mis-trigger never beeps at the user.
-                if reason not in ("wakeword_reject", "wakeword_error"):
+                # A rejected wake (verifier, duplicate) aborts the run silently — no
+                # ack chime — so a mis-trigger or a second device never beeps.
+                if reason not in REJECT_REASONS:
                     self._schedule_ack()
 
                 # Trim the configured lead-in (wake-word tail / button-press click) off the
@@ -777,7 +892,7 @@ class Pipeline:
                 # trimmed by core.vad.trim_start_ms above) as a 16 kHz / mono / 16-bit WAV.
                 # Off by default; enabled per capture session. A capture failure must NEVER
                 # break the run, so it is fully wrapped.
-                if self.core.capture.enabled and reason not in ("wakeword_reject", "wakeword_error"):
+                if self.core.capture.enabled and reason not in REJECT_REASONS:
                     try:
                         capture_dir = self.core.capture.dir
                         safe_name = "".join(
@@ -836,17 +951,24 @@ class Pipeline:
                     "wakeword_score": self._wakeword_score,
                 }
                 try:
-                    # Wake-word REJECT: the second-stage verifier did not confirm the
-                    # wake word. Abort the run silently — NO STT/LLM/TTS, NO ack (guarded
-                    # above), NO STT_VAD_END (that would trigger the thinking indicator).
-                    # Emit an empty STT_END (to balance STT_START) and RUN_END (which
-                    # stops the device streaming mid-utterance). Placed INSIDE the inner
-                    # try so the finally still records the run + stores its audio.
-                    if reason in ("wakeword_reject", "wakeword_error"):
-                        logger.info(
-                            f"{self.name}: 🚫 wake word rejected by verifier "
-                            f"(reason={reason}, score={self._wakeword_score})"
-                        )
+                    # REJECT: the second-stage verifier did not confirm the wake word,
+                    # or another device's wake of the same phrase won the arbitration.
+                    # Abort the run silently — NO STT/LLM/TTS, NO ack (guarded above),
+                    # NO STT_VAD_END (that would trigger the thinking indicator). Emit
+                    # an empty STT_END (to balance STT_START) and RUN_END (which stops
+                    # the device streaming mid-utterance). Placed INSIDE the inner try
+                    # so the finally still records the run + stores its audio.
+                    if reason in REJECT_REASONS:
+                        if reason == "duplicate":
+                            logger.info(
+                                f"{self.name}: 🚫 wake dropped as a duplicate of another "
+                                f"device's wake"
+                            )
+                        else:
+                            logger.info(
+                                f"{self.name}: 🚫 wake word rejected by verifier "
+                                f"(reason={reason}, score={self._wakeword_score})"
+                            )
                         record["result"] = "rejected"
                         record["reason"] = reason
                         await self._close_stt_streams(stt_streams)

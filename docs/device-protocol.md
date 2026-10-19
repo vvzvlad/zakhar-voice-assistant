@@ -69,6 +69,12 @@ The owner's words:
   microphone (XMOS stage NONE) and by about 1 dB on the XMOS-processed channels the wake word and
   the server use; hearing over the reply would mean taking a raw microphone from the XMOS. The
   findings: [echo-cancellation.md](echo-cancellation.md).
+- «поисследуй, как можно отбрасывать копии с разных колонок», then «давай сделаем 3, да» — when
+  several devices wake on one phrase, the server keeps one session and ends the others with
+  `state idle` before `listening`. Of the rules offered (the first wake wins; the cleanest wake
+  word wins; device priority; compare the texts after recognition), option 3: a device with a
+  speaker beats one without, between equals the device that heard the wake word with the higher
+  signal-to-noise ratio, then the earlier wake.
 
 ## Transport
 
@@ -202,6 +208,16 @@ device                                   server
   session on both sides: the device flushes its playback, the server cancels the older run and,
   before anything else of the new session, sends `play_stop` — a stream the server started before
   it saw the `wake` is dropped on the device too.
+- One phrase heard by several devices: the server holds a `wake` for `core.arbitration.window_ms`
+  (default 500 ms) to collect the wakes of the other online devices, or less once every online
+  device has woken; a lone online device is not held. With several wakes it rules only once
+  each of them has its pre-roll in, or `window_ms` after that device's own `wake`, and the
+  server's second wake-word check has ruled on it; a wake that check rejects takes no part. It keeps one session — a device with a
+  speaker over one without, between equals the higher signal-to-noise ratio of the pre-roll,
+  then the earlier wake — and ends the others with `state idle` before `listening`. For
+  `core.arbitration.cooldown_ms` (default 2000 ms) after the first of those wakes, a `wake` from
+  any other device is ended the same way at once. The ended runs show in the run log as
+  `rejected`, reason `duplicate`.
 - `stop`: `{"type": "stop", "session": 17}`, device → server: the stop word. The device runs the
   stop model from 1 s after its playback starts until the playback ends; a detection flushes the
   playback and sends `stop`, then `played {id, "dropped": true}` for each stream it dropped.
