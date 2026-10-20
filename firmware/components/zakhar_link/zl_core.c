@@ -386,7 +386,7 @@ zl_wake_t zl_sess_wake_check(const zl_sess_t *s)
 {
     if (s->detect_off) return ZL_WAKE_DETECT_OFF;
     if (s->capture) return ZL_WAKE_CAPTURE;
-    if (s->mic) return ZL_WAKE_MIC;
+    if (s->mic || s->proposed != 0) return ZL_WAKE_MIC;
     return ZL_WAKE_START;
 }
 
@@ -394,9 +394,7 @@ zl_wake_t zl_sess_wake(zl_sess_t *s)
 {
     const zl_wake_t w = zl_sess_wake_check(s);
     if (w != ZL_WAKE_START) return w;
-    s->session++;
-    s->open = true;
-    s->mic = true;
+    s->proposed = ++s->last;
     return ZL_WAKE_START;
 }
 
@@ -408,26 +406,48 @@ void zl_sess_detect(zl_sess_t *s, bool on)
 bool zl_sess_accepts(const zl_sess_t *s, const zl_msg_t *m)
 {
     if (m->type == ZL_MSG_PLAY_START || m->type == ZL_MSG_PLAY_END) return true;
-    return !m->has_session || m->session == s->session;
+    return !m->has_session || m->session == s->session || (s->proposed != 0 && m->session == s->proposed);
 }
 
-bool zl_sess_state(zl_sess_t *s, zl_state_t state)
+bool zl_sess_state(zl_sess_t *s, const zl_msg_t *m, bool *rewind)
 {
-    if (state == ZL_STATE_LISTENING) {
-        const bool reopen = s->open && !s->mic;
-        if (reopen) s->mic = true;
-        return reopen;
+    *rewind = false;
+    if (s->proposed != 0 && m->has_session && m->session == s->proposed) {
+        s->proposed = 0;
+        if (m->state != ZL_STATE_LISTENING) return false;
+        s->session = m->session;
+        s->open = true;
+        s->mic = true;
+        return true;
+    }
+    if (m->state == ZL_STATE_LISTENING) {
+        if (s->open && !s->mic) {
+            s->mic = true;
+            // A proposal's audio already streams: the follow-up's goes on in it, from where it is.
+            *rewind = s->proposed == 0;
+        }
+        return true;
     }
     s->mic = false;
-    if (state == ZL_STATE_IDLE || state == ZL_STATE_ERROR) s->open = false;
-    return false;
+    if (m->state == ZL_STATE_IDLE || m->state == ZL_STATE_ERROR) s->open = false;
+    return true;
 }
 
 bool zl_sess_capture(zl_sess_t *s)
 {
-    if (s->open) return false;
+    if (s->open || s->proposed != 0) return false;
     s->capture = true;
     return true;
+}
+
+bool zl_sess_streams(const zl_sess_t *s)
+{
+    return s->mic || s->proposed != 0;
+}
+
+bool zl_sess_busy(const zl_sess_t *s)
+{
+    return s->open || s->proposed != 0 || s->capture;
 }
 
 void zl_sess_lost(zl_sess_t *s, bool *was_open)
@@ -435,6 +455,7 @@ void zl_sess_lost(zl_sess_t *s, bool *was_open)
     *was_open = s->open;
     s->open = false;
     s->mic = false;
+    s->proposed = 0;
     s->detect_off = false;
 }
 

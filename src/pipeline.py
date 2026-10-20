@@ -128,9 +128,9 @@ class Pipeline:
         # (src/wake_arbiter.py) a wake run registers with and reports to — its
         # pre-roll is in, its verifier ruled, it stopped waiting (sync calls); None
         # runs every wake unarbitrated. take_session(cid) and end_wake(cid) (sync): the
-        # run of the wake that opened session `cid` is taken (the session starts, the
-        # playback is dropped) or ends without being taken (the running session goes
-        # on under the new number).
+        # run of the wake that proposed session `cid` is taken (the session starts, the
+        # playback is dropped) or ends without being taken (the device is refused that
+        # number; the running session goes on).
         self.send_event = None
         self.play = None
         self.has_speaker = False
@@ -326,7 +326,7 @@ class Pipeline:
         task this runs in), the device server starts the wake's session
         (take_session: `play_stop` before anything else of it) and the device is shown
         `listening` at once — the arbitration may hold the run for seconds more, and
-        the device shows nothing until `listening`. A taken run that later loses keeps
+        the device shows nothing of this wake until `listening`. A taken run that later loses keeps
         it (docs/device-protocol.md, the decisions)."""
         run.taken = True
         self._proposed = None

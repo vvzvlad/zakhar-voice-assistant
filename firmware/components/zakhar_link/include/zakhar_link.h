@@ -58,8 +58,9 @@ typedef struct {
 // is valid only during the call.
 typedef struct {
     void (*on_connection)(bool connected);
-    // A `state` of the current session. A session still open when the connection is lost ends
-    // with ZL_STATE_ERROR and NULL text.
+    // A `state` of the current session, the `listening` that makes a proposed one current among
+    // them; a wake the server does not take shows nothing. A session still open when the
+    // connection is lost ends with ZL_STATE_ERROR and NULL text.
     void (*on_state)(zl_state_t state, const char *text);
     void (*on_transcript)(const char *text);
     // announcement: the reply came without a session (a reminder, an agent's speak).
@@ -73,8 +74,8 @@ typedef struct {
     // ignored meanwhile. A lost link does not end it: it ends once all its audio is sent, or 2 s
     // after its last frame was recorded when it cannot be sent.
     void (*on_capture)(bool active);
-    // Asked on a wake word that would start a session (online, detection on, no capture, no
-    // session streaming its mic); false ignores it.
+    // Asked on a wake word that would propose a session (online, detection on, no capture, no wake
+    // proposed, no session streaming its mic); false ignores it.
     bool (*can_start)(void);
     // A model the server sent (`model` and its 0x03 frames), all `size` bytes in. The callee owns
     // `data` (16-byte aligned, in PSRAM, released with heap_caps_free) and returns whether the
@@ -118,8 +119,9 @@ void zl_report_volume(int percent);
 // task after zl_start().
 void zl_report_ambient(double dbfs);
 
-// Whether the microphone is in use: a voice session is open (from its wake to its idle or error)
-// or a capture is held; false before zl_start(). Takes the component's lock briefly.
+// Whether the microphone is in use: a wake awaits the server's ruling, a voice session is open (from
+// its `listening` to its idle or error) or a capture is held; false before zl_start(). Takes the
+// component's lock briefly.
 bool zl_mic_busy(void);
 
 // Speakers: the next playback samples (mono, play_rate) for the I2S writer task, after

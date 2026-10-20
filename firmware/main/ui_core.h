@@ -10,7 +10,6 @@
 
 typedef enum {
     LED_PHASE_IDLE,
-    LED_PHASE_WAITING,    // from the wake to the server's verdict: nothing shown
     LED_PHASE_LISTENING,
     LED_PHASE_THINKING,   // transcribing and thinking
     LED_PHASE_REPLYING,

@@ -225,68 +225,112 @@ static zl_msg_t msg_of(const char *json)
     return m;
 }
 
+#define DROPPED (-1)  // state(): the filter drops it
+#define UNSHOWN 0
+#define SHOWN 1
+
+// A `state` of `session` through the filter, then the session: DROPPED, or whether it is shown;
+// *rewind as zl_sess_state() sets it.
+static int state(zl_sess_t *s, uint32_t session, const char *value, bool *rewind)
+{
+    char json[100];
+    snprintf(json, sizeof json, "{\"type\": \"state\", \"session\": %u, \"value\": \"%s\"}", (unsigned)session, value);
+    zl_msg_t m = msg_of(json);
+    *rewind = false;
+    const int r = zl_sess_accepts(s, &m) ? zl_sess_state(s, &m, rewind) : DROPPED;
+    zl_msg_free(&m);
+    return r;
+}
+
 static void test_session(void)
 {
     zl_sess_t s = {0};
-    assert(zl_sess_wake(&s) == ZL_WAKE_START && s.session == 1 && s.open && s.mic);
-    // A detection inside the phrase, before or after `listening`, starts no new session.
-    assert(zl_sess_wake(&s) == ZL_WAKE_MIC && s.session == 1 && s.mic);
-    zl_msg_t cur = msg_of("{\"type\": \"state\", \"session\": 1, \"value\": \"listening\"}");
-    zl_msg_t old = msg_of("{\"type\": \"state\", \"session\": 0, \"value\": \"idle\"}");
+    bool rewind;
+    assert(!zl_sess_streams(&s) && !zl_sess_busy(&s));
+    // A wake proposes number 1 and its audio streams; there is no current session until the server
+    // takes it, and a detection inside the phrase proposes nothing.
+    assert(zl_sess_wake(&s) == ZL_WAKE_START && s.proposed == 1 && s.session == 0 && !s.open && !s.mic);
+    assert(zl_sess_streams(&s) && zl_sess_busy(&s));
+    assert(zl_sess_wake(&s) == ZL_WAKE_MIC && s.proposed == 1);
+    assert(!zl_sess_capture(&s) && !s.capture);  // busy: a wake is proposed
+    // `listening` of the proposed number takes it: shown, the stream goes on from the pre-roll.
+    assert(state(&s, 1, "listening", &rewind) == SHOWN && !rewind);
+    assert(s.session == 1 && s.proposed == 0 && s.open && s.mic);
+    assert(zl_sess_wake(&s) == ZL_WAKE_MIC && s.proposed == 0);  // its phrase is still being said
+    assert(state(&s, 0, "idle", &rewind) == DROPPED);
     zl_msg_t any = msg_of("{\"type\": \"reply\", \"text\": \"a\"}");
-    assert(zl_sess_accepts(&s, &cur) && !zl_sess_accepts(&s, &old) && zl_sess_accepts(&s, &any));
-
-    assert(!zl_sess_state(&s, ZL_STATE_LISTENING));  // the mic is on already: no reopen
-    assert(s.mic && s.open);
-    assert(zl_sess_wake(&s) == ZL_WAKE_MIC && s.session == 1);
+    assert(zl_sess_accepts(&s, &any));
+    assert(state(&s, 1, "listening", &rewind) == SHOWN && !rewind && s.mic);  // the mic is on already
     assert(!zl_sess_capture(&s));  // busy: a session is open
-    zl_sess_state(&s, ZL_STATE_TRANSCRIBING);
-    assert(!s.mic && s.open);
-    // A follow-up: a `listening` of the open session whose mic is off turns the mic on again.
-    assert(zl_sess_state(&s, ZL_STATE_LISTENING));
-    assert(s.mic && s.open);
-    zl_sess_state(&s, ZL_STATE_TRANSCRIBING);
+    assert(state(&s, 1, "transcribing", &rewind) == SHOWN && !s.mic && s.open);
+    assert(!zl_sess_streams(&s) && zl_sess_busy(&s));
+    // A follow-up: a `listening` of the open session whose mic is off streams again, from now.
+    assert(state(&s, 1, "listening", &rewind) == SHOWN && rewind && s.mic && s.open);
+    assert(state(&s, 1, "speaking", &rewind) == SHOWN && !s.mic && s.open);
 
-    assert(zl_sess_wake(&s) == ZL_WAKE_START && s.session == 2 && s.mic);  // a new wake replaces the session
-    assert(!zl_sess_accepts(&s, &cur));
-    // The replaced session's playback still passes: only the server's play_stop drops it.
+    // A wake over the answer proposes 2: session 1 stays current, its states shown, its playback
+    // passing, and none of them stops the proposal's audio.
+    assert(zl_sess_wake(&s) == ZL_WAKE_START && s.proposed == 2 && s.session == 1 && s.open && !s.mic);
     zl_msg_t play = msg_of("{\"type\": \"play_start\", \"session\": 1, \"id\": 7, \"rate\": 16000}");
     zl_msg_t end = msg_of("{\"type\": \"play_end\", \"session\": 1, \"id\": 7}");
     assert(zl_sess_accepts(&s, &play) && zl_sess_accepts(&s, &end));
-    zl_sess_state(&s, ZL_STATE_IDLE);
-    assert(!s.mic && !s.open);
-    assert(!zl_sess_state(&s, ZL_STATE_LISTENING));  // a closed session reopens nothing
-    assert(!s.mic && !s.open);
+    assert(state(&s, 3, "idle", &rewind) == DROPPED);
+    assert(state(&s, 1, "speaking", &rewind) == SHOWN && s.proposed == 2 && s.open);
+    assert(zl_sess_streams(&s));  // the current session's mic is off, the proposal's audio goes on
+    // Its follow-up `listening` while the proposal streams goes on in that stream: no rewind.
+    assert(state(&s, 1, "listening", &rewind) == SHOWN && !rewind && s.mic);
+    // `idle` of the proposed number refuses the wake unshown; the follow-up's mic streams on.
+    assert(state(&s, 2, "idle", &rewind) == UNSHOWN && s.proposed == 0);
+    assert(s.session == 1 && s.open && s.mic);
+    assert(state(&s, 2, "listening", &rewind) == DROPPED);  // the refused number is gone
+    assert(state(&s, 1, "idle", &rewind) == SHOWN && !s.open && !s.mic);
+    assert(!zl_sess_streams(&s) && !zl_sess_busy(&s));
+    assert(state(&s, 1, "listening", &rewind) == SHOWN && !rewind && !s.mic && !s.open);  // closed: no reopen
+
+    // Numbers are never reused: the next wake proposes 3, which the server refuses with an error.
+    assert(zl_sess_wake(&s) == ZL_WAKE_START && s.proposed == 3);
+    assert(state(&s, 3, "error", &rewind) == UNSHOWN && s.proposed == 0 && s.session == 1);
+    // Taken, a proposal replaces the current session; the replaced one's playback still passes until
+    // the server's play_stop.
+    assert(zl_sess_wake(&s) == ZL_WAKE_START && s.proposed == 4);
+    assert(state(&s, 4, "listening", &rewind) == SHOWN && s.session == 4 && s.open && s.mic);
+    assert(zl_sess_accepts(&s, &play) && zl_sess_accepts(&s, &end));
+    assert(state(&s, 1, "idle", &rewind) == DROPPED);
+    assert(state(&s, 4, "idle", &rewind) == SHOWN && !s.open && !s.mic);
 
     assert(zl_sess_capture(&s) && s.capture);
+    assert(!zl_sess_streams(&s) && zl_sess_busy(&s));
     assert(zl_sess_wake_check(&s) == ZL_WAKE_CAPTURE);
-    assert(zl_sess_wake(&s) == ZL_WAKE_CAPTURE && s.session == 2);  // wake words ignored during a capture
+    assert(zl_sess_wake(&s) == ZL_WAKE_CAPTURE && s.proposed == 0);  // wake words ignored during a capture
     bool open;
     zl_sess_lost(&s, &open);
     assert(!open && s.capture);  // a lost link keeps the capture
     assert(zl_sess_wake(&s) == ZL_WAKE_CAPTURE);
     s.capture = false;  // the capture ended
-    assert(zl_sess_wake(&s) == ZL_WAKE_START);
+    // A lost link drops a proposal; the current session's number stays.
+    assert(zl_sess_wake(&s) == ZL_WAKE_START && s.proposed == 5);
+    zl_sess_lost(&s, &open);
+    assert(!open && s.proposed == 0 && s.session == 4 && zl_sess_wake_check(&s) == ZL_WAKE_START);
+    assert(zl_sess_wake(&s) == ZL_WAKE_START && s.proposed == 6);
+    assert(state(&s, 6, "listening", &rewind) == SHOWN);
     zl_sess_lost(&s, &open);
     assert(open && !s.open && !s.mic);
 
     // Detection off: wake words are refused and say why, a capture still starts; a lost
     // connection turns detection on again.
-    const uint32_t before = s.session;
+    const uint32_t before = s.last;
     zl_sess_detect(&s, false);
     assert(zl_sess_wake_check(&s) == ZL_WAKE_DETECT_OFF);
-    assert(zl_sess_wake(&s) == ZL_WAKE_DETECT_OFF && s.session == before && !s.open && !s.mic);
+    assert(zl_sess_wake(&s) == ZL_WAKE_DETECT_OFF && s.last == before && s.proposed == 0);
     assert(zl_sess_capture(&s) && s.capture);
     zl_sess_lost(&s, &open);
     assert(zl_sess_wake_check(&s) == ZL_WAKE_CAPTURE);  // detection is on again, the capture still runs
     s.capture = false;
-    assert(zl_sess_wake(&s) == ZL_WAKE_START && s.session == before + 1);
+    assert(zl_sess_wake(&s) == ZL_WAKE_START && s.proposed == before + 1);
     zl_sess_detect(&s, false);
     zl_sess_detect(&s, true);
-    assert(zl_sess_wake_check(&s) == ZL_WAKE_MIC);  // detection is on again; the session still streams
+    assert(zl_sess_wake_check(&s) == ZL_WAKE_MIC);  // detection is on again; the proposal still streams
 
-    zl_msg_free(&cur);
-    zl_msg_free(&old);
     zl_msg_free(&any);
     zl_msg_free(&play);
     zl_msg_free(&end);

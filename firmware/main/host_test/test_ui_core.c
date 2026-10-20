@@ -38,8 +38,6 @@ static void test_priority(void)
     assert(ind_choose(&s, 0) == IND_THINKING);
     s.phase = LED_PHASE_REPLYING;
     assert(ind_choose(&s, 0) == IND_REPLYING);
-    s.phase = LED_PHASE_WAITING;
-    assert(ind_choose(&s, 0) == IND_OFF);        // nothing from the wake to the verdict
     s.phase = LED_PHASE_IDLE;
     assert(ind_choose(&s, 0) == IND_REPLYING);   // an announcement playing, over mute
     s.playing = false;
@@ -73,14 +71,12 @@ static void test_error_hold(void)
     assert(ind_choose(&s, 1999) == IND_ERROR);
     assert(ind_choose(&s, 2000) == IND_OFF && s.phase == LED_PHASE_IDLE);
 
-    // A new wake within the second replaces the error, and the hold does not touch it.
+    // A new session within the second replaces the error, and the hold does not touch it.
     s = online();
     ind_set_phase(&s, LED_PHASE_ERROR, 0);
     assert(ind_choose(&s, 400) == IND_ERROR);
-    ind_set_phase(&s, LED_PHASE_WAITING, 500);
-    assert(ind_choose(&s, 1500) == IND_OFF && s.phase == LED_PHASE_WAITING);
-    ind_set_phase(&s, LED_PHASE_LISTENING, 1600);
-    assert(ind_choose(&s, 1600) == IND_LISTENING);
+    ind_set_phase(&s, LED_PHASE_LISTENING, 500);
+    assert(ind_choose(&s, 1500) == IND_LISTENING && s.phase == LED_PHASE_LISTENING);
 
     // While the server is away the error waits; it ends at the first look after.
     s = online();

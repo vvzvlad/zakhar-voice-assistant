@@ -567,27 +567,23 @@ async def test_a_wake_over_the_answer_drops_it_only_once_confirmed(srv):
     assert len(verifier.calls) == 1  # the confirmed wake is not checked again
 
 
-async def test_a_rejected_wake_leaves_the_answer_playing_under_the_new_session(srv, tmp_path):
+async def test_a_rejected_wake_leaves_the_answer_playing(srv, tmp_path):
     srv.rt.runs_store = RunsStore(str(tmp_path / "runs.db"))
     dev = await srv.connect(buffer_ms=1400)
     old = await answer_playing(srv, dev, 1)
     verifier = srv.rt.wakeword_backend = HeldVerifier()
     verifier.verdict(11).set_result(WakewordVerdict(accepted=False, score=0.0))
     await wake_over(dev, 2)
-    # No play_stop: the answer's text and last state, stamped with session 2, reach the device
-    # (its mic stops); the answer plays to its end and its run then ends session 2.
-    assert [await dev.recv() for _ in range(3)] == [
-        {"type": "transcript", "session": 2, "text": "включи свет"},
-        {"type": "reply", "session": 2, "text": "готово"},
-        state(2, "speaking"),
-    ]
+    # No play_stop: `state idle` of session 2 refuses the wake, nothing of session 1 is sent
+    # again, and its answer plays to its end and ends session 1.
+    assert await dev.recv() == state(2, "idle")
     assert await dev.recv() == {"type": "play_end", "id": old, "session": 1}
     assert len(dev.plays[old]) == 32000
     # The rejected wake is in the run log before the answer is reported played: its
     # record does not wait for the answering run, which holds the run lock until then.
     await until(lambda: srv.rt.runs_store.list(result="rejected"))
     await dev.send(type="played", id=old)
-    assert await dev.recv() == state(2, "idle")
+    assert await dev.recv() == state(1, "idle")
     await until(lambda: len(srv.rt.runs_store.list()) == 2)
     [row] = srv.rt.runs_store.list(result="rejected")
     assert (row["reason"], row["wakeword_score"], row["has_audio"]) == ("wakeword_reject", 0.0, 1)
@@ -668,7 +664,7 @@ async def test_a_held_wake_keeps_the_arbitration_open_until_its_check_rules(srv,
         assert await panel.recv() == state(3, "idle")
     else:
         # The group is ruled without it: the panel keeps the phrase.
-        assert await speaker.recv() == {"type": "transcript", "session": 2, "text": "включи свет"}
+        assert await speaker.recv() == state(2, "idle")
         assert await panel.recv() == state(3, "transcribing")
 
 
@@ -720,7 +716,7 @@ async def test_a_wake_that_loses_before_its_check_leaves_the_answer_playing(srv,
     # The kitchen speaker answers; the hall speaker keeps a new phrase, and the kitchen's wake
     # comes in that phrase's cooldown: it loses before its own check rules. Confirmed later,
     # it is still never taken — the answer plays on — and at the end of its phrase the kitchen
-    # gets the answer's text and state under the new session, as for a rejected wake.
+    # gets `state idle` of the proposed session, as for a rejected wake.
     monkeypatch.setattr("src.wake_arbiter.WINDOW_MS", 100)
     monkeypatch.setattr("src.wake_arbiter.COOLDOWN_MS", 500)
     kitchen = await srv.connect(buffer_ms=1400)
@@ -743,11 +739,7 @@ async def test_a_wake_that_loses_before_its_check_leaves_the_answer_playing(srv,
         await asyncio.wait_for(kitchen.recv(), 0.5)
     assert len(kitchen.plays[old]) > sent
     await kitchen.mic(stereo(13, -13, 60))  # its phrase ends
-    assert [await kitchen.recv() for _ in range(3)] == [
-        {"type": "transcript", "session": 2, "text": "включи свет"},
-        {"type": "reply", "session": 2, "text": "готово"},
-        state(2, "speaking"),
-    ]
+    assert await kitchen.recv() == state(2, "idle")
 
 
 async def test_stop_word_in_a_session_ends_it(srv):

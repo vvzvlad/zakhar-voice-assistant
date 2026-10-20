@@ -110,50 +110,65 @@ void zl_put_u32le(uint8_t *p, uint32_t v);
 // ---------------------------------------------------------------- the voice session
 
 typedef struct {
-    uint32_t session;  // the last wake's number, 0 before the first
-    bool open;         // from the wake to its idle or error
-    bool mic;          // the session's audio streams: from the wake or a follow-up listening to the next
-                       // state other than listening
-    bool capture;      // a capture is held: from its `capture` until it ends; a lost link keeps it
-    bool detect_off;   // a `detect` turned wake words off; zero, so on, with every connection
+    uint32_t session;   // the last session the server took (listening), 0 before the first
+    uint32_t proposed;  // a wake the server has not ruled on yet; 0 = none. Its audio streams meanwhile
+    uint32_t last;      // the last proposed number: numbers are never reused
+    bool open;          // the current session: from its listening to its idle or error
+    bool mic;           // the current session's audio streams: from its listening, or a follow-up one,
+                        // to its next state other than listening
+    bool capture;       // a capture is held: from its `capture` until it ends; a lost link keeps it
+    bool detect_off;    // a `detect` turned wake words off; zero, so on, with every connection
 } zl_sess_t;
 
-// What a wake word does: starts a session, or is refused and why.
+// What a wake word does: proposes a session, or is refused and why.
 typedef enum {
     ZL_WAKE_START,
     ZL_WAKE_DETECT_OFF,  // a `detect` turned detection off
     ZL_WAKE_CAPTURE,     // a capture runs
-    ZL_WAKE_MIC,         // the session's audio still streams: its phrase is still being said
+    ZL_WAKE_MIC,         // the audio of the session or of a proposed one still streams: its phrase is
+                         // still being said
 } zl_wake_t;
 
 // What a wake word would do now; changes nothing.
 zl_wake_t zl_sess_wake_check(const zl_sess_t *s);
 
-// A wake word: refused while detection is off, a capture runs or the session's mic still streams
-// (as zl_sess_wake_check says) — a detection inside the phrase must not cut it off; otherwise the
-// next session starts (new number, open, the mic on) and replaces the current one.
+// A wake word: refused while detection is off, a capture runs, the session's mic still streams or a
+// wake is proposed already (as zl_sess_wake_check says) — a detection inside the phrase must not cut
+// it off; otherwise it proposes the next number (`proposed`, which `wake` carries) and its audio
+// streams. The current session stays current until the server takes the proposal.
 zl_wake_t zl_sess_wake(zl_sess_t *s);
 
-// A `detect`: wake words start sessions (true) or are refused (false). A capture does not care.
+// A `detect`: wake words propose sessions (true) or are refused (false). A capture does not care.
 void zl_sess_detect(zl_sess_t *s, bool on);
 
-// The session filter: a message without `session` passes, one with it only for the current one.
-// play_start and play_end pass whatever their `session`: the playback of the session a wake
-// replaced keeps playing until the server's play_stop, which it sends once it takes the wake: at
-// once when its wake-word check is off or nothing is going, otherwise once that check confirms it.
+// The session filter: a message without `session` passes, one with it only for the current or the
+// proposed one. play_start and play_end pass whatever their `session`: only the server's play_stop
+// drops the playback, which it sends once it takes a wake: at once when its wake-word check is off
+// or nothing is going, otherwise once that check confirms it.
 bool zl_sess_accepts(const zl_sess_t *s, const zl_msg_t *m);
 
-// A `state` that passed the filter: anything but listening stops the mic, idle and error close. A
-// listening of the open session whose mic is off (a follow-up) turns the mic on again; true only
-// then, so the caller sets where its audio starts.
-bool zl_sess_state(zl_sess_t *s, zl_state_t state);
+// A `state` that passed the filter; returns whether it is shown (on_state). Of the proposed session:
+// listening takes the proposal (it becomes the current session, open, its mic on), anything else
+// drops it unshown. Of the current one: anything but listening stops its mic, idle and error close
+// it; a listening of the open session whose mic is off (a follow-up) turns the mic on again, and
+// *rewind is true only when that starts the stream (no proposal streams), so the caller sets where
+// its audio starts.
+bool zl_sess_state(zl_sess_t *s, const zl_msg_t *m, bool *rewind);
 
-// A `capture`: false (busy) while a session is open; otherwise the capture is held, in place of
-// one held already.
+// A `capture`: false (busy) while a session is open or a wake is proposed; otherwise the capture is
+// held, in place of one held already.
 bool zl_sess_capture(zl_sess_t *s);
 
-// The connection is gone: the session ends, a held capture stays held, and detection is on again
-// for the next connection. Reports whether a session was open.
+// Whether the session's microphone audio streams: the current session's mic is on or a wake is
+// proposed (a held capture streams on its own terms).
+bool zl_sess_streams(const zl_sess_t *s);
+
+// Whether the microphone is in use for the server: a session is open, a wake is proposed or a
+// capture is held.
+bool zl_sess_busy(const zl_sess_t *s);
+
+// The connection is gone: the session ends, a proposal is dropped, a held capture stays held, and
+// detection is on again for the next connection. Reports whether a session was open.
 void zl_sess_lost(zl_sess_t *s, bool *was_open);
 
 // ---------------------------------------------------------------- the playback queue

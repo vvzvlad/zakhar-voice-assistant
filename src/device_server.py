@@ -295,13 +295,10 @@ class Connection:
         # The session the server stamps its messages with, and whether its run is still
         # going (from wake until the terminal state): plays in that window belong to
         # the session. While a wake's run is held before the server takes it (the
-        # pipeline's proposal) the device is already on the held wake's number and drops
-        # the states and text stamped with this one; play_start/play_end pass whatever
-        # their session.
+        # pipeline's proposal) the device stays on this number and lets the held wake's
+        # through too; its `listening` or `state idle` (_end_wake) rules on the wake.
         self.session = None
         self.session_open = False
-        # The last `state`, `transcript` and `reply` sent in the current session, by type.
-        self.last_sent: dict[str, dict] = {}
         self.config_sent = None  # _config_fields() last sent in `config`
         self.log_on = None  # `on` last sent in `log_stream`
         self.models: dict[str, str] = {}  # kind -> the name last sent in `model`
@@ -342,7 +339,6 @@ class Connection:
         """Send a message of the current session, stamped with it."""
         if self.session is None:
             return
-        self.last_sent[msg["type"]] = msg
         self.send({**msg, "session": self.session})
 
     def send_config(self, cfg) -> None:
@@ -378,7 +374,6 @@ class Connection:
         `play_stop` before anything else of the new session."""
         self.session = session
         self.session_open = True
-        self.last_sent = {}
         self.drop_playback()
 
     @property
@@ -574,25 +569,13 @@ class Device:
             self.conn.start_session(session)
 
     def _end_wake(self, session) -> None:
-        """The pipeline's end_wake hook: the run of the `wake` that opened `session` ends
-        without being taken (its check rejected it, or it lost the arbitration). The
-        running answer goes on under the new session number, so the device hears the
-        rest of it: what the device dropped while it was on the new number, now stamped
-        with it — the run's text for a screen, then its state, which the device follows
-        as it would have (the mic stops, a follow-up `listening` keeps it streaming);
-        `state idle` when no run is going. The run's later messages carry the new
-        number."""
-        conn = self.conn
-        if conn is None:
-            return
-        conn.session = session
-        if conn.session_open:
-            for kind in ("transcript", "reply"):
-                if kind in conn.last_sent:
-                    conn.send_session(conn.last_sent[kind])
-            conn.send_session(conn.last_sent["state"])
-        else:
-            conn.send_session({"type": "state", "value": "idle"})
+        """The pipeline's end_wake hook: the run of the `wake` that proposed `session`
+        ends without being taken (its check rejected it, or it lost the arbitration).
+        `state idle` of that number refuses it: the device drops the proposal, whose audio
+        stops unless the current session listens for a follow-up, and stays on the
+        current session, whose answer plays on."""
+        if self.conn is not None:
+            self.conn.send({"type": "state", "session": session, "value": "idle"})
 
     async def on_text(self, conn: Connection, msg: dict) -> None:
         if conn is not self.conn:
