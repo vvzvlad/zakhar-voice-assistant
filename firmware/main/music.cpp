@@ -186,6 +186,7 @@ static void music_task(void *arg)
     cfg.protocol_task_priority = PROTOCOL_PRIO;
     // The protocol's JSON documents go to PSRAM: the arena would be internal RAM.
     cfg.json_arena_size = 0;
+    log_internal("before the client is made");
     auto *client = new sendspin::SendspinClient(std::move(cfg));
     sendspin::PlayerRoleConfig pc;
     pc.audio_formats = {
@@ -225,13 +226,16 @@ static void music_task(void *arg)
         ESP_LOGI(TAG, "Sendspin player \"%s\" on %s.local:%u", name, host, (unsigned)port);
     }
     log_internal("player up");
-    bool stack_logged = false;
+    bool stack_logged = false, was_active = false;
     for (;;) {
         client->loop();
-        if (!stack_logged && xTaskGetTickCount() - started >= pdMS_TO_TICKS(STACK_LOG_MS)) {
+        // Logged once after the start and again at each stream's end, when a stream has run here.
+        const bool active = s_active.load(std::memory_order_relaxed);
+        if ((!stack_logged && xTaskGetTickCount() - started >= pdMS_TO_TICKS(STACK_LOG_MS)) || (was_active && !active)) {
             ESP_LOGI(TAG, "music task: %u B of its stack never used", (unsigned)uxTaskGetStackHighWaterMark(NULL));
             stack_logged = true;
         }
+        was_active = active;
         vTaskDelay(pdMS_TO_TICKS(LOOP_MS));
     }
 }

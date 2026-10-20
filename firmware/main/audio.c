@@ -245,10 +245,12 @@ static void mic_task(void *arg)
         const int level = atomic_load_explicit(&s_echo_cancel, memory_order_relaxed);
         const int mode = atomic_load_explicit(&s_echo_mode, memory_order_relaxed);
         const int filter = atomic_load_explicit(&s_echo_filter, memory_order_relaxed);
+        // Playing is zakhar's playback or a music stream.
+        const bool playing = zl_playing() || music_active();
         // The AEC is made at the first playback with echo_cancel on, not at boot: its internal RAM
         // then comes after the link task's stack, which at boot found no block left. Once made, a
         // new echo_cancel_mode or echo_cancel_filter re-creates it at once.
-        if ((made_mode >= 0 || (level > 0 && zl_playing())) && (mode != made_mode || filter != made_filter)) {
+        if ((made_mode >= 0 || (level > 0 && playing)) && (mode != made_mode || filter != made_filter)) {
             if (st.chunks > 0) {
                 log_playback(aec, made_filter, &st, lag_in_use);
                 st = (aec_stats_t){.corr = NAN};
@@ -260,9 +262,8 @@ static void mic_task(void *arg)
             made_filter = filter;
             applied = level;
         }
-        // Quiet is auto volume on, nothing playing (zakhar's playback or a music stream), no session
-        // open, no wake proposed and no capture held; its end ends a measurement.
-        const bool playing = zl_playing() || music_active();
+        // Quiet is auto volume on, nothing playing, no session open, no wake proposed and no capture
+        // held; its end ends a measurement.
         const bool measuring = ambient_sched_want(
             &amb, atomic_load_explicit(&s_auto_volume, memory_order_relaxed) && !playing && !zl_mic_busy());
         const bool want_raw = (level > 0 && aec != NULL && playing) || measuring;

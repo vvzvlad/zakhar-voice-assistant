@@ -534,6 +534,16 @@ static void test_music_ring(void)
     frames_from(600, in, 7);
     assert(music_ring_write(&r, in, 8) == 7);
     ring_read_is(&r, 16, 600, 7);
+
+    // A flush to a point the reader has already passed leaves the tail where it is.
+    frames_from(700, in, 4);
+    const uint32_t start = r.head;
+    music_ring_write(&r, in, 4);
+    ring_read_is(&r, 3, 700, 3);
+    const uint32_t tail = r.tail;
+    music_ring_flush(&r, (start + 1) % r.cap);
+    assert(r.tail == tail);
+    ring_read_is(&r, 16, 703, 1);
 }
 
 static void test_volume(void)
