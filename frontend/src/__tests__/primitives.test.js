@@ -30,14 +30,14 @@ describe("segsFor", () => {
     const segs = segsFor({ result: "ok", t: { vad: 50, stt: 50, llm: 0, tts: 0 } });
     // llm/tts are 0 -> dropped; vad then stt order preserved.
     expect(segs).toHaveLength(2);
-    expect(segs.map((s) => s.label)).toEqual(["vad 50", "stt 50"]);
+    expect(segs.map((s) => s.label)).toEqual(["VAD 50", "STT 50"]);
   });
 
   it("labels a segment below the 15% threshold with the bare number only", () => {
-    // vad = 10/100 = 10% (<15) -> "10"; stt = 90/100 = 90% -> "stt 90".
+    // vad = 10/100 = 10% (<15) -> "10"; stt = 90/100 = 90% -> "STT 90".
     const segs = segsFor({ result: "ok", t: { vad: 10, stt: 90, llm: 0, tts: 0 } });
     expect(segs[0].label).toBe("10");
-    expect(segs[1].label).toBe("stt 90");
+    expect(segs[1].label).toBe("STT 90");
   });
 
   it("appends a hatched 'fail' segment for an error result", () => {
@@ -57,8 +57,8 @@ describe("segsFor", () => {
     const last = segs[segs.length - 1];
     expect(last.label).toBe("rejected");
     expect(last.pct).toBe(24);
-    // The wakeword stage timing still renders its own segment before the marker.
-    expect(segs.some((s) => s.label === "20" || s.label === "wakeword 20")).toBe(true);
+    // The wake word stage timing still renders its own segment before the marker.
+    expect(segs.some((s) => s.label === "20" || s.label === "Wake word 20")).toBe(true);
   });
 });
 

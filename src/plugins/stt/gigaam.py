@@ -59,9 +59,9 @@ class GigaamSttConfig(BaseModel):
     model: str = Field("gigaam-v3-rnnt", title="Model type",
                        description="onnx-asr name of the model in that directory, "
                        "e.g. gigaam-v3-rnnt or gigaam-v3-ctc.")
+    # Which files of the directory to load.
     quantization: str = Field("int8", title="Quantization",
-                              description="Which files of the directory to load: int8 for the quantized ones, "
-                              "empty for full precision.")
+                              description="int8 loads the quantized files; empty loads full precision.")
 
 
 def _list_model_dirs(base_dir: str) -> list[dict]:

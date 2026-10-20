@@ -15,7 +15,7 @@ from loguru import logger
 from pydantic import BaseModel, Field
 
 from src.followup import FollowupGate, FollowupVerdict, NoFollowup
-from src.plugins.base import ADVANCED_FIELD_EXTRA, Deps, Provider, register
+from src.plugins.base import ADVANCED_FIELD_EXTRA, PERCENT_FIELD_EXTRA, Deps, Provider, register
 from src.plugins.llm._decisions import DECISIONS_API_URL, noul_answer
 
 _CONTINUATION_QUESTION = {
@@ -35,15 +35,13 @@ _CONTINUATION_QUESTION = {
 
 
 class JevFollowupConfig(BaseModel):
+    # A phrase heard in the window goes on only when the jev decision model takes it for
+    # a continuation of the dialog. It uses the model and API key of the jev handler and
+    # works on devices that support it.
     enabled: bool = Field(
         False,
         title="Follow-up",
-        description=(
-            "After the spoken answer keep listening for a few seconds without the wake "
-            "word. A phrase heard there goes on only when the jev decision model takes "
-            "it for a continuation of the dialog. Uses the model and API key of the jev "
-            "handler; works on devices that support it."
-        ),
+        description="Listens for a follow-up after the reply without the wake word; uses the Jev handler's key.",
     )
     window_ms: int = Field(
         5000,
@@ -51,15 +49,14 @@ class JevFollowupConfig(BaseModel):
         description="How long to wait for speech to start after the answer.",
         json_schema_extra={"unit": "ms"},
     )
+    # The phrase goes on when the probability that it continues the dialog reaches this.
     min_confidence: float = Field(
         0.5,
         ge=0.0,
         le=1.0,
         title="Confidence threshold",
-        description=(
-            "The decision model's probability that the phrase continues the dialog must "
-            "reach this for the phrase to go on."
-        ),
+        description="How sure the decision model must be that the phrase continues the dialog.",
+        json_schema_extra=PERCENT_FIELD_EXTRA,
     )
     timeout: float = Field(
         2.0,

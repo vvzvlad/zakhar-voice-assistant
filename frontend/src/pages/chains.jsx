@@ -4,7 +4,7 @@
 // on the same audio until one answers. The whole list is one draft saved as ONE
 // patch of the full array, because PATCH /api/config replaces lists.
 import React from "react";
-import { PageHeader, FormPage, Select, Toggle, Field } from "../components/primitives.jsx";
+import { PageHeader, FormPage, Select, Toggle, Field, NavLink } from "../components/primitives.jsx";
 import { Ic } from "../components/icons.jsx";
 import { useAppData } from "../appData.jsx";
 import { useStageForm } from "../useStageForm.js";
@@ -25,7 +25,7 @@ function ProviderPick({ label, cat, value, options, onChange }) {
   return <div className="z-f">
     <div className="z-fl">
       <b>{label}</b>
-      <button type="button" className="z-btn g sm" onClick={() => configure(cat, value)}>configure →</button>
+      <NavLink onClick={() => configure(cat, value)}>Configure</NavLink>
     </div>
     <Select value={value} options={options} onChange={onChange} />
   </div>;
@@ -63,7 +63,7 @@ function ChainCard({ chain, index, count, catalog, chains, isLastEnabled, onUpda
       </Field>}
       {/* The first enabled chain always starts at speech; later ones may start with it. */}
       {!startsFirst(chains, index) && <Field row label="Recognize in parallel"
-        hint="Start this chain's STT together with the first chain. Handlers still run in order.">
+        hint="Starts this chain's STT with the first chain's; handlers still run in order.">
         <Toggle on={!!chain.parallel} onChange={(on) => onUpdate({ parallel: on })} />
       </Field>}
       {openEnded && <div className="z-banner warn" style={{ margin: "12px 0" }}>

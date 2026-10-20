@@ -78,8 +78,7 @@ class ReplyConfig(BaseModel):
     reply_error_after_tools: str = Field(
         "Сделал, но ответить не смог.",
         title="Reply on error after a tool",
-        description="Spoken when the handler fails after a tool already ran: the action "
-        "happened, only the answer is missing.",
+        description="Spoken when the handler fails after a tool already ran.",
         json_schema_extra=FALLBACK_REPLY_EXTRA,
     )
 

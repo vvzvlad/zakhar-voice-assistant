@@ -361,6 +361,53 @@ describe("SchemaField numeric onChange payload", () => {
   });
 });
 
+describe("SchemaField percent fields", () => {
+  // A probability stored as 0..1 shows and is edited as 0-100 %, and is written back as 0..1.
+  function Controlled({ node, onChange, initial = 0.5 }) {
+    const [val, setVal] = React.useState(initial);
+    return <SchemaForm schema={{ properties: { p: node } }} values={{ p: val }}
+      onChange={(f, v) => { onChange(f, v); setVal(v); }} />;
+  }
+
+  it("a stepper shows 0.5 as 50 % and writes 70 and 50 back as 0.7 and 0.5", () => {
+    const onChange = vi.fn();
+    const { container } = render(<Controlled node={{ type: "number", minimum: 0, maximum: 1, percent: true }} onChange={onChange} />);
+    const input = container.querySelector(".z-stepper input");
+    expect(input.value).toBe("50");
+    expect(container.querySelector(".z-stepper").nextSibling.textContent).toBe("%");
+    fireEvent.change(input, { target: { value: "70" } });
+    fireEvent.blur(input);
+    expect(onChange).toHaveBeenLastCalledWith("p", 0.7);
+    expect(input.value).toBe("70");
+    fireEvent.change(input, { target: { value: "50" } });
+    fireEvent.blur(input);
+    expect(onChange).toHaveBeenLastCalledWith("p", 0.5);
+  });
+
+  it("a stored fractional percent shows whole and is not rewritten by a focus and blur", () => {
+    const onChange = vi.fn();
+    const { container } = render(<Controlled node={{ type: "number", minimum: 0, maximum: 1, percent: true }} onChange={onChange} initial={0.855} />);
+    const input = container.querySelector(".z-stepper input");
+    expect(input.value).toBe("86");
+    fireEvent.focus(input);
+    fireEvent.blur(input);
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("a slider shows 0.5 as 50% and writes a drag to 50 % back as 0.5", () => {
+    const onChange = vi.fn();
+    const { container } = render(<Controlled node={{ type: "number", minimum: 0, maximum: 1, widget: "slider", percent: true }} onChange={onChange} />);
+    expect(container.querySelector(".z-sval").textContent).toBe("50%");
+    const track = container.querySelector(".z-trk");
+    track.getBoundingClientRect = () => ({ left: 0, width: 100, top: 0, height: 10, right: 100, bottom: 10 });
+    fireEvent(track, new MouseEvent("pointerdown", { bubbles: true, clientX: 70 }));
+    expect(onChange).toHaveBeenLastCalledWith("p", 0.7);
+    expect(container.querySelector(".z-sval").textContent).toBe("70%");
+    fireEvent(track, new MouseEvent("pointerdown", { bubbles: true, clientX: 50 }));
+    expect(onChange).toHaveBeenLastCalledWith("p", 0.5);
+  });
+});
+
 describe("SchemaField ScaleSeg (segment scale) selection", () => {
   it("renders a labeled ScaleSeg (word labels + poles + readout) for an integer with choices", () => {
     const onChange = vi.fn();

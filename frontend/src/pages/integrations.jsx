@@ -127,7 +127,8 @@ function McpServerModal({ initial, onSave, onClose, title, takenNames }) {
   return <Modal title={title} onClose={onClose}
     footer={<><button className="z-btn g" onClick={onClose}>Cancel</button>
       <button className="z-btn p" disabled={!valid} onClick={done}>{initial ? "Done" : "Add"}</button></>}>
-    <Field label="Name" hint="Unique name — it is also the source id in /api/tools.">
+    {/* The name is also the source id in /api/tools. */}
+    <Field label="Name" hint="Unique name of this server among the tool sources.">
       <div className="z-inp"><input value={name} placeholder="e.g. home" onChange={(e) => setName(e.target.value)} /></div>
       {dup && <div className="z-fh" style={{ color: "#b91c1c" }}>Name is already in use.</div>}
       {!dup && reserved && <div className="z-fh" style={{ color: "#b91c1c" }}>Name is reserved by a built-in source.</div>}
@@ -241,7 +242,7 @@ export function MCP() {
   const onServerChange = (i) => (field, value) => setServers(servers.map((x, idx) => (idx === i ? { ...x, [field]: value } : x)));
 
   return <FormPage form={form} narrow>
-    <PageHeader title="Tools" desc="Tool sources the model calls: external smart-home MCP servers and built-in weather/calendar/reminders/assistant tasks, plus the always-on speaker volume tool. Sources are applied live — rebuilt on save, no restart needed."
+    <PageHeader title="Tools" desc="Tool sources the model calls: external smart-home MCP servers and built-in weather/calendar/reminders/assistant tasks, plus the always-on device volume tool. Sources are applied live — rebuilt on save, no restart needed."
       actions={<button className="z-btn p" onClick={() => setModal({ mode: "add" })}><Ic n="add" w={14} />Add server</button>} />
     {toolsErr && <div className="z-banner warn" style={{ margin: "0 0 14px" }}>
       <Ic n="restart" w={15} />
@@ -591,13 +592,13 @@ export function Devices() {
     x.name === name ? { ...x, ...edit } : x
   )));
   const onDelete = (name) => {
-    if (!window.confirm(`Delete speaker "${deviceLabel(devices, name)}"?`)) return;
+    if (!window.confirm(`Delete device "${deviceLabel(devices, name)}"?`)) return;
     saveList((list) => list.filter((x) => x.name !== name));
   };
 
   return <div className="z-page">
     <PageHeader title="Devices" desc="An unknown device is added on its first connection. Each device id also keys its own dialog context."
-      actions={<button className="z-btn g" onClick={() => setModal({ mode: "add" })}><Ic n="add" w={14} />Add speaker</button>} />
+      actions={<button className="z-btn g" onClick={() => setModal({ mode: "add" })}><Ic n="add" w={14} />Add device</button>} />
     {busyErr && <div className="z-banner warn" style={{ margin: "0 0 12px" }}><Ic n="restart" w={15} /><span>{errorLines(busyErr).join(" · ")}</span></div>}
     <Card>
       {/* On a narrow screen Firmware and Uptime hide (the dialog header has them) and what is
@@ -607,7 +608,7 @@ export function Devices() {
         <thead><tr><th>Name</th><th>Firmware</th><th>Wake word model</th><th>Uptime</th><th>Status</th></tr></thead>
         <tbody>
           {devices.length === 0
-            ? <tr><td colSpan={5} style={{ color: "var(--mut)", padding: "14px 0" }}>No speakers configured.</td></tr>
+            ? <tr><td colSpan={5} style={{ color: "var(--mut)", padding: "14px 0" }}>No devices configured.</td></tr>
             : devices.map((d, i) => {
               const enabled = d.enabled ?? true;
               const dim = enabled ? "" : "z-dim";
@@ -629,8 +630,8 @@ export function Devices() {
       </table>
       </div>
     </Card>
-    {modal?.mode === "add" && <DeviceModal title="Add speaker" onSave={onAdd} onClose={() => setModal(null)} />}
-    {modal?.mode === "edit" && <DeviceModal key={modal.name} title="Edit speaker" onClose={() => setModal(null)}
+    {modal?.mode === "add" && <DeviceModal title="Add device" onSave={onAdd} onClose={() => setModal(null)} />}
+    {modal?.mode === "edit" && <DeviceModal key={modal.name} title="Edit device" onClose={() => setModal(null)}
       device={modal.name} label={devices.find((d) => d.name === modal.name)?.label || ""}
       enabled={devices.find((d) => d.name === modal.name)?.enabled ?? true}
       wakeModel={devices.find((d) => d.name === modal.name)?.wake_model || ""}

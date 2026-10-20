@@ -275,8 +275,8 @@ function NumBlock({ slots, showServer }) {
       {slots.map((s) => {
         const text = s.type === "string";
         const hint = text
-          ? "Free text. The offline engine can put here only a number said in the command, or the off token for a turn-off command."
-          : "Set by a number in the command itself — e.g. «поставь ночник на 30». No dictionary needed.";
+          ? "Free text: the offline engine puts only a spoken number or the off token here."
+          : "Set by a number said in the command, e.g. «поставь ночник на 30».";
         return (
           <Field row key={`${s.server}.${s.tool}.${s.slot}`}
             label={<span className="mono">{s.tool}<span style={{ color: "var(--mut2)" }}> · {s.slot}</span></span>}

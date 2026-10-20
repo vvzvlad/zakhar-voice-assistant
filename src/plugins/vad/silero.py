@@ -22,7 +22,7 @@ thresholds with hysteresis).
 import numpy as np
 from pydantic import BaseModel, Field, model_validator
 
-from src.plugins.base import Deps, Provider, register
+from src.plugins.base import PERCENT_FIELD_EXTRA, Deps, Provider, register
 from src.vad import SAMPLE_RATE, EndpointPolicy, EndpointTracker, VadBackend, VadSession
 
 # Silero's 16 kHz path consumes exactly 512-sample windows = 32 ms = 1024 bytes
@@ -147,17 +147,21 @@ class SileroVadBackend(VadBackend):
 
 class SileroVadConfig(BaseModel):
     model_path: str = Field("models/silero_vad.onnx", title="Model file")
+    # Judged per window: lower is more sensitive, it catches quiet speech and also takes
+    # more noise for speech.
     threshold: float = Field(
         0.5, ge=0.05, le=0.95,
         title="Speech threshold",
-        json_schema_extra={"widget": "slider"},
-        description="Windows with speech probability at or above this count as speech. Lower = more sensitive (catches quiet speech, more false triggers from noise).",
+        json_schema_extra={"widget": "slider", **PERCENT_FIELD_EXTRA},
+        description="Speech probability at which audio counts as speech; lower catches quieter speech.",
     )
+    # Hysteresis against flicker on breathy or trailing sounds; kept at or below the speech
+    # threshold by the validator below.
     neg_threshold: float = Field(
         0.35, ge=0.05, le=0.95,
         title="Speech-end threshold",
-        json_schema_extra={"widget": "slider"},
-        description="Hysteresis: once speech has started, it only ends when the probability drops below this. Must be at or below the speech threshold; prevents flicker on breathy/trailing sounds.",
+        json_schema_extra={"widget": "slider", **PERCENT_FIELD_EXTRA},
+        description="Speech ends when the probability drops below this; kept at or below the speech threshold.",
     )
 
     @model_validator(mode="after")

@@ -39,6 +39,7 @@ from src.commands import (
 )
 from src.plugins.base import (
     ADVANCED_FIELD_EXTRA,
+    PERCENT_FIELD_EXTRA,
     PHRASE_FIELD_EXTRA,
     SECRET_FIELD_EXTRA,
     Deps,
@@ -58,16 +59,15 @@ class JevConfig(ReplyConfig):
         description="OpenRouter decision model asked about every phrase this chain gets.",
     )
     api_key: str = Field("", title="API key", json_schema_extra=SECRET_FIELD_EXTRA)
+    # The answers about the request kind, the device and the action (when it sets a slot)
+    # must each reach this confidence for the command to run.
     min_confidence: float = Field(
         0.8,
         ge=0.0,
         le=1.0,
         title="Confidence threshold",
-        description=(
-            "The decision model's answers about the request kind, the device and the "
-            "action (when it sets a slot) must each reach this confidence for the "
-            "command to run."
-        ),
+        description="How sure the decision model must be of the request, device and action to run it.",
+        json_schema_extra=PERCENT_FIELD_EXTRA,
     )
     timeout: float = Field(
         2.0,
