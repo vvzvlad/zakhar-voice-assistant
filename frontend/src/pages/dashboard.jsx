@@ -5,13 +5,13 @@
 import React, { useState, useEffect } from "react";
 import { nav } from "../navStore.js";
 import { Ic } from "../components/icons.jsx";
-import { PageHeader, Waterfall, Loading, Toggle, StatusPill, Pill } from "../components/primitives.jsx";
+import { PageHeader, Waterfall, Loading, Toggle, StatusPill, Pill, NavLink } from "../components/primitives.jsx";
 import { useAppData } from "../appData.jsx";
 import { getMetrics, getRuns, openRunsStream, getConfig } from "../api.js";
 import { errorLines } from "../useStageForm.js";
 import { STAGE_COLOR, fmtSec, fmtTime, mapRun, totalMs, statusMeta, isAnnouncement, applyStreamedRun } from "../runsModel.js";
 import { chainsOf, chainRows, ttsVariantsOf, voiceOf } from "../chains.js";
-import { deviceLabel } from "../format.js";
+import { deviceLabel, fmtPct } from "../format.js";
 
 const SC = STAGE_COLOR;
 
@@ -35,20 +35,15 @@ function speechOf(catalog) {
   return { provider: p?.label || first?.provider, voice: voiceOf(p?.values), fallbacks: Math.max(0, enabled.length - 1) };
 }
 
-const fmtShare = (share) => (share == null ? "—" : `${Math.round(share * 100)}%`);
-
-function Configure() {
-  return <span className="cfg">Configure <svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M2 6h7M6 3l3 3-3 3" /></svg></span>;
-}
-
 // One service-map tile. Its dot is grey when what it stands for is off (no VAD
-// provider, no enabled chain, no enabled TTS variant) and blinks while reloading.
+// provider, no enabled chain, no enabled TTS variant) and blinks while reloading. The
+// whole tile opens its page; the link at its foot takes the click to the tile.
 function Tile({ title, page, on, loading, prov, flex, children }) {
   return <div className="z-svc" style={flex ? { flex } : undefined} onClick={() => nav(page)} data-testid={`tile-${page}`}>
     <div className="z-svc-h"><span className={"z-dot " + (loading ? "loading" : on ? "ok" : "off")} /><b>{title}</b><span className="prov">{prov}</span></div>
     {loading && <div className="mdl"><span className="z-loading-inline"><span className="z-spin" />loading…</span></div>}
     {children}
-    <Configure />
+    <div className="cfg"><NavLink>Configure</NavLink></div>
   </div>;
 }
 
@@ -84,7 +79,7 @@ function ServiceMap({ catalog, config, stageAvg, perChain, reloading }) {
   const arrow = <div className="z-arrow"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6"><path d="M2 8h11M9 4l4 4-4 4" strokeLinecap="round" strokeLinejoin="round" /></svg></div>;
   return <div className="z-card"><div className="z-map">
     <Tile title="Capture" page="capture" on={!!vad.id} loading={busy("vad", "wakeword")} prov={vad.label || "—"}>
-      <Mark label="wake-word verify" on={!!wake.values.enabled} />
+      <Mark label="Wake word verify" on={!!wake.values.enabled} />
       <Avg ms={stageAvg.vad} color={SC.vad} role="Voice capture" />
     </Tile>
     {arrow}
@@ -92,7 +87,7 @@ function ServiceMap({ catalog, config, stageAvg, perChain, reloading }) {
       {rows.length === 0 && <div className="mdl">no enabled chain</div>}
       {rows.map((r) => <div key={r.name} className="mdl" data-testid="chain-row" title={`${labelOf(catalog, "stt", r.stt)} → ${labelOf(catalog, "llm", r.handler)}`} style={{ display: "flex", gap: 8 }}>
         <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>{r.name}</span>
-        <span style={{ color: "var(--mut)" }}>{fmtShare(r.share)}</span>
+        <span style={{ color: "var(--mut)" }}>{fmtPct(r.share)}</span>
         <span style={{ color: SC.llm }}>{fmtSec(r.avg_ms)}</span>
       </div>)}
       <McpChip config={config} />
@@ -100,8 +95,8 @@ function ServiceMap({ catalog, config, stageAvg, perChain, reloading }) {
     {arrow}
     <Tile title="Speech" page="speech" on={!!speech.provider} loading={busy("tts", "stress")} prov={speech.provider || "—"}>
       <div className="mdl" data-testid="speech-voice">{speech.voice || "—"}{speech.fallbacks > 0 ? ` · +${speech.fallbacks} fallback` : ""}</div>
-      <Mark label="stress" on={!!stress.values.enabled} />
-      <Mark label="follow-up" on={!!followup.values.enabled} />
+      <Mark label="Stress" on={!!stress.values.enabled} />
+      <Mark label="Follow-up" on={!!followup.values.enabled} />
       <Avg ms={stageAvg.tts} color={SC.tts} role="Text → speech" />
     </Tile>
   </div></div>;
@@ -126,7 +121,7 @@ function DevicesCard({ catalog, system, patch }) {
   return <div className="z-card">
     {err && <div className="z-banner warn" style={{ margin: 12 }}><Ic n="restart" w={15} /><span>{errorLines(err).join(" · ")}</span></div>}
     {devices.length === 0
-      ? <div className="z-empty" style={{ padding: "24px 20px" }}><b>No speakers</b>A device appears here after its first connection.</div>
+      ? <div className="z-empty" style={{ padding: "24px 20px" }}><b>No devices</b>A device appears here after its first connection.</div>
       : <table className="z-tbl">
         <thead><tr><th style={{ width: 56 }}>On</th><th>Device</th><th style={{ width: 120 }}>Status</th></tr></thead>
         <tbody>
@@ -195,13 +190,13 @@ function Dashboard() {
       </div>)}
     </div>
 
-    <div className="z-sl">Devices<div className="ln" /><a onClick={() => nav("devices")}>Manage devices →</a></div>
+    <div className="z-sl">Devices<div className="ln" /><NavLink onClick={() => nav("devices")}>Manage devices</NavLink></div>
     <DevicesCard catalog={catalog} system={system} patch={patch} />
 
     <div className="z-sl">Pipeline service map<div className="ln" /></div>
     <ServiceMap catalog={catalog} config={config} stageAvg={stageAvg} perChain={m.per_chain} reloading={reloading} />
 
-    <div className="z-sl">Recent requests<div className="ln" /><a onClick={() => nav("log")}>View full log →</a></div>
+    <div className="z-sl">Recent requests<div className="ln" /><NavLink onClick={() => nav("log")}>View full log</NavLink></div>
     <div className="z-card">
       {loading ? <Loading />
         : recent.length === 0 ? <div className="z-empty"><div className="ic"><Ic n="log" w={20} /></div><b>No runs</b>Recent requests will appear here after the first one is processed.</div>

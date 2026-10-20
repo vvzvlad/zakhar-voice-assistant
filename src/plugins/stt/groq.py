@@ -6,7 +6,7 @@ import httpx
 from loguru import logger
 from pydantic import BaseModel, Field
 
-from src.plugins.base import MODEL_FIELD_EXTRA, SECRET_FIELD_EXTRA, Deps, Provider, register
+from src.plugins.base import MODEL_FIELD_EXTRA, PHRASE_FIELD_EXTRA, SECRET_FIELD_EXTRA, Deps, Provider, register
 from src.stage_errors import StageError
 # The hallucination filter now lives in src.stt (shared pure helpers); re-exported
 # here so existing `from src.plugins.stt.groq import ...` imports keep working.
@@ -125,11 +125,13 @@ class GroqSttConfig(BaseModel):
     language: str = Field("ru", title="Language", description="Language code of the speech, e.g. ru.")
     temperature: float = Field(0.0, title="Temperature", description="Whisper sampling temperature; 0 = most deterministic.")
     timeout: int = Field(60, title="Request timeout", json_schema_extra={"unit": "s"})
+    # Optional text passed to Whisper: names, brands, places, technical terms in the audio
+    # language (e.g. a comma-separated list). Up to 896 characters; longer text is truncated.
     prompt: str = Field(
         "",
         title="Recognition vocabulary hint",
-        json_schema_extra={"widget": "textarea", "maxLength": 896},
-        description="Optional text passed to Whisper to bias recognition toward specific words — names, brands, places, technical terms. Write the words the way they should be spelled, in the audio language (e.g. a comma-separated list). Max 896 characters; longer text is truncated automatically.",
+        json_schema_extra={"widget": "textarea", "maxLength": 896, **PHRASE_FIELD_EXTRA},
+        description="Words to bias recognition toward, spelled the way they should be written.",
     )
 
 

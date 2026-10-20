@@ -1318,7 +1318,7 @@ async def test_post_model_reloads_and_maps_errors(tmp_path):
 
 
 async def test_device_controls_read_and_set_one_and_map_errors(tmp_path):
-    # The Edit speaker dialog's live controls (the volume slider among them): GET reads
+    # The Edit device dialog's live controls (the volume slider among them): GET reads
     # them, POST sets one and answers with the controls as they are after the write.
     calls = []
     values = {"speaker_volume": 40.0}

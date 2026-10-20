@@ -11,6 +11,7 @@ const RELOAD_LABELS = Object.fromEntries(STAGES.map((s) => [s.cat, s.name]));
 export function Topbar({ active, onMenu }) {
   const { system, connected } = useAppData();
   const reloading = system?.reloading || [];
+  const reloadingNames = reloading.map((c) => RELOAD_LABELS[c] || c).join(", ");
   // Match both top-level item ids and nested children ids so nested
   // sections (e.g. prompt under llm) keep their group breadcrumb.
   const grp = NAV.find((g) =>
@@ -26,9 +27,9 @@ export function Topbar({ active, onMenu }) {
     {/* Global loading badge: shown whenever a backend category is being hot-reloaded
         (model load in flight), surfaced via the system heartbeat's `reloading` list. */}
     {reloading.length > 0 && (
-      <span className="z-env loading" title={`Loading: ${reloading.join(", ")}`}>
+      <span className="z-env loading" title={`Loading: ${reloadingNames}`}>
         <span className="z-spin" />
-        Loading… {reloading.map((c) => RELOAD_LABELS[c] || c).join(", ")}
+        Loading… {reloadingNames}
       </span>
     )}
     {/* Main liveness indicator: driven by the WS heartbeat (connected), shows

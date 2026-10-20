@@ -685,7 +685,7 @@ class Device:
         out = [
             {"id": WAKE_CUTOFF, "name": "Wake word cutoff", "value": cfg.wake_cutoff,
              "min": 0, "max": 100, "step": 1, "unit": "%"},
-            {"id": VAD_CUTOFF, "name": "VAD cutoff", "value": cfg.vad_cutoff,
+            {"id": VAD_CUTOFF, "name": "On-device VAD cutoff", "value": cfg.vad_cutoff,
              "min": 0, "max": 100, "step": 1, "unit": "%"},
             {"id": ECHO_CANCEL, "name": "Stop word echo cancellation (0 off, 1..3 echo suppression)",
              "value": cfg.echo_cancel, "min": 0, "max": 3, "step": 1, "unit": ""},
@@ -703,7 +703,7 @@ class Device:
         ]
         conn = self.conn
         if conn is not None and conn.speaker:
-            out.append({"id": SPEAKER_VOLUME, "name": "Speaker volume", "value": conn.volume,
+            out.append({"id": SPEAKER_VOLUME, "name": "Volume", "value": conn.volume,
                         "min": 0, "max": 100, "step": 1, "unit": "%"})
         return out
 
@@ -820,7 +820,7 @@ class Device:
         return self.conn.volume
 
     async def say(self, text: str) -> None:
-        """Speak `text` (the panel's "Say on speaker"). Raises DeviceOfflineError, or what
+        """Speak `text` (the panel's "Say on device"). Raises DeviceOfflineError, or what
         announce raises when the speech fails."""
         if not self.online:
             raise DeviceOfflineError(f"{self.name} is offline")

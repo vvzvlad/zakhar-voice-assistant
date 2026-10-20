@@ -23,6 +23,13 @@ import { resolve, enumOf, humanize } from "../schema.js";
 // each render and doesn't need to be reasoned about in effect dependency arrays.
 const parseStringList = (t) => t.split(/[\n,]+/).map((s) => s.trim()).filter(Boolean);
 
+// A `percent` field stores a probability as 0..1 and is shown and edited as 0-100 %. Both
+// directions round to drop float noise (0.07 * 100 = 7.000000000000001).
+// Whole percent on screen: a stored 0.855 shows as 86 and stays 0.855 until edited, since a
+// stepper rounds its own text on blur and would otherwise write a value nobody chose.
+const toPct = (v) => Math.round(v * 100);
+const fromPct = (p) => Math.round(p * 100) / 1e4;
+
 function DynamicSelect({ value, currentLabel, onChange, load, itemAction, itemActionBusy, allowCustom, remoteSearch }) {
   const norm = (o) => (o && typeof o === "object" ? o : { value: o, label: String(o) });
   // The current value's seed option: its persisted human label when known
@@ -169,7 +176,7 @@ function SchemaField({ name, node, root, value, labelValue, onLabelChange, onCha
   let control;
   let hintSuffix = "";
   if (isStringArray) {
-    hintSuffix = "Comma-separated; one entry per item.";
+    hintSuffix = "Comma-separated.";
     control = <StringListInput value={value} onChange={set} phrase={phrase} />;
   } else if (dynamic && optionsFor) {
     const itemAction = itemActionFor ? itemActionFor(name) : null;
@@ -207,24 +214,29 @@ function SchemaField({ name, node, root, value, labelValue, onLabelChange, onCha
   } else if (type === "integer" || type === "number") {
     const hasRange = r.minimum != null && r.maximum != null;
     const isInt = type === "integer";
+    // A probability (`percent`) shows and steps in whole percent points; the control works
+    // on the scaled value and every change is scaled back to 0..1 before it is stored.
+    const percent = !!(node.percent || r.percent);
+    const scale = percent ? toPct : (v) => v;
+    const store = (v) => set(percent ? fromPct(v) : isInt ? Math.round(v) : v);
     // Fractional fields always step by 0.1 (a step of 1 made e.g. LLM temperature
     // 0.0–2.0 effectively un-editable in the Stepper); integers step by 1.
-    const step = r.multipleOf || (isInt ? 1 : 0.1);
+    const step = percent ? 1 : r.multipleOf || (isInt ? 1 : 0.1);
     if (hasRange && widget === "slider") {
-      const fmt = isInt ? (v) => v : (v) => Number(v).toFixed(1);
+      const fmt = percent ? (v) => `${v}%` : isInt ? (v) => v : (v) => Number(v).toFixed(1);
       control = (
         <Slider
-          min={r.minimum} max={r.maximum} step={step}
-          value={value ?? r.minimum} onChange={set} fmt={fmt}
+          min={scale(r.minimum)} max={scale(r.maximum)} step={step}
+          value={scale(value ?? r.minimum)} onChange={store} fmt={fmt}
         />
       );
     } else {
       control = (
         <Stepper
-          value={value ?? 0} step={step}
-          min={r.minimum ?? -Infinity} max={r.maximum ?? Infinity}
-          unit={unit} slot
-          onChange={(v) => set(isInt ? Math.round(v) : v)}
+          value={scale(value ?? 0)} step={step}
+          min={scale(r.minimum ?? -Infinity)} max={scale(r.maximum ?? Infinity)}
+          unit={percent ? "%" : unit} slot
+          onChange={store}
         />
       );
     }
@@ -234,7 +246,7 @@ function SchemaField({ name, node, root, value, labelValue, onLabelChange, onCha
         value={value ?? ""}
         onChange={(e) => set(e.target.value)}
         spellCheck={false}
-        style={{ width: "100%", minHeight: 90, resize: "vertical", border: "1px solid var(--line)", borderRadius: 8, padding: "10px 12px", fontFamily: "var(--mono)", fontSize: 12, lineHeight: 1.6, color: "var(--ink)", outline: "none", background: "var(--panel2)" }}
+        style={{ width: "100%", minHeight: 90, resize: "vertical", border: "1px solid var(--line)", borderRadius: 8, padding: "10px 12px", fontFamily: phrase ? "var(--sans)" : "var(--mono)", fontSize: 12, lineHeight: 1.6, color: "var(--ink)", outline: "none", background: "var(--panel2)" }}
       />
     );
   } else if (r.secret === true) {

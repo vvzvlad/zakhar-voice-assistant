@@ -69,7 +69,7 @@ from src.commands import (
     tokenize,
     warn_missing,
 )
-from src.plugins.base import ADVANCED_FIELD_EXTRA, PHRASE_FIELD_EXTRA, Deps, Provider, register
+from src.plugins.base import ADVANCED_FIELD_EXTRA, PERCENT_FIELD_EXTRA, PHRASE_FIELD_EXTRA, Deps, Provider, register
 from src.plugins.llm.base import LlmBackend, ReplyConfig
 from src.stage_errors import Declined
 
@@ -77,15 +77,15 @@ from src.stage_errors import Declined
 class SimpleNluConfig(ReplyConfig):
     # --- NLU configuration (baked into the backend at create(); changing any of
     # these triggers a backend rebuild via reconfig, which is correct) ---
+    # When the direct match finds no command, the classifier's command runs only at or
+    # above this probability.
     classifier_threshold: float = Field(
         0.7,
         ge=0.0,
         le=1.0,
         title="Classifier confidence threshold",
-        description=(
-            "When the direct match finds no command, the classifier's command runs "
-            "only at or above this probability."
-        ),
+        description="How sure the classifier must be to run a command the direct match missed.",
+        json_schema_extra=PERCENT_FIELD_EXTRA,
     )
     reply_unmatched: str = Field(
         "Не понял команду, повтори.",

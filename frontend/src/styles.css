@@ -93,7 +93,10 @@ details.z-card>summary .z-chev{flex:none;color:var(--mut);transform:rotate(-90de
 details.z-card[open]>summary .z-chev{transform:none;}
 .z-sl{display:flex;align-items:center;gap:10px;font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--ink2);margin:22px 0 11px;}
 .z-sl .ln{flex:1;height:1px;background:var(--line);}
-.z-sl a{font-size:11px;color:var(--acc);text-transform:none;letter-spacing:0;font-weight:600;cursor:pointer;}
+/* An in-panel link to another page or card (NavLink): the same look in a heading, a form
+   row or a tile. */
+.z-link{border:none;background:none;padding:0;font:inherit;font-size:11.5px;font-weight:600;color:var(--acc);text-transform:none;letter-spacing:0;white-space:nowrap;cursor:pointer;}
+.z-link:hover{text-decoration:underline;}
 
 /* ── KPI ────────────────────────────────────────────────── */
 .z-kpis{display:grid;grid-template-columns:repeat(5,1fr);gap:13px;}
@@ -109,7 +112,6 @@ details.z-card[open]>summary .z-chev{transform:none;}
 .z-map{display:flex;align-items:stretch;padding:12px;}
 .z-svc{flex:1;display:flex;flex-direction:column;gap:7px;min-width:0;padding:12px 13px;border-radius:8px;background:var(--panel2);border:1px solid var(--line);cursor:pointer;transition:border-color .12s,box-shadow .12s;}
 .z-svc:hover{border-color:#cdd6e2;box-shadow:0 2px 8px rgba(16,24,40,.06);}
-.z-svc.off{opacity:.62;background:repeating-linear-gradient(45deg,var(--panel2),var(--panel2) 6px,#f2f4f7 6px,#f2f4f7 7px);}
 .z-svc-h{display:flex;align-items:center;gap:7px;}
 .z-svc-h b{font-size:13px;font-weight:600;}
 .z-svc-h .prov{font-family:var(--mono);font-size:10.5px;color:var(--mut);margin-left:auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
@@ -117,8 +119,7 @@ details.z-card[open]>summary .z-chev{transform:none;}
 .z-svc .lat{display:flex;align-items:baseline;gap:6px;}
 .z-svc .lat b{font-family:var(--mono);font-size:15px;font-weight:600;}
 .z-svc .lat s{text-decoration:none;font-size:10px;color:var(--mut);}
-.z-svc .cfg{margin-top:auto;display:inline-flex;align-items:center;gap:4px;font-size:10.5px;font-weight:600;color:var(--acc);padding-top:8px;border-top:1px solid var(--line);}
-.z-svc.off .cfg{color:var(--mut);}
+.z-svc .cfg{margin-top:auto;padding-top:8px;border-top:1px solid var(--line);}
 .z-mcpchip{display:inline-flex;align-items:center;gap:5px;font-size:10px;font-weight:600;color:var(--indigo);background:#eef2ff;border-radius:4px;padding:2px 6px;align-self:flex-start;}
 .z-arrow{flex:0 0 26px;display:flex;align-items:center;justify-content:center;color:#c2c9d4;}
 
@@ -299,6 +300,8 @@ details.z-card[open]>summary .z-chev{transform:none;}
 .z-tool .tn s{text-decoration:none;font-size:10px;color:#fff;background:var(--acc);border-radius:3px;padding:1px 5px;}
 .z-code{font-family:var(--mono);font-size:11px;background:#0f1720;color:#9fe6c4;border-radius:6px;padding:9px 11px;margin-top:7px;white-space:pre-wrap;word-break:break-word;line-height:1.5;}
 .z-code .k{color:#7c8aa0;}
+/* A phrase said or heard as words keeps the text font inside a code block. */
+.z-code.text{font-family:var(--sans);font-size:12px;}
 .z-codeline{display:flex;gap:8px;margin-top:6px;font-size:11px;}
 .z-codeline .arr{color:var(--mut2);}
 

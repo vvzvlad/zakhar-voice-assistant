@@ -133,7 +133,7 @@ describe("VAD page — layout", () => {
   it("gives the engine, wake-word and chime sections the ids configure links scroll to", async () => {
     renderPage();
     expect(document.getElementById("card-vad")).toContainElement(cardByTitle("WebRTC VAD"));
-    expect(document.getElementById("card-wakeword")).toBe(cardByTitle("Wake-word verify"));
+    expect(document.getElementById("card-wakeword")).toBe(cardByTitle("Wake word verify"));
     expect(document.getElementById("card-ack")).toBe(cardByTitle("End-of-phrase chime"));
     await settle();
   });
@@ -168,7 +168,7 @@ describe("VAD page — layout", () => {
 
   it("leaves `enabled` out of the wake-word and chime cards", async () => {
     renderPage();
-    expect(within(cardByTitle("Wake-word verify")).queryByRole("switch")).toBeNull();
+    expect(within(cardByTitle("Wake word verify")).queryByRole("switch")).toBeNull();
     expect(within(cardByTitle("End-of-phrase chime")).queryByRole("switch")).toBeNull();
     await settle();
   });
@@ -187,7 +187,7 @@ describe("VAD page — one Save", () => {
     await settle();
     setStepper(cardByTitle("End-pointing thresholds"), "900");
     fireEvent.click(within(cardByTitle("Microphone input & conditioning")).getAllByRole("switch")[0]);
-    fireEvent.change(within(cardByTitle("Wake-word verify")).getByDisplayValue("захар"), { target: { value: "алиса" } });
+    fireEvent.change(within(cardByTitle("Wake word verify")).getByDisplayValue("захар"), { target: { value: "алиса" } });
     setStepper(cardByTitle("WebRTC VAD"), "3");
     fireEvent.click(tab("Silero VAD"));
     setStepper(cardByTitle("Silero VAD"), "0.7");

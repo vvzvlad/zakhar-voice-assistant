@@ -6,10 +6,10 @@
 // the firmware without its build hash in its header, saves a display label, the enabled switch,
 // a wake-word model (a listed or an uploaded one), the device log, the auto volume and the reply
 // compression switches — edits on different tabs survive the switch, mark their tabs and go out
-// in one save; only the open tab shows — marks its live controls, deletes the speaker after a
+// in one save; only the open tab shows — marks its live controls, deletes the device after a
 // confirmation, closes on Escape but not on a backdrop click, and shows on every tab why its
 // controls cannot load. It
-// also says a typed text on the speaker to check the volume — the phrase in flight and the text
+// also says a typed text on the device to check the volume — the phrase in flight and the text
 // outlive a tab switch — shows the auto volume's settings and readings only while auto volume is
 // on and writes the stop word's mode picked on a scale as its number.
 import React from "react";
@@ -38,7 +38,7 @@ vi.mock("../api.js", () => ({
 
 afterEach(cleanup);
 
-// Open the Edit dialog of the page's only speaker.
+// Open the Edit dialog of the page's only device.
 const openEdit = () => fireEvent.click(screen.getByTestId("device-row"));
 // The switch of the dialog field labelled `label`.
 const switchOf = async (label) => (await screen.findByText(label)).closest(".z-f").querySelector('[role="switch"]');
@@ -65,7 +65,7 @@ beforeEach(() => {
 });
 
 describe("Devices page", () => {
-  it("edit switches the speaker off on General and saves it onto the server's current list", async () => {
+  it("edit switches the device off on General and saves it onto the server's current list", async () => {
     api.getDeviceControls.mockResolvedValue({ device: "kitchen", online: true, versions: [], controls: [] });
     render(<Devices />);
     openEdit();
@@ -81,17 +81,17 @@ describe("Devices page", () => {
     ] } });
   });
 
-  it("Delete speaker asks first, then deletes from the server's current list and closes the dialog", async () => {
+  it("Delete device asks first, then deletes from the server's current list and closes the dialog", async () => {
     api.getDeviceControls.mockResolvedValue({ device: "kitchen", online: true, versions: [], controls: [] });
     const confirm = vi.spyOn(window, "confirm").mockReturnValueOnce(false).mockReturnValueOnce(true);
     render(<Devices />);
     openEdit();
-    fireEvent.click(await screen.findByText("Delete speaker"));
-    expect(confirm).toHaveBeenLastCalledWith('Delete speaker "kitchen"?');
+    fireEvent.click(await screen.findByText("Delete device"));
+    expect(confirm).toHaveBeenLastCalledWith('Delete device "kitchen"?');
     expect(data.patch).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByText("Delete speaker"));
+    fireEvent.click(screen.getByText("Delete device"));
     await waitFor(() => expect(data.patch).toHaveBeenCalledWith({ core: { devices: [FRESH[1]] } }));
-    await waitFor(() => expect(screen.queryByText("Edit speaker")).toBeNull());
+    await waitFor(() => expect(screen.queryByText("Edit device")).toBeNull());
     confirm.mockRestore();
   });
 
@@ -104,9 +104,9 @@ describe("Devices page", () => {
     fireEvent.keyDown(screen.getAllByRole("option")[0], { key: "Escape" });
     expect(screen.queryByRole("option")).toBeNull();
     fireEvent.click(document.querySelector(".z-modal"));
-    expect(screen.getByText("Edit speaker")).toBeInTheDocument();
+    expect(screen.getByText("Edit device")).toBeInTheDocument();
     fireEvent.keyDown(document.body, { key: "Escape" });
-    expect(screen.queryByText("Edit speaker")).toBeNull();
+    expect(screen.queryByText("Edit device")).toBeNull();
   });
 
   it("shows the firmware without its build hash, the whole version in its tooltip, in the table and the dialog", async () => {
@@ -122,7 +122,7 @@ describe("Devices page", () => {
 
   it("adds to the server's current list", async () => {
     render(<Devices />);
-    fireEvent.click(screen.getByText("Add speaker"));
+    fireEvent.click(screen.getByText("Add device"));
     fireEvent.change(screen.getByPlaceholderText("e.g. fc012cd1e5ec"), { target: { value: "porch" } });
     fireEvent.click(screen.getByText("Add"));
     await waitFor(() => expect(data.patch).toHaveBeenCalledTimes(1));
@@ -222,7 +222,7 @@ describe("Devices page", () => {
     fireEvent.click(await screen.findByText("Log"));
     const sw = await switchOf("Device log");
     expect(sw).toHaveAttribute("aria-checked", "false");
-    expect(screen.getByText(/keeps the last 7 days in data\/device_logs\/kitchen\//)).toBeInTheDocument();
+    expect(screen.getByText(/on the server for 7 days\./)).toBeInTheDocument();
     expect(screen.getByText("Save")).toBeDisabled();
     fireEvent.click(sw);
     expect(sw).toHaveAttribute("aria-checked", "true");
@@ -292,11 +292,11 @@ describe("Devices page", () => {
     fireEvent.change(await screen.findByPlaceholderText("kitchen"), { target: { value: "Кухня" } });
     fireEvent.click(screen.getByText("Sound"));
     // Only the open tab shows.
-    expect(screen.getByText("Say on speaker")).toBeVisible();
+    expect(screen.getByText("Say on device")).toBeVisible();
     expect(screen.getByPlaceholderText("kitchen")).not.toBeVisible();
     fireEvent.click(await switchOf("Auto volume"));
     fireEvent.click(screen.getByText("General"));
-    expect(screen.getByText("Say on speaker")).not.toBeVisible();
+    expect(screen.getByText("Say on device")).not.toBeVisible();
     expect(screen.getByDisplayValue("Кухня")).toBeInTheDocument();
     expect(screen.getAllByTestId("unsaved-dot").map((d) => d.parentElement.textContent)).toEqual(["General", "Sound"]);
     fireEvent.click(screen.getByText("Save"));
@@ -394,7 +394,7 @@ describe("Devices page", () => {
     await waitFor(() => expect(api.setDeviceControl).toHaveBeenCalledWith("kitchen", "echo_cancel_mode", 3));
   });
 
-  it("edit says the typed text on the speaker to check the volume", async () => {
+  it("edit says the typed text on the device to check the volume", async () => {
     api.getDeviceControls.mockResolvedValue({ device: "kitchen", online: true, versions: [], controls: [] });
     let finish;
     api.sayOnDevice.mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
@@ -417,7 +417,7 @@ describe("Devices page", () => {
     expect(await screen.findByText("Say")).toBeEnabled();
   });
 
-  it("edit shows why the speaker could not say the text, and an offline speaker cannot", async () => {
+  it("edit shows why the device could not say the text, and an offline device cannot", async () => {
     api.getDeviceControls.mockResolvedValue({ device: "kitchen", online: true, versions: [], controls: [] });
     api.sayOnDevice.mockRejectedValue(new Error("tts down"));
     const { unmount } = render(<Devices />);
@@ -434,6 +434,6 @@ describe("Devices page", () => {
     fireEvent.click(await screen.findByText("Sound"));
     await screen.findByDisplayValue("Проверка громкости.");
     expect(screen.getByText("Say")).toBeDisabled();
-    expect(screen.getByText("Say")).toHaveAttribute("title", "Speaker offline");
+    expect(screen.getByText("Say")).toHaveAttribute("title", "Device offline");
   });
 });

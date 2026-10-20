@@ -2,7 +2,7 @@
 // Integration tests (jsdom) for the Pipeline pages Capture and Speech. They only
 // choose what runs and switch stages on and off: every change is a draft until
 // the Save in the page's save bar, which sends the whole page as ONE patch;
-// "configure →" sits right after every item's name and opens the Providers page
+// "Configure →" sits right after every item's name and opens the Providers page
 // (and provider tab) scrolled to the item's card; providers are named by their
 // catalog labels, short in switches and "+" buttons; a switched-off TTS variant
 // fades its name, not its toggle and buttons.
@@ -57,7 +57,7 @@ beforeEach(() => {
 afterEach(() => { cleanup(); clearTab("vad"); clearTab("tts"); takeCard(); });
 
 const itemOf = (label) => screen.getByText(label, { selector: "b" }).closest(".z-f");
-const configureOf = (el) => within(el).getByRole("button", { name: "configure →" });
+const configureOf = (el) => within(el).getByRole("button", { name: "Configure →" });
 const configure = (label) => fireEvent.click(configureOf(itemOf(label)));
 async function saved() {
   fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
@@ -69,7 +69,7 @@ describe("Capture page", () => {
   it("keeps the engine choice and toggles as a draft and saves them in one patch", async () => {
     render(<Capture />);
     fireEvent.click(screen.getByText("Silero VAD"));
-    fireEvent.click(within(itemOf("Wake-word verify")).getByRole("switch"));
+    fireEvent.click(within(itemOf("Wake word verify")).getByRole("switch"));
     fireEvent.click(within(itemOf("End-of-phrase chime")).getByRole("switch"));
     expect(patch).not.toHaveBeenCalled();
     expect(await saved()).toEqual({
@@ -81,7 +81,7 @@ describe("Capture page", () => {
 
   it("explains each switch with the backend's description", () => {
     render(<Capture />);
-    expect(within(itemOf("Wake-word verify")).getByText(WAKE_HINT)).toBeInTheDocument();
+    expect(within(itemOf("Wake word verify")).getByText(WAKE_HINT)).toBeInTheDocument();
     expect(within(itemOf("End-of-phrase chime")).getByText(ACK_HINT)).toBeInTheDocument();
   });
 
@@ -104,7 +104,7 @@ describe("Capture page", () => {
     expect(pendingTab("vad")).toBe("webrtc");
     expect(takeCard()).toBe("card-vad");
     clearTab("vad");
-    configure("Wake-word verify");
+    configure("Wake word verify");
     expect(go).toHaveBeenLastCalledWith("vad");
     expect(pendingTab("vad")).toBeUndefined();
     expect(takeCard()).toBe("card-wakeword");
@@ -146,7 +146,7 @@ describe("Speech page", () => {
     fireEvent.click(within(rows()[0]).getByRole("button", { name: "Move down" }));   // piper, yandex
     fireEvent.click(within(rows()[0]).getByRole("switch"));                            // enable piper
     fireEvent.click(screen.getByRole("button", { name: "+ Fish Audio" }));             // piper, yandex, fishaudio
-    fireEvent.click(within(rows()[1]).getByRole("button", { name: "Remove" }));        // piper, fishaudio
+    fireEvent.click(within(rows()[1]).getByRole("button", { name: "Delete" }));        // piper, fishaudio
     fireEvent.click(within(itemOf("Stress placement")).getByRole("switch"));
     fireEvent.click(within(itemOf("Follow-up")).getByRole("switch"));
     expect(within(itemOf("Follow-up")).getByText(FOLLOWUP_HINT)).toBeInTheDocument();
@@ -161,7 +161,7 @@ describe("Speech page", () => {
   it("offers the missing providers as \"+ <short label>\" buttons", () => {
     render(<Speech />);
     expect(screen.getAllByRole("button", { name: /^\+ / }).map((b) => b.textContent)).toEqual(["+ Fish Audio", "+ Silero"]);
-    fireEvent.click(within(rows()[1]).getByRole("button", { name: "Remove" }));
+    fireEvent.click(within(rows()[1]).getByRole("button", { name: "Delete" }));
     expect(screen.getByRole("button", { name: "+ Piper" })).toBeInTheDocument();
   });
 
@@ -172,22 +172,23 @@ describe("Speech page", () => {
     expect(rows().map((r) => r.querySelector(".z-fh").textContent)).toEqual(["zahar", "ru_RU-ruslan-medium.onnx", "Захар"]);
   });
 
-  it("Remove is the panel's danger button, the other variant actions its plain small buttons", () => {
+  it("Delete is the panel's danger button, the other variant actions its plain small buttons, Configure the panel's link", () => {
     render(<Speech />);
     const row = rows()[0];
-    expect(within(row).getByRole("button", { name: "Remove" })).toHaveClass("z-btn", "d", "sm");
-    for (const name of ["Move up", "Move down", "configure →"]) expect(within(row).getByRole("button", { name })).toHaveClass("z-btn", "g", "sm");
+    expect(within(row).getByRole("button", { name: "Delete" })).toHaveClass("z-btn", "d", "sm");
+    for (const name of ["Move up", "Move down"]) expect(within(row).getByRole("button", { name })).toHaveClass("z-btn", "g", "sm");
+    expect(configureOf(row)).toHaveClass("z-link");
     expect(screen.getByRole("button", { name: "+ Fish Audio" })).toHaveClass("z-btn", "g", "sm");
   });
 
-  it("puts configure → right after the name on variants and on Stress/Follow-up alike", () => {
+  it("puts Configure → right after the name on variants and on Stress/Follow-up alike", () => {
     render(<Speech />);
     for (const el of [...rows(), itemOf("Stress placement"), itemOf("Follow-up")]) {
       expect(configureOf(el).previousElementSibling.tagName).toBe("B");
     }
   });
 
-  it("configure → opens Providers → TTS at the card: the variant's tab, stress placement, follow-up", () => {
+  it("Configure → opens Providers → TTS at the card: the variant's tab, stress placement, follow-up", () => {
     render(<Speech />);
     fireEvent.click(configureOf(rows()[1]));
     expect(go).toHaveBeenLastCalledWith("tts");

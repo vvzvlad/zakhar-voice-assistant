@@ -1,4 +1,4 @@
-// One speaker's own log, which the server keeps on disk one file per day (src/device_logs.py).
+// One device's own log, which the server keeps on disk one file per day (src/device_logs.py).
 // Pick a day to read it; the newest day may still be growing, so while it is shown it is polled
 // and the new lines are appended. Mounted only while it is on screen, so it polls only then.
 import React, { useState, useEffect, useLayoutEffect, useRef } from "react";
@@ -72,7 +72,7 @@ export default function DeviceLog({ device }) {
 
   if (error) return <ErrorBox error={error} onRetry={loadDays} />;
   if (!days) return <Loading />;
-  if (days.length === 0) return <div className="z-empty"><b>No log yet</b>The server keeps this speaker's log once "Device log" above is on and saved.</div>;
+  if (days.length === 0) return <div className="z-empty"><b>No log yet</b>The server keeps this device's log once "Device log" above is on and saved.</div>;
   // The text box takes the height its container leaves it (.z-logview, .z-logbox).
   return <div className="z-logview">
     <Field row label="Day"><div className="z-rowctl"><Select value={day} options={days} onChange={setDay} /></div></Field>

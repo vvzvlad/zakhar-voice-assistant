@@ -24,7 +24,7 @@ const DEVICE_TABS = ["General", "Wake word", "Sound", "Stop word", "Log"];
 // mounted and only the open one shows, so a running capture or a typed phrase outlives a tab
 // switch; the log alone mounts with its tab, so it is polled only while shown. `online` says
 // whether the device is reachable, `logDays` how many days of device log the server keeps,
-// `onDelete` deletes the device (the footer's Delete speaker).
+// `onDelete` deletes the device (the footer's Delete device).
 export default function DeviceModal({ onSave, onClose, onDelete, title, device, label: savedLabel = "", enabled: savedEnabled = true, wakeModel: savedWakeModel = "", log: savedLog = false, autoVolume: savedAutoVolume = false, compressReplies: savedCompressReplies = false, logDays, online }) {
   const [name, setName] = useState("");
   const [label, setLabel] = useState(savedLabel);
@@ -84,7 +84,7 @@ export default function DeviceModal({ onSave, onClose, onDelete, title, device, 
       .map(controlField);
     const loading = !ctl.snap && !ctl.err && <div className="z-f"><div className="z-fh">Loading…</div></div>;
     return <Modal top wide title={title} onClose={onClose}
-      footer={<><button className="z-btn d" style={{ marginRight: "auto" }} onClick={onDelete}>Delete speaker</button>
+      footer={<><button className="z-btn d" style={{ marginRight: "auto" }} onClick={onDelete}>Delete device</button>
         <button className="z-btn g" onClick={onClose}>Close</button>
         <button className="z-btn p" disabled={marked.length === 0} onClick={() => onSave({
           // Only the edited fields: the rest stays as in the server's fresh list (saveList).
@@ -120,8 +120,10 @@ export default function DeviceModal({ onSave, onClose, onDelete, title, device, 
               ]} />
             </div>
           </Field>
-          {/* A row of its own, so the button does not read as a step after picking a model. */}
-          <Field row label="Upload model" hint="Adds a .tflite to the list above and picks it. It is kept in the server's data volume; a new file of the same name replaces it and goes at once to every device using it.">
+          {/* A row of its own, so the button does not read as a step after picking a model. The
+              file is kept in the server's data volume; a new file of the same name replaces it
+              and goes at once to every device using it. */}
+          <Field row label="Upload model" hint="Picks it; the same file name replaces it on every device.">
             <div className="z-rowctl" style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6 }}>
               <button className="z-btn g" onClick={() => fileRef.current.click()}>Upload</button>
               <input ref={fileRef} type="file" accept=".tflite" hidden aria-label="Wake word model file" onChange={upload} />
@@ -138,12 +140,14 @@ export default function DeviceModal({ onSave, onClose, onDelete, title, device, 
         {loading}
         {controls("speaker_volume")}
         <SayControl device={device} online={online} />
-        <Field row label="Auto volume" hint="On: every 15 s of quiet the speaker measures the room's noise on its raw microphone; the reply's volume is the dial's plus (noise − threshold) × gain: louder above the threshold, quieter below it. Applies on save, no reflash.">
+        {/* Every 15 s of quiet the device measures the room's noise on its raw microphone; the
+            reply's volume is the dial's plus (noise − threshold) × gain. No reflash needed. */}
+        <Field row label="Auto volume" hint="Louder replies in a noisy room, quieter in a quiet one; applies on save.">
           <Toggle on={autoVolume} onChange={setAutoVolume} />
         </Field>
         {autoVolume && <>
           {controls("auto_volume_threshold", "auto_volume_gain")}
-          {ctl.snap?.readings.length > 0 && <Field row label="Auto volume now" hint="The room's noise the speaker measured and the boost the server sends for it.">
+          {ctl.snap?.readings.length > 0 && <Field row label="Auto volume now" hint="The room noise the device measured and the volume boost sent for it.">
             <div className="z-rowctl" style={{ display: "flex", gap: 24 }}>
               {ctl.snap.readings.map((r) => <Stat key={r.id} label={r.name}>
                 {r.value == null ? "—" : withUnit(Number.isInteger(r.value) ? r.value : r.value.toFixed(1), r.unit)}
@@ -151,7 +155,10 @@ export default function DeviceModal({ onSave, onClose, onDelete, title, device, 
             </div>
           </Field>}
         </>}
-        <Field row label="Compress replies" hint="On: the server compresses everything it plays on this speaker — quiet parts up to 20 dB louder, peaks held at −11.5 dBFS. Louder for a TTS whose peaks sit below full scale (about +2–3 dB with Fish Audio); one that already peaks at full scale, as Piper does, plays up to ~3 dB quieter. Applies on save, no reflash.">
+        {/* Quiet parts up to 20 dB louder, peaks held at −11.5 dBFS: louder for a TTS whose
+            peaks sit below full scale (about +2–3 dB with Fish Audio); one that already peaks at
+            full scale, as Piper does, plays up to ~3 dB quieter. No reflash needed. */}
+        <Field row label="Compress replies" hint="Makes the quiet parts of replies louder; applies on save.">
           <Toggle on={compressReplies} onChange={setCompressReplies} />
         </Field>
         {controls("play_prime_ms")}
@@ -161,7 +168,9 @@ export default function DeviceModal({ onSave, onClose, onDelete, title, device, 
         {controls("echo_cancel", "echo_cancel_mode", "echo_cancel_filter")}
       </div>
       <div hidden={tab !== "Log"} className="z-logpane">
-        <Field row label="Device log" hint={`On: the speaker streams its whole log to the server, which keeps the last ${logDays} days in data/device_logs/${device}/. Off: the speaker sends nothing. Applies on save, no reflash.`}>
+        {/* The server keeps the log in data/device_logs/<device id>/; off, the device sends
+            nothing. No reflash needed. */}
+        <Field row label="Device log" hint={`Keeps the device's log on the server for ${logDays} days.`}>
           <Toggle on={log} onChange={setLog} />
         </Field>
         {tab === "Log" && <DeviceLog device={device} />}
@@ -175,7 +184,7 @@ export default function DeviceModal({ onSave, onClose, onDelete, title, device, 
   </Modal>;
 }
 
-// "Record X seconds" control shown inside the Edit-speaker modal. Each recording
+// "Record X seconds" control shown inside the Edit device dialog. Each recording
 // runs as a SERVER-SIDE background task (start -> poll countdown -> download WAV).
 // With a count > 1 the browser loops that full cycle back-to-back, downloading one
 // WAV per take — so you collect many wake-word samples without re-clicking. A Stop
@@ -231,7 +240,7 @@ function CaptureControl({ device, online }) {
     }
   };
 
-  return <Field row label="Capture sample" hint={`Records ${seconds}s of mic audio and downloads a WAV per take${count > 1 ? ` (×${count})` : ""}. Used for wake-word training.`}>
+  return <Field row label="Capture sample" hint="Downloads mic audio as WAV files, for wake word training.">
     <div className="z-rowctl">
       <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
         {running
@@ -246,7 +255,7 @@ function CaptureControl({ device, online }) {
           : <>
               <Stepper sm value={seconds} min={1} max={300} onChange={setSeconds} unit="s" />
               <Stepper sm value={count} min={1} max={1000} onChange={setCount} unit="takes" />
-              <button className="z-btn p" style={{ marginLeft: "auto" }} disabled={!online} title={online ? "" : "Speaker offline"}
+              <button className="z-btn p" style={{ marginLeft: "auto" }} disabled={!online} title={online ? "" : "Device offline"}
                 onClick={run}>Record</button>
             </>}
       </div>
@@ -257,15 +266,19 @@ function CaptureControl({ device, online }) {
 }
 
 // Short per-control hint shown under the control's label, keyed by control id.
+//   echo_cancel: off, the stop word hears the wake word's input; 1..3 add the residual
+//     echo suppression, which only the FD modes have.
+//   play_prime_ms: the reserve is held again after the stream runs dry.
+//   auto_volume_threshold: above it the reply is louder than the dial, below it quieter.
 const CONTROL_HINTS = {
-  wake_probability_cutoff: "Higher = fewer false-fires, may miss wake word",
-  vad_cutoff: "Lower = fewer dropped wakes, slightly more non-speech leak",
-  echo_cancel: "Off: the stop word hears the wake word's input; 1..3: residual echo suppression, mild to strongest (FD modes only)",
-  echo_cancel_mode: "SR / FD, low cost / high performance; a change re-creates the canceller",
-  echo_cancel_filter: "Filter length 1..8; a change re-creates the canceller",
-  play_prime_ms: "Audio the speaker holds before it starts a phrase, and again after the stream runs dry; more = fewer stutters, the answer starts later",
-  auto_volume_threshold: "The room noise at which the reply plays at the dial's volume, with Auto volume on: louder above it, quieter below",
-  auto_volume_gain: "Volume % per dB of noise away from the threshold; 2.5 %/dB moves the reply 1 dB per dB",
+  wake_probability_cutoff: "Higher means fewer false wakes but more missed ones.",
+  vad_cutoff: "Lower drops fewer wakes but lets a little more non-speech through.",
+  echo_cancel: "Off, or echo suppression from mild to strongest (FD modes only).",
+  echo_cancel_mode: "Low is cheaper, high cancels better; FD also suppresses echo.",
+  echo_cancel_filter: "From 1 to 8; a change briefly restarts echo cancellation.",
+  play_prime_ms: "Buffer before playback: fewer stutters, but a later reply.",
+  auto_volume_threshold: "Room noise at which the reply plays at the dial's volume.",
+  auto_volume_gain: "Volume % per dB of noise away from the threshold; 2.5 %/dB moves the reply 1 dB per dB.",
 };
 
 // The live controls DeviceModal places on its Wake word, Sound and Stop word tabs; any other
@@ -316,7 +329,7 @@ function ControlField({ control: c, value, onChange }) {
   </Field>;
 }
 
-// The per-device live state of the Edit-speaker dialog, used once by DeviceModal so it keeps
+// The per-device live state of the Edit device dialog, used once by DeviceModal so it keeps
 // polling while the tabs switch: `snap` is the last snapshot {controls, readings, versions}, null
 // before the first. The controls are the wake-word probability cutoff, the VAD cutoff, the stop
 // word's echo cancellation, the playback reserve, the auto volume's threshold and gain (all from
@@ -380,8 +393,8 @@ function useDeviceControls(device) {
   return { snap, err, write, valueOf: (c) => local[c.id] ?? c.value ?? c.min ?? 0 };
 }
 
-// "Say on speaker" control shown on the Sound tab of the Edit-speaker modal, under the speaker
-// volume: speaks the typed text on the speaker through the TTS, so the volume can be checked by
+// "Say on device" control shown on the Sound tab of the Edit device dialog, under the speaker
+// volume: speaks the typed text on the device through the TTS, so the volume can be checked by
 // ear. The request resolves once the speech has played. Disabled (tooltip) while offline.
 function SayControl({ device, online }) {
   const [text, setText] = useState("Проверка громкости.");
@@ -400,11 +413,11 @@ function SayControl({ device, online }) {
     }
   };
 
-  return <Field row label="Say on speaker" hint="Speaks the text on the speaker through the TTS — to check the volume.">
+  return <Field row label="Say on device" hint="Speaks the text on the device to check the volume.">
     <div className="z-rowctl">
       <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
         <div className="z-inp" style={{ flex: 1 }}><input value={text} onChange={(e) => setText(e.target.value)} /></div>
-        <button className="z-btn p" disabled={!online || !text.trim() || saying} title={online ? "" : "Speaker offline"}
+        <button className="z-btn p" disabled={!online || !text.trim() || saying} title={online ? "" : "Device offline"}
           onClick={say}>{saying ? "Saying…" : "Say"}</button>
       </div>
       {err && <div className="z-fh" style={{ color: "#b91c1c" }}>{err}</div>}
@@ -412,7 +425,7 @@ function SayControl({ device, online }) {
   </Field>;
 }
 
-// Live, read-only Wake Probability meter shown on the Wake word tab of the Edit-speaker modal
+// Live, read-only Wake Probability meter shown on the Wake word tab of the Edit device dialog
 // (only for an EXISTING device). The stream is gated ON THE DEVICE: opening the modal enables it
 // (POST enabled=true), closing it disables it (POST enabled=false), so the firmware only streams
 // while the panel is open. While open we poll once a second and render the
@@ -464,7 +477,7 @@ function WakeProbabilityMeter({ device, online: onlineProp }) {
     </div>;
   }
 
-  return <Field row label="Wake probability" hint="On-device wake-word probability — peak over the last second.">
+  return <Field row label="Wake probability" hint="The device's wake word probability, peak over the last second.">
     <div className="z-rowctl">
       {body}
       {err && <div className="z-fh" style={{ color: "#b91c1c", marginTop: 6 }}>

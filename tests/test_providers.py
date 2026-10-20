@@ -112,6 +112,19 @@ def test_llm_panel_schema_groups_the_fallback_replies_and_names_units():
     assert props["max_tokens"]["unit"] == "tokens"
 
 
+@pytest.mark.parametrize("category,provider_id,fields", [
+    ("vad", "silero", {"threshold", "neg_threshold"}),
+    ("vad", "ten", {"threshold"}),
+    ("llm", "simple-nlu", {"classifier_threshold"}),
+    ("llm", "jev", {"min_confidence"}),
+    ("followup", "jev", {"min_confidence"}),
+])
+def test_probabilities_are_shown_in_percent(category, provider_id, fields):
+    # The panel shows a field marked `percent` as 0-100 % and stores it as 0..1.
+    props = get_provider(category, provider_id).ConfigModel.model_json_schema()["properties"]
+    assert {k for k, v in props.items() if v.get("percent")} == fields
+
+
 # --- options() ----------------------------------------------------------------
 
 def test_yandex_options_voice_returns_list():
