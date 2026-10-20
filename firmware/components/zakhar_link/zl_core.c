@@ -230,7 +230,7 @@ static char *finish(cJSON *o, bool ok)
     return s;
 }
 
-char *zl_encode_hello(const zl_config_t *cfg, int volume, uint32_t capture, uint32_t uptime_s)
+char *zl_encode_hello(const zl_config_t *cfg, int volume, uint32_t capture, uint32_t uptime_s, const char *reset)
 {
     const bool speaker = cfg->play_rate > 0;
     cJSON *o = message("hello");
@@ -238,6 +238,7 @@ char *zl_encode_hello(const zl_config_t *cfg, int volume, uint32_t capture, uint
     bool ok = o != NULL && cJSON_AddStringToObject(o, "id", cfg->id) != NULL &&
               cJSON_AddStringToObject(o, "fw", cfg->fw) != NULL &&
               cJSON_AddNumberToObject(o, "uptime", uptime_s) != NULL &&
+              cJSON_AddStringToObject(o, "reset", reset) != NULL &&
               (caps = cJSON_AddObjectToObject(o, "caps")) != NULL &&
               cJSON_AddBoolToObject(caps, "speaker", speaker) != NULL &&
               cJSON_AddBoolToObject(caps, "screen", cfg->screen) != NULL &&
@@ -327,6 +328,26 @@ char *zl_encode_ambient(double dbfs)
 {
     cJSON *o = message("ambient");
     return finish(o, o != NULL && cJSON_AddNumberToObject(o, "value", dbfs) != NULL);
+}
+
+char *zl_encode_stats(const zl_stats_t *st)
+{
+    static const char *const CPU[] = {"cpu0", "cpu1"};
+    cJSON *o = message("stats");
+    bool ok = o != NULL;
+    if (ok && st->has_rssi) ok = cJSON_AddNumberToObject(o, "rssi", st->rssi) != NULL;
+    for (int i = 0; ok && i < st->ncpu; i++) ok = cJSON_AddNumberToObject(o, CPU[i], st->cpu[i]) != NULL;
+    if (ok && st->has_temp) ok = cJSON_AddNumberToObject(o, "temp", round(st->temp * 10) / 10) != NULL;
+    ok = ok && cJSON_AddNumberToObject(o, "heap", st->heap) != NULL &&
+         cJSON_AddNumberToObject(o, "heap_min", st->heap_min) != NULL &&
+         cJSON_AddNumberToObject(o, "heap_block", st->heap_block) != NULL;
+    if (ok && st->has_psram) {
+        ok = cJSON_AddNumberToObject(o, "psram", st->psram) != NULL &&
+             cJSON_AddNumberToObject(o, "psram_min", st->psram_min) != NULL;
+    }
+    ok = ok && cJSON_AddNumberToObject(o, "wifi_drops", st->wifi_drops) != NULL;
+    if (ok && st->wifi_drops > 0) ok = cJSON_AddNumberToObject(o, "wifi_reason", st->wifi_reason) != NULL;
+    return finish(o, ok);
 }
 
 void zl_free(char *json)

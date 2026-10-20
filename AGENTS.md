@@ -106,8 +106,10 @@ only setting is `core.agent_mcp.enabled`, panel-editable and read live per reque
 - `core.*` holds non-provider settings (context, audio, vad — end-pointing thresholds +
   mic conditioning, network, openweathermap, mcp_servers,
   calendar, assistant_tasks, agent_mcp, prompt, runs, reminders, ack, devices, commands —
-  the command catalog both command handlers read (helpers in `src/commands.py`), tts_timeout,
-  log_level, device_log_days) as plain `CoreConfig` pydantic sections.
+  the command catalog both command handlers read (helpers in `src/commands.py`), telemetry —
+  the MQTT broker the server publishes its and the devices' telemetry to (topics in
+  `src/telemetry.py`), tts_timeout, log_level, device_log_days) as plain `CoreConfig` pydantic
+  sections.
 - API keys are plain string fields in the JSON (trusted-LAN service, no masking). `data/`
   is gitignored so `config.json` never gets committed.
 

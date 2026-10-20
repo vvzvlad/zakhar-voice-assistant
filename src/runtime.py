@@ -48,6 +48,7 @@ class Runtime:
         self.reminders_store = None  # RemindersStore | None (swapped by a reminders toggle)
         self.assistant_tasks = None  # AssistantTasks (jobs handed to the ZeroClaw assistant)
         self.panel = None           # PanelServer (so a runs-store swap reaches its endpoints)
+        self.telemetry = None       # Telemetry (MQTT publisher; restarted on a telemetry change)
 
     @property
     def core(self):

@@ -25,7 +25,7 @@ import soxr
 from aiohttp import WSCloseCode, WSMsgType, web
 from loguru import logger
 
-from src import captures, config_store, context, device_logs
+from src import captures, config_store, context, device_logs, telemetry
 from src.chime import build_ack_clip
 from src.pipeline import Pipeline
 from src.pipeline_events import StageEvent
@@ -94,6 +94,9 @@ _DEVICE_FIELDS = ("wake_cutoff", "vad_cutoff", "echo_cancel", "echo_cancel_mode"
                   "play_prime_ms", "auto_volume")
 # The `ambient` values a connection keeps: a minute of them, the device measuring every 15 s.
 AMBIENT_KEEP = 4
+# A device's boot time (the hello's whole-second uptime counted back from its arrival) moving
+# later than this between two of its connections is a reboot, not the jitter of a reconnect.
+REBOOT_MARGIN_S = 10
 
 # StageEvents that map onto a plain `state` message; TTS_START, STT_END and ERROR
 # carry text and are handled in Device._send_event, the rest send nothing.
@@ -287,8 +290,9 @@ class Connection:
         self.ws = ws
         self.name = hello["id"]
         self.fw = hello.get("fw")
+        self.connected_at = time.time()
         # When the device booted, on the server clock: its hello `uptime` counted back from now.
-        self.booted_at = time.time() - hello["uptime"]
+        self.booted_at = self.connected_at - hello["uptime"]
         # The wake model the device reported loaded (`model_loaded`); None until it does.
         self.model = None
         self.speaker = bool(hello.get("caps", {}).get("speaker"))
@@ -520,6 +524,9 @@ class Device:
         self._capture_watchdog: asyncio.TimerHandle | None = None
         # The device log could not be written last time: warned once until a write succeeds.
         self._log_write_failed = False
+        # The boot time of the device's last connection in this process, None before its first:
+        # a later one tells a reboot from a reconnect.
+        self.booted_at: float | None = None
 
     @property
     def cfg(self):
@@ -541,7 +548,16 @@ class Device:
         if self.conn is conn:
             self.conn = None
             logger.info(f"{self.name}: disconnected")
+            error = conn.ws.exception()
+            self.publish_event("disconnected", {
+                "code": conn.ws.close_code, "error": str(error) if error is not None else None,
+                "connected_s": round(time.time() - conn.connected_at, 1),
+            })
             await self.pipeline.on_disconnect()
+
+    def publish_event(self, kind: str, payload: dict) -> None:
+        """Publish a device event to the telemetry (src/telemetry.py)."""
+        telemetry.publish(self.rt, f"devices/{self.name}/event/{kind}", payload)
 
     def _send_event(self, event, data) -> None:
         """The pipeline's send_event hook: map a StageEvent onto wire messages."""
@@ -596,13 +612,16 @@ class Device:
             # Over a running answer or an open session the wake may be the speaker's
             # own voice, which the check is told; the answer goes on until the wake is
             # taken (take_session).
-            self.pipeline.on_wake(msg["session"], msg.get("word"),
-                                  over_answer=conn.session_open or conn.playing)
+            over_answer = conn.session_open or conn.playing
+            self.publish_event("wake", {"session": msg["session"], "word": msg.get("word"),
+                                        "over_answer": over_answer})
+            self.pipeline.on_wake(msg["session"], msg.get("word"), over_answer=over_answer)
         elif kind == "stop":
+            in_session = conn.session_open
+            self.publish_event("stop", {"session": msg.get("session"), "in_session": in_session})
             # Synchronously, as a wake: the dropped plays and the cancelled run. A cancelled
             # run emits no RUN_END, so the session's terminal `state idle` goes out here.
             conn.drop_playback()
-            in_session = conn.session_open
             if in_session:
                 self.pipeline.cancel_run()
                 conn.send_session({"type": "state", "value": "idle"})
@@ -610,15 +629,23 @@ class Device:
             logger.info(f"{self.name}: stop word, playback{' and run' if in_session else ''} stopped")
         elif kind == "played":
             if msg.get("dropped"):
+                self.publish_event("played", {"dropped": True})
                 conn.on_played(msg["id"], True)
             else:
+                self.publish_event("played", {"dry": msg["dry"], "gap_ms": msg["gap_ms"]})
                 conn.on_played(msg["id"], False, msg["dry"], msg["gap_ms"])
         elif kind == "volume":
+            self.publish_event("volume", {"value": msg["value"]})
             conn.volume = msg["value"]
+        elif kind == "stats":
+            telemetry.publish(self.rt, f"devices/{self.name}/stats",
+                              {k: v for k, v in msg.items() if k != "type"})
         elif kind == "ambient":
-            # A microphone reading all zeros measures -inf, which arrives as null: not a level.
             value = msg.get("value")
-            if isinstance(value, (int, float)) and math.isfinite(value):
+            # A microphone reading all zeros measures -inf, which arrives as null: not a level.
+            level = isinstance(value, (int, float)) and math.isfinite(value)
+            self.publish_event("ambient", {"value": value, "zeros": not level})
+            if level:
                 conn.ambient.append(value)
                 self.update_boost()
         elif kind == "wake_peak":
@@ -1078,6 +1105,13 @@ class DeviceManager:
         if old is not None:
             old.close(CLOSE_REPLACED)
             await device.pipeline.on_disconnect()
+        rebooted = (device.booted_at is not None
+                    and conn.booted_at - device.booted_at > REBOOT_MARGIN_S)
+        device.booted_at = conn.booted_at
+        device.publish_event("connected", {
+            "fw": conn.fw, "uptime": hello["uptime"], "reset": hello.get("reset"),
+            "speaker": conn.speaker, "replaced": old is not None, "rebooted": rebooted,
+        })
         # Before the models: the device holds a capture's unsent audio only in its ~7 s tap.
         # A capture file that cannot be read must not keep the device from connecting.
         try:

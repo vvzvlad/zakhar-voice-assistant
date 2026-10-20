@@ -6,21 +6,24 @@ import json
 
 from loguru import logger
 
+from src import telemetry
 from src.runs_store import summary_row
 
 
 async def record_run(rt, record: dict) -> None:
-    """Insert a finished run into the run log and push it to live panel
-    subscribers; a failure is logged, never raised. No-op when the log is off."""
+    """Insert a finished run into the run log, push it to live panel subscribers
+    (both skipped while the log is off) and publish it to the telemetry, with its
+    run log id when it has one; a failure is logged, never raised."""
     store, events = rt.runs_store, rt.run_events
-    if store is None:
-        return
+    run_id = None
     try:
-        run_id = await asyncio.to_thread(store.insert, record)
-        if events is not None:
-            await events.broadcast({"type": "run", "run": summary_row(record, run_id)})
+        if store is not None:
+            run_id = await asyncio.to_thread(store.insert, record)
+            if events is not None:
+                await events.broadcast({"type": "run", "run": summary_row(record, run_id)})
     except Exception as e:
         logger.error(f"run record failed: {e}")
+    telemetry.publish_run(rt, record, run_id)
 
 
 class RunEventsHub:

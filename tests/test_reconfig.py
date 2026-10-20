@@ -92,6 +92,7 @@ def test_action_for_representative_paths():
         "core.reminders.something": "rebuild_reminders",
         "core.runs.enabled": "rebuild_runs",
         "core.runs.retention_days": "rebuild_runs",
+        "core.telemetry.host": "rebuild_telemetry",
         "core.devices": "rebuild_devices",
         "core.devices.0.wake_cutoff": "rebuild_devices",
         "core.devices.0.log": "rebuild_devices",

@@ -156,6 +156,19 @@ The owner's words:
   protocol), option chosen: «В прошивке колонки» — the speaker is itself a Sendspin player that
   Music Assistant finds by mDNS, outside this protocol; the music and this protocol's playback
   share the speaker on the device.
+- «надо бы телеметрию от захара и колонок в каком-то виде сделать, чтобы можно было засунуть ее
+  в инфлюкс, как у нас умный дом сделан например» — the server publishes its own telemetry and
+  the devices' to the smart home's MQTT broker (`core.telemetry`), and the mqtt2influx bridge
+  there carries it into InfluxDB. To the devices reporting nothing about their own health, option
+  chosen: «Плюс Wi-Fi, память, температура» — the device sends `stats`. «надо не только раз в 30
+  секунд, а по эвентам всяким и так далее» — besides the 30 s state, every event is published as
+  it happens. «плюс у колонок/панелей еще телеметрия всякая, посмотри пример в укуетисе» — `stats`
+  carries what the Ukuetis controller's system telemetry does (Wi-Fi signal, free, lowest and
+  largest free heap, CPU load) plus the chip temperature. «смысл в том, чтобы разбирать всякие
+  отказы и проблемы можно было постфактум по телеметрии, а то щас по логам неудобно» — every
+  event and every finished run carries its context as text (the reason, the failed stage and its
+  error, the phrase, the tool calls, the reset reason), and a bridge stream of its own writes the
+  text to InfluxDB.
 
 ## Transport
 
@@ -191,6 +204,7 @@ The owner's words:
 1. Device → `hello`:
    ```json
    {"type": "hello", "id": "fc012cd1e5ec", "fw": "voicepe 0.1.0 (a1b2c3d)", "uptime": 3725,
+    "reset": "poweron",
     "caps": {"speaker": true, "screen": false, "follow_up": true},
     "mic": {"channels": 2},
     "play": {"rate": 48000, "buffer_ms": 4000},
@@ -202,6 +216,9 @@ The owner's words:
      an enabled device.
    - `uptime` is the whole seconds since the device booted, taken when it sends the `hello`;
      the server counts the device's uptime on from it.
+   - `reset` is why the device last booted: `poweron`, `ext`, `sw`, `panic`, `int_wdt`,
+     `task_wdt`, `wdt`, `deepsleep`, `brownout`, `sdio`, `usb`, `jtag`, `efuse`, `pwr_glitch`,
+     `cpu_lockup` or `unknown` (ESP-IDF's `esp_reset_reason()`).
    - `play` and `volume` are present only when `caps.speaker` is true.
    - `caps.follow_up` is true when the device reopens its microphone on a follow-up `listening`
      (see [Follow-up](#follow-up)); the server listens for a follow-up only on such a device.
@@ -451,6 +468,7 @@ the answer, so the next phrase needs no wake word:
 | `capture_resume {id, from}` | server → device | go on with a capture the device kept across a lost link |
 | `audio_end {reason, id}` | device → server | a capture ended on the device: `capture` (all its audio is out) or `busy` (refused, a session is running) |
 | `log_stream {on}` | server → device | send the device log in `log` messages or stop; after every `hello` and whenever `core.devices[].log` changes. Off from boot. A lost link does not turn it off on the device: the lines logged meanwhile wait (16 KB on the Voice PE, a line that does not fit is dropped) for the next connection's `log_stream`, and off drops them |
+| `stats {…}` | device → server | the device's health, right after `hello` and every 30 s while connected: `rssi` (dBm of the access point, absent while not associated), `cpu0`, `cpu1` (load of each core over the last 30 s, percent; `cpu1` absent on a single-core chip; both absent from firmware built without `CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS`, which costs about 1.8 KB of internal RAM — the Voice PE is built without it), `temp` (chip temperature, °C, one decimal; absent when it cannot be read), `heap`, `heap_min`, `heap_block` (internal RAM: free, the lowest free since boot, the largest free block; bytes), `psram`, `psram_min` (PSRAM free and the lowest free since boot; absent without PSRAM), `wifi_drops` (Wi-Fi disconnect events since `zl_start()` at boot — the ones before it are not counted — each failed reconnect attempt included; never reset by a reconnection to the server) and `wifi_reason` (the ESP-IDF reason code of the last one, absent before the first). The server publishes them to its telemetry |
 | `log {text}` | device → server | one or more whole lines of the device's ESP log, each ending in `\n` (on the Voice PE up to 2 KB a message, a line cut at 512 bytes). The server appends them to `data/device_logs/<id>/<YYYY-MM-DD>.log` (its local day), each behind its own time of arrival `HH:MM:SS.mmm`, and deletes a day's file once that day ended more than `core.device_log_days` (7) days ago |
 
 ### Auto volume
