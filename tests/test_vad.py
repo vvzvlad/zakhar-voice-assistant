@@ -144,49 +144,60 @@ def test_maxlen_wins_over_no_speech_when_timeouts_coincide():
     assert drive(tracker, "." * 10) == "maxlen"  # 200 ms hits both caps -> maxlen
 
 
-# --- pause after the wake word -------------------------------------------------------
+# --- the wake word's pre-roll ----------------------------------------------------------
 
-# The first 100 ms are pre-roll ending at the wake word; the command may follow it
-# after up to 300 ms of silence, while the phrase itself ends after 100 ms.
+# The first 100 ms are pre-roll ending at the wake word, which is spoken in it; the
+# command may start up to 300 ms after it, and the phrase ends after 100 ms of silence.
 WAKE_POLICY = EndpointPolicy(
     silence_ms=100, min_speech_ms=40,
-    max_utterance_ms=2000, no_speech_timeout_ms=1000,
-    preroll_ms=100, wake_pause_ms=300,
+    max_utterance_ms=2000, no_speech_timeout_ms=300,
+    preroll_ms=100,
 )
 
 
+def test_bare_wake_word_ends_as_no_speech():
+    # Speech only inside the pre-roll is the wake word, not a command: the run ends
+    # as no_speech 300 ms after the pre-roll, not as an endpoint that goes to STT.
+    tracker = EndpointTracker(WAKE_POLICY)
+    assert drive(tracker, "sssss" + "." * 14) is None  # 280 ms after the pre-roll
+    assert tracker.update(False, 20) == "no_speech"   # 300 ms
+    assert tracker.debug_state()["speech_detected"] is False
+
+
 def test_pause_after_wake_word_does_not_end_the_phrase():
-    # Wake word in the pre-roll, a 200 ms pause, then the command: the pause is
-    # longer than silence_ms but the phrase goes on; after the command the usual
-    # 100 ms of silence ends it.
+    # Wake word in the pre-roll, a 200 ms pause (over silence_ms), then the command:
+    # the phrase goes on, and the usual 100 ms of silence after the command ends it.
     tracker = EndpointTracker(WAKE_POLICY)
-    assert drive(tracker, "sss" + "." * 10 + "ss" + "....") is None
+    assert drive(tracker, "sssss" + "." * 10 + "ss" + "....") is None
     assert tracker.update(False, 20) == "endpoint"
-
-
-def test_bare_wake_word_ends_after_the_wake_pause():
-    tracker = EndpointTracker(WAKE_POLICY)
-    assert drive(tracker, "sss" + "." * 14) is None  # 280 ms of silence
-    assert tracker.update(False, 20) == "endpoint"   # 300 ms
 
 
 def test_short_command_after_wake_word_is_not_delayed():
     # One speech window past the pre-roll (20 ms, under min_speech_ms) is already
-    # the command: the usual pause applies.
+    # the command: the usual pause ends it.
     tracker = EndpointTracker(WAKE_POLICY)
     assert drive(tracker, "s" * 6 + "....") is None
     assert tracker.update(False, 20) == "endpoint"
 
 
-def test_wake_pause_needs_a_preroll():
-    # A run without pre-roll (no wake word) ends after silence_ms as before.
+def test_window_straddling_the_preroll_end_is_preroll():
+    # Silero's 32 ms windows do not divide the pre-roll: the window at 96–128 ms
+    # starts inside the 100 ms pre-roll, so its speech is still the wake word.
+    tracker = EndpointTracker(WAKE_POLICY)
+    assert drive(tracker, "ssss" + "." * 8, window_ms=32) is None  # 128 + 256 ms
+    assert tracker.debug_state()["speech_detected"] is False
+
+
+def test_run_without_preroll_still_needs_min_speech():
+    # No wake word (a follow-up listen): a 20 ms blip is noise, the run ends as
+    # no_speech after no_speech_timeout_ms from its start.
     policy = EndpointPolicy(
         silence_ms=100, min_speech_ms=40,
-        max_utterance_ms=2000, no_speech_timeout_ms=1000, wake_pause_ms=300,
+        max_utterance_ms=2000, no_speech_timeout_ms=300,
     )
     tracker = EndpointTracker(policy)
-    assert drive(tracker, "ss....") is None
-    assert tracker.update(False, 20) == "endpoint"
+    assert drive(tracker, "s" + "." * 13) is None   # 280 ms
+    assert tracker.update(False, 20) == "no_speech"
 
 
 # --- debug_state ---------------------------------------------------------------------
