@@ -1,4 +1,11 @@
 dependencies:
+  bblanchon/arduinojson:
+    component_hash: 5e6aff2bc5bc988b36c8e90c01e637495ee895ad3af93911860c21ec6da79b6a
+    dependencies: []
+    source:
+      registry_url: https://components.espressif.com
+      type: service
+    version: 7.4.3
   esphome/esp-micro-speech-features:
     component_hash: 2b720b4ed49fa9df14b24f35fd3ec8a012eddde1c8dd4709448e36a581eebd3e
     dependencies:
@@ -9,6 +16,34 @@ dependencies:
       registry_url: https://components.espressif.com/
       type: service
     version: 1.2.3
+  esphome/libsodium:
+    component_hash: 39bee6f58d2d7fb8f2d30e04133afe60d0b642792196d36cde3a6dd07738fb08
+    dependencies: []
+    source:
+      registry_url: https://components.espressif.com
+      type: service
+    version: 1.10021.12
+  esphome/micro-flac:
+    component_hash: a06a472806f8bd7c77bf0329119806bdabfa0101686971f3553b8d90b1002444
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=4.4'
+    source:
+      registry_url: https://components.espressif.com
+      type: service
+    version: 0.3.0
+  esphome/noise-c:
+    component_hash: 12dcc72a8ca1ba82f703aaba07dcddeab6037135a7fa7e73e99af80efd6e565f
+    dependencies:
+    - name: esphome/libsodium
+      registry_url: https://components.espressif.com
+      require: private
+      version: 1.10021.12
+    source:
+      registry_url: https://components.espressif.com
+      type: service
+    version: 0.1.31
   espressif/cjson:
     component_hash: e788323270d90738662d66fffa910bfe1fba019bba087f01557e70c40485b469
     dependencies:
@@ -178,6 +213,40 @@ dependencies:
     source:
       type: idf
     version: 5.5.4
+  sendspin/sendspin-cpp:
+    component_hash: 68e333bf742307ce52606bb5ed2d3c52a4f7522b672a5be3549077a5733694f1
+    dependencies:
+    - name: bblanchon/arduinojson
+      registry_url: https://components.espressif.com
+      require: private
+      version: '>=7.4.2'
+    - name: esphome/micro-flac
+      registry_url: https://components.espressif.com
+      require: private
+      rules:
+      - if: $CONFIG{SENDSPIN_ENABLE_PLAYER} == True
+      version: '>=0.1.1'
+    - name: esphome/micro-opus
+      registry_url: https://components.espressif.com
+      require: private
+      rules:
+      - if: ($CONFIG{SENDSPIN_ENABLE_PLAYER} == True || $CONFIG{SENDSPIN_ENABLE_SOURCE} == True) && $CONFIG{SENDSPIN_ENABLE_OPUS} == True
+      version: '>=0.3.5'
+    - name: esphome/noise-c
+      registry_url: https://components.espressif.com
+      require: private
+      version: '>=0.1.13'
+    - name: espressif/esp_websocket_client
+      registry_url: https://components.espressif.com
+      require: private
+      version: '>=1.6.1'
+    - name: idf
+      require: private
+      version: '>=5.5.2'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 0.9.5
 direct_dependencies:
 - esphome/esp-micro-speech-features
 - espressif/esp-nn
@@ -188,6 +257,7 @@ direct_dependencies:
 - espressif/mdns
 - espressif/network_provisioning
 - idf
-manifest_hash: 7cab83509642bd383033d2a8d27ec1b07cda297fe6f17101db1b120caf0ab518
+- sendspin/sendspin-cpp
+manifest_hash: 0bbb42a52fe1c0130df2c147e3d98f51db35ed8b459d3428af6bc1e9ac36820c
 target: esp32s3
 version: 2.0.0

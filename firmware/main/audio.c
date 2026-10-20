@@ -34,6 +34,8 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "leds.h"
+#include "music.h"
+#include "volume.h"
 #include "wake_word.h"
 #include "xmos.h"
 #include "zakhar_link.h"
@@ -58,6 +60,8 @@ _Static_assert(TAP_FRAMES - TAP_MARGIN >= (2000 + 3000) * MIC_RATE / 1000,
 
 #define SPK_RATE 48000
 #define SPK_BLOCK 720  // frames per write: 15 ms, the stock DMA buffer
+// The TX DMA buffers, SPK_BLOCK frames each: a block just written plays out after all of them.
+#define SPK_DMA_BUFS 4
 #define LATE_CHECK_BLOCKS 67  // the speaker task reports late buffers about once a second
 
 // The mic task's unit: 512 frames = 32 ms, the AEC's frame in its SR and FD modes at 16 kHz and
@@ -239,10 +243,12 @@ static void mic_task(void *arg)
         const int level = atomic_load_explicit(&s_echo_cancel, memory_order_relaxed);
         const int mode = atomic_load_explicit(&s_echo_mode, memory_order_relaxed);
         const int filter = atomic_load_explicit(&s_echo_filter, memory_order_relaxed);
+        // Playing is zakhar's playback or a music stream.
+        const bool playing = zl_playing() || music_active();
         // The AEC is made at the first playback with echo_cancel on, not at boot: its internal RAM
         // then comes after the link task's stack, which at boot found no block left. Once made, a
         // new echo_cancel_mode or echo_cancel_filter re-creates it at once.
-        if ((made_mode >= 0 || (level > 0 && zl_playing())) && (mode != made_mode || filter != made_filter)) {
+        if ((made_mode >= 0 || (level > 0 && playing)) && (mode != made_mode || filter != made_filter)) {
             if (st.chunks > 0) {
                 log_playback(aec, made_filter, &st, lag_in_use);
                 st = (aec_stats_t){.corr = NAN};
@@ -254,11 +260,11 @@ static void mic_task(void *arg)
             made_filter = filter;
             applied = level;
         }
-        // Quiet is auto volume on, nothing playing, no session open, no wake proposed and no capture held; its end
-        // ends a measurement.
+        // Quiet is auto volume on, nothing playing, no session open, no wake proposed and no capture
+        // held; its end ends a measurement.
         const bool measuring = ambient_sched_want(
-            &amb, atomic_load_explicit(&s_auto_volume, memory_order_relaxed) && !zl_playing() && !zl_mic_busy());
-        const bool want_raw = (level > 0 && aec != NULL && zl_playing()) || measuring;
+            &amb, atomic_load_explicit(&s_auto_volume, memory_order_relaxed) && !playing && !zl_mic_busy());
+        const bool want_raw = (level > 0 && aec != NULL && playing) || measuring;
         const mic_chunk_t c = mic_chunks_step(&chunks, dropped, want_raw, wrote, tap_position(&s_ref));
         // Written as soon as the chunk is in, so the chunk's processing does not delay the switch.
         wrote = c.write && xmos_ch0_raw(c.write_raw) == ESP_OK;
@@ -328,6 +334,11 @@ static void mic_task(void *arg)
     }
 }
 
+// Per block: zakhar's playback (mono) on both channels plus the music stream (stereo, music.h) at
+// its gain, a tenth of it while a session is open or zakhar plays; the echo reference is the mono
+// downmix of the block as it goes to the wire. The LEDs follow zakhar's playback alone. The block
+// is mixed in place, as internal RAM has no room for more buffers: the music comes into `stereo`
+// and the downmix replaces `mono`.
 static void speaker_task(void *arg)
 {
     (void)arg;
@@ -335,6 +346,8 @@ static void speaker_task(void *arg)
     static int16_t stereo[SPK_BLOCK * 2];
     static int16_t ref[SPK_BLOCK / 3];
     static const int16_t silence[SPK_BLOCK / 3];
+    static mix_t mix;
+    mix_init(&mix);
     // The buffers that went out before this task started are not late.
     uint32_t seen = atomic_load_explicit(&s_late, memory_order_relaxed);
     uint32_t ref_late = seen;
@@ -356,14 +369,18 @@ static void speaker_task(void *arg)
         const size_t n = zl_play_read(mono, SPK_BLOCK);
         leds_set_playing(n > 0);
         memset(mono + n, 0, (SPK_BLOCK - n) * sizeof mono[0]);
-        for (size_t i = 0; i < SPK_BLOCK; i++) {
-            stereo[2 * i] = mono[i];
-            stereo[2 * i + 1] = mono[i];
-        }
+        // The DAC plays the louder of the dial and the dial plus the boost; each stream is brought
+        // down to its own level here.
+        gain_block(mono, n, volume_voice_gain());
+        const size_t m = music_read(stereo, SPK_BLOCK);
+        // Music Assistant's volume times what keeps the music at the dial.
+        const uint32_t gain = (uint32_t)(((uint64_t)music_gain() * volume_music_gain()) >> 16);
+        mix_block(&mix, mono, stereo, m, gain, zl_mic_busy() || zl_playing(), SPK_BLOCK, stereo, mono);
         // The echo reference: this block, silence included, as it goes to the wire.
         tap_write(&s_ref, ref, dec3_run(&s_dec, mono, SPK_BLOCK, ref));
         size_t written;
         i2s_channel_write(s_tx, stereo, sizeof stereo, &written, portMAX_DELAY);
+        if (m > 0) music_played(m, esp_timer_get_time() + (int64_t)SPK_DMA_BUFS * SPK_BLOCK * 1000000 / SPK_RATE);
     }
 }
 
@@ -371,7 +388,7 @@ esp_err_t audio_start(void)
 {
     // auto_clear: an empty DMA buffer goes out as silence.
     i2s_chan_config_t tx_cc = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_SLAVE);
-    tx_cc.dma_desc_num = 4;
+    tx_cc.dma_desc_num = SPK_DMA_BUFS;
     tx_cc.dma_frame_num = SPK_BLOCK;
     tx_cc.auto_clear = true;
     i2s_std_config_t tx_std = {

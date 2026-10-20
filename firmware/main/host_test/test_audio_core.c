@@ -1,7 +1,7 @@
 // Host test of the Voice PE firmware's pure audio core (audio_core.c): the microphone sample
 // conversion against ESPHome's MicrophoneSource, the tap ring, the echo reference and delay
-// estimator, the mic task's chunk bookkeeping, the room's noise level, and the stock volume -> DAC
-// byte table.
+// estimator, the mic task's chunk bookkeeping, the room's noise level, the speaker's mix, the music
+// ring, and the stock volume -> DAC byte table.
 // `make fw-voicepe-host-test` builds it.
 #include <assert.h>
 #include <math.h>
@@ -11,6 +11,7 @@
 #include <string.h>
 
 #include "audio_core.h"
+#include "music_ring.h"
 
 static void test_samples(void)
 {
@@ -417,6 +418,148 @@ static void test_ambient_sched(void)
     assert(ambient_dbfs(&s.level) == -90.3);
 }
 
+static void test_mix(void)
+{
+    enum { N = 720 };
+    static int16_t voice[N], music[2 * N], out[2 * N], mono[N];
+    mix_t m;
+
+    // Voice only: on both channels as it is, and the reference is the voice itself.
+    mix_init(&m);
+    for (size_t i = 0; i < N; i++) voice[i] = (int16_t)(i * 37 - 13000);
+    mix_block(&m, voice, music, 0, MIX_UNITY, false, N, out, mono);
+    for (size_t i = 0; i < N; i++) assert(out[2 * i] == voice[i] && out[2 * i + 1] == voice[i] && mono[i] == voice[i]);
+
+    // The music ramps in from silence across the first block, then plays at its gain; the
+    // reference is (L + R) / 2.
+    mix_init(&m);
+    memset(voice, 0, sizeof voice);
+    for (size_t i = 0; i < N; i++) {
+        music[2 * i] = 20000;
+        music[2 * i + 1] = -10000;
+    }
+    mix_block(&m, voice, music, N, MIX_UNITY, false, N, out, mono);
+    assert(out[0] < 100 && out[2 * (N - 1)] == 20000 && out[2 * (N - 1) + 1] == -10000);
+    for (size_t i = 1; i < N; i++) assert(out[2 * i] >= out[2 * (i - 1)]);
+    mix_block(&m, voice, music, N, MIX_UNITY, false, N, out, mono);
+    for (size_t i = 0; i < N; i++) assert(out[2 * i] == 20000 && out[2 * i + 1] == -10000 && mono[i] == 5000);
+
+    // Ducked: down to a tenth across one block, monotonically, then held there.
+    mix_block(&m, voice, music, N, MIX_UNITY, true, N, out, mono);
+    assert(out[0] > 19900 && out[2 * (N - 1)] == 2000 && out[2 * (N - 1) + 1] == -1000);
+    for (size_t i = 1; i < N; i++) assert(out[2 * i] <= out[2 * (i - 1)]);
+    mix_block(&m, voice, music, N, MIX_UNITY, true, N, out, mono);
+    for (size_t i = 0; i < N; i++) assert(out[2 * i] == 2000 && out[2 * i + 1] == -1000);
+    // And back up once the duck ends.
+    mix_block(&m, voice, music, N, MIX_UNITY, false, N, out, mono);
+    assert(out[0] < 2100 && out[2 * (N - 1)] == 20000);
+
+    // Fewer music frames than the block: the rest is the voice alone.
+    for (size_t i = 0; i < N; i++) voice[i] = 100;
+    mix_block(&m, voice, music, 300, MIX_UNITY, false, N, out, mono);
+    assert(out[2 * 299] == 20100 && out[2 * 299 + 1] == -9900);
+    for (size_t i = 300; i < N; i++) assert(out[2 * i] == 100 && out[2 * i + 1] == 100 && mono[i] == 100);
+
+    // Voice plus music saturates instead of wrapping, and the reference is of what was saturated.
+    for (size_t i = 0; i < N; i++) {
+        voice[i] = 30000;
+        music[2 * i] = 20000;
+        music[2 * i + 1] = -32768;
+    }
+    mix_block(&m, voice, music, N, MIX_UNITY, false, N, out, mono);
+    assert(out[0] == INT16_MAX && out[1] == 30000 - 32768 && mono[0] == (INT16_MAX + 30000 - 32768) / 2);
+    for (size_t i = 0; i < N; i++) {
+        voice[i] = -30000;
+        music[2 * i] = -20000;
+    }
+    mix_block(&m, voice, music, N, MIX_UNITY, false, N, out, mono);
+    assert(out[0] == INT16_MIN && out[1] == INT16_MIN && mono[0] == INT16_MIN);
+
+    // In place, as the speaker task mixes (out over music, the downmix over voice), mid-ramp and
+    // with a short music block: the same block as into separate buffers.
+    for (size_t i = 0; i < N; i++) {
+        voice[i] = (int16_t)(i * 29 - 9000);
+        music[2 * i] = (int16_t)(15000 - i * 31);
+        music[2 * i + 1] = (int16_t)(i * 17 - 6000);
+    }
+    mix_t a, b;
+    mix_init(&a);
+    mix_init(&b);
+    mix_block(&a, voice, music, 500, MIX_UNITY, false, N, out, mono);
+    mix_block(&b, voice, music, 500, MIX_UNITY, false, N, music, voice);
+    assert(memcmp(out, music, sizeof out) == 0 && memcmp(mono, voice, sizeof mono) == 0 && a.gain == b.gain);
+}
+
+// The music ring holds the test stream's frames (frames_from: channel 0 = f, channel 1 = -f).
+static void ring_read_is(music_ring_t *r, size_t max, uint32_t want_from, size_t want_n)
+{
+    int16_t got[2 * 16], want[2 * 16];
+    assert(max <= 16);
+    assert(music_ring_read(r, got, max) == want_n);
+    frames_from(want_from, want, want_n);
+    assert(memcmp(got, want, want_n * 2 * sizeof(int16_t)) == 0);
+}
+
+static void test_music_ring(void)
+{
+    int16_t buf[8 * 2], in[2 * 16];
+    music_ring_t r = {buf, 8, 0, 0};
+    // Across the end of the buffer: frames 0..4 in and out, then 5..10 land in slots 5..7 and 0..2.
+    frames_from(0, in, 5);
+    assert(music_ring_write(&r, in, 5) == 5);
+    ring_read_is(&r, 16, 0, 5);
+    frames_from(5, in, 6);
+    assert(music_ring_write(&r, in, 6) == 6 && r.head == 3);
+    ring_read_is(&r, 4, 5, 4);  // 5..8: slots 5, 6, 7, 0
+    ring_read_is(&r, 16, 9, 2);
+    assert(r.tail == 3);
+    ring_read_is(&r, 16, 0, 0);  // empty
+
+    // Full at cap - 1 frames: the rest is refused until the reader makes room, one for one.
+    frames_from(100, in, 10);
+    assert(music_ring_write(&r, in, 10) == 7);
+    assert(music_ring_write(&r, &in[2 * 7], 3) == 0);
+    ring_read_is(&r, 1, 100, 1);
+    assert(music_ring_write(&r, &in[2 * 7], 3) == 1);
+    ring_read_is(&r, 16, 101, 7);
+
+    // A stream ends with frames still held; the next stream writes before the reader's first read
+    // after the end: the flush drops the old frames and keeps the new ones.
+    frames_from(200, in, 4);
+    music_ring_write(&r, in, 4);
+    ring_read_is(&r, 1, 200, 1);
+    const uint32_t end = r.head;  // the ended stream's head
+    frames_from(300, in, 3);
+    music_ring_write(&r, in, 3);
+    music_ring_flush(&r, end);
+    ring_read_is(&r, 16, 300, 3);
+    // A flush with nothing held after `end` empties the ring.
+    frames_from(400, in, 2);
+    music_ring_write(&r, in, 2);
+    music_ring_flush(&r, r.head);
+    ring_read_is(&r, 16, 0, 0);
+
+    // A flush on a full ring: everything goes, and the ring takes cap - 1 frames again.
+    frames_from(500, in, 7);
+    assert(music_ring_write(&r, in, 7) == 7);
+    music_ring_flush(&r, r.head);
+    assert(r.tail == r.head);
+    ring_read_is(&r, 16, 0, 0);
+    frames_from(600, in, 7);
+    assert(music_ring_write(&r, in, 8) == 7);
+    ring_read_is(&r, 16, 600, 7);
+
+    // A flush to a point the reader has already passed leaves the tail where it is.
+    frames_from(700, in, 4);
+    const uint32_t start = r.head;
+    music_ring_write(&r, in, 4);
+    ring_read_is(&r, 3, 700, 3);
+    const uint32_t tail = r.tail;
+    music_ring_flush(&r, (start + 1) % r.cap);
+    assert(r.tail == tail);
+    ring_read_is(&r, 16, 703, 1);
+}
+
 static void test_volume(void)
 {
     // The stock table: UI volume -> register byte (0.5 dB steps from 0 dB = 0x00).
@@ -441,6 +584,37 @@ static void test_volume(void)
     }
     assert(volume_dac_muted(0));
     assert(!volume_dac_muted(1) && !volume_dac_muted(100));
+
+    // The dial at 50 %, the boost lifting the replies to 100 %: the DAC at 100 %, the music taken
+    // back 38 register steps (19 dB) to the dial, the replies at unity.
+    volume_levels_t l = volume_levels(50, 50);
+    assert(l.dac == 100 && l.voice == 65536u);
+    assert(l.music > 7340 && l.music < 7370);  // 65536 x 10^(-19 / 20) = 7353
+    // A boost lowering the replies to 30 %: the DAC stays at the dial, the replies come down.
+    l = volume_levels(50, -20);
+    assert(l.dac == 50 && l.music == 65536u && l.voice < 65536u);
+    l = volume_levels(0, 40);
+    assert(l.dac == 0 && l.music == 65536u && l.voice == 65536u);
+    // Any dial under any boost: the music at the dial, the replies at the dial plus the boost
+    // within 1..100 %, each within 0.01 dB of the DAC playing that level by itself.
+    for (int base = 1; base <= 100; base++) {
+        for (int boost = -100; boost <= 100; boost++) {
+            l = volume_levels(base, boost);
+            const int v = base + boost, reply = v < 1 ? 1 : v > 100 ? 100 : v;
+            const double dac_db = (int8_t)volume_dac_byte(l.dac) * 0.5;
+            assert(l.dac >= base && l.dac >= reply);
+            assert(fabs(dac_db + 20.0 * log10(l.music / 65536.0) - (int8_t)volume_dac_byte(base) * 0.5) < 0.01);
+            assert(fabs(dac_db + 20.0 * log10(l.voice / 65536.0) - (int8_t)volume_dac_byte(reply) * 0.5) < 0.01);
+        }
+    }
+
+    int16_t s[] = {32767, -32768, 1000, -1000, 1};
+    gain_block(s, 5, 65536u);
+    assert(s[0] == 32767 && s[1] == -32768 && s[2] == 1000 && s[4] == 1);
+    gain_block(s, 5, 32768u);
+    assert(s[0] == 16384 && s[1] == -16384 && s[2] == 500 && s[3] == -500 && s[4] == 1);
+    gain_block(s, 5, 0);
+    assert(s[0] == 0 && s[1] == 0 && s[2] == 0 && s[3] == 0 && s[4] == 0);
 }
 
 int main(void)
@@ -457,6 +631,8 @@ int main(void)
     test_chunk_offset();
     test_ambient();
     test_ambient_sched();
+    test_mix();
+    test_music_ring();
     test_volume();
     printf("audio_core: all tests passed\n");
     return 0;

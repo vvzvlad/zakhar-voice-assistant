@@ -1,6 +1,6 @@
 // The Voice PE firmware: Wi-Fi (the stored network, or BLE provisioning when there is none), then
 // the board in the stock order (the XMOS, then the DAC, then the amplifier), then the zakhar
-// WebSocket device protocol through zakhar_link.
+// WebSocket device protocol through zakhar_link, then the Sendspin music player (music.cpp).
 #include <stdatomic.h>
 #include <stdio.h>
 
@@ -23,6 +23,7 @@
 #include "freertos/event_groups.h"
 #include "freertos/task.h"
 #include "leds.h"
+#include "music.h"
 #include "net_log.h"
 #include "network_provisioning/manager.h"
 #include "network_provisioning/scheme_ble.h"
@@ -53,13 +54,17 @@ static _Atomic bool s_provisioning;  // the provisioning manager makes the conne
 static void on_net_event(void *arg, esp_event_base_t base, int32_t id, void *data)
 {
     (void)arg;
-    if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) leds_set_network(false);
+    if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
+        leds_set_network(false);
+        music_set_network(false);
+    }
     if (base == WIFI_EVENT && (id == WIFI_EVENT_STA_START || id == WIFI_EVENT_STA_DISCONNECTED)) {
         if (!atomic_load(&s_provisioning)) esp_wifi_connect();
     } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
         const ip_event_got_ip_t *ev = data;
         ESP_LOGI(TAG, "IP " IPSTR, IP2STR(&ev->ip_info.ip));
         leds_set_network(true);
+        music_set_network(true);
         xEventGroupSetBits(s_net, NET_UP);
     }
 }
@@ -350,6 +355,7 @@ void app_main(void)
     wake_word_set_stop(zl_playing, zl_stop);
     err = audio_start_playback();
     if (err == ESP_OK) err = controls_start();
+    if (err == ESP_OK) err = music_start();
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "bring-up failed: %s", esp_err_to_name(err));
         return;

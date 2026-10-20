@@ -1,8 +1,9 @@
 // The pure audio pieces of the Voice PE firmware: no ESP headers, host-tested
 // (make fw-voicepe-host-test). The microphone sample conversion, the microphone tap ring, the echo
 // reference (decimator, aligned reads, the skip decision), the echo delay estimator, the mic
-// task's per-chunk bookkeeping, the room's noise level and the speaker volume -> DAC register
-// mapping.
+// task's per-chunk bookkeeping, the room's noise level, the speaker's mix of zakhar's playback and
+// the music, and the speaker volume -> DAC register mapping. audio_core.c also implements the
+// music ring, declared in music_ring.h.
 #pragma once
 
 #include <stdatomic.h>
@@ -177,6 +178,28 @@ bool ambient_sched_want(ambient_sched_t *s, bool quiet);
 // completes the measurement; ambient_dbfs(&s->level) is then its level.
 bool ambient_sched_take(ambient_sched_t *s, bool raw, const int32_t *in, size_t frames);
 
+// ---------------------------------------------------------------- the speaker's mix
+
+// Gains are Q16: 65536 is 1.0.
+#define MIX_UNITY 65536u
+// The music under a voice session or zakhar's playback: -20 dB, a tenth of its gain.
+#define MIX_DUCK_DIV 10
+
+typedef struct {
+    uint32_t gain;  // the music's gain at the end of the previous block
+} mix_t;
+
+// The music starts from silence.
+void mix_init(mix_t *m);
+// One speaker block of `frames` frames. `out` (interleaved stereo) is `voice` (mono, `frames`
+// samples) on both channels plus `music` (interleaved stereo; its first music_frames frames, then
+// silence) times the music's gain, saturating; `mono` is (L + R) / 2 of `out`, the echo reference.
+// The music's gain moves linearly across the block from where the previous block left it to
+// `gain`, or to a tenth of it while `duck`, reaching it at the block's last frame. In place: `out`
+// may be `music` and `mono` may be `voice`, as each frame is read before it is written.
+void mix_block(mix_t *m, const int16_t *voice, const int16_t *music, size_t music_frames, uint32_t gain, bool duck,
+               size_t frames, int16_t *out, int16_t *mono);
+
 // ---------------------------------------------------------------- speaker volume
 
 // The stock volume path: percent 0..100 remapped to 0.40..0.85, then the AIC3204 digital volume
@@ -184,3 +207,16 @@ bool ambient_sched_take(ambient_sched_t *s, bool raw, const int32_t *in, size_t 
 uint8_t volume_dac_byte(int percent);
 // Below 1 % the DAC is muted (page 0 register 64 = 0x0C).
 bool volume_dac_muted(int percent);
+// The speaker's levels for the dial at `base` % and the server's boost in points. Zakhar's replies
+// play at base + boost within 1..100 % (1, not 0: 0 mutes the DAC, so a quiet room would silence
+// the reply instead of lowering it), the music at base; a base of 0 mutes both. The DAC takes the
+// louder of the two, and each stream is brought down to its own level digitally by a Q16 gain
+// (65536 = unity) that takes back the DAC steps it has over that level.
+typedef struct {
+    int dac;         // percent, for aic3204_set_volume
+    uint32_t music;  // Q16
+    uint32_t voice;  // Q16
+} volume_levels_t;
+volume_levels_t volume_levels(int base, int boost);
+// Scales `n` samples in place by a Q16 gain of unity at most, rounding to nearest.
+void gain_block(int16_t *s, size_t n, uint32_t gain);
