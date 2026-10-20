@@ -165,6 +165,13 @@ async def test_config_sound_alikes_reach_the_grammar_of_a_wake_over_an_answer(mo
     assert grammars[0] == ["захар", "[unk]"]
 
 
+def test_config_schema_puts_units_after_the_field():
+    # The panel shows a unit after its field, never in the title.
+    props = VoskWakewordConfig.model_json_schema()["properties"]
+    for name in ("window_ms", "timeout_ms"):
+        assert props[name]["unit"] == "ms" and "(ms)" not in props[name]["title"], name
+
+
 async def test_verify_rejects_when_no_keyword_present():
     # No keyword token in the recognized text -> rejected, score 0.0.
     result = {"text": "[unk]", "result": [{"word": "[unk]", "conf": 0.5}]}

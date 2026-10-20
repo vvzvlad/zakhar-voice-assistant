@@ -69,7 +69,7 @@ from src.commands import (
     tokenize,
     warn_missing,
 )
-from src.plugins.base import ADVANCED_FIELD_EXTRA, Deps, Provider, register
+from src.plugins.base import ADVANCED_FIELD_EXTRA, PHRASE_FIELD_EXTRA, Deps, Provider, register
 from src.plugins.llm.base import LlmBackend, ReplyConfig
 from src.stage_errors import Declined
 
@@ -90,10 +90,12 @@ class SimpleNluConfig(ReplyConfig):
     reply_unmatched: str = Field(
         "Не понял команду, повтори.",
         title="Reply when nothing matched",
+        json_schema_extra=PHRASE_FIELD_EXTRA,
     )
     reply_done: str = Field(
         "Готово.",
         title="Reply after a tool ran",
+        json_schema_extra=PHRASE_FIELD_EXTRA,
     )
     # The ReplyConfig field with this engine's own default and minimum: the tool round
     # and the final reply round both run.

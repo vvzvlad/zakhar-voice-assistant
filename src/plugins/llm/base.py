@@ -15,8 +15,12 @@ from src.plugins.base import (  # noqa: F401
     ADVANCED_FIELD_EXTRA,
     LABEL_FIELD_EXTRA,
     MODEL_FIELD_EXTRA,
+    PHRASE_FIELD_EXTRA,
     SECRET_FIELD_EXTRA,
 )
+
+# The spoken fallbacks: phrases, folded under "Advanced" in a group of their own.
+FALLBACK_REPLY_EXTRA: dict = {**ADVANCED_FIELD_EXTRA, **PHRASE_FIELD_EXTRA, "group": "Fallback replies"}
 
 
 class LlmBackend(ABC):
@@ -43,19 +47,21 @@ class ReplyConfig(BaseModel):
     # rate-limit reach TTS as "".
     reply_rate_limit: str = Field(
         "Лимит запросов исчерпан. Попробуй ещё раз чуть позже.",
-        title="Reply on rate limit", json_schema_extra=ADVANCED_FIELD_EXTRA,
+        title="Reply on rate limit",
+        description="Spoken when the provider refuses the request over its rate limit (HTTP 429).",
+        json_schema_extra=FALLBACK_REPLY_EXTRA,
     )
     reply_empty_after_tools: str = Field(
         "Готово.",
         title="Reply when empty after a tool",
         description="Spoken when the model returns no text after a tool ran.",
-        json_schema_extra=ADVANCED_FIELD_EXTRA,
+        json_schema_extra=FALLBACK_REPLY_EXTRA,
     )
     reply_empty: str = Field(
         "Я тебя не расслышал, повтори.",
         title="Reply when empty",
         description="Spoken when the model returns no text.",
-        json_schema_extra=ADVANCED_FIELD_EXTRA,
+        json_schema_extra=FALLBACK_REPLY_EXTRA,
     )
     # Spoken when the LLM stage fails for any reason other than a rate limit; the
     # raw error text goes to the run log, never to the user. A command engine, which
@@ -65,7 +71,7 @@ class ReplyConfig(BaseModel):
         title="Reply on error",
         description="Spoken when the handler fails, and by a command engine after a tool "
         "returned an error.",
-        json_schema_extra=ADVANCED_FIELD_EXTRA,
+        json_schema_extra=FALLBACK_REPLY_EXTRA,
     )
     # Spoken when the LLM stage fails AFTER a tool already ran: the action happened,
     # so no later chain retries it and the user hears that only the answer is missing.
@@ -74,7 +80,7 @@ class ReplyConfig(BaseModel):
         title="Reply on error after a tool",
         description="Spoken when the handler fails after a tool already ran: the action "
         "happened, only the answer is missing.",
-        json_schema_extra=ADVANCED_FIELD_EXTRA,
+        json_schema_extra=FALLBACK_REPLY_EXTRA,
     )
 
 
@@ -88,9 +94,13 @@ class LlmConfig(ReplyConfig):
     # shows the model name immediately on load instead of the bare id. Hidden companion
     # field (see LABEL_FIELD_EXTRA). Not sent to the chat-completions API.
     model_label: str = Field("", json_schema_extra=LABEL_FIELD_EXTRA)
-    temperature: float = Field(0.8, ge=0.0, le=2.0, title="Temperature")
-    max_tokens: int = Field(4096, ge=1, title="Max reply tokens",
-                            json_schema_extra=ADVANCED_FIELD_EXTRA)
+    temperature: float = Field(
+        0.8, ge=0.0, le=2.0,
+        title="Temperature",
+        description="Randomness of the reply, from 0 to 2: lower is more predictable, higher more varied.",
+    )
+    max_tokens: int = Field(4096, ge=1, title="Max reply length",
+                            json_schema_extra={**ADVANCED_FIELD_EXTRA, "unit": "tokens"})
     # Per-request HTTP timeout for one chat-completions round-trip (seconds).
     timeout: int = Field(300, title="Request timeout",
                          json_schema_extra={**ADVANCED_FIELD_EXTRA, "unit": "s"})

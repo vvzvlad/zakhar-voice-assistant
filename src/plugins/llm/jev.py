@@ -37,7 +37,14 @@ from src.commands import (
     resolve_alias,
     round2_reply,
 )
-from src.plugins.base import ADVANCED_FIELD_EXTRA, SECRET_FIELD_EXTRA, Deps, Provider, register
+from src.plugins.base import (
+    ADVANCED_FIELD_EXTRA,
+    PHRASE_FIELD_EXTRA,
+    SECRET_FIELD_EXTRA,
+    Deps,
+    Provider,
+    register,
+)
 from src.plugins.llm._decisions import DECISIONS_API_URL, noul_answer
 from src.plugins.llm.base import LlmBackend, ReplyConfig
 from src.stage_errors import Declined
@@ -71,10 +78,12 @@ class JevConfig(ReplyConfig):
     reply_unmatched: str = Field(
         "Не понял команду, повтори.",
         title="Reply when nothing matched",
+        json_schema_extra=PHRASE_FIELD_EXTRA,
     )
     reply_done: str = Field(
         "Готово.",
         title="Reply after a tool ran",
+        json_schema_extra=PHRASE_FIELD_EXTRA,
     )
     # The ReplyConfig field with this handler's own default and minimum: the tool round
     # and the final reply round both run.

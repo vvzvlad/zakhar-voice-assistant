@@ -54,9 +54,14 @@ class GigaamSttBackend(SttBackend):
 
 class GigaamSttConfig(BaseModel):
     model_path: str = Field("models/gigaam-v3-onnx", title="Model directory",
+                            description="Directory with the model's ONNX files on the models volume.",
                             json_schema_extra=LOCAL_MODEL_FIELD_EXTRA)
-    model: str = Field("gigaam-v3-rnnt", title="Model")
-    quantization: str = Field("int8", title="Quantization")
+    model: str = Field("gigaam-v3-rnnt", title="Model type",
+                       description="onnx-asr name of the model in that directory, "
+                       "e.g. gigaam-v3-rnnt or gigaam-v3-ctc.")
+    quantization: str = Field("int8", title="Quantization",
+                              description="Which files of the directory to load: int8 for the quantized ones, "
+                              "empty for full precision.")
 
 
 def _list_model_dirs(base_dir: str) -> list[dict]:

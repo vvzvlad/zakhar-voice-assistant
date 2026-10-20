@@ -7,10 +7,11 @@ import { parseVoiceMarker, voiceField, voiceName, differsFromVoice } from "../vo
 import SchemaForm from "../components/SchemaForm.jsx";
 import DeviceModal from "../components/DeviceModal.jsx";
 import { useAppData } from "../appData.jsx";
-import { useStageForm, errorLines } from "../useStageForm.js";
+import { errorLines } from "../useStageForm.js";
 import { usePageForm } from "../usePageForm.js";
 import { confirmDiscard } from "../navStore.js";
 import { deref } from "../schema.js";
+import { BUILTIN_SOURCES } from "../toolSources.js";
 import {
   getPromptProfiles, getPromptProfile, createPromptProfile, updatePromptProfile,
   deletePromptProfile, activatePromptProfile,
@@ -45,9 +46,10 @@ function ToolChips({ tools }) {
   </div>;
 }
 
-// One integration source card: header (name + kind badge + status pill), an
-// editable SchemaForm bound to its core.* sub-section, and the live tool chips.
-// The card's draft belongs to the page form, saved with the page's one Save.
+// One built-in source card, folded to its header until opened: header (name + kind
+// badge + status pill), an editable SchemaForm bound to its core.* sub-section, and
+// the live tool chips. The card's draft belongs to the page form, saved with the
+// page's one Save.
 //   name      — human title; sub — short caption under it
 //   schema    — resolved JSON sub-schema (from core.schema, $defs available on root)
 //   root      — full core schema (holds $defs for the SchemaForm)
@@ -68,9 +70,10 @@ function SourceCard({ name, sub, schema, root, draft, onChange, configured, live
   else if (!isConfigured) pill = <Pill tone="muted">not configured</Pill>;
   else pill = <StatusPill status="offline" />;
 
-  return <div className="z-card" style={{ marginBottom: 14 }}>
-    <div className="z-card-h">
+  return <details className="z-card" style={{ marginBottom: 14 }}>
+    <summary className="z-card-h">
       <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
+        <svg className="z-chev" width="11" height="11" viewBox="0 0 11 11" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><path d="M2 4l3.5 3.5L9 4" /></svg>
         <Ic n={kind === "http" ? "mcp" : "network"} w={17} />
         <div style={{ minWidth: 0 }}>
           <b style={{ display: "block" }}>{name}</b>
@@ -81,32 +84,20 @@ function SourceCard({ name, sub, schema, root, draft, onChange, configured, live
         <Pill tone={kind === "http" ? "warn" : "muted"}>{kind === "http" ? "external" : "built-in"}</Pill>
         {pill}
       </div>
-    </div>
+    </summary>
     <div className="z-card-b">
       {schema
         ? <SchemaForm schema={schema} root={root} values={draft} onChange={onChange} />
         : <div className="z-fh">Schema unavailable.</div>}
       <ToolChips tools={live?.tools} />
     </div>
-  </div>;
+  </details>;
 }
-
-// The built-in tool sources; `id` is both the core.* section and the source id
-// in /api/tools, `fallback` the values shown before the section exists.
-const BUILTIN_SOURCES = [
-  { id: "openweathermap", name: "OpenWeatherMap (built-in)", sub: "core.openweathermap · built-in MCP",
-    fallback: { enabled: true, api_key: "", city: "Moscow" }, configured: (v) => !!(v && v.api_key) },
-  { id: "calendar", name: "Calendar (built-in)", sub: "core.calendar · built-in MCP (CalDAV)",
-    fallback: { enabled: true, url: "", username: "", password: "", calendar: "" }, configured: (v) => !!(v && v.url && v.username) },
-  { id: "reminders", name: "Reminders (built-in)", sub: "core.reminders · built-in MCP",
-    fallback: { enabled: true }, configured: (v) => !!(v && v.enabled) },
-  { id: "assistant_tasks", name: "Assistant tasks (built-in)", sub: "core.assistant_tasks · built-in MCP (ZeroClaw webhook)",
-    fallback: { enabled: true, url: "", secret: "", task_suffix: "", prompt: "" }, configured: (v) => !!(v && v.url && v.secret) },
-];
 
 // ── External MCP server modal (add / edit) ────────────────────────────────
 // Fields mirror McpServerConfig: name (unique source id), url, token (masked),
-// transport (Literal), prompt (describes the server's tools to the model).
+// transport (Literal), prompt (describes the server's tools to the model). Its
+// button puts the server into the page's draft; the page's Save writes it.
 const TRANSPORTS = ["auto", "streamable_http", "sse"];
 // Built-in ToolHub source ids — an external server may not shadow them, or it
 // would hide the openweathermap/calendar/reminders/assistant_tasks/volume status in /api/tools.
@@ -122,11 +113,20 @@ function McpServerModal({ initial, onSave, onClose, title, takenNames }) {
   const dup = !!name && takenNames.includes(name);
   const reserved = !!name && RESERVED_NAMES.includes(name.trim().toLowerCase());
   const valid = !!name && !!url && !dup && !reserved;
+  // Edit writes back only the fields the user changed: the rest of the entry (enabled,
+  // slow, and fields a saved entry may omit) stays as it was, so Done without changes
+  // leaves the server equal to its saved copy. Add writes every field, enabled and not slow.
+  const done = () => {
+    const fields = { name, url, token, transport, prompt };
+    if (!initial) return onSave({ ...fields, enabled: true, slow: false });
+    const start = { name: initial.name || "", url: initial.url || "", token: initial.token || "", transport: initial.transport || "auto", prompt: initial.prompt || "" };
+    const next = { ...initial };
+    for (const k of Object.keys(fields)) if (fields[k] !== start[k]) next[k] = fields[k];
+    onSave(next);
+  };
   return <Modal title={title} onClose={onClose}
     footer={<><button className="z-btn g" onClick={onClose}>Cancel</button>
-      {/* Preserve the enabled/slow flags across edits (they have no modal fields);
-          Add mode defaults to enabled + not slow. */}
-      <button className="z-btn p" disabled={!valid} onClick={() => onSave({ name, url, token, transport, prompt, enabled: initial?.enabled ?? true, slow: initial?.slow ?? false })}>Save</button></>}>
+      <button className="z-btn p" disabled={!valid} onClick={done}>{initial ? "Done" : "Add"}</button></>}>
     <Field label="Name" hint="Unique name — it is also the source id in /api/tools.">
       <div className="z-inp"><input value={name} placeholder="e.g. home" onChange={(e) => setName(e.target.value)} /></div>
       {dup && <div className="z-fh" style={{ color: "#b91c1c" }}>Name is already in use.</div>}
@@ -146,16 +146,18 @@ function McpServerModal({ initial, onSave, onClose, title, takenNames }) {
   </Modal>;
 }
 
-// One external MCP server card: header (name + status pill), the
-// url in mono, and the live tool chips matched from /api/tools by source id ===
-// server name. Enable/Disable / Edit / Delete buttons drive the CRUD flow above;
-// a disabled server is dimmed except its buttons and shows a "disabled" pill (missing
-// flag = enabled).
-function McpServerCard({ server, live, onToggle, onEdit, onDelete }) {
+// One external MCP server card: header (name + status pill), the url in mono, the
+// Enabled switch (`enabledSchema`, rendered like the built-in sources' switch) and the
+// live tool chips matched from /api/tools by source id === server name. The switch and
+// the Edit / Delete buttons change the page's draft; a disabled server is dimmed except
+// its controls and shows a "disabled" pill (missing flag = enabled).
+function McpServerCard({ server, saved, live, enabledSchema, root, onChange, onEdit, onDelete }) {
   const enabled = server.enabled ?? true;
   const dim = enabled ? "" : "z-dim";
   let pill;
   if (!enabled) pill = <Pill tone="muted">disabled</Pill>;
+  // A server added or renamed in the draft has never been connected to: no status yet.
+  else if (!saved) pill = <Pill tone="muted">not saved</Pill>;
   else if (live) pill = <StatusPill status={live.online ? "online" : "offline"} />;
   else pill = <StatusPill status="offline" />;
   // On a narrow card the header wraps: the status and buttons drop under the name and url, a
@@ -173,14 +175,14 @@ function McpServerCard({ server, live, onToggle, onEdit, onDelete }) {
       <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 12, marginLeft: "auto" }}>
         <div className={dim} style={{ display: "flex" }}>{pill}</div>
         <div style={{ display: "flex", gap: 6 }}>
-          <button className="z-btn g sm" onClick={onToggle}>{enabled ? "Disable" : "Enable"}</button>
           <button className="z-btn g sm" onClick={onEdit}>Edit</button>
           <button className="z-btn d sm" onClick={onDelete}>Delete</button>
         </div>
       </div>
     </div>
-    <div className={`z-card-b ${dim}`}>
-      <ToolChips tools={live?.tools} />
+    <div className="z-card-b">
+      <SchemaForm schema={enabledSchema} root={root} values={{ enabled }} onChange={onChange} />
+      <div className={dim}><ToolChips tools={live?.tools} /></div>
     </div>
   </div>;
 }
@@ -193,8 +195,8 @@ export function MCP() {
   // properties.<section> is a $ref into $defs; resolve it so SchemaForm gets a
   // schema with `.properties` (and pass the full core schema as `root` for $defs).
   const sub = (key) => deref(coreSchema.properties?.[key] || {}, coreSchema);
-
-  const servers = coreValues.mcp_servers || [];   // [{enabled,name,url,token,transport,prompt}]
+  // An external server's Enabled switch: the `enabled` field of its schema alone.
+  const enabledSchema = { properties: { enabled: deref(sub("mcp_servers").items, coreSchema).properties?.enabled } };
 
   const [tools, setTools] = useState(null);   // null = loading; [] = loaded/empty
   const [toolsErr, setToolsErr] = useState(null);
@@ -214,40 +216,36 @@ export function MCP() {
     return r;
   }, [patch, loadTools]);
 
-  // External-servers CRUD: full-array replace via patch({ core: { mcp_servers } }),
-  // mirroring the Devices page. Sources rebuild live on change, so no restart needed.
+  // One page form holds every source: the external servers' list (core.mcp_servers,
+  // replaced whole) and the built-in sections. Adding, editing, deleting and switching
+  // a server only changes the draft; the page's one Save writes it all in one patch,
+  // and the sources are rebuilt live (rebuild_tools), no restart needed.
+  const form = usePageForm([
+    { key: "mcp_servers", values: { mcp_servers: coreValues.mcp_servers || [] }, toPatch: (d) => ({ core: d }) },
+    ...BUILTIN_SOURCES.map((s) => ({
+      key: s.id, values: coreValues[s.id] || s.fallback, toPatch: (d) => ({ core: { [s.id]: d } }),
+    })),
+  ], patchAndRefresh);
+  const servers = form.draftOf("mcp_servers").mcp_servers;   // [{enabled,name,url,token,transport,prompt,slow}]
+  const setServers = (list) => form.onChangeOf("mcp_servers")("mcp_servers", list);
+
   const [modal, setModal] = useState(null); // { mode:'add'|'edit', index }
-  const [busyErr, setBusyErr] = useState(null);
-  const saveList = async (list) => {
-    setBusyErr(null);
-    try { await patchAndRefresh({ core: { mcp_servers: list } }); setModal(null); }
-    catch (e) { setBusyErr(e); }
-  };
-  const onAdd = (s) => saveList([...servers, s]);
-  const onEdit = (i, s) => saveList(servers.map((x, idx) => (idx === i ? s : x)));
+  const onAdd = (s) => { setServers([...servers, s]); setModal(null); };
+  const onEdit = (i, s) => { setServers(servers.map((x, idx) => (idx === i ? s : x))); setModal(null); };
   const onDelete = (i) => {
     if (!window.confirm(`Delete MCP server "${servers[i].name}"?`)) return;
-    saveList(servers.filter((_, idx) => idx !== i));
+    setServers(servers.filter((_, idx) => idx !== i));
   };
-  // Flip the persisted enabled flag (missing = true on old configs). A disabled
-  // server is dropped from the ToolHub and its prompt block — both hot-applied.
-  const onToggle = (i) => saveList(servers.map((x, idx) => (idx === i ? { ...x, enabled: !(x.enabled ?? true) } : x)));
-
-  // The built-in source cards are one page form; sources are hot-reloaded —
-  // rebuilt live on save (rebuild_tools).
-  const form = usePageForm(BUILTIN_SOURCES.map((s) => ({
-    key: s.id, values: coreValues[s.id] || s.fallback, toPatch: (d) => ({ core: { [s.id]: d } }),
-  })), patchAndRefresh);
+  // A card's Enabled switch edits its server in the draft; once saved, a disabled
+  // server is dropped from the ToolHub and its prompt block.
+  const onServerChange = (i) => (field, value) => setServers(servers.map((x, idx) => (idx === i ? { ...x, [field]: value } : x)));
 
   return <FormPage form={form} narrow>
-    <PageHeader title="Tools" desc="Tool sources the model calls: external smart-home MCP servers and built-in weather/calendar/reminders/assistant tasks/speaker volume. Sources are applied live — rebuilt on save, no restart needed."
+    <PageHeader title="Tools" desc="Tool sources the model calls: external smart-home MCP servers and built-in weather/calendar/reminders/assistant tasks, plus the always-on speaker volume tool. Sources are applied live — rebuilt on save, no restart needed."
       actions={<button className="z-btn p" onClick={() => setModal({ mode: "add" })}><Ic n="add" w={14} />Add server</button>} />
     {toolsErr && <div className="z-banner warn" style={{ margin: "0 0 14px" }}>
       <Ic n="restart" w={15} />
       <span><b>Status unavailable.</b> Failed to fetch the tool list: {errorLines(toolsErr).join(" · ")}</span>
-    </div>}
-    {busyErr && <div className="z-banner warn" style={{ margin: "0 0 12px" }}>
-      <Ic n="restart" w={15} /><span>{errorLines(busyErr).join(" · ")}</span>
     </div>}
     {tools === null
       ? <Card><Loading /></Card>
@@ -256,7 +254,8 @@ export function MCP() {
         {servers.length === 0
           ? <Card><div className="z-fh" style={{ padding: "6px 0" }}>No external MCP servers — smart home is unavailable.</div></Card>
           : servers.map((s, i) => <McpServerCard key={s.name || i} server={s} live={liveOf(s.name)}
-              onToggle={() => onToggle(i)}
+              saved={(coreValues.mcp_servers || []).some((x) => x.name === s.name)}
+              enabledSchema={enabledSchema} root={coreSchema} onChange={onServerChange(i)}
               onEdit={() => setModal({ mode: "edit", index: i })} onDelete={() => onDelete(i)} />)}
         <div className="z-sl">Built-in sources<div className="ln" /></div>
         {BUILTIN_SOURCES.map((s) => <SourceCard key={s.id} name={s.name} sub={s.sub} schema={sub(s.id)} root={coreSchema}
@@ -431,14 +430,8 @@ export function Prompt() {
     finally { setProfileBusy(false); }
   };
 
-  // Dialog context (core.context) — its own draft in the aside, saved by the
-  // page's one Save together with the text.
   // All hooks must run before the early-return below to satisfy the rules of hooks.
-  const { catalog, patch, reload } = useAppData();
-  const ctxSchema = catalog.core.schema.$defs?.ContextConfig;
-  const ctxValues = catalog.core.values.context || {};
-  const ctxBuildPatch = (d) => ({ core: { context: d } });
-  const { draft: ctxDraft, onChange: ctxOnChange, dirty: ctxDirty, saving: ctxSaving, err: ctxErr, save: ctxSave } = useStageForm(ctxValues, ctxBuildPatch, patch);
+  const { catalog, reload } = useAppData();
 
   // Preferred voice parsed from the SELECTED profile's last-saved text (`loaded`),
   // the TTS provider it names and the one speaking now (first enabled variant).
@@ -468,16 +461,8 @@ export function Prompt() {
     return () => { alive = false; };
   }, [lookup, vProvider, vField, vId]);
 
-  // The page's one Save persists both the prompt text and the dialog-context
-  // settings. Each underlying save handles its own error/saving state, so this
-  // never rejects; we just await whichever forms are dirty.
-  const form = {
-    dirty: dirty || ctxDirty,
-    saving: saving || ctxSaving,
-    save: async () => {
-      await Promise.all([dirty ? save() : null, ctxDirty ? ctxSave() : null].filter(Boolean));
-    },
-  };
+  // The page's one Save persists the prompt text; save() keeps its own error, so it never rejects.
+  const form = { dirty, saving, save };
 
   if (text == null || profiles == null) {
     if (err) {
@@ -500,64 +485,64 @@ export function Prompt() {
     voiceName(voice, vValues, found?.id === vId ? found.name : undefined)].join(" · ");
   const voiceDiffers = differsFromVoice(voice, current, ttsProv(current)?.values);
 
-  return <FormPage form={form} errors={[...errorLines(saveErr), ...errorLines(ctxErr)]}>
+  return <FormPage form={form} narrow errors={errorLines(saveErr)}>
     <PageHeader title="System Prompt"
-      desc="Zahar's character, rules and answer format. Keep several named profiles and activate the one the assistant should use. The placeholder is replaced with live date/time at request time."
+      desc="Zakhar's character, rules and answer format. Keep several named profiles and activate the one the assistant should use. The placeholder is replaced with live date/time at request time."
       actions={<button className="z-btn g" onClick={() => { if (confirmDiscard(dirty)) load(selected?.id); }}>Reload</button>} />
-    {/* Profile bar: pick a profile to edit; Activate switches what the pipeline uses. */}
+    {/* Profile bar: pick a profile to edit; Activate switches what the pipeline uses.
+        The profile's voice switch sits on its own line under the buttons. */}
     <div className="z-card" style={{ marginBottom: 14 }}>
-      <div className="z-card-b" style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", padding: "10px 14px" }}>
-        <Select w={260} value={selected?.id} options={profileOptions} onChange={selectProfile} />
-        <button className="z-btn p" disabled={isActive || profileBusy} onClick={doActivate}
-          title={isActive ? "This profile is already active" : "Make this profile the one the assistant uses"}>Activate</button>
-        {voice && <span style={{ display: "flex", alignItems: "center", gap: 6 }}
+      <div className="z-card-b" style={{ display: "flex", flexDirection: "column", gap: 10, padding: "10px 14px" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          <Select w={260} value={selected?.id} options={profileOptions} onChange={selectProfile} />
+          <button className="z-btn p" disabled={isActive || profileBusy} onClick={doActivate}
+            title={isActive ? "This profile is already active" : "Make this profile the one the assistant uses"}>Activate</button>
+          <div style={{ display: "flex", gap: 6, marginLeft: "auto" }}>
+            <button className="z-btn g" onClick={() => { if (confirmDiscard(dirty)) { setModalErr(null); setModal({ mode: "new" }); } }}><Ic n="add" w={14} />New</button>
+            <button className="z-btn g" onClick={() => { setModalErr(null); setModal({ mode: "rename" }); }}>Rename</button>
+            <button className="z-btn d" disabled={isActive || profileBusy} onClick={doDelete}
+              title={isActive ? "The active profile cannot be deleted" : ""}>Delete</button>
+          </div>
+        </div>
+        {voice && <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}
           title="Apply this profile's preferred TTS voice when activating">
           <Toggle on={applyVoice} onChange={setApplyVoice} sm />
-          <span className="sub" data-testid="marker-voice">Apply voice: {voiceText}</span>
+          <span className="sub" data-testid="marker-voice">Apply voice on activate: {voiceText}</span>
           {voiceDiffers && <Pill tone="warn">differs from current TTS voice</Pill>}
-        </span>}
-        <div style={{ display: "flex", gap: 6, marginLeft: "auto" }}>
-          <button className="z-btn g" onClick={() => { if (confirmDiscard(dirty)) { setModalErr(null); setModal({ mode: "new" }); } }}><Ic n="add" w={14} />New</button>
-          <button className="z-btn g" onClick={() => { setModalErr(null); setModal({ mode: "rename" }); }}>Rename</button>
-          <button className="z-btn d" disabled={isActive || profileBusy} onClick={doDelete}
-            title={isActive ? "The active profile cannot be deleted" : ""}>Delete</button>
-        </div>
+        </div>}
       </div>
     </div>
-    <div className="z-cols wide">
-      <Card right={<span className="sub" style={{ marginLeft: "auto" }}>{selected?.name} · {text.length} chars</span>} title="Editor"
-        foot={err ? <div className="z-foot"><span className="z-dirty" style={{ color: "#b91c1c" }}>{errorLines(err).join(" · ")}</span></div> : undefined}>
-        <div style={{ padding: "8px 0" }}>
-          <textarea ref={taRef} value={text} onChange={(e) => setText(e.target.value)} spellCheck={false}
-            style={{ width: "100%", minHeight: 560, resize: "none", overflow: "hidden", boxSizing: "border-box", border: "1px solid var(--line)", borderRadius: 8, padding: "13px 15px", fontFamily: "var(--mono)", fontSize: 12.5, lineHeight: 1.65, color: "var(--ink)", outline: "none", background: "var(--panel2)" }} />
-        </div>
-      </Card>
-      <div className="z-aside">
-        <Card title="Dialog context">
-          {ctxSchema
-            ? <SchemaForm schema={ctxSchema} values={ctxDraft} onChange={ctxOnChange} skip={["dir"]} />
-            : <>
-                <Field label="Context depth" hint="Recent Q&A pairs sent to the model." row><Stepper value={ctxDraft.max_turns ?? 5} min={1} onChange={(v) => ctxOnChange("max_turns", v)} unit="turns" /></Field>
-                <Field label="Dialog TTL" hint="Idle time before a dialog resets (0 = always fresh)." row><Stepper value={ctxDraft.ttl_seconds ?? 300} min={0} step={30} onChange={(v) => ctxOnChange("ttl_seconds", v)} unit="s" /></Field>
-              </>}
-        </Card>
-        <Card title="The date/time variable">
-          <div className="z-info" style={{ padding: "10px 0 12px" }}>
+    {/* The prompt syntax reference, collapsed: the date/time variable, the voice marker, stress marks. */}
+    <div className="z-card" style={{ marginBottom: 14 }}><div className="z-card-b">
+      <details>
+        <summary className="z-disclosure">Syntax</summary>
+        <div className="z-f">
+          <div className="z-fl"><b>The date/time variable</b></div>
+          <div className="z-info">
             <span className="z-paramtag" style={{ fontSize: 11 }}>{"<<<<<TDW>>>>>"}</span> is substituted at request time with the current <b>date and time</b>.
           </div>
-        </Card>
-        <Card title="Preferred voice">
-          <div className="z-info" style={{ padding: "10px 0 12px" }}>
+        </div>
+        <div className="z-f">
+          <div className="z-fl"><b>Preferred voice</b></div>
+          <div className="z-info">
             A single line <span className="z-paramtag" style={{ fontSize: 11 }}>{"<<<<<VOICE provider=… field=value>>>>>"}</span> records a preferred TTS voice for this profile.
             The first pair <b>provider=</b> picks the TTS provider; the rest map to its fields (e.g. <span className="z-paramtag" style={{ fontSize: 11 }}>{"<<<<<VOICE provider=yandex voice=zahar>>>>>"}</span>).
             When you activate the profile with the toggle on, this voice is applied to the TTS config. The marker is <b>stripped</b> from the prompt sent to the model.
           </div>
-        </Card>
-        <Card title="Notation">
-          <div className="z-info" style={{ padding: "10px 0 12px" }}>Stress marks use <b>«+»</b> before the stressed vowel (e.g. «з+амок»).</div>
-        </Card>
+        </div>
+        <div className="z-f">
+          <div className="z-fl"><b>Notation</b></div>
+          <div className="z-info">Stress marks use <b>«+»</b> before the stressed vowel (e.g. «з+амок»).</div>
+        </div>
+      </details>
+    </div></div>
+    <Card right={<span className="sub" style={{ marginLeft: "auto" }}>{selected?.name} · {text.length} chars</span>} title="Editor"
+      foot={err ? <div className="z-foot"><span className="z-dirty" style={{ color: "#b91c1c" }}>{errorLines(err).join(" · ")}</span></div> : undefined}>
+      <div style={{ padding: "8px 0" }}>
+        <textarea ref={taRef} value={text} onChange={(e) => setText(e.target.value)} spellCheck={false}
+          style={{ width: "100%", minHeight: 560, resize: "none", overflow: "hidden", boxSizing: "border-box", border: "1px solid var(--line)", borderRadius: 8, padding: "13px 15px", fontFamily: "var(--mono)", fontSize: 12.5, lineHeight: 1.65, color: "var(--ink)", outline: "none", background: "var(--panel2)" }} />
       </div>
-    </div>
+    </Card>
     {modal?.mode === "new" && <ProfileNameModal title="New profile (copy of the active prompt)"
       onSave={doCreate} onClose={() => setModal(null)} busyErr={modalErr} />}
     {modal?.mode === "rename" && <ProfileNameModal title="Rename profile" initial={selected?.name}

@@ -124,7 +124,7 @@ class GroqSttConfig(BaseModel):
     model: str = Field("whisper-large-v3-turbo", title="Model", json_schema_extra=MODEL_FIELD_EXTRA)
     language: str = Field("ru", title="Language", description="Language code of the speech, e.g. ru.")
     temperature: float = Field(0.0, title="Temperature", description="Whisper sampling temperature; 0 = most deterministic.")
-    timeout: int = Field(60, title="Request timeout (s)")
+    timeout: int = Field(60, title="Request timeout", json_schema_extra={"unit": "s"})
     prompt: str = Field(
         "",
         title="Recognition vocabulary hint",

@@ -311,14 +311,15 @@ function ttsUsage(variants, id) {
 
 // STT and LLM: provider tabs; `field` is the chain field that names this
 // category's provider. The offline command engine is excluded from the LLM tabs
-// (it has its own Commands page).
-function ChainProviderStage({ cat, field, title, desc }) {
+// (it has its own Commands page). `parts` are page-form parts besides the
+// providers' and `children(form)` renders their cards under the provider's.
+function ChainProviderStage({ cat, field, title, desc, parts = [], children }) {
   const { catalog, config, patch } = useAppData();
   const chains = chainsOf(config);
   const category = catalog.categories.find((c) => c.id === cat);
   const providers = category.providers.filter((p) => settingsPageFor(cat, p.id) === cat);
   const [tab, setTab] = useProviderTab(cat, providers, chains.find((c) => c.enabled)?.[field]);
-  const form = usePageForm(providerParts(cat, providers), patch);
+  const form = usePageForm([...providerParts(cat, providers), ...parts], patch);
   const prov = providers.find((p) => p.id === tab);
 
   return <FormPage form={form} narrow>
@@ -329,6 +330,7 @@ function ChainProviderStage({ cat, field, title, desc }) {
         <ProviderTabs cat={cat} providers={providers} tab={tab} onTab={setTab} form={form} inUse={usedByChains(chains, field)} />
         <div className="z-grid">
           <ProviderSettings key={tab} cat={cat} prov={prov} form={form} usage={usageLine(chains, field, tab)} />
+          {children && children(form)}
         </div>
       </>
       : <div className="z-card"><div className="z-empty"><b>No providers</b>The backend reports no providers for this stage.</div></div>}
@@ -337,11 +339,20 @@ function ChainProviderStage({ cat, field, title, desc }) {
 
 export function STT() {
   return <ChainProviderStage cat="stt" field="stt" title="STT · Speech to text"
-    desc="Settings of each speech recognizer: cloud Whisper or offline Vosk. Which one runs is set on the Logic page." />;
+    desc="Settings of each speech recognizer, cloud and offline. Which one runs is set on the Logic page." />;
 }
 export function LLM() {
+  const { catalog } = useAppData();
+  // The dialog history handed to every handler (core.context), saved with the page's one Save.
+  const ctxSchema = catalog.core.schema.$defs?.ContextConfig;
+  const ctxPart = { key: "context", values: catalog.core.values.context, toPatch: (d) => ({ core: { context: d } }) };
   return <ChainProviderStage cat="llm" field="handler" title="LLM · Reasoning & tools"
-    desc="Settings of each chat model that generates the reply and calls smart-home tools over MCP. Which one runs is set on the Logic page." />;
+    desc="Settings of each chat model that generates the reply and calls smart-home tools over MCP. Which one runs is set on the Logic page."
+    parts={[ctxPart]}>
+    {(form) => ctxSchema && <Card title="Dialog context">
+      <SchemaForm schema={ctxSchema} values={form.draftOf("context")} onChange={form.onChangeOf("context")} />
+    </Card>}
+  </ChainProviderStage>;
 }
 export function Commands() {
   const { catalog, config, patch } = useAppData();
@@ -441,16 +452,16 @@ export function VAD() {
   // vad prop is a $ref to $defs.VadConfig — resolve to the object schema.
   const vadSchema = coreSchema.$defs ? coreSchema.$defs.VadConfig : null;
   const ackSchema = coreSchema.$defs ? coreSchema.$defs.AckConfig : null;
-  // mic_channel / mic_normalize / mic_highpass live in VadConfig but get their own card,
-  // so core.vad is split into two disjoint parts; both patch core.vad and the merge
-  // of the two keeps them apart.
-  const { mic_channel, mic_normalize, mic_highpass, ...vadValues } = catalog.core.values.vad || {};
+  // mic_channel / mic_auto_gain / mic_normalize / mic_highpass live in VadConfig but get
+  // their own card, so core.vad is split into two disjoint parts; both patch core.vad
+  // and the merge of the two keeps them apart.
+  const { mic_channel, mic_auto_gain, mic_normalize, mic_highpass, ...vadValues } = catalog.core.values.vad || {};
   // The chime's `enabled` is switched on the Capture page.
   const { enabled: _ackEnabled, ...ackValues } = catalog.core.values.ack || {};
   const [tab, setTab] = useProviderTab("vad", engines, vadCat?.selected);
   const form = usePageForm([
     { key: "endpointing", values: vadValues, toPatch: (d) => ({ core: { vad: d } }) },
-    { key: "mic", values: { mic_channel, mic_normalize, mic_highpass }, toPatch: (d) => ({ core: { vad: d } }) },
+    { key: "mic", values: { mic_channel, mic_auto_gain, mic_normalize, mic_highpass }, toPatch: (d) => ({ core: { vad: d } }) },
     { key: "ack", values: ackValues, toPatch: (d) => ({ core: { ack: d } }) },
     ...providerParts("vad", engines),
     wake.part,
@@ -459,22 +470,25 @@ export function VAD() {
 
   // Chime selector options for core.ack.sound_path: bundled files from assets/chimes,
   // shown by bare filename, plus an empty-valued "synthesized" default at the top.
+  // The field names its current value the same way, listed or not.
+  const chimeLabel = (p) => (p ? p.split("/").pop() : "Synthesized chime (default)");
   const ackOptionsFor = async () => {
     const { options } = await getChimes();
     return [
-      { value: "", label: "Synthesized chime (default)" },
-      ...options.map((p) => ({ value: p, label: p.split("/").pop() })),
+      { value: "", label: chimeLabel("") },
+      ...options.map((p) => ({ value: p, label: chimeLabel(p) })),
     ];
   };
 
-  // Mic input card: which device mic channel feeds the pipeline + the pre-STT
-  // conditioning toggles. The fields live in VadConfig (core.vad.mic_channel /
-  // mic_normalize / mic_highpass) — a LIVE reconfig, applied on the next utterance.
+  // Mic input card: which device mic channel feeds the pipeline, the boost of quiet
+  // audio for the VAD decision and the pre-STT conditioning toggles. The fields live
+  // in VadConfig (core.vad.mic_*) — a LIVE reconfig, applied on the next utterance.
   // Build a mini-schema with just those props so they render in their own card.
   const micSchema = vadSchema && vadSchema.properties ? {
     type: "object",
     properties: {
       mic_channel: vadSchema.properties.mic_channel,
+      mic_auto_gain: vadSchema.properties.mic_auto_gain,
       mic_normalize: vadSchema.properties.mic_normalize,
       mic_highpass: vadSchema.properties.mic_highpass,
     },
@@ -484,40 +498,37 @@ export function VAD() {
 
   if (!vadSchema) return <div className="z-page"><div className="z-card"><div className="z-empty"><b>VAD</b>Schema unavailable.</div></div></div>;
 
-  return <FormPage form={form}>
+  return <FormPage form={form} narrow>
     <PageHeader title="VAD · Voice capture"
       desc="The speaker streams audio continuously and never signals end-of-phrase — we detect it server-side with the VAD engine chosen on the Capture page. Tune sensitivity to pauses here." />
     <ReloadingBanner cat="wakeword" label={wake.prov.label} />
-    {/* Two equal columns: VAD engine + end-pointing on the left, mic + chime + wake-word cards stacked on the right */}
-    <div className="z-cols even">
-      <div className="z-grid">
-        {engine && <div id="card-vad">
-          <ProviderTabs cat="vad" providers={engines} tab={tab} onTab={setTab} form={form} inUse={[vadCat.selected]} />
-          <ProviderSettings key={tab} cat="vad" prov={engine} form={form} usage={vadUsage(vadCat.selected, tab)} />
-        </div>}
-        <Card title="End-pointing thresholds" sub="when a phrase is considered started / finished">
-          <SchemaForm schema={{ ...vadSchema, $defs: coreSchema.$defs }} root={{ ...vadSchema, $defs: coreSchema.$defs }}
-            values={form.draftOf("endpointing")} onChange={form.onChangeOf("endpointing")} skip={["mic_channel", "mic_normalize", "mic_highpass"]} />
-        </Card>
-      </div>
-      <div className="z-grid">
-        {micSchema && <Card title="Microphone input & conditioning" sub="which device mic stream feeds the pipeline · pre-STT conditioning">
-          {/* The conditioning toggles are advanced: they fold full-width under the channel selector. */}
-          <SchemaForm schema={{ ...micSchema, $defs: coreSchema.$defs }} root={{ ...micSchema, $defs: coreSchema.$defs }}
-            values={form.draftOf("mic")} onChange={form.onChangeOf("mic")} />
-        </Card>}
-        {ackSchema && <Card id="card-ack" title="End-of-phrase chime" sub="confirmation played when your phrase ends">
-          <SchemaForm schema={{ ...ackSchema, $defs: coreSchema.$defs }} root={{ ...ackSchema, $defs: coreSchema.$defs }}
-            values={form.draftOf("ack")} onChange={form.onChangeOf("ack")} optionsFor={ackOptionsFor} skip={["enabled"]}
-            itemActionFor={(field) => (field === "sound_path" ? chime.play : null)} itemActionBusy={chime.busy} />
-          {/* Per-item play buttons live in the dropdown; only surface preview errors here. */}
-          {chime.msg && <div className="z-fh" style={{ marginTop: 6, ...(chime.msg.tone === "err" ? { color: "#b91c1c" } : {}) }}>{chime.msg.text}</div>}
-        </Card>}
-        <Card id="card-wakeword" title="Wake-word verify" sub={wake.prov.label}>
-          <SchemaForm schema={wake.prov.schema} values={form.draftOf(wake.part.key)} onChange={form.onChangeOf(wake.part.key)}
-            optionsFor={optionsLoader("wakeword", wake.prov.id)} skip={["enabled"]} />
-        </Card>
-      </div>
+    {/* One column, like the other provider pages: VAD engine, end-pointing, mic, chime, wake-word verify. */}
+    <div className="z-grid">
+      {engine && <div id="card-vad">
+        <ProviderTabs cat="vad" providers={engines} tab={tab} onTab={setTab} form={form} inUse={[vadCat.selected]} />
+        <ProviderSettings key={tab} cat="vad" prov={engine} form={form} usage={vadUsage(vadCat.selected, tab)} />
+      </div>}
+      <Card title="End-pointing thresholds" sub="when a phrase is considered started / finished">
+        <SchemaForm schema={{ ...vadSchema, $defs: coreSchema.$defs }} root={{ ...vadSchema, $defs: coreSchema.$defs }}
+          values={form.draftOf("endpointing")} onChange={form.onChangeOf("endpointing")} skip={["mic_channel", "mic_auto_gain", "mic_normalize", "mic_highpass"]} />
+      </Card>
+      {micSchema && <Card title="Microphone input & conditioning" sub="which device mic stream feeds the pipeline · its conditioning">
+        {/* The conditioning toggles are advanced: they fold full-width under the channel selector and the auto gain. */}
+        <SchemaForm schema={{ ...micSchema, $defs: coreSchema.$defs }} root={{ ...micSchema, $defs: coreSchema.$defs }}
+          values={form.draftOf("mic")} onChange={form.onChangeOf("mic")} />
+      </Card>}
+      {ackSchema && <Card id="card-ack" title="End-of-phrase chime" sub="confirmation played when your phrase ends">
+        <SchemaForm schema={{ ...ackSchema, $defs: coreSchema.$defs }} root={{ ...ackSchema, $defs: coreSchema.$defs }}
+          values={form.draftOf("ack")} onChange={form.onChangeOf("ack")} optionsFor={ackOptionsFor} skip={["enabled"]}
+          labelFor={(field, value) => (field === "sound_path" ? chimeLabel(value) : undefined)}
+          itemActionFor={(field) => (field === "sound_path" ? chime.play : null)} itemActionBusy={chime.busy} />
+        {/* Per-item play buttons live in the dropdown; only surface preview errors here. */}
+        {chime.msg && <div className="z-fh" style={{ marginTop: 6, ...(chime.msg.tone === "err" ? { color: "#b91c1c" } : {}) }}>{chime.msg.text}</div>}
+      </Card>}
+      <Card id="card-wakeword" title="Wake-word verify" sub={wake.prov.label}>
+        <SchemaForm schema={wake.prov.schema} values={form.draftOf(wake.part.key)} onChange={form.onChangeOf(wake.part.key)}
+          optionsFor={optionsLoader("wakeword", wake.prov.id)} skip={["enabled"]} />
+      </Card>
     </div>
   </FormPage>;
 }

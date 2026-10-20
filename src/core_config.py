@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 # SECRET_FIELD_EXTRA marks a genuine credential field (the panel renders it as a masked
 # reveal input), ADVANCED_FIELD_EXTRA a rarely changed one (folded under "Advanced").
 # Imported from src.plugins.base (no circular import — base imports nothing from here).
-from src.plugins.base import ADVANCED_FIELD_EXTRA, SECRET_FIELD_EXTRA
+from src.plugins.base import ADVANCED_FIELD_EXTRA, PHRASE_FIELD_EXTRA, SECRET_FIELD_EXTRA
 
 # Panel descriptions shared by the built-in tool sources.
 SOURCE_ENABLED_DESCRIPTION = "Off removes this source's tools and its prompt block."
@@ -24,10 +24,12 @@ class ContextConfig(BaseModel):
         5, ge=1,
         title="Context depth",
         description="How many recent question-answer pairs are sent to the model.",
+        json_schema_extra={"unit": "turns"},
     )
     ttl_seconds: int = Field(
         300, ge=0,
-        title="Dialog timeout (s)",
+        title="Dialog timeout",
+        json_schema_extra={"unit": "s"},
         description="Idle time after which the next request starts a new dialog; 0 = every request starts fresh.",
     )
 
@@ -130,7 +132,10 @@ class OpenWeatherMapConfig(BaseModel):
     # Master switch: a disabled source is removed from the ToolHub and its prompt block is dropped.
     enabled: bool = Field(True, title="Enabled", description=SOURCE_ENABLED_DESCRIPTION)
     api_key: str = Field("", title="API key", json_schema_extra=SECRET_FIELD_EXTRA)
-    city: str = Field("Moscow", title="City", description="City the weather is reported for.")
+    city: str = Field(
+        "Moscow", title="City", description="City the weather is reported for.",
+        json_schema_extra=PHRASE_FIELD_EXTRA,
+    )
     # Appended to the system prompt to describe this built-in MCP's tools to the model.
     prompt: str = Field("", title="Tools prompt", description=SOURCE_PROMPT_DESCRIPTION,
                         json_schema_extra={"widget": "textarea"})
@@ -141,7 +146,7 @@ class McpServerConfig(BaseModel):
     # (so it matches the /api/tools source id). `prompt` is appended to the system
     # prompt to describe this server's tools to the model.
     # Master switch: a disabled source is removed from the ToolHub and its prompt block is dropped.
-    enabled: bool = True
+    enabled: bool = Field(True, title="Enabled", description=SOURCE_ENABLED_DESCRIPTION)
     name: str
     url: str = ""
     token: str = Field("", json_schema_extra=SECRET_FIELD_EXTRA)

@@ -103,8 +103,10 @@ export function Slider({ min = 0, max = 100, step = 1, value, onChange, fmt }) {
     <span className="z-sval">{fmt ? fmt(value) : value}</span>
   </div>;
 }
-// `sm` narrows the number field for a row that holds several steppers.
-export function Stepper({ value, onChange, min = -Infinity, max = Infinity, step = 1, unit, sm }) {
+// `sm` narrows the number field for a row that holds several steppers. `slot` reserves
+// a fixed-width unit column even without a unit, so a form's right-aligned steppers
+// line up whether or not each field has a unit.
+export function Stepper({ value, onChange, min = -Infinity, max = Infinity, step = 1, unit, sm, slot }) {
   const clamp = (v) => Math.max(min, Math.min(max, v));
   // Integer steppers (capture seconds, ports, TTLs, default step=1) must never emit a
   // fractional value: a typed "1.5" would propagate a float that pydantic int fields reject
@@ -131,7 +133,7 @@ export function Stepper({ value, onChange, min = -Infinity, max = Infinity, step
         onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); commit(e.target.value); e.currentTarget.blur(); } }} />
       <button onClick={() => onChange(clamp(norm(value + step)))}>+</button>
     </div>
-    {unit && <span style={{ fontSize: 11.5, color: "var(--mut)" }}>{unit}</span>}
+    {(unit || slot) && <span style={{ fontSize: 11.5, color: "var(--mut)", minWidth: slot ? 40 : undefined }}>{unit}</span>}
   </div>;
 }
 export function Select({ value, options, onChange, w, itemAction, itemActionBusy, searchable, allowCustom, onQuery }) {

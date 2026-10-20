@@ -2,11 +2,13 @@ import React from "react";
 import { NAV } from "../nav.js";
 import { Ic } from "./icons.jsx";
 import { useAppData } from "../appData.jsx";
+import { enabledToolSources } from "../toolSources.js";
 
 // `open`: shown over the page on a narrow screen (styles.css); ignored on a wide one.
 export function Sidebar({ active, open, onNav }) {
   const { config, system } = useAppData();
-  const mcpCount = (config?.core?.mcp_servers || []).length;
+  // The Tools page's sources that are switched on, external and built-in.
+  const toolsCount = enabledToolSources(config?.core);
   const devCfg = config?.core?.devices || [];
 
   // Device statuses arrive live over the panel WS heartbeat (system.devices),
@@ -21,7 +23,7 @@ export function Sidebar({ active, open, onNav }) {
       onClick={() => onNav(id)}
       onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onNav(id); } }}>
       <Ic n={id} />{label}
-      {id === "tools" && <span className="badge">{mcpCount}</span>}
+      {id === "tools" && <span className="badge">{toolsCount}</span>}
       {id === "devices" && devTotal > 0 && <span className="badge">{online}/{devTotal}</span>}
     </div>
   );

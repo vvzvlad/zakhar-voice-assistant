@@ -109,7 +109,7 @@ function DynamicSelect({ value, currentLabel, onChange, load, itemAction, itemAc
 // typed text LOCALLY so separators (comma/space) and in-progress entries aren't
 // clobbered by re-normalization on every keystroke; pushes the PARSED array up so
 // the stored value stays a real list[str] (pydantic list[str] validates on save).
-function StringListInput({ value, onChange }) {
+function StringListInput({ value, onChange, phrase }) {
   const arr = Array.isArray(value) ? value : [];
   const [text, setText] = useState(arr.join(", "));
   // Re-sync local text ONLY when the external value diverges from what the current
@@ -124,7 +124,7 @@ function StringListInput({ value, onChange }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [value]);
   return (
-    <div className="z-inp mono">
+    <div className={phrase ? "z-inp" : "z-inp mono"}>
       <input value={text} onChange={(e) => { setText(e.target.value); onChange(parseStringList(e.target.value)); }} />
     </div>
   );
@@ -145,6 +145,8 @@ function SchemaField({ name, node, root, value, labelValue, onLabelChange, onCha
   const poles = node.poles || r.poles;
   const choices = node.choices || r.choices;
   const readout = node.readout || r.readout;
+  // A phrase spoken or heard as words is text, not an id: it keeps the text font.
+  const phrase = !!(node.phrase || r.phrase);
   // Labeled/scale segment control: explicit `choices` (value+label per segment), or an
   // enum decorated with `poles` (numeric segments + edge captions). Stores the numeric value.
   const segOptions = choices || (enums && poles ? enums.map((v) => ({ value: v, label: String(v) })) : null);
@@ -168,7 +170,7 @@ function SchemaField({ name, node, root, value, labelValue, onLabelChange, onCha
   let hintSuffix = "";
   if (isStringArray) {
     hintSuffix = "Comma-separated; one entry per item.";
-    control = <StringListInput value={value} onChange={set} />;
+    control = <StringListInput value={value} onChange={set} phrase={phrase} />;
   } else if (dynamic && optionsFor) {
     const itemAction = itemActionFor ? itemActionFor(name) : null;
     // Persist the picked option's human label into the <name>_label companion
@@ -221,7 +223,7 @@ function SchemaField({ name, node, root, value, labelValue, onLabelChange, onCha
         <Stepper
           value={value ?? 0} step={step}
           min={r.minimum ?? -Infinity} max={r.maximum ?? Infinity}
-          unit={unit}
+          unit={unit} slot
           onChange={(v) => set(isInt ? Math.round(v) : v)}
         />
       );
@@ -243,7 +245,7 @@ function SchemaField({ name, node, root, value, labelValue, onLabelChange, onCha
     control = <KeyInput value={value} onChange={set} />;
   } else {
     control = (
-      <div className="z-inp mono">
+      <div className={phrase ? "z-inp" : "z-inp mono"}>
         <input value={value ?? ""} onChange={(e) => set(e.target.value)} />
       </div>
     );
@@ -264,12 +266,26 @@ function SchemaField({ name, node, root, value, labelValue, onLabelChange, onCha
   );
 }
 
-export default function SchemaForm({ schema, values, onChange, optionsFor, root, skip = [], itemActionFor, itemActionBusy }) {
+// Ungrouped fields first, then the fields of each `group` under its own subheading.
+function grouped(list) {
+  const groups = [...new Set(list.map((f) => f.group).filter(Boolean))];
+  return [
+    ...list.filter((f) => !f.group).map((f) => f.el),
+    ...groups.map((g) => <React.Fragment key={`group:${g}`}>
+      <div className="z-sl">{g}<div className="ln" /></div>
+      {list.filter((f) => f.group === g).map((f) => f.el)}
+    </React.Fragment>),
+  ];
+}
+
+// `labelFor(field, value)` (optional) names the current value of a dynamic select
+// that has no "<field>_label" companion, so it shows the way its options do.
+export default function SchemaForm({ schema, values, onChange, optionsFor, root, skip = [], itemActionFor, itemActionBusy, labelFor }) {
   const doc = root || schema;
   const props = (schema && schema.properties) || {};
   const skipSet = new Set(skip);
   // Fields flagged `advanced: true` go into a collapsed "Advanced" disclosure
-  // after the regular ones.
+  // after the regular ones; fields sharing a `group` sit together under its name.
   const fields = [];
   const advanced = [];
   for (const [name, node] of Object.entries(props)) {
@@ -282,28 +298,33 @@ export default function SchemaForm({ schema, values, onChange, optionsFor, root,
     if (hiddenWhen && values && values[hiddenWhen]) continue;
     const labelField = name + "_label";
     const hasLabel = Object.prototype.hasOwnProperty.call(props, labelField);
-    (node.advanced || r.advanced ? advanced : fields).push(
-      <SchemaField
+    const value = values ? values[name] : undefined;
+    let labelValue;
+    if (hasLabel) labelValue = values ? values[labelField] : undefined;
+    else if (labelFor) labelValue = labelFor(name, value);
+    (node.advanced || r.advanced ? advanced : fields).push({
+      group: node.group || r.group,
+      el: <SchemaField
         key={name}
         name={name}
         node={node}
         root={doc}
-        value={values ? values[name] : undefined}
-        labelValue={hasLabel && values ? values[labelField] : undefined}
+        value={value}
+        labelValue={labelValue}
         onLabelChange={hasLabel ? (lbl) => onChange(labelField, lbl) : undefined}
         onChange={onChange}
         optionsFor={optionsFor}
         itemActionFor={itemActionFor}
         itemActionBusy={itemActionBusy}
-      />
-    );
+      />,
+    });
   }
   return (
     <>
-      {fields}
+      {grouped(fields)}
       {advanced.length > 0 && <details>
         <summary className="z-disclosure">Advanced</summary>
-        {advanced}
+        {grouped(advanced)}
       </details>}
     </>
   );

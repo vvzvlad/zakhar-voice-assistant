@@ -294,7 +294,7 @@ class YandexSttConfig(BaseModel):
         title="Text normalization",
         description="Convert spoken numbers, dates and similar to their numeric form.",
     )
-    timeout: int = Field(30, title="Request timeout (s)")
+    timeout: int = Field(30, title="Request timeout", json_schema_extra={"unit": "s"})
 
 
 @register
