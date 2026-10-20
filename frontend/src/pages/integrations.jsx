@@ -625,7 +625,7 @@ function DeviceModal({ onSave, onClose, title, device, label: savedLabel = "", w
     const controls = (...ids) => ids.map((id) => snapControls.find((c) => c.id === id)).filter(Boolean)
       .map(controlField);
     const loading = !ctl.snap && !ctl.err && <div className="z-f"><div className="z-fh">Loading…</div></div>;
-    return <Modal top title={title} onClose={onClose}
+    return <Modal top wide title={title} onClose={onClose}
       footer={<><button className="z-btn g" onClick={onClose}>Close</button>
         <button className="z-btn p" disabled={marked.length === 0} onClick={() => onSave({
           // Only the edited fields: the rest stays as in the server's fresh list (saveList).
@@ -643,23 +643,25 @@ function DeviceModal({ onSave, onClose, title, device, label: savedLabel = "", w
       <Seg full options={DEVICE_TABS} value={tab} onChange={setTab} marked={marked} />
       {ctl.err && <div className="z-fh" style={{ color: "#b91c1c", marginTop: 8 }}>{ctl.err.message || String(ctl.err)}</div>}
       <div hidden={tab !== "General"}>
-        <Field label="Name" hint="Shown in the panel instead of the device id; empty shows the id."><div className="z-inp"><input value={label} placeholder={device} onChange={(e) => setLabel(e.target.value)} /></div></Field>
+        <Field row label="Name" hint="Shown in the panel instead of the device id; empty shows the id."><div className="z-rowctl"><div className="z-inp"><input value={label} placeholder={device} onChange={(e) => setLabel(e.target.value)} /></div></div></Field>
         <Field row label="Device log" hint={`On: the speaker streams its whole log to the server, which keeps the last ${logDays} days in data/device_logs/${device}/. Off: the speaker sends nothing. Applies on save, no reflash.`}>
           <Toggle on={log} onChange={setLog} />
         </Field>
         {snapControls.filter((c) => !PLACED_CONTROLS.has(c.id)).map(controlField)}
       </div>
       <div hidden={tab !== "Wake word"}>
-        {wakeModels && <Field label="Wake-word model" hint="Sent to the device on save and at every connection. An uploaded .tflite is kept in the server's data volume; a new file of the same name replaces it and goes at once to every device using it.">
-          <Select value={wakeModel} onChange={setWakeModel} options={[
-            { value: "", label: `Release default (${wakeModels.release})` },
-            ...wakeModels.options.map((n) => ({ value: n, label: n })),
-          ]} />
-          <div style={{ marginTop: 8 }}>
-            <button className="z-btn g sm" onClick={() => fileRef.current.click()}>Upload .tflite</button>
-            <input ref={fileRef} type="file" accept=".tflite" hidden aria-label="Wake-word model file" onChange={upload} />
+        {wakeModels && <Field row label="Wake-word model" hint="Sent to the device on save and at every connection. An uploaded .tflite is kept in the server's data volume; a new file of the same name replaces it and goes at once to every device using it.">
+          <div className="z-rowctl">
+            <Select value={wakeModel} onChange={setWakeModel} options={[
+              { value: "", label: `Release default (${wakeModels.release})` },
+              ...wakeModels.options.map((n) => ({ value: n, label: n })),
+            ]} />
+            <div style={{ marginTop: 8 }}>
+              <button className="z-btn g sm" onClick={() => fileRef.current.click()}>Upload .tflite</button>
+              <input ref={fileRef} type="file" accept=".tflite" hidden aria-label="Wake-word model file" onChange={upload} />
+            </div>
+            {uploadErr && <div className="z-fh" style={{ color: "#b91c1c" }}>{uploadErr}</div>}
           </div>
-          {uploadErr && <div className="z-fh" style={{ color: "#b91c1c" }}>{uploadErr}</div>}
         </Field>}
         <WakeProbabilityMeter device={device} online={online} />
         {loading}
@@ -752,26 +754,28 @@ function CaptureControl({ device, online }) {
     }
   };
 
-  return <Field label="Capture sample" hint={`Records ${seconds}s of mic audio and downloads a WAV per take${count > 1 ? ` (×${count})` : ""}. Used for wake-word training.`}>
-    <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-      {running
-        ? <>
-            <span className="z-fh">{(phase || "…") + (stopping ? " — will stop after this take" : "")}</span>
-            <button
-              className={stopping ? "z-btn warn" : "z-btn d"}
-              disabled={stopping}
-              onClick={() => { cancelRef.current = true; setStopping(true); }}
-            >{stopping ? "Stopping…" : "Stop"}</button>
-          </>
-        : <>
-            <Stepper value={seconds} min={1} max={300} onChange={setSeconds} unit="s" />
-            <Stepper value={count} min={1} max={1000} onChange={setCount} unit="takes" />
-            <button className="z-btn p" disabled={!online} title={online ? "" : "Speaker offline"}
-              onClick={run}>{count > 1 ? `Record ×${count}` : "Record sample"}</button>
-          </>}
+  return <Field row label="Capture sample" hint={`Records ${seconds}s of mic audio and downloads a WAV per take${count > 1 ? ` (×${count})` : ""}. Used for wake-word training.`}>
+    <div className="z-rowctl">
+      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+        {running
+          ? <>
+              <span className="z-fh">{(phase || "…") + (stopping ? " — will stop after this take" : "")}</span>
+              <button
+                className={stopping ? "z-btn warn" : "z-btn d"}
+                disabled={stopping}
+                onClick={() => { cancelRef.current = true; setStopping(true); }}
+              >{stopping ? "Stopping…" : "Stop"}</button>
+            </>
+          : <>
+              <Stepper value={seconds} min={1} max={300} onChange={setSeconds} unit="s" />
+              <Stepper value={count} min={1} max={1000} onChange={setCount} unit="takes" />
+              <button className="z-btn p" disabled={!online} title={online ? "" : "Speaker offline"}
+                onClick={run}>{count > 1 ? `Record ×${count}` : "Record sample"}</button>
+            </>}
+      </div>
+      {!running && phase && <div className="z-fh">{phase}</div>}
+      {err && <div className="z-fh" style={{ color: "#b91c1c" }}>{err}</div>}
     </div>
-    {!running && phase && <div className="z-fh">{phase}</div>}
-    {err && <div className="z-fh" style={{ color: "#b91c1c" }}>{err}</div>}
   </Field>;
 }
 
@@ -824,11 +828,13 @@ function Stat({ label, title, children }) {
 // step the server gives it.
 function ControlField({ control: c, value, onChange }) {
   const scale = CONTROL_SCALES[c.id];
-  return <Field label={CONTROL_LABELS[c.id] || c.name} hint={CONTROL_HINTS[c.id]}>
-    {scale
-      ? <ScaleSeg options={scale.map((label, i) => ({ value: i, label }))} value={value} onChange={onChange} />
-      : <Slider min={c.min} max={c.max} step={c.step || 1} value={value} onChange={onChange}
-          fmt={(val) => withUnit(c.step < 1 ? Number(val).toFixed(1) : Math.round(val), c.unit)} />}
+  return <Field row label={CONTROL_LABELS[c.id] || c.name} hint={CONTROL_HINTS[c.id]}>
+    <div className="z-rowctl">
+      {scale
+        ? <ScaleSeg options={scale.map((label, i) => ({ value: i, label }))} value={value} onChange={onChange} />
+        : <Slider min={c.min} max={c.max} step={c.step || 1} value={value} onChange={onChange}
+            fmt={(val) => withUnit(c.step < 1 ? Number(val).toFixed(1) : Math.round(val), c.unit)} />}
+    </div>
   </Field>;
 }
 
@@ -916,13 +922,15 @@ function SayControl({ device, online }) {
     }
   };
 
-  return <Field label="Say on speaker" hint="Speaks the text on the speaker through the TTS — to check the volume.">
-    <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-      <div className="z-inp" style={{ flex: 1 }}><input value={text} onChange={(e) => setText(e.target.value)} /></div>
-      <button className="z-btn p" disabled={!online || !text.trim() || saying} title={online ? "" : "Speaker offline"}
-        onClick={say}>{saying ? "Saying…" : "Say"}</button>
+  return <Field row label="Say on speaker" hint="Speaks the text on the speaker through the TTS — to check the volume.">
+    <div className="z-rowctl">
+      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+        <div className="z-inp" style={{ flex: 1 }}><input value={text} onChange={(e) => setText(e.target.value)} /></div>
+        <button className="z-btn p" disabled={!online || !text.trim() || saying} title={online ? "" : "Speaker offline"}
+          onClick={say}>{saying ? "Saying…" : "Say"}</button>
+      </div>
+      {err && <div className="z-fh" style={{ color: "#b91c1c" }}>{err}</div>}
     </div>
-    {err && <div className="z-fh" style={{ color: "#b91c1c" }}>{err}</div>}
   </Field>;
 }
 
@@ -981,11 +989,13 @@ function WakeProbabilityMeter({ device, online: onlineProp }) {
     </div>;
   }
 
-  return <Field label="Wake probability" hint="On-device wake-word probability — peak over the last second.">
-    {body}
-    {err && <div className="z-fh" style={{ color: "#b91c1c", marginTop: 6 }}>
-      {(err && (err.message || String(err))) || "Failed to read wake probability."}
-    </div>}
+  return <Field row label="Wake probability" hint="On-device wake-word probability — peak over the last second.">
+    <div className="z-rowctl">
+      {body}
+      {err && <div className="z-fh" style={{ color: "#b91c1c", marginTop: 6 }}>
+        {(err && (err.message || String(err))) || "Failed to read wake probability."}
+      </div>}
+    </div>
   </Field>;
 }
 
@@ -1038,7 +1048,7 @@ export function Devices() {
     x.name === name ? { ...x, enabled: !(x.enabled ?? true) } : x
   )));
 
-  return <div className="z-page narrow">
+  return <div className="z-page">
     <PageHeader title="Devices" desc={`Devices connect to ws://<server>:${devicePort}/device; an unknown device is added on its first connection. Each device id also keys its own dialog context.`}
       actions={<button className="z-btn p" onClick={() => setModal({ mode: "add" })}><Ic n="add" w={14} />Add speaker</button>} />
     {busyErr && <div className="z-banner warn" style={{ margin: "0 0 12px" }}><Ic n="restart" w={15} /><span>{errorLines(busyErr).join(" · ")}</span></div>}
