@@ -72,7 +72,7 @@ describe("Devices page", () => {
     render(<Devices />);
     fireEvent.click(screen.getByText("Add speaker"));
     fireEvent.change(screen.getByPlaceholderText("e.g. fc012cd1e5ec"), { target: { value: "porch" } });
-    fireEvent.click(screen.getByText("Save"));
+    fireEvent.click(screen.getByText("Add"));
     await waitFor(() => expect(data.patch).toHaveBeenCalledTimes(1));
     expect(data.patch).toHaveBeenCalledWith({ core: { devices: [
       ...FRESH, { name: "porch", enabled: true },
@@ -199,6 +199,20 @@ describe("Devices page", () => {
     ] } });
   });
 
+  it("a tab switched to while scrolled opens at its first row, the header keeps its scroll", async () => {
+    api.getDeviceControls.mockResolvedValue({ device: "kitchen", online: true, versions: [], controls: [] });
+    render(<Devices />);
+    fireEvent.click(screen.getByText("Edit"));
+    const bar = (await screen.findByText("Sound")).closest(".z-tabs");
+    const body = bar.parentElement;
+    // Scrolled 300 px, the header ends 212 px above the stuck bar: the bar caught on at 88.
+    Object.defineProperty(body, "scrollTop", { value: 300, writable: true });
+    bar.getBoundingClientRect = () => ({ top: 0 });
+    bar.previousElementSibling.getBoundingClientRect = () => ({ bottom: -212 });
+    fireEvent.click(screen.getByText("Wake word"));
+    expect(body.scrollTop).toBe(88);
+  });
+
   it("edits on two tabs survive the switch, mark both tabs and go out in one save", async () => {
     api.getDeviceControls.mockResolvedValue({ device: "kitchen", online: true, versions: [], controls: [] });
     render(<Devices />);
@@ -281,8 +295,7 @@ describe("Devices page", () => {
     data.refreshConfig.mockClear(); // the re-read on opening the dialog
 
     fireEvent.click(screen.getByText("Wake word"));
-    await screen.findByText("Wake word cutoff");
-    const track = document.querySelector(".z-trk");
+    const track = (await screen.findByText("Wake word cutoff")).closest(".z-f").querySelector(".z-trk");
     track.getBoundingClientRect = () => ({ left: 0, width: 100, top: 0, height: 10, right: 100, bottom: 10 });
     fireEvent(track, new MouseEvent("pointerdown", { bubbles: true, clientX: 55 }));
     await waitFor(() => expect(api.setDeviceControl).toHaveBeenCalledWith("kitchen", "wake_probability_cutoff", 55));

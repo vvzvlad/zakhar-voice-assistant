@@ -14,8 +14,6 @@ ind_t ind_choose(ind_state_t *s, uint32_t now_ms)
     if (s->capture) return IND_CAPTURE;
     if (s->phase == LED_PHASE_ERROR && now_ms - s->error_at >= IND_ERROR_MS) s->phase = LED_PHASE_IDLE;
     switch (s->phase) {
-    case LED_PHASE_WAITING:
-        return IND_OFF;
     case LED_PHASE_LISTENING:
         return IND_LISTENING;
     case LED_PHASE_THINKING:

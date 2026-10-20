@@ -589,6 +589,14 @@ function DeviceModal({ onSave, onClose, title, device, label: savedLabel = "", w
   const [tab, setTab] = useState("General");
   const ctl = useDeviceControls(device);
   const fileRef = useRef(null);
+  const tabsRef = useRef(null);
+  // A new tab opens at its first row. Once the sticky tabs bar has caught on, the scroll past
+  // that point shows as a gap between the bar and the header it normally touches; drop just that.
+  function pickTab(t) {
+    const bar = tabsRef.current;
+    if (bar) bar.parentElement.scrollTop -= bar.getBoundingClientRect().top - bar.previousElementSibling.getBoundingClientRect().bottom;
+    setTab(t);
+  }
   useEffect(() => {
     if (!device) return undefined;
     let alive = true;
@@ -634,13 +642,13 @@ function DeviceModal({ onSave, onClose, title, device, label: savedLabel = "", w
           ...(log !== savedLog && { log }),
           ...(autoVolume !== savedAutoVolume && { auto_volume: autoVolume }),
         })}>Save</button></>}>
-      <div style={{ display: "flex", gap: 16, flexWrap: "wrap", padding: "10px 0 14px" }}>
+      <div className="z-dev-stats">
         <Stat label="Status"><StatusPill status={online ? "online" : "offline"} /></Stat>
         <Stat label="Device id" title="Sent by the firmware when it connects — keys the device's settings and dialog context.">{device}</Stat>
-        <Stat label="Firmware">{deviceVersion(ctl.snap, "config_version") ?? "—"}</Stat>
-        <Stat label="Model">{deviceVersion(ctl.snap, "model_version") ?? "—"}</Stat>
+        <Stat label="Firmware" title={deviceVersion(ctl.snap, "config_version")}>{deviceVersion(ctl.snap, "config_version") ?? "—"}</Stat>
+        <Stat label="Model" title={deviceVersion(ctl.snap, "model_version")}>{deviceVersion(ctl.snap, "model_version") ?? "—"}</Stat>
       </div>
-      <Seg full options={DEVICE_TABS} value={tab} onChange={setTab} marked={marked} />
+      <div className="z-tabs" ref={tabsRef}><Seg full options={DEVICE_TABS} value={tab} onChange={pickTab} marked={marked} /></div>
       {ctl.err && <div className="z-fh" style={{ color: "#b91c1c", marginTop: 8 }}>{ctl.err.message || String(ctl.err)}</div>}
       <div hidden={tab !== "General"}>
         <Field row label="Name" hint="Shown in the panel instead of the device id; empty shows the id."><div className="z-rowctl"><div className="z-inp"><input value={label} placeholder={device} onChange={(e) => setLabel(e.target.value)} /></div></div></Field>
@@ -652,12 +660,14 @@ function DeviceModal({ onSave, onClose, title, device, label: savedLabel = "", w
       <div hidden={tab !== "Wake word"}>
         {wakeModels && <Field row label="Wake-word model" hint="Sent to the device on save and at every connection. An uploaded .tflite is kept in the server's data volume; a new file of the same name replaces it and goes at once to every device using it.">
           <div className="z-rowctl">
-            <Select value={wakeModel} onChange={setWakeModel} options={[
-              { value: "", label: `Release default (${wakeModels.release})` },
-              ...wakeModels.options.map((n) => ({ value: n, label: n })),
-            ]} />
-            <div style={{ marginTop: 8 }}>
-              <button className="z-btn g sm" onClick={() => fileRef.current.click()}>Upload .tflite</button>
+            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <Select value={wakeModel} onChange={setWakeModel} options={[
+                  { value: "", label: `Release default (${wakeModels.release})` },
+                  ...wakeModels.options.map((n) => ({ value: n, label: n })),
+                ]} />
+              </div>
+              <button className="z-btn g" title="Upload a .tflite model" onClick={() => fileRef.current.click()}>Upload</button>
               <input ref={fileRef} type="file" accept=".tflite" hidden aria-label="Wake-word model file" onChange={upload} />
             </div>
             {uploadErr && <div className="z-fh" style={{ color: "#b91c1c" }}>{uploadErr}</div>}
@@ -677,11 +687,13 @@ function DeviceModal({ onSave, onClose, title, device, label: savedLabel = "", w
         </Field>
         {autoVolume && <>
           {controls("auto_volume_threshold", "auto_volume_gain")}
-          {ctl.snap?.readings.length > 0 && <div className="z-f"><div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
-            {ctl.snap.readings.map((r) => <Stat key={r.id} label={r.name}>
-              {r.value == null ? "—" : withUnit(Number.isInteger(r.value) ? r.value : r.value.toFixed(1), r.unit)}
-            </Stat>)}
-          </div></div>}
+          {ctl.snap?.readings.length > 0 && <Field row label="Auto volume now" hint="The room's noise the speaker measured and the boost the server sends for it.">
+            <div className="z-rowctl" style={{ display: "flex", gap: 24 }}>
+              {ctl.snap.readings.map((r) => <Stat key={r.id} label={r.name}>
+                {r.value == null ? "—" : withUnit(Number.isInteger(r.value) ? r.value : r.value.toFixed(1), r.unit)}
+              </Stat>)}
+            </div>
+          </Field>}
         </>}
         {controls("play_prime_ms")}
       </div>
@@ -691,9 +703,9 @@ function DeviceModal({ onSave, onClose, title, device, label: savedLabel = "", w
       </div>
     </Modal>;
   }
-  return <Modal title={title} onClose={onClose}
+  return <Modal top title={title} onClose={onClose}
     footer={<><button className="z-btn g" onClick={onClose}>Cancel</button>
-      <button className="z-btn p" disabled={!name} onClick={() => onSave({ name, enabled: true })}>Save</button></>}>
+      <button className="z-btn p" disabled={!name} onClick={() => onSave({ name, enabled: true })}>Add</button></>}>
     <Field label="Device id" hint="The id its firmware sends when it connects (its Wi-Fi MAC) — also keys the dialog context."><div className="z-inp"><input value={name} placeholder="e.g. fc012cd1e5ec" onChange={(e) => setName(e.target.value)} /></div></Field>
   </Modal>;
 }
@@ -768,8 +780,7 @@ function CaptureControl({ device, online }) {
             </>
           : <>
               <Stepper sm value={seconds} min={1} max={300} onChange={setSeconds} unit="s" />
-              <span title="takes" style={{ color: "var(--mut)" }}>×</span>
-              <Stepper sm value={count} min={1} max={1000} onChange={setCount} />
+              <Stepper sm value={count} min={1} max={1000} onChange={setCount} unit="takes" />
               <button className="z-btn p" style={{ marginLeft: "auto" }} disabled={!online} title={online ? "" : "Speaker offline"}
                 onClick={run}>Record</button>
             </>}
@@ -819,7 +830,7 @@ const withUnit = (text, unit) => (!unit || unit === "%" ? `${text}${unit || ""}`
 
 // A read-only figure: a small uppercase label over its mono value; `title` is the value's tooltip.
 function Stat({ label, title, children }) {
-  return <div>
+  return <div className="z-stat">
     <div style={{ fontSize: 10.5, color: "var(--mut)", textTransform: "uppercase", letterSpacing: ".04em", fontWeight: 600 }}>{label}</div>
     <div className="mono" title={title} style={{ fontSize: 13, fontWeight: 600, marginTop: 2 }}>{children}</div>
   </div>;
@@ -980,13 +991,10 @@ function WakeProbabilityMeter({ device, online: onlineProp }) {
     body = <div className="z-fh">Device offline.</div>;
   } else {
     const pct = value == null ? null : Math.max(0, Math.min(100, value));
-    body = <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-      <div className="mono" style={{ fontSize: 13, fontWeight: 600, minWidth: 38, textAlign: "right" }}>
-        {pct == null ? "…" : `${Math.round(pct)}%`}
-      </div>
-      <div style={{ flex: 1, height: 6, borderRadius: 3, background: "var(--bd, #e5e7eb)", overflow: "hidden" }}>
-        <div style={{ width: `${pct == null ? 0 : pct}%`, height: "100%", background: "var(--acc, #2563eb)", transition: "width .2s" }} />
-      </div>
+    // The slider's track and value markup without a thumb, so it lines up with the sliders below.
+    body = <div className="z-slider">
+      <div className="z-trk" style={{ cursor: "default" }}><i style={{ width: `${pct == null ? 0 : pct}%`, transition: "width .2s" }} /></div>
+      <span className="z-sval">{pct == null ? "…" : `${Math.round(pct)}%`}</span>
     </div>;
   }
 

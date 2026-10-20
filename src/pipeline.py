@@ -39,7 +39,7 @@ from src.tts import TtsBackend, pcm_rate
 from src.pipeline_events import StageEvent
 from src.llm_text import clean_llm_output
 from src.prompt import build_system_prompt
-from src.runs_store import live_row, summary_row
+from src.runs_store import live_row, new_record, summary_row
 from src.chime import build_ack_clip
 from src.followup import NoFollowup
 from src.stage_errors import StageError
@@ -128,9 +128,9 @@ class Pipeline:
         # (src/wake_arbiter.py) a wake run registers with and reports to — its
         # pre-roll is in, its verifier ruled, it stopped waiting (sync calls); None
         # runs every wake unarbitrated. take_session(cid) and end_wake(cid) (sync): the
-        # run of the wake that opened session `cid` is taken (the session starts, the
-        # playback is dropped) or ends without being taken (the running session goes
-        # on under the new number).
+        # run of the wake that proposed session `cid` is taken (the session starts, the
+        # playback is dropped) or ends without being taken (the device is refused that
+        # number; the running session goes on).
         self.send_event = None
         self.play = None
         self.has_speaker = False
@@ -138,7 +138,7 @@ class Pipeline:
         self.arbiter = None
         self.take_session = lambda cid: None
         self.end_wake = lambda cid: None
-        # speak() calls not yet played out (see speak()).
+        # Speeches not yet played out (see _voice()).
         self._speaking = 0
 
         # Background "filler" play tasks (early "I'll go check it" lines). Kept in a
@@ -326,7 +326,7 @@ class Pipeline:
         task this runs in), the device server starts the wake's session
         (take_session: `play_stop` before anything else of it) and the device is shown
         `listening` at once — the arbitration may hold the run for seconds more, and
-        the device shows nothing until `listening`. A taken run that later loses keeps
+        the device shows nothing of this wake until `listening`. A taken run that later loses keeps
         it (docs/device-protocol.md, the decisions)."""
         run.taken = True
         self._proposed = None
@@ -728,8 +728,7 @@ class Pipeline:
         no speech in it: the STT would make up words for the noise."""
         t0 = time.perf_counter()
         pcm, pcm2 = self._condition_audio(pcm, pcm2, trim=True)
-        record = self._new_record(reason, pcm, run.verify_ms, run.score)
-        record["result"] = "rejected"
+        record = self._new_record(reason, run, pcm, result="rejected")
         if reason == "duplicate" and run.endpoint != "no_speech":
             stt_t = time.perf_counter()
             try:
@@ -901,15 +900,15 @@ class Pipeline:
                 # Observability record for this run (_new_record). Accumulated across
                 # all terminal paths below and inserted exactly once in the finally;
                 # the rest of the timings fill in as stages complete.
-                # Native TTS reply audio captured during synthesis (see the TTS section) and
-                # stored after the run is inserted, mirroring the utterance-audio store. Stays
-                # None unless synthesis produced bytes, so a failed/empty TTS stores nothing.
+                # The answer's stored speech (speak_reply), stored after the run is
+                # inserted, mirroring the utterance-audio store. Stays None unless the
+                # answer played, so a failed/empty TTS stores nothing.
                 tts_audio = None
                 tts_mime = None
                 # False only for a follow-up window that heard no speech: no request,
                 # so no run in the log.
                 keep_record = True
-                record = self._new_record(reason, pcm, run.verify_ms, run.score)
+                record = self._new_record(reason, run, pcm)
                 try:
                     # VAD found no speech in the whole window — this is silence/noise,
                     # not an utterance. Skip STT entirely: Whisper hallucinates stray
@@ -1060,97 +1059,12 @@ class Pipeline:
 
                     self._emit(StageEvent.INTENT_END, {"conversation_id": conversation_id})
 
-                    # Accent (stress) stage: place '+' stress marks on the reply so every TTS
-                    # backend pronounces Russian correctly. RuAccent's output IS the canonical
-                    # '+vowel' LLM->TTS contract, so the per-backend adaptation handles it
-                    # unchanged. record["llm_text"] keeps the original (mark-free) reply for the
-                    # panel; only the text sent to TTS is accented. Isolated: a failure falls back
-                    # to the un-accented reply so it can never break the run.
-                    stress = self.stress_backend
-                    if stress is not None:
-                        ra_t = time.perf_counter()
-                        accented = reply
-                        accent_failed = False
-                        try:
-                            accented = await stress.accentize(reply)
-                        except Exception as e:
-                            accent_failed = True
-                            logger.error(f"{self.name}: accent stage [{self._backend_desc(stress)}] failed: {e}")
-                        record["t_stress"] = int((time.perf_counter() - ra_t) * 1000)
-                        # Store the accent-stage output (the text actually sent to TTS) ONLY when it
-                        # differs from the LLM reply, so the panel shows it without cluttering no-op
-                        # (disabled / nothing-to-stress) runs. record["llm_text"] keeps the original.
-                        if accented != reply:
-                            record["stress_text"] = accented
-                        reply = accented
-                        # Log the accent stage on the success path only; failures are
-                        # already surfaced by the logger.error above. `reply` now holds
-                        # the accented text actually sent to TTS.
-                        if not accent_failed:
-                            logger.info(
-                                f"{self.name}: ✒️ Accent [{self._backend_desc(stress)}] "
-                                f"({record['t_stress'] / 1000:.2f}s): {reply!r}"
-                            )
-                        self._emit_live(record)
-
-                    self._emit(StageEvent.TTS_START, {"text": reply})
                     played = None  # what the play hook returned for the answer stream
-                    # A device without a speaker gets the reply text only: no synthesis.
-                    if self.has_speaker:
-                        # The backend of the variant that started: it both synthesizes
-                        # and labels the log lines, so they can never diverge. None until
-                        # a variant starts.
-                        tts = None
-                        try:
-                            tts_t = time.perf_counter()
-                            # The TTS variants in order until one yields its first chunk;
-                            # every variant tried lands in the run's attempts. All failing
-                            # raises the last error into the except below.
-                            tts, mime, audio = await self._start_tts(reply, record["attempts"])
-                            # t_tts = time-to-stream-start: the user-perceived TTS
-                            # latency (the device plays while synthesis continues).
-                            record["t_tts"] = int((time.perf_counter() - tts_t) * 1000)
-                            logger.info(
-                                f"{self.name}: 🔊 TTS [{self._backend_desc(tts)}] "
-                                f"stream start ({time.perf_counter() - tts_t:.2f}s)"
-                            )
-                            tts_chunks = []
-                            try:
-                                played = await self.play(mime, self._tee_chunks(audio, tts_chunks))
-                            finally:
-                                # The tee only closes `audio` once it has started.
-                                await self._close_stream(audio)
-                            if played is not None:
-                                record["play_dry"] = played["dry"]
-                                record["play_gap_ms"] = played["gap_ms"]
-                            clip = b"".join(tts_chunks)
-                            record["audio_bytes"] = len(clip)
-                            record["audio_fmt"] = mime.partition(";")[0].rpartition("/")[2]
-                            # Keep the full native clip for the run's stored TTS audio (see
-                            # finally); raw PCM is stored as WAV so the panel can play it.
-                            rate = pcm_rate(mime)
-                            if rate is not None:
-                                tts_audio, tts_mime = pcm_to_wav_bytes(clip, rate=rate), "audio/wav"
-                            else:
-                                tts_audio, tts_mime = clip, mime
-                            logger.info(
-                                f"{self.name}: 🔊 TTS played "
-                                f"({time.perf_counter() - tts_t:.2f}s total, {len(clip)} bytes)"
-                            )
-                        except Exception as e:
-                            # The run still ends cleanly. result="error" unconditionally,
-                            # but only claim the stage/text if nothing earlier set them:
-                            # when the LLM already reported an error (error_stage="LLM") we
-                            # continued into TTS anyway, so a TTS failure here must not
-                            # overwrite the LLM root cause.
-                            record["result"] = "error"
-                            if record["error_stage"] is None:
-                                record["error_stage"] = "TTS"
-                                record["error_text"] = str(e)
-                            # No backend when no variant started (each failure is
-                            # already logged by _start_tts).
-                            where = f" [{self._backend_desc(tts)}]" if tts is not None else ""
-                            logger.error(f"{self.name}: TTS{where} failed: {e}")
+                    try:
+                        played, tts_audio, tts_mime = await self.speak_reply(
+                            reply, record, answer=True)
+                    except Exception:  # noqa: BLE001 - marked on the record and logged by speak_reply
+                        pass  # the run still ends cleanly
 
                     logger.info(
                         f"{self.name}: ✅ run complete in {time.perf_counter() - t0:.2f}s"
@@ -1256,42 +1170,34 @@ class Pipeline:
             pcm = normalize_peak(pcm)
         return pcm, pcm2
 
-    def _new_record(self, reason, pcm: bytes, t_wakeword: int,
-                    wakeword_score: float | None) -> dict:
-        """A run record before its stages fill it in.
+    def _new_record(self, reason, run: Run | None = None, pcm: bytes = b"", **fields) -> dict:
+        """A pipeline run's record before its stages fill it in (new_record with the
+        stage fields at their not-run values); `fields` set the rest. A voice run's
+        (`run`) also carries its second-stage wake-word gate: the verify latency and
+        score, 0/None for an ungated (non-wake / disabled / passthrough) run; a text
+        request has neither key.
 
         t_vad is the captured-utterance duration in ms (the "VAD capture" segment
         shown in the UI waterfall), derived from the PCM length — NOT the CPU time
         spent running the VAD. audio_ms is intentionally left None for now: the
         reply's playback duration is not measured yet."""
-        return {
-            "ts": time.time(),
-            "device": self.name,
-            "reason": reason,
-            "result": "empty",
+        if run is not None:
+            fields = {"t_wakeword": run.verify_ms, "wakeword_score": run.score, **fields}
+        return new_record(self.name, reason, **{
             "t_vad": int(len(pcm) / (SAMPLE_RATE * 2) * 1000),
             "t_stt": 0, "t_llm": 0, "t_stress": 0, "t_tts": 0,
-            "stt_text": "", "llm_text": "", "stress_text": "",
+            "stress_text": "",
             "filler_text": "", "t_filler": None,
             "model": None, "tokens": None,
             "audio_ms": None, "audio_bytes": None, "audio_fmt": None,
-            "error_stage": None, "error_text": None,
             "rounds": [],
             "request": None,
-            # Recognition chains: the one that served the request and every
-            # chain tried (see chains.ChainRun).
+            # The recognition chain that served the request.
             "chain": None,
-            "attempts": [],
-            # Second-stage wake-word gate: verify latency + score. Stay 0/None
-            # for ungated (non-wake / disabled / passthrough) runs.
-            "t_wakeword": t_wakeword,
-            "wakeword_score": wakeword_score,
-            # The reply's playback as the device reports it: times it ran dry
-            # and the ms of silence played meanwhile. None when it does not count.
-            "play_dry": None, "play_gap_ms": None,
-        }
+            **fields,
+        })
 
-    async def _store_run(self, record: dict, t0: float, pcm: bytes, pcm2: bytes,
+    async def _store_run(self, record: dict, t0: float, pcm: bytes = b"", pcm2: bytes = b"",
                          tts_audio=None, tts_mime=None) -> dict | None:
         """Insert the run record and store its audio; returns the summary row to
         broadcast (_broadcast_run), or None. A recording failure must never break the
@@ -1330,7 +1236,7 @@ class Pipeline:
         # rolling window as the utterance audio (runs.audio_keep) so operators can play
         # back exactly what the assistant spoke — shown right after the Accents text in
         # the log detail view. Best-effort: a storage failure must never break the run.
-        # tts_audio is set only when synthesis produced bytes (see the TTS section).
+        # tts_audio is set only when synthesis produced bytes (see speak_reply).
         if self.core.runs.store_audio and tts_audio:
             try:
                 await asyncio.to_thread(
@@ -1357,12 +1263,13 @@ class Pipeline:
         through the recognition chains (with tools and conversation context),
         optionally spoken on the speaker.
 
-        A simplified mirror of the chains/TTS portion of `_run`: no audio, no VAD/STT
-        and no stage events of its own (there is no voice session for a text run, so
-        they would reach the device out of band; speak() first ends an open follow-up
-        window, see _close_followup). Serialized with voice runs via the same per-device
-        lock. The run is recorded to the runs store with reason="text" and the
-        request in stt_text, so the panel run log shows it in the usual column.
+        The chains of a voice run entered at the handler, its reply spoken by the same
+        speak_reply: no audio, no VAD/STT and no stage events of its own (there is no
+        voice session for a text run, so they would reach the device out of band; the
+        speech first ends an open follow-up window, see _close_followup). Serialized
+        with voice runs via the same per-device lock. The run is recorded to the runs
+        store with reason="text" and the request in stt_text, so the panel run log
+        shows it in the usual column.
 
         Returns {"reply", "result", "error_stage", "error_text"}.
         """
@@ -1371,26 +1278,9 @@ class Pipeline:
         try:
             async with self._lock:
                 t0 = time.perf_counter()
-                # Same record shape as `_run`'s: audio-stage fields stay at their
-                # text-run values (t_vad/t_stt = 0, audio_* = None).
-                record = {
-                    "ts": time.time(),
-                    "device": self.name,
-                    "reason": "text",
-                    "result": "empty",
-                    "t_vad": 0,
-                    "t_stt": 0, "t_llm": 0, "t_stress": 0, "t_tts": 0,
-                    "stt_text": text, "llm_text": "", "stress_text": "",
-                    "filler_text": "", "t_filler": None,
-                    "model": None, "tokens": None,
-                    "audio_ms": None, "audio_bytes": None, "audio_fmt": None,
-                    "error_stage": None, "error_text": None,
-                    "rounds": [],
-                    "request": None,
-                    "chain": None,
-                    "attempts": [],
-                    "play_dry": None, "play_gap_ms": None,
-                }
+                # A pipeline run's record: audio-stage fields stay at their text-run
+                # values (t_vad/t_stt = 0, audio_* = None).
+                record = self._new_record("text", stt_text=text)
                 try:
                     # The recognition chains, entered at the handler step (no STT): each
                     # enabled chain's handler in order until one answers. No on_filler:
@@ -1417,53 +1307,14 @@ class Pipeline:
                             # Context persistence failure must not break the run.
                             logger.error(f"{self.name}: context append failed: {e}")
 
-                    # Accent (stress) stage: only accent the text actually spoken; the
-                    # value RETURNED to the caller stays the plain `reply`. RuAccent's
-                    # output is the canonical '+vowel' contract every TTS backend adapts.
-                    # Isolated: a failure falls back to the un-accented text.
-                    spoken = reply
-                    stress = self.stress_backend
-                    if speak and reply and stress is not None:
-                        ra_t = time.perf_counter()
-                        accent_failed = False
-                        try:
-                            spoken = await stress.accentize(reply)
-                        except Exception as e:
-                            accent_failed = True
-                            logger.error(f"{self.name}: accent stage [{self._backend_desc(stress)}] failed: {e}")
-                        record["t_stress"] = int((time.perf_counter() - ra_t) * 1000)
-                        # Store the accent-stage output ONLY when it differs from the
-                        # reply (mirror the _run rule); record["llm_text"] keeps the
-                        # original. The value returned to the caller stays `reply`.
-                        if spoken != reply:
-                            record["stress_text"] = spoken
-                        # Mirror _run: log the accent stage on success only; `spoken`
-                        # holds the accented text actually sent to TTS.
-                        if not accent_failed:
-                            logger.info(
-                                f"{self.name}: ✒️ Accent [{self._backend_desc(stress)}] "
-                                f"({record['t_stress'] / 1000:.2f}s): {spoken!r}"
-                            )
-
+                    # Only the spoken text is accented: the value RETURNED to the caller
+                    # stays the plain `reply`, which is also returned when its speech
+                    # fails.
                     if speak and reply:
                         try:
-                            played = await self.speak(spoken, record["attempts"])
-                            # The variants were tried back to back, so their times add
-                            # up to the time from the first attempt to the start.
-                            record["t_tts"] = sum(
-                                a["t"] for a in record["attempts"] if a["kind"] == "tts")
-                            if played is not None:
-                                record["play_dry"] = played["dry"]
-                                record["play_gap_ms"] = played["gap_ms"]
-                        except Exception as e:
-                            # Same precedence rule as `_run`: a TTS failure must
-                            # not overwrite an earlier (LLM) root cause. The reply
-                            # is still returned to the caller.
-                            record["result"] = "error"
-                            if record["error_stage"] is None:
-                                record["error_stage"] = "TTS"
-                                record["error_text"] = str(e)
-                            logger.error(f"{self.name}: text-run TTS failed: {e}")
+                            await self.speak_reply(reply, record)
+                        except Exception:  # noqa: BLE001 - marked on the record and logged by speak_reply
+                            pass
                 except Exception as e:
                     # Mirror `_run`'s catch-all: an unexpected failure is recorded
                     # honestly and never propagates to the MCP caller.
@@ -1472,26 +1323,13 @@ class Pipeline:
                     record["error_text"] = str(e)
                     logger.exception(f"{self.name}: text run failed: {e}")
                 finally:
-                    # Record the run; a store failure must never break the call.
-                    if self.runs_store is not None:
-                        record["t_total"] = int((time.perf_counter() - t0) * 1000)
-                        try:
-                            run_id = await asyncio.to_thread(self.runs_store.insert, record)
-                        except Exception as e:
-                            logger.error(f"{self.name}: run record failed: {e}")
-                        else:
-                            # Defer the broadcast until the lock is released (same
-                            # reason as `_run`).
-                            if self.run_events is not None:
-                                pending_run = summary_row(record, run_id)
+                    # Record the run; the broadcast is deferred until the lock is
+                    # released (same reason as `_run`).
+                    pending_run = await self._store_run(record, t0)
         finally:
             # Outside the lock: best-effort push of the finalized run to live
             # panel subscribers; only fires when the insert succeeded.
-            if pending_run is not None:
-                try:
-                    await self.run_events.broadcast({"type": "run", "run": pending_run})
-                except Exception as e:
-                    logger.error(f"{self.name}: run broadcast failed: {e}")
+            await self._broadcast_run(pending_run)
         return {
             "reply": reply,
             "result": record["result"],
@@ -1531,8 +1369,8 @@ class Pipeline:
     @staticmethod
     async def _tee_chunks(chunks, sink):
         """Pass-through wrapper over a TTS chunk async-iterator that also appends each
-        chunk to `sink`, so _run keeps a copy of the full streamed clip to store as the
-        run's TTS audio. On early close (aclose), the underlying iterator is closed
+        chunk to `sink`, so _voice keeps a copy of the full streamed clip to store as an
+        answer's TTS audio. On early close (aclose), the underlying iterator is closed
         too, so the backend's open response is always released."""
         try:
             async for chunk in chunks:
@@ -1580,8 +1418,9 @@ class Pipeline:
 
     async def _close_followup(self) -> None:
         """End a follow-up window that has heard no phrase yet the way silence ends it:
-        the device gets `state idle` and turns its microphone off. Proactive speech
-        calls it first, or the speaker would hear itself in the window as a phrase."""
+        the device gets `state idle` and turns its microphone off. Every speech calls it
+        first (_voice), or proactive speech would be heard in the window as a phrase; an
+        answer finds none open (its own finalized run is the current one)."""
         run = self._current
         if run is None or run.followup is None or run.finalized:
             return
@@ -1593,30 +1432,150 @@ class Pipeline:
         self._emit(StageEvent.RUN_END, {})
         await self._close_stt_streams(streams)
 
-    async def speak(self, text: str, attempts: list | None = None) -> dict | None:
-        """Public entry for proactive speech (reminders, external callers) and the
-        filler: synthesize via the first TTS variant that starts (see _start_tts) and
-        play it on the device, returning once it has played. A device without a
-        speaker gets no synthesis at all. `attempts` collects the variants tried (a
-        text run records them). Raises on failure (callers decide isolation).
+    async def speak_reply(self, text: str, record: dict, *, accent: bool = True,
+                          answer: bool = False):
+        """Speak `text` as a run's reply and fill the run's log `record` with how it
+        went: the one way a voice run's answer, a text request's reply and an
+        announcement are spoken.
+
+        The stress stage first (`accent`): '+' stress marks on the text so every TTS
+        backend pronounces Russian correctly. RuAccent's output IS the canonical
+        '+vowel' LLM->TTS contract, so the per-backend adaptation handles it unchanged.
+        It records t_stress, and stress_text only when it changed the text (so the
+        panel shows no no-op section); record["llm_text"] keeps the original reply.
+        Isolated: a failure falls back to the unmarked text. Then the speech (_voice):
+        the TTS variants until one starts, each in the record's attempts, and the
+        playback (play_dry, play_gap_ms). t_tts is the time from the first TTS attempt
+        to the start of the stream — the user-perceived TTS latency, the device plays
+        while synthesis continues; the variants are tried back to back, so their times
+        add up to it.
+
+        An `answer` is the reply of the device's voice session: the stress stage's
+        result goes to the panel live, TTS_START shows the device the spoken text (also
+        on a device without a speaker, which gets the text only), and its speech is
+        kept (audio_bytes, audio_fmt and the returned stored audio, raw PCM as WAV so
+        the panel can play it). Its t_tts stands once its stream started, even if the
+        playback then fails or the run is cancelled; another reply's only once it has
+        played.
+
+        A failure of the speech marks the record — result "error", and error stage
+        "TTS" unless an earlier stage owns it (a failed LLM's spoken phrase keeps the
+        LLM root cause) — is logged and raised.
+
+        Returns (played, tts_audio, tts_mime): what the play hook returned (None on a
+        device without a speaker) and an answer's stored speech (None, None for another
+        reply)."""
+        if accent:
+            stress = self.stress_backend
+            if stress is not None:
+                ra_t = time.perf_counter()
+                accented = text
+                accent_failed = False
+                try:
+                    accented = await stress.accentize(text)
+                except Exception as e:
+                    accent_failed = True
+                    logger.error(f"{self.name}: accent stage [{self._backend_desc(stress)}] failed: {e}")
+                record["t_stress"] = int((time.perf_counter() - ra_t) * 1000)
+                if accented != text:
+                    record["stress_text"] = accented
+                text = accented
+                # Logged on the success path only; a failure is logged above.
+                if not accent_failed:
+                    logger.info(
+                        f"{self.name}: ✒️ Accent [{self._backend_desc(stress)}] "
+                        f"({record['t_stress'] / 1000:.2f}s): {text!r}"
+                    )
+                if answer:
+                    self._emit_live(record)
+
+        def tts_ms() -> int:
+            return sum(a["t"] for a in record["attempts"] if a["kind"] == "tts")
+
+        tts_audio = tts_mime = None
+        done = False
+        try:
+            if answer:
+                self._emit(StageEvent.TTS_START, {"text": text})
+            played, clip = await self._voice(text, record["attempts"], keep=answer)
+            done = True
+            if played is not None:
+                record["play_dry"] = played["dry"]
+                record["play_gap_ms"] = played["gap_ms"]
+            if clip is not None:
+                mime, audio = clip
+                record["audio_bytes"] = len(audio)
+                record["audio_fmt"] = mime.partition(";")[0].rpartition("/")[2]
+                rate = pcm_rate(mime)
+                if rate is not None:
+                    tts_audio, tts_mime = pcm_to_wav_bytes(audio, rate=rate), "audio/wav"
+                else:
+                    tts_audio, tts_mime = audio, mime
+        except Exception as e:
+            record["result"] = "error"
+            if record["error_stage"] is None:
+                record["error_stage"] = "TTS"
+                record["error_text"] = str(e)
+            logger.error(f"{self.name}: TTS failed: {e}")
+            raise
+        finally:
+            # Also when the playback fails or the run is cancelled mid-speech (a stop
+            # word, a newer wake): an answer's t_tts stands once its stream started.
+            if done or (answer and any(a["kind"] == "tts" and a["outcome"] == "spoke"
+                                       for a in record["attempts"])):
+                record["t_tts"] = tts_ms()
+        return played, tts_audio, tts_mime
+
+    async def _voice(self, text: str, attempts: list | None = None, keep: bool = False):
+        """Synthesize `text` via the first TTS variant that starts (see _start_tts) and
+        play it on the device, returning once it has played: every speech — a reply
+        (speak_reply), a filler, proactive speech (speak). A device without a speaker
+        gets no synthesis at all. `attempts` collects the variants tried. Raises on
+        failure (callers decide isolation).
+
+        Returns (played, clip): what the play hook returned ({"outcome", "dry",
+        "gap_ms"}; None for a device without a speaker) and, when `keep`, the speech as
+        it was streamed, (mime, audio bytes); else None.
+        """
+        if not self.has_speaker:
+            return None, None
+        # Counted until it has played: a speech queued on the device behind an answer
+        # keeps that answer from opening a follow-up window (the answer's own count is
+        # released by the time it decides).
+        self._speaking += 1
+        try:
+            await self._close_followup()
+            t = time.perf_counter()
+            # The backend of the variant that started both synthesizes and labels the
+            # log line, so they can never diverge.
+            backend, mime, audio = await self._start_tts(text, attempts)
+            logger.info(f"{self.name}: 🔊 TTS [{self._backend_desc(backend)}] "
+                        f"stream start ({time.perf_counter() - t:.2f}s): {text!r}")
+            chunks = []
+            try:
+                played = await self.play(mime, self._tee_chunks(audio, chunks) if keep else audio)
+            finally:
+                # The tee only closes `audio` once it has started.
+                await self._close_stream(audio)
+            if not keep:
+                return played, None
+            clip = b"".join(chunks)
+            logger.info(f"{self.name}: 🔊 TTS played "
+                        f"({time.perf_counter() - t:.2f}s total, {len(clip)} bytes)")
+            return played, (mime, clip)
+        finally:
+            self._speaking -= 1
+
+    async def speak(self, text: str) -> dict | None:
+        """Public entry for proactive speech without a run record (the filler,
+        external callers): the speech of `text` (_voice). Raises on failure (callers
+        decide isolation).
 
         Returns what the play hook does ({"outcome", "dry", "gap_ms"}); None for a
         device without a speaker.
         """
-        if not self.has_speaker:
-            return None
-        # Counted until it has played: a speech started while an answer still plays is
-        # queued behind it on the device, so that answer opens no follow-up window.
-        self._speaking += 1
-        try:
-            await self._close_followup()
-            # The backend of the variant that started both synthesizes and labels the
-            # log line, so they can never diverge.
-            backend, mime, audio = await self._start_tts(text, attempts)
-            logger.info(f"{self.name}: 🔔 speak [tts={self._backend_desc(backend)}]: {text!r}")
-            return await self.play(mime, audio)
-        finally:
-            self._speaking -= 1
+        played, _ = await self._voice(text)
+        return played
 
     async def _deliver_filler(self, text: str) -> None:
         """Speak an early 'filler' line via speak().

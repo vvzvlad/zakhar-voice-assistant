@@ -30,6 +30,7 @@ from src.chime import build_ack_clip
 from src.pipeline import Pipeline
 from src.pipeline_events import StageEvent
 from src.run_events import record_run
+from src.runs_store import new_record
 from src.tts import pcm_rate
 from src.wake_arbiter import WakeArbiter
 
@@ -295,13 +296,10 @@ class Connection:
         # The session the server stamps its messages with, and whether its run is still
         # going (from wake until the terminal state): plays in that window belong to
         # the session. While a wake's run is held before the server takes it (the
-        # pipeline's proposal) the device is already on the held wake's number and drops
-        # the states and text stamped with this one; play_start/play_end pass whatever
-        # their session.
+        # pipeline's proposal) the device stays on this number and lets the held wake's
+        # through too; its `listening` or `state idle` (_end_wake) rules on the wake.
         self.session = None
         self.session_open = False
-        # The last `state`, `transcript` and `reply` sent in the current session, by type.
-        self.last_sent: dict[str, dict] = {}
         self.config_sent = None  # _config_fields() last sent in `config`
         self.log_on = None  # `on` last sent in `log_stream`
         self.models: dict[str, str] = {}  # kind -> the name last sent in `model`
@@ -342,7 +340,6 @@ class Connection:
         """Send a message of the current session, stamped with it."""
         if self.session is None:
             return
-        self.last_sent[msg["type"]] = msg
         self.send({**msg, "session": self.session})
 
     def send_config(self, cfg) -> None:
@@ -378,7 +375,6 @@ class Connection:
         `play_stop` before anything else of the new session."""
         self.session = session
         self.session_open = True
-        self.last_sent = {}
         self.drop_playback()
 
     @property
@@ -574,25 +570,13 @@ class Device:
             self.conn.start_session(session)
 
     def _end_wake(self, session) -> None:
-        """The pipeline's end_wake hook: the run of the `wake` that opened `session` ends
-        without being taken (its check rejected it, or it lost the arbitration). The
-        running answer goes on under the new session number, so the device hears the
-        rest of it: what the device dropped while it was on the new number, now stamped
-        with it — the run's text for a screen, then its state, which the device follows
-        as it would have (the mic stops, a follow-up `listening` keeps it streaming);
-        `state idle` when no run is going. The run's later messages carry the new
-        number."""
-        conn = self.conn
-        if conn is None:
-            return
-        conn.session = session
-        if conn.session_open:
-            for kind in ("transcript", "reply"):
-                if kind in conn.last_sent:
-                    conn.send_session(conn.last_sent[kind])
-            conn.send_session(conn.last_sent["state"])
-        else:
-            conn.send_session({"type": "state", "value": "idle"})
+        """The pipeline's end_wake hook: the run of the `wake` that proposed `session`
+        ends without being taken (its check rejected it, or it lost the arbitration).
+        `state idle` of that number refuses it: the device drops the proposal, whose audio
+        stops unless the current session listens for a follow-up, and stays on the
+        current session, whose answer plays on."""
+        if self.conn is not None:
+            self.conn.send({"type": "state", "session": session, "value": "idle"})
 
     async def on_text(self, conn: Connection, msg: dict) -> None:
         if conn is not self.conn:
@@ -781,28 +765,17 @@ class Device:
         (if any), `text` is the reply, and a failure carries the error stage ("device"
         when offline, "TTS" when the speech failed). An announcement that reached the
         device also joins its conversation context as a note that it was spoken, so
-        a follow-up question can refer to it. Raises on failure, after the run is
-        recorded."""
+        a follow-up question can refer to it. The text is spoken as it is, without the
+        stress stage. Raises on failure, after the run is recorded."""
         t0 = time.perf_counter()
-        record = {"ts": time.time(), "device": self.name, "reason": reason, "result": "ok",
-                  "stt_text": request, "llm_text": text,
-                  "error_stage": None, "error_text": None, "attempts": [],
-                  "play_dry": None, "play_gap_ms": None}
+        record = new_record(self.name, reason, result="ok", stt_text=request, llm_text=text)
         try:
             conn = self.conn
             if conn is None:
                 record.update(result="error", error_stage="device", error_text="offline")
                 raise RuntimeError(f"{self.name} is offline")
             conn.send({"type": "reply", "text": text})
-            try:
-                played = await self.pipeline.speak(text, record["attempts"])
-            except Exception as e:
-                record.update(result="error", error_stage="TTS", error_text=str(e))
-                raise
-            if played is not None:
-                record.update(play_dry=played["dry"], play_gap_ms=played["gap_ms"])
-            # Time to the start of the speech, as a text run counts it.
-            record["t_tts"] = sum(a["t"] for a in record["attempts"] if a["kind"] == "tts")
+            await self.pipeline.speak_reply(text, record, accent=False)
             ctx = self.rt.core.context
             context.append_spoken(self.pipeline._context_path, text,
                                   max_turns=ctx.max_turns, ttl_seconds=ctx.ttl_seconds)

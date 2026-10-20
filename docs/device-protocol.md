@@ -294,8 +294,10 @@ device                                   server
                                          or, with follow-up on, state listening (see Follow-up)
 ```
 
-- `wake`: `{"type": "wake", "session": 17, "word": "Захар"}`. `session` is a device counter, +1 for
-  every wake. Right after `wake` the device streams the microphone: first the pre-roll (the 2000 ms
+- `wake`: `{"type": "wake", "session": 17, "word": "Захар"}`. `session` is the number the device
+  proposes for the session the wake would start: a device counter, +1 for every wake, never
+  reused. The device stays on its current session until the server takes the proposal (below).
+  Right after `wake` the device streams the microphone: first the pre-roll (the 2000 ms
   of audio before the detection; the server's end-pointing takes the wake word to end where the
   pre-roll ends) as fast as it can, then live audio in 32 ms frames (512 samples per channel,
   interleaved when `mic.channels` is 2). On the Voice PE
@@ -306,37 +308,40 @@ device                                   server
   switch each way takes the device two 32 ms frames. During an auto volume measurement channel 0
   is the raw microphone 0 as read, at gain 1, switched the same way; a wake ends the measurement
   and switches it back (see [Auto volume](#auto-volume)).
-- The device keeps streaming until a `state` of this session other than `listening` arrives. The
-  end of the phrase is found by the server's VAD; the device has no end-pointing.
+- The device keeps streaming until the server refuses the wake or, once it takes it, until a
+  `state` of this session other than `listening` arrives. The end of the phrase is found by the
+  server's VAD; the device has no end-pointing.
 - `state`: `{"type": "state", "session": 17, "value": "listening"}`. Values: `listening`,
   `transcribing`, `thinking`, `speaking`, `idle`, `error` (`error` carries `text`). The device
-  draws its indication from these only. Between `wake` and `listening` it shows nothing: the
-  server may still reject the wake word with `state idle`, or over a running answer with that
-  answer's `state`.
+  draws its indication from the states of its current session only: between `wake` and the
+  server's ruling it goes on showing what the current session shows, a running answer included.
 - `transcript` and `reply` carry the recognised phrase and the answer text, for devices with a
   screen. `reply` without `session` is an announcement (a reminder, an agent's `speak`).
 - Every server message of a session carries its `session`; the device drops messages whose
-  `session` is not its current one, except `play_start` and `play_end`, which it takes whatever
-  their `session`: the playback of a session a new `wake` replaced plays on until `play_stop`.
-  While a session's microphone streams (from `wake` or a follow-up `listening` to the next
-  `state` other than `listening`) a wake word starts no new session: the phrase is still being
-  said, and a detection inside it must not cut it off.
-- After that a new `wake` replaces the current session. The device leaves its playback alone: the
-  detection may be its own voice. The server holds every `wake` until its second wake-word check
-  confirms it on the new session's microphone audio (at once when that check is off), and the
-  older run goes on meanwhile; over a running answer (a run of the device is going or a stream is
-  playing) the check also tells apart words that sound like the wake word (the Vosk check's
-  `answer_sound_alikes`), since the device's own voice reaches it. A confirmed wake is taken: the
-  server cancels the older run and, before anything else of the new session, sends `play_stop`,
-  which flushes the device's playback, a stream the server started before it saw the `wake`
-  included; the audio held meanwhile goes to its run. A rejected one gets the older run's last
-  `transcript`, `reply` and `state`, those it has, stamped with the new `session` (`state idle`
-  when no run is going), and the device follows that `state` as it would have: the microphone
-  stops, unless the `state` is a follow-up `listening` (the older run opened its follow-up window
-  while the wake was held), which keeps it streaming into that window. The playback goes on to its
-  end, and the older run carries on under the new number. The run log shows the rejected wake as
-  `rejected`, reason `wakeword_reject` (`wakeword_error` when the check timed out or failed and
-  its policy rejects).
+  `session` is neither its current one nor the one it proposed, except `play_start` and
+  `play_end`, which it takes whatever their `session`: only `play_stop` drops the playback, and a
+  wake the server has not taken leaves it playing.
+  While the microphone streams (from `wake` to the server's ruling, and in a session from its
+  `listening` or a follow-up `listening` to the next `state` other than `listening`) a wake word
+  proposes no new session: the phrase is still being said, and a detection inside it must not
+  cut it off.
+- After that a new `wake` proposes the next session. A proposal changes only the microphone: its
+  audio streams, while the current session, its playback and the indication stay as they are —
+  the detection may be the device's own voice. The server holds every `wake` until its second
+  wake-word check confirms it on the proposal's microphone audio (at once when that check is off),
+  and the older run goes on meanwhile; over a running answer (a run of the device is going or a
+  stream is playing) the check also tells apart words that sound like the wake word (the Vosk
+  check's `answer_sound_alikes`), since the device's own voice reaches it. A confirmed wake is
+  taken: the server cancels the older run and sends `play_stop`, which flushes the device's
+  playback, a stream the server started before it saw the `wake` included, then `state listening`
+  with the proposed `session`, which makes it the device's current session; the audio held
+  meanwhile goes to its run. A rejected one gets `state idle` with the proposed `session` (any
+  `state` of that number other than `listening` refuses it): the device drops the proposal
+  without showing it, and its microphone stops unless the current session listens for a follow-up
+  (the older run opened its follow-up window while the wake was held), which keeps it streaming
+  into that window. The current session goes on under its own number, its playback to its end.
+  A lost link drops a proposal. The run log shows the rejected wake as `rejected`, reason
+  `wakeword_reject` (`wakeword_error` when the check timed out or failed and its policy rejects).
 - One phrase heard by several devices: the server holds a `wake` for 500 ms to collect the wakes
   of the other online devices, or less once every online device has woken; a lone online device
   is not held. With several wakes it rules only once
@@ -363,7 +368,8 @@ device                                   server
 - `stop`: `{"type": "stop", "session": 17}`, device → server: the stop word. The device runs the
   stop model from 1 s after its playback starts until the playback ends; a detection flushes the
   playback and sends `stop`, then `played {id, "dropped": true}` for each stream it dropped.
-  `session` is the open session's number, absent outside a session. A stop word starts no session.
+  `session` is the current session's number while it is open, absent outside a session; a
+  proposed one is never named. A stop word starts no session.
   The server drops the playback as for a `wake` it takes and sends `play_stop`; in a session it
   then cancels the run and ends the session with `state idle`, outside one (an announcement, an
   agent's `speak`) only the playback stops.
@@ -386,7 +392,8 @@ the answer, so the next phrase needs no wake word:
 
 - A `listening` of the open session whose microphone is off turns the microphone on again: the
   device streams live audio from the moment the `listening` arrives, no pre-roll, in the frames of
-  a wake.
+  a wake. While a proposed wake's audio is streaming, the follow-up goes on in that stream from
+  where it is.
 - The server waits `followup` window for speech to start. Silence ends the session with
   `state idle`, without a sound. A phrase goes to the jev decision model with the assistant's name
   (the `word` of the session's `wake`), the last request and answer; one it does not take for a
@@ -445,11 +452,11 @@ the answer, so the next phrase needs no wake word:
 ### Auto volume
 
 - While `auto_volume` is on, the device measures the room's noise after every 15 s of quiet:
-  nothing playing, no session open and no capture held. The Voice PE switches the XMOS channel 0
+  nothing playing, no session open, no wake proposed and no capture held. The Voice PE switches the XMOS channel 0
   to the raw microphone 0 (stage NONE: before the XMOS's echo cancellation, noise suppression and
   AGC) for about a second, takes the RMS of its 32-bit slots and sends `ambient {value}`:
-  `20·log10(rms / 2^31)` dBFS, one decimal. Playback starting, a session opening or a capture
-  starting ends a measurement at once and nothing is sent: channel 0 goes back to AGC, or stays
+  `20·log10(rms / 2^31)` dBFS, one decimal. Playback starting, a wake or a capture starting ends
+  a measurement at once and nothing is sent: channel 0 goes back to AGC, or stays
   raw for a playback's echo cancellation. Channel 1, the wake word's input, does not change.
 - The server keeps the connection's last 4 `ambient` values (a minute) and sends
   `volume_boost {value}`, `round((median − threshold) × gain)` within −100..100 (negative below
@@ -470,7 +477,8 @@ outside any voice session.
 1. Server → `capture {id, seconds}`. `id` (> 0) is the server's number for this capture, opaque to
    the device. The device pauses wake-word detection and records `seconds` of the microphone from
    the moment of the command, no pre-roll. A new `capture` replaces a running one. While a session
-   is open the device refuses with `audio_end {reason: "busy", id}`.
+   is open or a wake awaits the server's ruling the device refuses with
+   `audio_end {reason: "busy", id}`.
 2. Device → `0x04` frames: the kind byte, the offset of the frame's first sample as a u32
    little-endian count of frames (one sample per channel) from the capture's first frame, then
    32 ms of samples interleaved as in `0x01`. Offsets grow; a jump between two frames is audio

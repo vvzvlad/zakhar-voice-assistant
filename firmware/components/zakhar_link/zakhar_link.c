@@ -106,11 +106,15 @@ static char *s_model_name;
 static uint8_t *s_model;
 
 // The next microphone frame to send: set by wake(), capture_start() and capture_resume() and
-// advanced by mic_poll(), all on the component task; set by on_text() on the client's task, under
-// s_lock, when a follow-up `listening` turns the mic on again: no mic_poll() reads it then (the mic
-// is off from before the `played` this task sent), and the next one reads it after seeing the mic
-// on under s_lock.
+// advanced by mic_poll(), all on the component task, the only one that touches it. A follow-up
+// `listening` that starts the stream again (on_text(), the client's task) leaves where it starts
+// in s_mic_rewind_pos with s_mic_rewind under s_lock, and mic_poll() moves s_mic_pos there under
+// the same lock before it reads: a mic_poll() may still be sending the audio of a wake the server
+// has just refused. wake(), capture_start() and capture_resume() drop a rewind still pending when
+// they set the position themselves.
 static uint32_t s_mic_pos;
+static uint32_t s_mic_rewind_pos;
+static bool s_mic_rewind;
 // The component task only: a microphone frame with its samples always from byte 8, aligned: a
 // session's frame starts at byte 7 with its kind byte, a capture's at byte 3 with its kind byte and
 // the offset at bytes 4..7.
@@ -229,7 +233,7 @@ static void on_text(esp_websocket_client_handle_t ws, const char *json, size_t l
     const uint32_t mic_now = s_cfg.mic_position();
     uint32_t dropped[ZL_PLAYQ_STREAMS];
     size_t ndropped = 0, overflow = 0;
-    bool done = false;
+    bool done = false, shown = false, rewind = false;
     lock();
     const bool current = zl_sess_accepts(&s_sess, &m);
     if (current) {
@@ -239,7 +243,11 @@ static void on_text(esp_websocket_client_handle_t ws, const char *json, size_t l
             if (m.play_prime_ms >= 0) s_playq.prime = (size_t)s_cfg.play_rate * (size_t)m.play_prime_ms / 1000;
             break;
         case ZL_MSG_STATE:
-            if (zl_sess_state(&s_sess, m.state)) s_mic_pos = mic_now;
+            shown = zl_sess_state(&s_sess, &m, &rewind);
+            if (rewind) {
+                s_mic_rewind_pos = mic_now;
+                s_mic_rewind = true;
+            }
             break;
         case ZL_MSG_PLAY_START:
             if (speaker && !zl_playq_start(&s_playq, m.id)) dropped[ndropped++] = m.id;
@@ -277,7 +285,7 @@ static void on_text(esp_websocket_client_handle_t ws, const char *json, size_t l
     }
     unlock();
     if (!current) {
-        ESP_LOGD(TAG, "dropped, session %u is not current: %.*s", (unsigned)m.session, (int)len, json);
+        ESP_LOGD(TAG, "dropped, session %u is neither current nor proposed: %.*s", (unsigned)m.session, (int)len, json);
         zl_msg_free(&m);
         return;
     }
@@ -292,6 +300,10 @@ static void on_text(esp_websocket_client_handle_t ws, const char *json, size_t l
         if (m.auto_volume >= 0 && s_cb.on_auto_volume != NULL) s_cb.on_auto_volume(m.auto_volume == 1);
         break;
     case ZL_MSG_STATE:
+        if (!shown) {
+            ESP_LOGI(TAG, "session %u not taken: %s", (unsigned)m.session, zl_state_name(m.state));
+            break;
+        }
         ESP_LOGI(TAG, "session %u: %s%s%s", (unsigned)m.session, zl_state_name(m.state), m.text != NULL ? ": " : "",
                  m.text != NULL ? m.text : "");
         if (s_cb.on_state != NULL) s_cb.on_state(m.state, m.text);
@@ -559,7 +571,7 @@ static void wake(void)
         ESP_LOGI(TAG, "wake word ignored: no server");
         return;
     }
-    // Refused before the start gate is asked, so can_start sees only wakes that start a session.
+    // Refused before the start gate is asked, so can_start sees only wakes that propose a session.
     if (would != ZL_WAKE_START) {
         wake_refused(would);
         return;
@@ -571,19 +583,23 @@ static void wake(void)
     // Counted back from the detection, not from now: this task may reach the event late.
     const uint32_t pos = atomic_load(&s_wake_pos);
     const uint32_t preroll = (uint32_t)s_cfg.preroll_ms * (ZL_MIC_RATE / 1000);
-    // The playback is left alone: the detection may be the speaker's own voice. The server flushes
-    // it with play_stop once it takes the wake: at once when its wake-word check is off or nothing
-    // is going, otherwise once that check confirms the wake.
+    // The playback and the current session are left alone: the detection may be the speaker's own
+    // voice. The server takes the wake with play_stop and `listening` of the proposed number: at
+    // once when its wake-word check is off or nothing is going, otherwise once that check confirms
+    // the wake; it refuses one with another `state` of that number.
     lock();
     const zl_wake_t w = zl_sess_wake(&s_sess);
-    const uint32_t session = s_sess.session;
-    if (w == ZL_WAKE_START) s_mic_pos = pos - (pos < preroll ? pos : preroll);
+    const uint32_t session = s_sess.proposed;
+    if (w == ZL_WAKE_START) {
+        s_mic_pos = pos - (pos < preroll ? pos : preroll);
+        s_mic_rewind = false;
+    }
     unlock();
     if (w != ZL_WAKE_START) {  // a `detect` off came in while can_start was asked
         wake_refused(w);
         return;
     }
-    ESP_LOGI(TAG, "wake word \"%s\": session %u", word, (unsigned)session);
+    ESP_LOGI(TAG, "wake word \"%s\": session %u proposed", word, (unsigned)session);
     send_json(s_ws, zl_encode_wake(session, word));
 }
 
@@ -609,7 +625,7 @@ static void stop(void)
 }
 
 // A `capture` from the server: from now, no pre-roll, in place of one held already; refused while
-// a session is open.
+// a session is open or a wake is proposed.
 static void capture_start(void)
 {
     const uint32_t pos = s_cfg.mic_position();
@@ -621,6 +637,7 @@ static void capture_start(void)
         s_capture_id = id;
         s_capture_sending = true;
         s_mic_pos = pos;
+        s_mic_rewind = false;
         s_capture_start = pos;
         s_capture_frames = ms * (ZL_MIC_RATE / 1000);
     }
@@ -644,6 +661,7 @@ static void capture_resume(void)
     const bool resumed = s_online && s_sess.capture && id == s_capture_id;
     if (resumed) {
         s_mic_pos = s_capture_start + (from < s_capture_frames ? from : s_capture_frames);
+        s_mic_rewind = false;
         s_capture_sending = true;
     }
     unlock();
@@ -677,15 +695,19 @@ static void capture_poll(void)
     if ((done || expired) && s_cb.on_capture != NULL) s_cb.on_capture(false);
 }
 
-// The session's or the capture's microphone audio: whole frames only, at most
-// MAX_FRAMES_PER_PASS per pass, so the pre-roll goes out at that pace and then the live audio.
+// The microphone audio of the session, of a proposed one or of the capture: whole frames only, at
+// most MAX_FRAMES_PER_PASS per pass, so the pre-roll goes out at that pace and then the live audio.
 // A capture's frame carries its offset, taken after the read: mic_read() skips forward past audio
 // the tap no longer holds.
 static void mic_poll(void)
 {
     lock();
+    if (s_mic_rewind) {
+        s_mic_pos = s_mic_rewind_pos;
+        s_mic_rewind = false;
+    }
     const bool capture = s_sess.capture && s_capture_sending;
-    const bool on = s_online && (s_sess.mic || capture);
+    const bool on = s_online && (zl_sess_streams(&s_sess) || capture);
     unlock();
     if (!on) return;
     const size_t samples = ZL_FRAME_FRAMES * (size_t)s_cfg.mic_channels;
@@ -779,7 +801,6 @@ static void link_task(void *arg)
         }
         if (ev & EV_CAPTURE) capture_start();
         if (ev & EV_CAPTURE_RESUME) capture_resume();
-        // Before a wake of the same pass: its `stop` names the session the wake replaces.
         if (ev & EV_STOP) stop();
         if (ev & EV_WAKE) wake();
         if (ev & EV_PLAYED) send_played();
@@ -858,7 +879,7 @@ bool zl_mic_busy(void)
 {
     if (s_lock == NULL) return false;
     lock();
-    const bool busy = s_sess.open || s_sess.capture;
+    const bool busy = zl_sess_busy(&s_sess);
     unlock();
     return busy;
 }

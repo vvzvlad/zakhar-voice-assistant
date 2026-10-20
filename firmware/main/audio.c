@@ -257,7 +257,7 @@ static void mic_task(void *arg)
             applied = level;
         }
         // Quiet is auto volume on, nothing playing (zakhar's playback or a music stream), no session
-        // open and no capture held; its end ends a measurement.
+        // open, no wake proposed and no capture held; its end ends a measurement.
         const bool playing = zl_playing() || music_active();
         const bool measuring = ambient_sched_want(
             &amb, atomic_load_explicit(&s_auto_volume, memory_order_relaxed) && !playing && !zl_mic_busy());

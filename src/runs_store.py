@@ -13,6 +13,7 @@ import json
 import os
 import sqlite3
 import threading
+import time
 
 _CREATE_TABLE = """
 CREATE TABLE IF NOT EXISTS runs (
@@ -497,6 +498,27 @@ def _per_chain(rows) -> dict:
         if r["chain"] is not None:
             totals.setdefault(r["chain"], []).append(r["t_total"])
     return {name: {"served": len(ts), "avg_ms": _avg(ts)} for name, ts in totals.items()}
+
+
+def new_record(device: str, reason: str, **fields) -> dict:
+    """A run log record before its stages fill it in: the keys every run has — a voice
+    run, a text request and an announcement alike. `fields` set the rest; a key a run
+    never sets is stored as NULL (insert)."""
+    return {
+        "ts": time.time(),
+        "device": device,
+        "reason": reason,
+        "result": "empty",
+        "stt_text": "", "llm_text": "",
+        "error_stage": None, "error_text": None,
+        # What the run tried: its recognition chains (see chains.ChainRun) and its
+        # TTS variants (Pipeline._start_tts).
+        "attempts": [],
+        # The reply's playback as the device reports it: times it ran dry and the ms
+        # of silence played meanwhile. None when it does not count.
+        "play_dry": None, "play_gap_ms": None,
+        **fields,
+    }
 
 
 def summary_row(rec: dict, run_id: int, has_audio: bool = False) -> dict:
