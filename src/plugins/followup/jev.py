@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field
 
 from src.followup import FollowupGate, FollowupVerdict, NoFollowup
 from src.plugins.base import ADVANCED_FIELD_EXTRA, Deps, Provider, register
-from src.plugins.llm.jev import DECISIONS_API_URL, JevProvider, _noul_answer
+from src.plugins.llm._decisions import DECISIONS_API_URL, noul_answer
 
 _CONTINUATION_QUESTION = {
     "type": "noul",
@@ -84,7 +84,7 @@ class JevFollowupGate(FollowupGate):
     async def check(self, name: str, request: str, reply: str,
                     utterance: str) -> FollowupVerdict:
         try:
-            jev = self._instance_config("llm", JevProvider.id)
+            jev = self._instance_config("llm", "jev")
             resp = await self._client.post(
                 DECISIONS_API_URL,
                 headers={"Authorization": f"Bearer {jev.api_key}"},
@@ -97,7 +97,7 @@ class JevFollowupGate(FollowupGate):
                 timeout=self._timeout,
             )
             resp.raise_for_status()
-            probability = _noul_answer(resp.json()["answers"], "continuation")
+            probability = noul_answer(resp.json()["answers"], "continuation")
         except Exception as e:  # noqa: BLE001 - the check never raises: a failure drops the phrase
             logger.warning(f"jev follow-up: decision model call failed: {type(e).__name__}: {e}")
             return FollowupVerdict(accepted=False, probability=None)

@@ -302,18 +302,20 @@ def test_vocabulary_empty_for_cloud_llm(tmp_path):
 
 
 def test_vocabulary_uses_simple_nlu_words(tmp_path):
-    # vocabulary(id) returns the handler instance's alias/verb/number words (the
-    # provider-agnostic vocabulary() hook) — the words a narrowing chain restricts to.
-    from src.plugins.llm.simple_nlu import nlu_vocabulary
+    # vocabulary(id) returns the handler's alias/verb/number words of the command
+    # catalog (the provider-agnostic vocabulary() hook) — the words a narrowing chain
+    # restricts to.
+    from src.commands import nlu_vocabulary
+    from src.core_config import CommandsConfig
 
     doc = _doc()
     aliases = "свет в зале, люстра = bright_room_light"
     actions = "on = включи\noff = выключи"
-    doc["llm"]["instances"]["simple-nlu"] = {"aliases": aliases, "actions": actions}
+    doc["core"]["commands"] = {"aliases": aliases, "actions": actions}
     svc = ConfigService(doc, _deps(), path=str(tmp_path / "config.json"))
 
     vocab = svc.vocabulary("simple-nlu")
-    assert vocab == nlu_vocabulary(aliases, actions)
+    assert vocab == nlu_vocabulary(aliases, actions, CommandsConfig().filler_words)
     # Non-empty and contains the spoken phrase/verb words.
     assert "свет" in vocab and "включи" in vocab
 
@@ -325,7 +327,7 @@ def test_base_provider_vocabulary_returns_empty(tmp_path):
 
     svc = _service(tmp_path)
     prov = get_provider("llm", "openrouter")
-    assert prov.vocabulary(svc.instance_config("llm", "openrouter")) == []
+    assert prov.vocabulary(svc.instance_config("llm", "openrouter"), svc.core.commands) == []
 
 
 def test_provider_returns_selected_provider_object(tmp_path):
@@ -402,7 +404,7 @@ def test_every_panel_form_field_has_a_title():
     models = [p.ConfigModel for provs in REGISTRY.values() for p in provs.values()]
     models += [CoreConfig.model_fields[s].annotation for s in (
         "context", "audio", "vad", "ack", "network", "openweathermap", "calendar",
-        "reminders", "agent_mcp", "runs")]
+        "reminders", "agent_mcp", "runs", "commands")]
     untitled = [f"{m.__name__}.{name}" for m in models for name, f in m.model_fields.items()
                 if f.title is None and not (f.json_schema_extra or {}).get("hidden")]
     assert untitled == []

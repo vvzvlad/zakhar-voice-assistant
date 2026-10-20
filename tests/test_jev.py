@@ -1,7 +1,7 @@
 """Tests for the Jev decision-model handler against a fake Decisions endpoint.
 
-The device options and verbs come from the simple-nlu settings (the Commands page),
-so the fixtures reuse the Simple NLU tests' tool catalog and aliases.
+The device options and verbs come from the command catalog (core.commands, the
+Commands page), so the fixtures reuse the Simple NLU tests' tool catalog and aliases.
 """
 
 import json
@@ -10,17 +10,13 @@ import httpx
 import pytest
 
 import src.plugins  # noqa: F401  triggers @register on all providers
+from src.commands import build_lemmatizer, index_tools, parse_actions, parse_aliases
 from src.config_service import ConfigService
+from src.core_config import CommandsConfig
 from src.llm import LlmRequest, LlmStage
 from src.plugins.base import Deps, get_provider
-from src.plugins.llm.jev import DECISIONS_API_URL, JevConfig, _named_targets, _targets
-from src.plugins.llm.simple_nlu import (
-    SimpleNluConfig,
-    build_lemmatizer,
-    index_tools,
-    parse_actions,
-    parse_aliases,
-)
+from src.plugins.llm._decisions import DECISIONS_API_URL
+from src.plugins.llm.jev import JevConfig, _named_targets, _targets
 from src.stage_errors import Declined
 from tests.test_simple_nlu import _ALIASES, _PROD, FAKE_TOOLS, FakeHub, _strict
 
@@ -35,13 +31,13 @@ def _client(respond, requests):
     return httpx.AsyncClient(transport=httpx.MockTransport(handler))
 
 
-def _jev(respond):
-    """(backend, requests): a jev backend reading the Commands names `_ALIASES`."""
+def _jev(respond, **catalog):
+    """(backend, requests): a jev backend reading the Commands names `_ALIASES` and
+    the other `catalog` fields."""
     requests = []
-    names = SimpleNluConfig(aliases=_ALIASES)
     client = _client(respond, requests)
     deps = Deps(http_cloud=client, http_local=client,
-                instance_config=lambda *key: {("llm", "simple-nlu"): names}[key])
+                commands=lambda: CommandsConfig(aliases=_ALIASES, **catalog))
     return get_provider("llm", "jev").create(JevConfig(api_key="key"), deps), requests
 
 
@@ -83,6 +79,12 @@ async def test_runs_a_confident_command(text, respond, name, args):
     assert msg["tool_calls"][0]["function"]["name"] == name
     assert json.loads(msg["tool_calls"][0]["function"]["arguments"]) == args
     assert data["model"] == f"jev/{name}"
+
+
+async def test_an_on_verb_sets_the_on_level_of_the_catalog():
+    backend, _ = _jev(_answers(target="set_dimmer.device_id=night_light", action="on"), level_on=60)
+    assert await _strict(backend, "включи ночник") == (
+        "set_dimmer", {"device_id": "night_light", "brightness": 60})
 
 
 async def test_end_to_end_through_llm_stage():
@@ -133,23 +135,24 @@ async def test_request_carries_the_alias_options():
 
 
 async def test_an_edited_commands_alias_reaches_the_next_request_without_a_rebuild(tmp_path):
-    # The real wiring: Deps.instance_config bound to the ConfigService, one backend
-    # built before the Commands page's aliases change.
+    # The real wiring: Deps.commands bound to the ConfigService, one backend built
+    # before the Commands page's aliases change.
     requests = []
     client = _client(_answers(), requests)
     deps = Deps(http_cloud=client, http_local=client)
     svc = ConfigService({
         "stt": {"instances": {}},
-        "llm": {"instances": {"simple-nlu": {"aliases": _ALIASES}}},
+        "llm": {"instances": {}},
         "tts": {"variants": [{"provider": "yandex"}]},
-        "core": {"chains": [{"name": "jev", "stt": "groq", "handler": "jev"}]},
+        "core": {"chains": [{"name": "jev", "stt": "groq", "handler": "jev"}],
+                 "commands": {"aliases": _ALIASES}},
     }, deps, path=str(tmp_path / "config.json"))
-    deps.instance_config = svc.instance_config
+    deps.commands = lambda: svc.core.commands
     backend = svc.create_instance("llm", "jev")
 
     await _strict(backend, "Захар, зажги люстру")
     edited = "большой свет = bright_room_light"
-    svc.apply({"llm": {"instances": {"simple-nlu": {"aliases": edited}}}})
+    svc.apply({"core": {"commands": {"aliases": edited}}})
     await _strict(backend, "Захар, зажги люстру")
 
     assert [json.loads(r.content)["questions"]["target"]["criteria"] for r in requests] == [
@@ -237,8 +240,8 @@ async def test_is_not_asked_what_it_cannot_answer(text, tools, reason):
 ])
 def test_names_the_devices_of_the_production_list(text, named):
     pytest.importorskip("pymorphy3")
-    tools_index = index_tools(_PROD["tools"], set(parse_actions(_PROD["nlu"]["actions"])))
-    targets = _targets(parse_aliases(_PROD["nlu"]["aliases"]), tools_index)
+    tools_index = index_tools(_PROD["tools"], set(parse_actions(_PROD["commands"]["actions"])))
+    targets = _targets(parse_aliases(_PROD["commands"]["aliases"]), tools_index)
     keys = _named_targets(targets, text, build_lemmatizer())
     assert [key.split("=")[1] for key in keys] == named
 

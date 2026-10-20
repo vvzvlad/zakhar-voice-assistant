@@ -73,10 +73,25 @@ function makeSources() {
   };
 }
 
+// Functional in-memory localStorage: the ambient global in this environment is
+// Node's experimental (nonfunctional without --localstorage-file) webstorage,
+// which shadows jsdom's — stub a real one so the hidden sources are testable.
+function makeLocalStorage() {
+  let store = {};
+  return {
+    getItem: (k) => (k in store ? store[k] : null),
+    setItem: (k, v) => { store[k] = String(v); },
+    removeItem: (k) => { delete store[k]; },
+    clear: () => { store = {}; },
+  };
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.stubGlobal("localStorage", makeLocalStorage());
   api.getTools.mockResolvedValue(makeSources());
 });
+afterEach(() => vi.unstubAllGlobals());
 
 const draft = { aliases: "", actions: "" };
 
@@ -248,7 +263,7 @@ describe("NluCatalogEditor (catalog port)", () => {
     expect(screen.getByText("fountain")).toBeInTheDocument();
   });
 
-  it("clicking a source chip persists it into draft.hidden_sources via onChange", async () => {
+  it("clicking a source chip hides its values and remembers it in this browser, not in the config", async () => {
     api.getTools.mockResolvedValue({
       sources: [
         {
@@ -263,16 +278,21 @@ describe("NluCatalogEditor (catalog port)", () => {
     });
     const onChange = vi.fn();
     render(<NluCatalogEditor draft={draft} onChange={onChange} />);
-    await screen.findByText("lamp");
+    await screen.findByText("fountain");
 
-    // Toggling an active source hides it -> onChange("hidden_sources", [...includes id]).
     fireEvent.click(screen.getByText("garden").closest(".e-srv"));
-    expect(onChange).toHaveBeenCalledTimes(1);
-    expect(onChange.mock.calls[0][0]).toBe("hidden_sources");
-    expect(onChange.mock.calls[0][1]).toContain("garden");
+    expect(screen.queryByText("fountain")).toBeNull();
+    expect(onChange).not.toHaveBeenCalled();
+    expect(JSON.parse(localStorage.getItem("zakhar.commands.hidden_sources"))).toEqual(["garden"]);
+
+    // A reload keeps it hidden.
+    cleanup();
+    render(<NluCatalogEditor draft={draft} onChange={onChange} />);
+    await screen.findByText("lamp");
+    expect(screen.queryByText("fountain")).toBeNull();
   });
 
-  it("hides a source's values when its id is in draft.hidden_sources", async () => {
+  it("shows every source when localStorage is unavailable", async () => {
     api.getTools.mockResolvedValue({
       sources: [
         {
@@ -285,11 +305,14 @@ describe("NluCatalogEditor (catalog port)", () => {
         },
       ],
     });
-    render(<NluCatalogEditor draft={{ aliases: "", actions: "", hidden_sources: ["garden"] }} onChange={vi.fn()} />);
+    const blocked = () => { throw new Error("blocked"); };
+    vi.stubGlobal("localStorage", { getItem: blocked, setItem: blocked });
+    render(<NluCatalogEditor draft={draft} onChange={vi.fn()} />);
     await screen.findByText("lamp");
-    // garden is hidden, so its enum value does not render; home's value still does.
+    expect(screen.getByText("fountain")).toBeInTheDocument();
+    // Hiding still works for the session.
+    fireEvent.click(screen.getByText("garden").closest(".e-srv"));
     expect(screen.queryByText("fountain")).toBeNull();
-    expect(screen.getByText("lamp")).toBeInTheDocument();
   });
 
   it("shows an offline card with Retry when getTools fails, then refetches", async () => {

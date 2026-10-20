@@ -28,28 +28,17 @@ class LlmBackend(ABC):
         this handler declines (by raising stage_errors.Declined)."""
 
 
-class LlmConfig(BaseModel):
-    # The per-field apply class is computed centrally by reconfig.action_for and injected
-    # into the catalog schema by ConfigService.catalog() (single source of truth), so the
-    # fields below carry no per-field "apply" annotation.
-    api_key: str = Field("", title="API key", json_schema_extra=SECRET_FIELD_EXTRA)
-    model: str = Field("anthropic/claude-haiku-4.5", title="Model", json_schema_extra=MODEL_FIELD_EXTRA)
-    # Human label of the selected model (catalog display name), persisted so the panel
-    # shows the model name immediately on load instead of the bare id. Hidden companion
-    # field (see LABEL_FIELD_EXTRA). Not sent to the chat-completions API.
-    model_label: str = Field("", json_schema_extra=LABEL_FIELD_EXTRA)
-    temperature: float = Field(0.8, ge=0.0, le=2.0, title="Temperature")
-    max_tokens: int = Field(4096, ge=1, title="Max reply tokens",
-                            json_schema_extra=ADVANCED_FIELD_EXTRA)
+class ReplyConfig(BaseModel):
+    """The handler settings the LLM stage and the recognition chains read per request
+    (reconfig._LLM_LIVE_LEAVES): the round limit and the spoken fallbacks. Every llm
+    provider's ConfigModel inherits them."""
+
     max_tool_rounds: int = Field(
         5, ge=1,
         title="Max rounds",
         description="Model calls per request, tool-calling rounds included.",
         json_schema_extra=ADVANCED_FIELD_EXTRA,
     )
-    # Per-request HTTP timeout for one chat-completions round-trip (seconds).
-    timeout: int = Field(300, title="Request timeout",
-                         json_schema_extra={**ADVANCED_FIELD_EXTRA, "unit": "s"})
     # Spoken fallbacks (read per request). Never let an empty/null model reply or a
     # rate-limit reach TTS as "".
     reply_rate_limit: str = Field(
@@ -69,10 +58,14 @@ class LlmConfig(BaseModel):
         json_schema_extra=ADVANCED_FIELD_EXTRA,
     )
     # Spoken when the LLM stage fails for any reason other than a rate limit; the
-    # raw error text goes to the run log, never to the user.
+    # raw error text goes to the run log, never to the user. A command engine, which
+    # has no model to read a tool's error, also speaks it when its tool returned one.
     reply_error: str = Field(
         "Что-то сломалось, попробуй ещё раз попозже.",
-        title="Reply on error", json_schema_extra=ADVANCED_FIELD_EXTRA,
+        title="Reply on error",
+        description="Spoken when the handler fails, and by a command engine after a tool "
+        "returned an error.",
+        json_schema_extra=ADVANCED_FIELD_EXTRA,
     )
     # Spoken when the LLM stage fails AFTER a tool already ran: the action happened,
     # so no later chain retries it and the user hears that only the answer is missing.
@@ -83,3 +76,21 @@ class LlmConfig(BaseModel):
         "happened, only the answer is missing.",
         json_schema_extra=ADVANCED_FIELD_EXTRA,
     )
+
+
+class LlmConfig(ReplyConfig):
+    # The per-field apply class is computed centrally by reconfig.action_for and injected
+    # into the catalog schema by ConfigService.catalog() (single source of truth), so the
+    # fields below carry no per-field "apply" annotation.
+    api_key: str = Field("", title="API key", json_schema_extra=SECRET_FIELD_EXTRA)
+    model: str = Field("anthropic/claude-haiku-4.5", title="Model", json_schema_extra=MODEL_FIELD_EXTRA)
+    # Human label of the selected model (catalog display name), persisted so the panel
+    # shows the model name immediately on load instead of the bare id. Hidden companion
+    # field (see LABEL_FIELD_EXTRA). Not sent to the chat-completions API.
+    model_label: str = Field("", json_schema_extra=LABEL_FIELD_EXTRA)
+    temperature: float = Field(0.8, ge=0.0, le=2.0, title="Temperature")
+    max_tokens: int = Field(4096, ge=1, title="Max reply tokens",
+                            json_schema_extra=ADVANCED_FIELD_EXTRA)
+    # Per-request HTTP timeout for one chat-completions round-trip (seconds).
+    timeout: int = Field(300, title="Request timeout",
+                         json_schema_extra={**ADVANCED_FIELD_EXTRA, "unit": "s"})

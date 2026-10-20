@@ -1,5 +1,5 @@
-// Pure helpers for the offline-NLU (simple-nlu) alias editor. These translate
-// between the provider's two textarea fields (`aliases`, `actions`) and the live
+// Pure helpers for the command catalog editor. These translate between the
+// catalog's two textarea fields (core.commands `aliases`, `actions`) and the live
 // MCP tool catalog, so the panel can offer one alias input per discovered entity
 // instead of asking the operator to hand-edit the raw textarea. No React here.
 

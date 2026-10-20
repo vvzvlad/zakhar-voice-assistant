@@ -209,9 +209,11 @@ class ConfigService:
 
     def vocabulary(self, handler_id: str) -> list[str]:
         """The closed command vocabulary of an llm provider instance (e.g. Simple
-        NLU's phrase/verb/number words) that a chain narrows its STT to; [] for a
-        free-form LLM. Read per utterance, so handler edits apply without a rebuild."""
-        return list(get_provider("llm", handler_id).vocabulary(self.instance_config("llm", handler_id)))
+        NLU's phrase/verb/number words from the command catalog) that a chain narrows
+        its STT to; [] for a free-form LLM. Read per utterance, so handler and catalog
+        edits apply without a rebuild."""
+        return list(get_provider("llm", handler_id).vocabulary(
+            self.instance_config("llm", handler_id), self.core.commands))
 
     def options(self, category, plugin, field, query: str = ""):
         prov = get_provider(category, plugin)
@@ -261,7 +263,7 @@ class ConfigService:
                 if cat == "stt":
                     entry["supports_vocabulary"] = prov.supports_vocabulary
                 elif cat == "llm":
-                    entry["has_vocabulary"] = bool(prov.vocabulary(values))
+                    entry["has_vocabulary"] = bool(prov.vocabulary(values, self._doc.core.commands))
                 provs.append(entry)
             if cat in POOL_CATEGORIES:
                 categories.append({"id": cat, "providers": provs})

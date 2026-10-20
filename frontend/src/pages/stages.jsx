@@ -349,7 +349,14 @@ export function Commands() {
   const { catalog, config, patch } = useAppData();
   const llm = catalog.categories.find((c) => c.id === "llm");
   const prov = llm?.providers.find((p) => p.id === COMMANDS_PROVIDER);
-  const form = usePageForm(prov ? providerParts("llm", [prov]) : [], patch);
+  // The command catalog is the core.commands section; the engine's own settings are
+  // its llm instance. Both save with the page's one Save.
+  const { $defs } = catalog.core.schema;
+  const commandsSchema = { ...$defs.CommandsConfig, $defs };
+  const form = usePageForm([
+    { key: "commands", values: catalog.core.values.commands, toPatch: (d) => ({ core: { commands: d } }) },
+    ...(prov ? providerParts("llm", [prov]) : []),
+  ], patch);
   const [open, setOpen] = useState(false); // the engine settings card starts collapsed
   const key = `llm:${COMMANDS_PROVIDER}`;
   const toggle = () => setOpen((o) => !o);
@@ -358,7 +365,7 @@ export function Commands() {
       desc="The offline command engine answers smart-home commands from its own vocabulary without an LLM. Spoken names and verbs come from the MCP tool catalog." />
     {prov
       ? <div className="z-grid">
-        <NluCatalogEditor draft={form.draftOf(key)} onChange={form.onChangeOf(key)} />
+        <NluCatalogEditor draft={form.draftOf("commands")} onChange={form.onChangeOf("commands")} />
         <div className="z-card">
           <div className="z-card-h" role="button" tabIndex={0} aria-expanded={open} style={{ cursor: "pointer" }}
             onClick={toggle} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); } }}>
@@ -367,9 +374,11 @@ export function Commands() {
           {open && <div className="z-card-b">
             <div className="z-fh" style={{ margin: 0, padding: "11px 0 2px" }}>{usageLine(chainsOf(config), "handler", prov.id)}</div>
             {/* `aliases`/`actions` are edited through the vocabulary editor above,
-                so their raw textareas are hidden; every other field stays. */}
+                so their raw textareas are hidden; the rest of the catalog stays. */}
+            <SchemaForm schema={commandsSchema} values={form.draftOf("commands")} onChange={form.onChangeOf("commands")}
+              skip={["aliases", "actions"]} />
             <SchemaForm schema={prov.schema} values={form.draftOf(key)} onChange={form.onChangeOf(key)}
-              optionsFor={optionsLoader("llm", prov.id)} skip={["aliases", "actions"]} />
+              optionsFor={optionsLoader("llm", prov.id)} />
           </div>}
         </div>
       </div>

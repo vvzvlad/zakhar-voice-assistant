@@ -11,7 +11,8 @@ from src.config_service import ConfigService
 from src.followup import FollowupVerdict, NoFollowup
 from src.plugins.base import Deps, get_provider
 from src.plugins.followup.jev import JevFollowupConfig
-from src.plugins.llm.jev import DECISIONS_API_URL, JevConfig
+from src.plugins.llm._decisions import DECISIONS_API_URL
+from src.plugins.llm.jev import JevConfig
 
 
 def _gate(respond, **cfg):
