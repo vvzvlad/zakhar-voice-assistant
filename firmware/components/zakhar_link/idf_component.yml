@@ -3,5 +3,8 @@ dependencies:
     version: ">=5.4"
   espressif/esp_websocket_client:
     version: "1.8.0"
+  # A range, not a pin: the espanel panel builds this component next to its own discovery
+  # component's mdns 1.11.1, and one build takes one version. Each project's
+  # dependencies.lock fixes the version it builds with.
   espressif/mdns:
-    version: "1.14.0"
+    version: "^1.11.1"
