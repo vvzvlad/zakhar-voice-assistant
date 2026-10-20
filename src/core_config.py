@@ -228,8 +228,10 @@ class DeviceConfig(BaseModel):
     auto_volume_gain: float = Field(2.0, ge=0, le=10)
     # The server runs everything it plays on the device through src/reply_compressor.py, read
     # at the start of each stream: quiet parts up to 20 dB louder, peaks held at -11.5 dBFS, so
-    # speech is denser and louder over music at the same dial. -11.5 dBFS because the device's
-    # DAC adds up to +10.5 dB at the top of the dial: the peaks stay 1 dB under full scale.
+    # speech is denser. Louder at the same dial for a TTS whose peaks sit below full scale (about
+    # +2-3 dB with Fish Audio); one that peaks at full scale, as Piper does, plays up to ~3 dB
+    # quieter. -11.5 dBFS because the device's DAC adds up to +10.5 dB at the top of the dial:
+    # the peaks stay 1 dB under full scale.
     compress_replies: bool = False
     # The .tflite models sent to the device: its wake-word model and the VAD model that gates
     # it. Empty: the model the release ships (device_server.RELEASE_WAKE_MODEL /

@@ -698,7 +698,7 @@ function DeviceModal({ onSave, onClose, title, device, label: savedLabel = "", w
             </div>
           </Field>}
         </>}
-        <Field row label="Compress replies" hint="On: the server compresses everything it plays on this speaker — quiet parts up to 20 dB louder, peaks held at −11.5 dBFS — about +2–3 dB louder speech. Applies on save, no reflash.">
+        <Field row label="Compress replies" hint="On: the server compresses everything it plays on this speaker — quiet parts up to 20 dB louder, peaks held at −11.5 dBFS. Louder for a TTS whose peaks sit below full scale (about +2–3 dB with Fish Audio); one that already peaks at full scale, as Piper does, plays up to ~3 dB quieter. Applies on save, no reflash.">
           <Toggle on={compressReplies} onChange={setCompressReplies} />
         </Field>
         {controls("play_prime_ms")}
