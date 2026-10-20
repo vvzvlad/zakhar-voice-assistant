@@ -4,18 +4,17 @@
 // other rate) into a ring the speaker task takes it from every block, mixed under zakhar's
 // playback. Music Assistant's volume and mute are the music's own digital gain, the DAC volume
 // applies to everything. The keypair and pairing records live in the NVS namespace `sendspin`.
-// The client's loop runs on this file's task. Internal RAM has no room for its stack, so the stack
-// is in PSRAM; a flash operation needs an internal stack, so every NVS call runs on a short-lived
-// task with one, this task waiting for it. The library's tasks sit below the mic task (5) and the
-// speaker task (6), the sync task above the two that feed it as the library asks; their stacks are
-// in PSRAM.
+// The client's loop, and with it every NVS call, runs on this file's task, its stack in PSRAM:
+// with code and read-only data in PSRAM (sdkconfig.defaults) a flash operation leaves the cache on,
+// so it needs no internal stack. The library's tasks sit below the mic task (5) and the speaker
+// task (6), the sync task above the two that feed it as the library asks; their stacks are in
+// PSRAM.
 #include "music.h"
 
 #include <algorithm>
 #include <atomic>
 #include <cmath>
 #include <cstdio>
-#include <functional>
 #include <optional>
 #include <string>
 #include <vector>
@@ -44,7 +43,6 @@ static const char *TAG = "music";
 #define INITIAL_VOLUME 100
 #define LOOP_MS 10
 #define LOOP_STACK (8 * 1024)  // in PSRAM
-#define NVS_STACK 3584          // internal, while an NVS call runs
 #define STACK_LOG_MS (30 * 1000)  // the loop task's stack use is logged this long after the start
 #define LOOP_PRIO 2
 #define HTTPD_PRIO 3
@@ -129,27 +127,6 @@ public:
     }
 };
 
-// Runs `op` on a task with an internal stack and waits for it; false when that task could not be
-// made. Called from the music task only.
-static SemaphoreHandle_t s_nvs_done;
-
-static void nvs_call_task(void *arg)
-{
-    (*static_cast<const std::function<void()> *>(arg))();
-    xSemaphoreGive(s_nvs_done);
-    vTaskDelete(NULL);
-}
-
-static bool on_internal_stack(const std::function<void()> &op)
-{
-    if (xTaskCreatePinnedToCore(nvs_call_task, "music_nvs", NVS_STACK, (void *)&op, LOOP_PRIO, NULL, 0) != pdPASS) {
-        ESP_LOGW(TAG, "NVS call: no internal RAM for its task");
-        return false;
-    }
-    xSemaphoreTake(s_nvs_done, portMAX_DELAY);
-    return true;
-}
-
 // Every key in one NVS namespace, the blob stored as the library hands it over. NVS writes are
 // durable when nvs_set_blob returns.
 class NvsStore : public sendspin::SendspinPersistenceProvider {
@@ -158,28 +135,21 @@ public:
 
     std::optional<std::vector<uint8_t>> load_blob(const std::string &key) override
     {
-        std::optional<std::vector<uint8_t>> out;
-        on_internal_stack([&] {
-            size_t len = 0;
-            if (nvs_get_blob(nvs, key.c_str(), NULL, &len) != ESP_OK) return;
-            std::vector<uint8_t> blob(len);
-            if (nvs_get_blob(nvs, key.c_str(), blob.data(), &len) == ESP_OK) out = std::move(blob);
-        });
-        return out;
+        size_t len = 0;
+        if (nvs_get_blob(nvs, key.c_str(), NULL, &len) != ESP_OK) return std::nullopt;
+        std::vector<uint8_t> blob(len);
+        if (nvs_get_blob(nvs, key.c_str(), blob.data(), &len) != ESP_OK) return std::nullopt;
+        return blob;
     }
 
     bool save_blob(const std::string &key, const uint8_t *data, size_t len) override
     {
-        bool ok = false;
-        on_internal_stack([&] { ok = nvs_set_blob(nvs, key.c_str(), data, len) == ESP_OK; });
-        return ok;
+        return nvs_set_blob(nvs, key.c_str(), data, len) == ESP_OK;
     }
 
     bool commit() override
     {
-        bool ok = false;
-        on_internal_stack([&] { ok = nvs_commit(nvs) == ESP_OK; });
-        return ok;
+        return nvs_commit(nvs) == ESP_OK;
     }
 };
 
@@ -198,9 +168,9 @@ static void music_task(void *arg)
     static Player listener;
     static Network network;
     static NvsStore store;
-    // A task made with caps is not deleted by vTaskDelete: a player that cannot start just stops.
-    esp_err_t err = ESP_ERR_NO_MEM;
-    on_internal_stack([&] { err = nvs_open("sendspin", NVS_READWRITE, &store.nvs); });
+    // vTaskDelete would leak this task's caps-allocated stack and TCB: a player that cannot start
+    // just stops.
+    esp_err_t err = nvs_open("sendspin", NVS_READWRITE, &store.nvs);
     uint8_t mac[6];
     if (err == ESP_OK) err = esp_read_mac(mac, ESP_MAC_WIFI_STA);
     if (err != ESP_OK) {
@@ -282,8 +252,7 @@ esp_err_t music_start(void)
 {
     s_ring = (int16_t *)heap_caps_malloc(RING_FRAMES * FRAME_BYTES, MALLOC_CAP_SPIRAM);
     s_space = xSemaphoreCreateBinary();
-    s_nvs_done = xSemaphoreCreateBinary();
-    if (s_ring == NULL || s_space == NULL || s_nvs_done == NULL) {
+    if (s_ring == NULL || s_space == NULL) {
         ESP_LOGE(TAG, "music ring: out of memory");
         return ESP_ERR_NO_MEM;
     }

@@ -1,5 +1,5 @@
-// Every C++ allocation of the image (operator new, so the music player's library, tflite-micro,
-// NVS) goes to PSRAM first and to internal RAM only when PSRAM has no room. With
+// Every operator new of the image without an alignment argument (so the music player's library,
+// tflite-micro, NVS) goes to PSRAM first and to internal RAM only when PSRAM has no room. With
 // CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL a block under 16 KB would try internal RAM first, and the
 // player's small objects alone took the internal RAM that the link's WebSocket task stack needs at
 // every connection. C allocations (malloc) keep that rule. operator delete stays the library's,

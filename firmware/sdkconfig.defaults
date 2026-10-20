@@ -70,7 +70,13 @@ CONFIG_SENDSPIN_ENABLE_PLAYER=y
 # CONFIG_SENDSPIN_ENABLE_VISUALIZER is not set
 # CONFIG_SENDSPIN_ENABLE_SOURCE is not set
 
-# The zero-initialised statics of lwip, net80211, pp and bt (ESP-IDF moves these libraries' .bss
-# with this option) and of the music player's library (main/music.lf) in PSRAM, ~14 KB: with the
-# player running, internal RAM had no 6 KB block left for the link's WebSocket task stack.
+# The zero-initialised statics of lwip, net80211, pp, wpa_supplicant and bt (ESP-IDF moves these
+# libraries' .bss with this option) and of the music player's library (main/music.lf) in PSRAM,
+# ~14 KB: with the player running, internal RAM had no 6 KB block left for the link's WebSocket
+# task stack.
 CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY=y
+
+# Sockets open at once: POST /ota's server 3 of its own and the upload, the Sendspin server 3 and
+# up to 4 connections, the network log's listener and its client (two while a new one replaces the
+# old), the zakhar_link connection. The socket table is in PSRAM with the lwip .bss above.
+CONFIG_LWIP_MAX_SOCKETS=16
