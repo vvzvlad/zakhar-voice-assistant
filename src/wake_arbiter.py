@@ -9,17 +9,17 @@ phrase recognized for the run log only (Pipeline.arbitration_verdict). A device
 without a speaker that lost the phrase (in the group or in its cooldown) is shown the
 winner's answer as an announcement, a `reply` without `session` (run_event).
 
-A group of wakes is collected for `core.arbitration.window_ms` (less
+A group of wakes is collected for WINDOW_MS (less
 once every online device has woken; a lone online device is not held) and ruled on:
 a device with a speaker over one without, between equals the higher signal-to-noise
-ratio of the pre-roll, then the earlier wake. For `core.arbitration.cooldown_ms`
+ratio of the pre-roll, then the earlier wake. For COOLDOWN_MS
 after the group's first wake, a wake of any device but the group's winner loses at
 once.
 
 A candidate is ready once it no longer waits for the verdict (its verifier rejected
 it, its run was cancelled, its device vanished), or once its wake-word verifier has
 ruled (the verifier's own timeout bounds that) and — when there are several
-candidates — its pre-roll is in or `window_ms` has passed since its own wake (its
+candidates — its pre-roll is in or WINDOW_MS has passed since its own wake (its
 SNR is then taken on what it has): the pre-roll streams in only after the `wake`.
 So the winner is always a wake the verifier accepted, and a group whose candidates
 all dropped out leaves no cooldown. The group is ruled once every candidate is ready
@@ -59,6 +59,12 @@ from src.vad import SAMPLE_RATE
 # The SNR's analysis window: 100 ms of 16 kHz samples.
 _SNR_WINDOW = SAMPLE_RATE // 10
 
+# How long a group of wakes waits for the wakes of the other online devices (ms).
+WINDOW_MS = 500
+# For this long after a group's first wake, a wake of any device but the group's
+# winner loses as a duplicate (ms).
+COOLDOWN_MS = 2000
+
 
 def wake_snr_db(pcm: bytes) -> float:
     """Signal-to-noise ratio (dB) of a pre-roll (16 kHz int16 mono): the RMS level of
@@ -78,20 +84,18 @@ def wake_snr_db(pcm: bytes) -> float:
 class _Candidate:
     """One wake run in the open group."""
     token: int
-    # Fires window_ms after this run's own wake and settles it.
+    # Fires WINDOW_MS after this run's own wake and settles it.
     timer: asyncio.TimerHandle
-    # Its pre-roll is in, or window_ms has passed since its wake.
+    # Its pre-roll is in, or WINDOW_MS has passed since its wake.
     settled: bool = False
 
 
 class WakeArbiter:
     """Decides which of the devices that woke on one phrase keeps its session."""
 
-    def __init__(self, runtime, online_count: Callable[[], int],
+    def __init__(self, online_count: Callable[[], int],
                  held_wakes: Callable[[], bool] = lambda: False,
                  send_reply: Callable | None = None):
-        # Window and cooldown are read live off runtime.core.arbitration on every wake.
-        self.rt = runtime
         self._online_count = online_count
         # Whether an online device holds a wake over its running answer until its
         # wake-word check rules (the device server's pending wake); the open group is
@@ -108,7 +112,7 @@ class WakeArbiter:
         # The open group's candidates, pipeline -> _Candidate, in arrival order.
         self._candidates: dict = {}
         self._open = False
-        # The group's window: fires window_ms after its first wake.
+        # The group's window: fires WINDOW_MS after its first wake.
         self._timer: asyncio.TimerHandle | None = None
         self._window_fired = False
         # Monotonic time of the latest group's first wake, and the pipeline that won
@@ -119,12 +123,11 @@ class WakeArbiter:
     def register(self, pipeline, token) -> None:
         """Take a wake run of `pipeline` into arbitration. Its verdict arrives as
         pipeline.arbitration_verdict(token, won), possibly before this returns."""
-        cfg = self.rt.core.arbitration
         loop = asyncio.get_running_loop()
         if not self._open:
             now = time.monotonic()
             if (self._group_start is not None
-                    and (now - self._group_start) * 1000 < cfg.cooldown_ms
+                    and (now - self._group_start) * 1000 < COOLDOWN_MS
                     and pipeline is not self._winner):
                 if self._awaiting_answer and not pipeline.has_speaker:
                     self._answer_to.append(pipeline)
@@ -136,18 +139,18 @@ class WakeArbiter:
             self._answer_to = []
             self._open = True
             self._window_fired = False
-            self._timer = loop.call_later(cfg.window_ms / 1000, self._window_end)
+            self._timer = loop.call_later(WINDOW_MS / 1000, self._window_end)
         old = self._candidates.get(pipeline)
         if old is not None:
             old.timer.cancel()
         # A re-register of the same pipeline replaces its entry in place.
         self._candidates[pipeline] = _Candidate(
-            token, loop.call_later(cfg.window_ms / 1000, self.preroll_in, pipeline, token))
+            token, loop.call_later(WINDOW_MS / 1000, self.preroll_in, pipeline, token))
         self._maybe_close()
 
     def preroll_in(self, pipeline, token) -> None:
         """The pre-roll of `pipeline`'s run registered under `token` is fully in — or,
-        called by the candidate's own timer, window_ms has passed since its wake and
+        called by the candidate's own timer, WINDOW_MS has passed since its wake and
         its SNR is taken on whatever pre-roll it has. The verdict may be delivered
         before this returns, to this pipeline too."""
         candidate = self._candidates.get(pipeline)

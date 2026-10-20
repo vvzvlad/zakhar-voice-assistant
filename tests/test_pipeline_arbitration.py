@@ -61,7 +61,7 @@ async def test_the_cleaner_wake_wins_though_its_pre_roll_comes_after_its_wake(tm
     patch_llm(monkeypatch)
     first, first_events = make_pipeline(tmp_path, monkeypatch, name="first")
     second, second_events = make_pipeline(tmp_path, monkeypatch, name="second")
-    first.arbiter = second.arbiter = WakeArbiter(first.rt, online_count=lambda: 2)
+    first.arbiter = second.arbiter = WakeArbiter(online_count=lambda: 2)
 
     await first.on_start("a", WAKE)
     await first.on_audio(preroll(1000, 3162))  # 10 dB
@@ -86,7 +86,7 @@ async def test_a_winner_the_verifier_rejects_leaves_the_phrase_to_the_other_devi
     speaker.rt.wakeword_backend = FakeWakewordVerifier(accepted=False, window_ms=2500)
     panel.rt.wakeword_backend = FakeWakewordVerifier(accepted=True, window_ms=2500)
     panel.has_speaker = False
-    speaker.arbiter = panel.arbiter = WakeArbiter(speaker.rt, online_count=lambda: 2)
+    speaker.arbiter = panel.arbiter = WakeArbiter(online_count=lambda: 2)
 
     for p in (panel, speaker):
         await p.on_start("cid", WAKE)
@@ -109,7 +109,7 @@ async def test_a_device_that_loses_by_its_own_confirmation_is_not_shown_listenin
     for p in (first, second):
         p.rt.wakeword_backend = FakeWakewordVerifier(accepted=True, window_ms=2500)
         install_fake_vad(p, [True] * 400)  # no end-point: each check waits for its window
-    first.arbiter = second.arbiter = WakeArbiter(first.rt, online_count=lambda: 2)
+    first.arbiter = second.arbiter = WakeArbiter(online_count=lambda: 2)
 
     for p in (first, second):
         await p.on_start("cid", WAKE)
@@ -129,7 +129,7 @@ async def test_a_lone_false_wake_leaves_no_cooldown_for_another_device(tmp_path,
     speaker, _ = make_pipeline(tmp_path, monkeypatch, name="speaker")
     panel, panel_events = make_pipeline(tmp_path, monkeypatch, name="panel")
     speaker.rt.wakeword_backend = FakeWakewordVerifier(accepted=False)
-    speaker.arbiter = panel.arbiter = WakeArbiter(speaker.rt, online_count=lambda: 1)
+    speaker.arbiter = panel.arbiter = WakeArbiter(online_count=lambda: 1)
 
     await speaker.on_start("cid", WAKE)
     await speaker.on_audio(b"\x01\x02" * 30000)  # > the verify window
@@ -146,14 +146,16 @@ async def test_a_held_run_shows_listening_at_once_and_is_released_once_it_won(
     store = FakeRunsStore()
     pipeline, events, arbiter = make_arbitrated(
         tmp_path, monkeypatch, stt_text="включи свет", runs_store=store)
+    held_phrase(pipeline)
 
     await pipeline.on_start("cid", WAKE)
-    await pipeline.on_audio(b"\x01\x02" * 1000)
+    await pipeline.on_audio(FRAME * 3)  # the phrase goes on
     assert types_of(events) == [StageEvent.RUN_START, StageEvent.STT_START, StageEvent.STT_VAD_START]
 
     pipeline.arbitration_verdict(arbiter.tokens[-1], True)
     assert types_of(events).count(StageEvent.STT_VAD_START) == 1
-    await pipeline.on_stop(False)
+    await pipeline.on_audio(FRAME * 6)  # ...and ends
+    await settle(pipeline)
     assert store.records[-1]["stt_text"] == "включи свет"
 
 
@@ -200,7 +202,7 @@ async def test_a_speakerless_device_the_cooldown_dropped_is_shown_the_winners_an
     panel, _ = make_pipeline(tmp_path, monkeypatch, name="panel", stt_text="свет")
     panel.has_speaker = False
     speaker.arbiter = panel.arbiter = WakeArbiter(
-        speaker.rt, online_count=lambda: 1,
+        online_count=lambda: 1,
         send_reply=lambda p, text: sent.append((p.name, text)))
     for p in (speaker, panel):
         held_phrase(p)

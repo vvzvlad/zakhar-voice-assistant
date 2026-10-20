@@ -24,19 +24,28 @@ from src.wakeword import PassthroughVerifier, WakewordVerdict, WakewordVerifier
 # Reuse the existing pipeline test harness (fakes + helpers) verbatim.
 from tests.test_pipeline import (
     FRAME,
+    PHRASE,
     FakeRunEvents,
     FakeRunsStore,
     FakeSttBackend,
     install_fake_vad,
+    install_phrase_vad,
     make_pipeline,
     patch_llm,
     set_small_vad_thresholds,
+    settle,
     types_of,
 )
 
 # A real wake-word run carries a non-empty wake_word_phrase; a None phrase is a
 # manual button start (never gated). The gate keys off this phrase.
 WAKE = "Захар"
+
+# A verify window that fills inside a PHRASE, and the first chunk of a phrase that runs
+# one frame past it without end-pointing yet (4 frames of trailing silence, 5 end it).
+VERIFY_WINDOW_MS = 100
+VERIFY_WINDOW_BYTES = VERIFY_WINDOW_MS * 16000 * 2 // 1000
+HEAD_BYTES = VERIFY_WINDOW_BYTES + 640
 
 
 class FakeWakewordVerifier(WakewordVerifier):
@@ -89,11 +98,12 @@ async def test_gate_accept_proceeds_to_stt_and_records(tmp_path, monkeypatch):
     # record carries the verify latency + score.
     patch_llm(monkeypatch, reply="готово")
     store = FakeRunsStore()
-    verifier = FakeWakewordVerifier(accepted=True, score=0.91)
+    verifier = FakeWakewordVerifier(accepted=True, score=0.91, window_ms=VERIFY_WINDOW_MS)
     pipeline, events = _make_gated(
         tmp_path, monkeypatch, verifier=verifier,
         stt_text="включи свет", runs_store=store,
     )
+    install_phrase_vad(pipeline)
 
     await pipeline.on_start("cid", WAKE)
     # Before the verdict: gate pending, STT_VAD_START NOT emitted, stream not opened.
@@ -101,9 +111,9 @@ async def test_gate_accept_proceeds_to_stt_and_records(tmp_path, monkeypatch):
     assert pipeline._wakeword_confirmed is False
     assert types_of(events) == [StageEvent.RUN_START, StageEvent.STT_START]
 
-    # Feed enough PCM to cross the verify window (1500 ms = 48000 bytes); the gate
-    # schedules verify on the first chunk that crosses it.
-    await pipeline.on_audio(b"\x01\x02" * 30000)  # 120000 bytes > window
+    # Feed a chunk past the verify window (100 ms = 3200 bytes); the gate schedules
+    # verify on the first chunk that crosses it.
+    await pipeline.on_audio(PHRASE[:HEAD_BYTES])
     assert pipeline._wakeword_task is not None
     await _drain_verify(pipeline)
 
@@ -112,11 +122,14 @@ async def test_gate_accept_proceeds_to_stt_and_records(tmp_path, monkeypatch):
     assert pipeline._wakeword_pending is False
     assert StageEvent.STT_VAD_START in types_of(events)
 
-    # The verifier saw the pre-roll head sized to its window (48000 bytes).
+    # The verifier saw the pre-roll head sized to its window (3200 bytes), not the
+    # whole chunk.
     assert len(verifier.calls) == 1
-    assert len(verifier.calls[0]) == verifier.window_ms * 16000 * 2 // 1000
+    assert len(verifier.calls[0]) == VERIFY_WINDOW_BYTES < HEAD_BYTES
 
-    await pipeline.on_stop(False)
+    # The rest of the phrase: the VAD end-points it.
+    await pipeline.on_audio(PHRASE[HEAD_BYTES:])
+    await settle(pipeline)
     assert types_of(events) == [
         StageEvent.RUN_START,
         StageEvent.STT_START,
@@ -266,18 +279,21 @@ async def test_gate_timeout_fail_open_proceeds(tmp_path, monkeypatch):
     # the run proceeds normally through STT.
     patch_llm(monkeypatch, reply="готово")
     store = FakeRunsStore()
-    verifier = FakeWakewordVerifier(hang=True, timeout_ms=20, fail_open=True)
+    verifier = FakeWakewordVerifier(hang=True, timeout_ms=20, fail_open=True,
+                                    window_ms=VERIFY_WINDOW_MS)
     pipeline, events = _make_gated(
         tmp_path, monkeypatch, verifier=verifier,
         stt_text="включи свет", runs_store=store,
     )
+    install_phrase_vad(pipeline)
 
     await pipeline.on_start("cid", WAKE)
-    await pipeline.on_audio(b"\x01\x02" * 30000)
+    await pipeline.on_audio(PHRASE[:VERIFY_WINDOW_BYTES])
     await _drain_verify(pipeline)
 
     assert pipeline._wakeword_confirmed is True
-    await pipeline.on_stop(False)
+    await pipeline.on_audio(PHRASE[VERIFY_WINDOW_BYTES:])
+    await settle(pipeline)
     rec = store.records[-1]
     assert rec["result"] in ("ok", "tool")
     assert rec["stt_text"] == "включи свет"
@@ -321,6 +337,7 @@ async def test_no_gate_when_backend_none(tmp_path, monkeypatch):
     patch_llm(monkeypatch, reply="готово")
     pipeline, events = make_pipeline(tmp_path, monkeypatch, stt_text="включи свет")
     assert pipeline.rt.wakeword_backend is None
+    install_phrase_vad(pipeline)
 
     await pipeline.on_start("cid", WAKE)
     assert pipeline._wakeword_confirmed is True
@@ -331,9 +348,9 @@ async def test_no_gate_when_backend_none(tmp_path, monkeypatch):
         StageEvent.STT_START,
         StageEvent.STT_VAD_START,
     ]
-    await pipeline.on_audio(b"\x01\x02" * 100)
+    await pipeline.on_audio(PHRASE)
     assert pipeline._wakeword_task is None
-    await pipeline.on_stop(False)
+    await settle(pipeline)
     assert StageEvent.RUN_END in types_of(events)
 
 
@@ -346,6 +363,7 @@ async def test_no_gate_when_passthrough(tmp_path, monkeypatch):
         tmp_path, monkeypatch, verifier=PassthroughVerifier(),
         stt_text="включи свет", runs_store=store,
     )
+    install_phrase_vad(pipeline)
 
     await pipeline.on_start("cid", WAKE)
     assert pipeline._wakeword_confirmed is True
@@ -354,9 +372,9 @@ async def test_no_gate_when_passthrough(tmp_path, monkeypatch):
         StageEvent.STT_START,
         StageEvent.STT_VAD_START,
     ]
-    await pipeline.on_audio(b"\x01\x02" * 100)
+    await pipeline.on_audio(PHRASE)
     assert pipeline._wakeword_task is None
-    await pipeline.on_stop(False)
+    await settle(pipeline)
     rec = store.records[-1]
     # Ungated run: gate fields stay at their 0/None defaults.
     assert rec["t_wakeword"] == 0
@@ -391,12 +409,13 @@ async def test_a_wake_verified_by_the_device_server_is_not_gated(tmp_path, monke
     pipeline, events = _make_gated(
         tmp_path, monkeypatch, verifier=verifier, stt_text="включи свет", runs_store=store,
     )
+    install_phrase_vad(pipeline)
 
     await pipeline.on_start("cid", WAKE, verified=(0.7, 120))
     assert types_of(events) == [StageEvent.RUN_START, StageEvent.STT_START, StageEvent.STT_VAD_START]
-    await pipeline.on_audio(b"\x01\x02" * 30000)
+    await pipeline.on_audio(PHRASE)
     assert pipeline._wakeword_task is None and verifier.calls == []
-    await pipeline.on_stop(False)
+    await settle(pipeline)
     rec = store.records[-1]
     assert rec["result"] in ("ok", "tool")
     # The record carries the device server's verify.
@@ -462,17 +481,18 @@ async def test_gate_accept_streaming_feeds_backlog_once(tmp_path, monkeypatch):
     # incrementally (no double-feed, no lost audio).
     patch_llm(monkeypatch, reply="готово")
     stt = _RecordingStreamSttBackend(text="включи свет")
-    verifier = FakeWakewordVerifier(accepted=True, score=0.9, window_ms=1500)
+    verifier = FakeWakewordVerifier(accepted=True, score=0.9, window_ms=VERIFY_WINDOW_MS)
     pipeline, events = _make_gated(
         tmp_path, monkeypatch, verifier=verifier, stt_backend=stt,
     )
+    install_phrase_vad(pipeline)
 
     await pipeline.on_start("cid", WAKE)
     # No stream opened while gating.
     assert pipeline._stt_streams == {}
     assert stt.session.fed == []
 
-    backlog = b"\x01\x02" * 30000  # > 48000-byte window
+    backlog = PHRASE[:HEAD_BYTES]  # past the verify window
     await pipeline.on_audio(backlog)
     await _drain_verify(pipeline)
 
@@ -480,73 +500,17 @@ async def test_gate_accept_streaming_feeds_backlog_once(tmp_path, monkeypatch):
     assert pipeline._stt_streams == {"main": stt.session}
     assert stt.session.fed == [backlog]
 
-    # A further chunk after confirm feeds incrementally (not the backlog again).
-    tail = b"\x03\x04" * 10
+    # A further chunk after confirm feeds incrementally (not the backlog again); it
+    # ends the phrase.
+    tail = PHRASE[HEAD_BYTES:]
     await pipeline.on_audio(tail)
     assert stt.session.fed == [backlog, tail]
 
-    await pipeline.on_stop(False)
+    await settle(pipeline)
     assert StageEvent.STT_END in types_of(events)
 
 
 # --- disconnect cancels an in-flight verify ----------------------------------
-
-
-async def test_on_stop_while_pending_rejects_not_full_pipeline(tmp_path, monkeypatch):
-    # A device stop that arrives while the verdict is still pending must NOT bypass
-    # the gate into STT/LLM/TTS. It cancels the in-flight verify and routes the stop
-    # through the reject path: result='rejected', NO STT/LLM/TTS, and NO STT_VAD_END
-    # (which would have wrongly triggered the thinking indicator).
-    patch_llm(monkeypatch, reply="готово")
-    store = FakeRunsStore()
-    # STT spy: must NEVER be called when the stop short-circuits to a reject.
-    stt = FakeSttBackend("должно остаться нераспознанным")
-    stt_calls = []
-    orig = stt.transcribe
-
-    async def spy(pcm):
-        stt_calls.append(pcm)
-        return await orig(pcm)
-
-    stt.transcribe = spy
-    # Long-running verify so the gate is still pending when on_stop arrives.
-    verifier = FakeWakewordVerifier(hang=True, timeout_ms=5000, accepted=True)
-    pipeline, events = _make_gated(
-        tmp_path, monkeypatch, verifier=verifier, stt_backend=stt, runs_store=store,
-    )
-
-    await pipeline.on_start("cid", WAKE)
-    await pipeline.on_audio(b"\x01\x02" * 30000)  # schedules verify
-    task = pipeline._wakeword_task
-    assert task is not None and not task.done()
-    assert pipeline._wakeword_pending is True
-    assert pipeline._wakeword_confirmed is False
-
-    # Device stop BEFORE the verdict -> reject, not the full pipeline.
-    await pipeline.on_stop(False)
-    # The in-flight verify was cancelled.
-    with pytest.raises(asyncio.CancelledError):
-        await task
-    assert task.cancelled()
-
-    assert stt_calls == []                 # STT never ran
-    assert pipeline._finalized is True
-    seq = types_of(events)
-    # No STT_VAD_START/STT_VAD_END (no thinking indicator), only the reject sequence.
-    assert seq == [
-        StageEvent.RUN_START,
-        StageEvent.STT_START,
-        StageEvent.STT_END,
-        StageEvent.RUN_END,
-    ]
-    assert StageEvent.STT_VAD_END not in seq
-    assert StageEvent.STT_VAD_START not in seq
-    assert StageEvent.TTS_START not in seq
-
-    rec = store.records[-1]
-    assert rec["result"] == "rejected"
-    assert rec["reason"] == "wakeword_reject"
-    assert rec["stt_text"] == ""
 
 
 async def test_on_disconnect_cancels_pending_verify(tmp_path, monkeypatch):

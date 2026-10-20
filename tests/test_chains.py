@@ -11,8 +11,8 @@ from src.llm import LlmResult
 from src.pipeline_events import StageEvent
 from src.plugins.llm.base import LlmConfig
 from src.stage_errors import Declined, StageError
-from tests.test_pipeline import (install_fake_vad, make_pipeline, set_small_vad_thresholds,
-                                 types_of)
+from tests.test_pipeline import (PHRASE, install_fake_vad, install_phrase_vad, make_pipeline,
+                                 say, set_small_vad_thresholds, settle, types_of)
 
 
 class Stt:
@@ -367,9 +367,7 @@ async def test_pipeline_runs_chains_and_records_them(tmp_path, monkeypatch):
         (Stt("включи свет"), Handler("Готово", tool_used=True)),
         runs_store=store,
     )
-    await pipeline.on_start("cid", None)
-    await pipeline.on_audio(b"\x01\x02" * 100)
-    await pipeline.on_stop(False)
+    await say(pipeline)
 
     # One STT_END (the first non-empty transcript) and one INTENT_START, as before.
     assert types_of(events) == [
@@ -399,9 +397,7 @@ async def test_pipeline_all_declined_speaks_decline_and_keeps_context_clean(
         (Stt("свет"), Handler(Declined("Не понял команду"))),
         runs_store=store,
     )
-    await pipeline.on_start("cid", None)
-    await pipeline.on_audio(b"\x01\x02" * 100)
-    await pipeline.on_stop(False)
+    await say(pipeline)
 
     assert dict(events)[StageEvent.TTS_START] == {"text": "Не понял команду"}
     assert (store.records[0]["result"], store.records[0]["chain"]) == ("ok", None)
@@ -440,12 +436,13 @@ async def test_pipeline_opens_streams_for_first_and_parallel_chains_only(tmp_pat
     pipeline.rt.core.chains = [chain("a"), chain("b", parallel=True), chain("c")]
     pipeline.rt.stt_backends = {"a": a, "b": b, "c": c}
     pipeline.rt.llm_backends = {"a": Handler("ok"), "b": Handler("x"), "c": Handler("y")}
+    install_phrase_vad(pipeline)
 
     await pipeline.on_start("cid", None)
     assert set(pipeline._stt_streams) == {"a", "b"}
-    await pipeline.on_audio(b"\x01\x02" * 100)
-    assert a.fed == b.fed == [b"\x01\x02" * 100] and c.fed == []
-    await pipeline.on_stop(False)
+    await pipeline.on_audio(PHRASE)
+    assert a.fed == b.fed == [PHRASE] and c.fed == []
+    await settle(pipeline)
 
     assert a.finished and not c.finished and c.calls == []
     assert b.closed                    # the unused parallel session is released

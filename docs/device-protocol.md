@@ -331,10 +331,10 @@ device                                   server
   keeps it streaming into that window. The playback goes on to its end, and the older run carries
   on under the new number. The run log shows the rejected wake as `rejected`, reason
   `wakeword_reject` (`wakeword_error` when the check timed out or failed and its policy rejects).
-- One phrase heard by several devices: the server holds a `wake` for `core.arbitration.window_ms`
-  (default 500 ms) to collect the wakes of the other online devices, or less once every online
-  device has woken; a lone online device is not held. With several wakes it rules only once
-  each of them has its pre-roll in, or `window_ms` after that device's own `wake`, and the
+- One phrase heard by several devices: the server holds a `wake` for 500 ms to collect the wakes
+  of the other online devices, or less once every online device has woken; a lone online device
+  is not held. With several wakes it rules only once
+  each of them has its pre-roll in, or 500 ms after that device's own `wake`, and the
   server's second wake-word check has ruled on it; a wake that check rejects takes no part. Once
   a device with a speaker is ready, a device without one is not waited for: it cannot win. A
   `wake` the server holds over a running answer (above) joins only once the check confirms it,
@@ -344,7 +344,7 @@ device                                   server
   `listening` as soon as the second check confirms its wake (at once when that check is off),
   without waiting for the ruling; one ruled out by then — in the cooldown, or by the ruling its
   own confirmation completes — gets none. The devices that lost stream their microphone on until
-  the server's VAD finds the end of the phrase, and then they get `state idle`. For `core.arbitration.cooldown_ms` (default 2000 ms) after the
+  the server's VAD finds the end of the phrase, and then they get `state idle`. For 2000 ms after the
   first of those wakes, a `wake` from any other device is ended the same way. The ended runs
   show in the run log as `rejected`, reason `duplicate`, with the phrase recognized by the STT
   of the first enabled chain; the device gets no `transcript` of it. A device ended before the
@@ -411,10 +411,8 @@ the answer, so the next phrase needs no wake word:
   and treats it as dropped.
 - Pacing: the server keeps at most `buffer_ms − play_prime_ms − 500` ms of audio ahead of the
   device's playback, estimating that playback runs at real time from the first frame it sends;
-  `play_prime_ms` is the largest one it sent to that connection in `config` while the device had
-  a stream pending (no `played` yet, not flushed), else the last one sent: the device may still
-  lag by the reserve it primed with, so a smaller one paces only the streams after. The device
-  buffer holds `buffer_ms`.
+  `play_prime_ms` is the last one it sent to that connection in `config`. The device buffer holds
+  `buffer_ms`.
 - The device starts a stream, and resumes one that ran dry before its `play_end`, once it holds
   `play_prime_ms` (default 700) of it or its `play_end` has come; pacing leaves that much room in
   the buffer for the wait.

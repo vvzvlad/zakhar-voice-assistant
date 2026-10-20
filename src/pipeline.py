@@ -8,15 +8,15 @@ Server-side VAD end-pointing
 ----------------------------
 The device fires its wake word on-device and then streams mic PCM to us
 continuously (silence included). It has no end-pointing of its own
-(docs/device-protocol.md), so on_stop has no caller on the wire (the device's `stop`, the stop
-word, cancels the run through cancel_run). To know when the user has
+(docs/device-protocol.md); the device's `stop`, the stop word, cancels the run through
+cancel_run. To know when the user has
 finished speaking we run the configured VAD stage backend over the incoming PCM
 (one VadSession per run, see src/vad.py) and finalize the utterance once it
 reports an endpoint (speech followed by enough trailing silence), a hard max
-length, or a no-speech timeout. The explicit device-stop path still finalizes
-too — both routes funnel through a synchronous _claim() (which atomically
-marks the run finalized and snapshots the audio) followed by the async _run(), so a
-run is finalized exactly once even under concurrent eager on_audio tasks.
+length, or a no-speech timeout. Every finalize funnels through a synchronous _claim()
+(which atomically marks the run finalized and snapshots the audio) followed by the
+async _run(), so a run is finalized exactly once even under concurrent eager on_audio
+tasks.
 """
 
 import asyncio
@@ -33,7 +33,6 @@ from src.audio_prep import (
     pcm_to_wav_bytes,
     trim_start_pcm,
     vad_boost,
-    write_wav,
 )
 from src.tts import TtsBackend, pcm_rate
 from src.pipeline_events import StageEvent
@@ -798,7 +797,7 @@ class Pipeline:
     async def _wakeword_reject(self, error: bool) -> None:
         """Reject verdict: abort the run silently and stop the device.
 
-        Claims the run (so a concurrent device-stop / VAD finalize can't also run it)
+        Claims the run (so a concurrent VAD finalize can't also run it)
         and funnels through _run with a reject reason. _run records the run as
         'rejected', skips STT/LLM/TTS and the ack chime, and emits RUN_END — which the
         device server sends as `state idle`, so the device stops streaming the mic and
@@ -974,35 +973,6 @@ class Pipeline:
                 # `listening`, before the phrase. The non-empty guard above still holds
                 # afterwards (trim_start_pcm never returns empty audio).
                 pcm, pcm2 = self._condition_audio(pcm, pcm2, trim=followup is None)
-
-                # Optional raw audio capture: save the finalized utterance PCM (already
-                # trimmed by core.vad.trim_start_ms above) as a 16 kHz / mono / 16-bit WAV.
-                # Off by default; enabled per capture session. A capture failure must NEVER
-                # break the run, so it is fully wrapped. A follow-up window that heard no
-                # speech is not an utterance and leaves nothing, like in the run log.
-                silent_followup = followup is not None and reason == "no_speech"
-                if (self.core.capture.enabled and not silent_followup
-                        and reason not in REJECT_REASONS):
-                    try:
-                        capture_dir = self.core.capture.dir
-                        safe_name = "".join(
-                            c if c.isascii() and (c.isalnum() or c in "._-") else "_"
-                            for c in self.name
-                        )
-                        fname = f"{safe_name}_{time.time_ns()}_{reason}.wav"
-                        out_path = os.path.join(capture_dir, fname)
-
-                        def _capture(d=capture_dir, p=out_path, data=pcm):
-                            os.makedirs(d, exist_ok=True)
-                            write_wav(p, data)
-
-                        await asyncio.to_thread(_capture)
-                        logger.info(
-                            f"{self.name}: 💾 captured raw audio -> {out_path} "
-                            f"({len(pcm)} bytes)"
-                        )
-                    except Exception as e:
-                        logger.error(f"{self.name}: raw audio capture failed: {e}")
 
                 # Observability record for this run (_new_record). Accumulated across
                 # all terminal paths below and inserted exactly once in the finally;
@@ -1828,17 +1798,3 @@ class Pipeline:
             await self.play(mime, audio)
         except Exception as e:
             logger.error(f"{self.name}: end-of-phrase ack failed: {e}")
-
-    async def on_stop(self, abort: bool = False) -> None:
-        """Explicit stop: finalize the run (exactly once)."""
-        if self._wakeword_pending and not self._wakeword_confirmed:
-            # A stop before the verdict must NOT bypass the gate into STT/LLM/TTS.
-            # Cancel the in-flight verify and abort this run as a reject.
-            task = self._wakeword_task
-            if task is not None and not task.done():
-                task.cancel()
-            await self._wakeword_reject(error=False)
-            return
-        claimed = self._claim()
-        if claimed is not None:
-            await self._run("device_stop", claimed[0], self._conversation_id, pcm2=claimed[1])

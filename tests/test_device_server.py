@@ -635,10 +635,11 @@ async def test_a_wake_with_nothing_to_protect_is_taken_at_once(srv):
 
 
 @pytest.mark.parametrize("outcome", ["confirmed", "rejected", "dropped"])
-async def test_a_held_wake_keeps_the_arbitration_open_until_its_check_rules(srv, outcome):
+async def test_a_held_wake_keeps_the_arbitration_open_until_its_check_rules(srv, outcome, monkeypatch):
     # The kitchen speaker answers and holds a wake when the panel (no speaker) wakes too and
     # its check rules first: no device keeps the phrase until the speaker's check rules.
-    srv.svc.apply({"core": {"arbitration": {"window_ms": 100, "cooldown_ms": 300}}})
+    monkeypatch.setattr("src.wake_arbiter.WINDOW_MS", 100)
+    monkeypatch.setattr("src.wake_arbiter.COOLDOWN_MS", 300)
     speaker = await srv.connect(buffer_ms=1400)
     panel = await srv.connect("panel", speaker=False)
     await panel.recv()  # config
@@ -680,10 +681,11 @@ async def test_a_held_wake_keeps_the_arbitration_open_until_its_check_rules(srv,
         assert await panel.recv() == state(3, "transcribing")
 
 
-async def test_a_confirmed_wake_holds_the_arbitration_until_its_run_is_registered(srv):
+async def test_a_confirmed_wake_holds_the_arbitration_until_its_run_is_registered(srv, monkeypatch):
     # The speaker's held wake is confirmed and the panel's check rules while the speaker's
     # run is still starting: the panel's group waits for the speaker, which then wins.
-    srv.svc.apply({"core": {"arbitration": {"window_ms": 100, "cooldown_ms": 300}}})
+    monkeypatch.setattr("src.wake_arbiter.WINDOW_MS", 100)
+    monkeypatch.setattr("src.wake_arbiter.COOLDOWN_MS", 300)
     speaker = await srv.connect(buffer_ms=1400)
     panel = await srv.connect("panel", speaker=False)
     await panel.recv()  # config
@@ -882,52 +884,6 @@ async def test_playback_is_paced_to_the_device_buffer(srv, prime):
     # The last frame leaves once 0.6 s of the 0.8 s has played.
     assert 0.35 <= dev.frame_times[-1][0] - t0 < 0.8
     assert not play.done()  # still waiting for `played`
-    await dev.send(type="played", id=start["id"])
-    await asyncio.wait_for(play, 2)
-
-
-async def test_a_smaller_reserve_mid_stream_keeps_the_pacing_of_the_larger(srv):
-    # 1400 - 700 - 500 -> 200 ms ahead. The device primed this stream with 700 ms, so a reserve
-    # lowered to 0 while it plays must not let the server run 900 ms ahead and overflow it.
-    dev = await srv.connect(buffer_ms=1400)
-    await dev.recv()  # config
-
-    async def chunks():
-        for _ in range(8):
-            yield b"\x03\x00" * 1600  # 0.1 s at 16 kHz
-
-    async def lower():
-        await asyncio.sleep(0.1)
-        srv.manager.set_device_control("kitchen", "play_prime_ms", 0)
-        await srv.manager.reconfigure()
-
-    play = asyncio.create_task(srv.device().play(pcm_mime(16000), chunks()))
-    start = await dev.recv()
-    assert start["type"] == "play_start"
-    # Lowered in the background, so the frames are read (and timed) as they arrive.
-    lowering = asyncio.create_task(lower())
-    assert (await dev.recv())["play_prime_ms"] == 0
-    await lowering
-    assert (await dev.recv())["type"] == "play_end"
-    t0 = dev.frame_times[0][0]
-    received = 0
-    for t, n in dev.frame_times:
-        received += n
-        assert received / 32000 - (t - t0) <= 0.2 + 0.05
-    await dev.send(type="played", id=start["id"])
-    await asyncio.wait_for(play, 2)
-
-    # The next stream starts on an empty buffer: paced by the reserve 0, 900 ms ahead (once the
-    # server's estimate of the first stream's playback has run out too).
-    await asyncio.sleep(0.4)
-    dev.frame_times.clear()
-    play = asyncio.create_task(srv.device().play(pcm_mime(16000), b"\x03\x00" * 19200))  # 1.2 s
-    start = await dev.recv()
-    assert (await dev.recv())["type"] == "play_end"
-    t0 = dev.frame_times[0][0]
-    ahead = max(sum(n for _, n in dev.frame_times[:i + 1]) / 32000 - (t - t0)
-                for i, (t, _) in enumerate(dev.frame_times))
-    assert 0.8 <= ahead <= 0.9 + 0.05
     await dev.send(type="played", id=start["id"])
     await asyncio.wait_for(play, 2)
 

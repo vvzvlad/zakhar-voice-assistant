@@ -18,7 +18,6 @@ from src.audio_prep import (
     normalize_peak,
     pcm_to_wav_bytes,
     vad_boost,
-    write_wav,
 )
 from src.vad import SAMPLE_RATE
 
@@ -82,22 +81,6 @@ def test_normalize_peak_preserves_trailing_odd_byte_after_boost():
 def test_normalize_peak_single_byte_is_identity():
     # 1 byte holds no whole int16 sample (n == 0): returned unchanged, no exception.
     assert normalize_peak(b"\x07") == b"\x07"
-
-
-# --- write_wav: container header round-trip ----------------------------------------
-
-def test_write_wav_header_and_pcm_round_trip(tmp_path):
-    # The file must be a 16 kHz / mono / 16-bit WAV whose frames are the input PCM
-    # verbatim (the header params are asserted nowhere else in the suite).
-    pcm = np.array([1, -2, 3, -4, 5, -6], dtype="<i2").tobytes()
-    path = str(tmp_path / "out.wav")
-    write_wav(path, pcm)
-    with wave.open(path, "rb") as w:
-        assert w.getnchannels() == 1
-        assert w.getsampwidth() == 2
-        assert w.getframerate() == SAMPLE_RATE
-        assert w.getnframes() == 6
-        assert w.readframes(w.getnframes()) == pcm
 
 
 # --- pcm_to_wav_bytes: odd-length / empty edges ------------------------------------

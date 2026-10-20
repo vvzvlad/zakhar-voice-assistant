@@ -118,15 +118,6 @@ def test_core_config_has_agent_mcp_section():
     assert core.agent_mcp.enabled is True
 
 
-def test_agent_mcp_config_accepts_overrides_and_ignores_stale_keys():
-    # Docs may carry host/port keys from the standalone-server layout: pydantic must
-    # ignore them on parse.
-    amcp = AgentMcpConfig(enabled=False, host="127.0.0.1", port=9000)
-    assert amcp.enabled is False
-    assert not hasattr(amcp, "host")
-    assert not hasattr(amcp, "port")
-
-
 def test_ack_config_defaults():
     # The end-of-phrase ack chime is ON by default with no sound-file override
     # (an empty path means the synthesized two-tone chime is used).
