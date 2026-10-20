@@ -474,6 +474,20 @@ static void test_mix(void)
     }
     mix_block(&m, voice, music, N, MIX_UNITY, false, N, out, mono);
     assert(out[0] == INT16_MIN && out[1] == INT16_MIN && mono[0] == INT16_MIN);
+
+    // In place, as the speaker task mixes (out over music, the downmix over voice), mid-ramp and
+    // with a short music block: the same block as into separate buffers.
+    for (size_t i = 0; i < N; i++) {
+        voice[i] = (int16_t)(i * 29 - 9000);
+        music[2 * i] = (int16_t)(15000 - i * 31);
+        music[2 * i + 1] = (int16_t)(i * 17 - 6000);
+    }
+    mix_t a, b;
+    mix_init(&a);
+    mix_init(&b);
+    mix_block(&a, voice, music, 500, MIX_UNITY, false, N, out, mono);
+    mix_block(&b, voice, music, 500, MIX_UNITY, false, N, music, voice);
+    assert(memcmp(out, music, sizeof out) == 0 && memcmp(mono, voice, sizeof mono) == 0 && a.gain == b.gain);
 }
 
 // The music ring holds the test stream's frames (frames_from: channel 0 = f, channel 1 = -f).

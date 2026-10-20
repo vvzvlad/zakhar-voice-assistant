@@ -338,14 +338,14 @@ static void mic_task(void *arg)
 
 // Per block: zakhar's playback (mono) on both channels plus the music stream (stereo, music.h) at
 // its gain, a tenth of it while a session is open or zakhar plays; the echo reference is the mono
-// downmix of the block as it goes to the wire. The LEDs follow zakhar's playback alone.
+// downmix of the block as it goes to the wire. The LEDs follow zakhar's playback alone. The block
+// is mixed in place, as internal RAM has no room for more buffers: the music comes into `stereo`
+// and the downmix replaces `mono`.
 static void speaker_task(void *arg)
 {
     (void)arg;
     static int16_t mono[SPK_BLOCK];
-    static int16_t music[SPK_BLOCK * 2];
     static int16_t stereo[SPK_BLOCK * 2];
-    static int16_t wire[SPK_BLOCK];
     static int16_t ref[SPK_BLOCK / 3];
     static const int16_t silence[SPK_BLOCK / 3];
     static mix_t mix;
@@ -371,10 +371,10 @@ static void speaker_task(void *arg)
         const size_t n = zl_play_read(mono, SPK_BLOCK);
         leds_set_playing(n > 0);
         memset(mono + n, 0, (SPK_BLOCK - n) * sizeof mono[0]);
-        const size_t m = music_read(music, SPK_BLOCK);
-        mix_block(&mix, mono, music, m, music_gain(), zl_mic_busy() || zl_playing(), SPK_BLOCK, stereo, wire);
+        const size_t m = music_read(stereo, SPK_BLOCK);
+        mix_block(&mix, mono, stereo, m, music_gain(), zl_mic_busy() || zl_playing(), SPK_BLOCK, stereo, mono);
         // The echo reference: this block, silence included, as it goes to the wire.
-        tap_write(&s_ref, ref, dec3_run(&s_dec, wire, SPK_BLOCK, ref));
+        tap_write(&s_ref, ref, dec3_run(&s_dec, mono, SPK_BLOCK, ref));
         size_t written;
         i2s_channel_write(s_tx, stereo, sizeof stereo, &written, portMAX_DELAY);
         if (m > 0) music_played(m, esp_timer_get_time() + (int64_t)SPK_DMA_BUFS * SPK_BLOCK * 1000000 / SPK_RATE);

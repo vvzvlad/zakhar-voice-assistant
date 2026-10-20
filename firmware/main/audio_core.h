@@ -195,7 +195,8 @@ void mix_init(mix_t *m);
 // samples) on both channels plus `music` (interleaved stereo; its first music_frames frames, then
 // silence) times the music's gain, saturating; `mono` is (L + R) / 2 of `out`, the echo reference.
 // The music's gain moves linearly across the block from where the previous block left it to
-// `gain`, or to a tenth of it while `duck`, reaching it at the block's last frame.
+// `gain`, or to a tenth of it while `duck`, reaching it at the block's last frame. In place: `out`
+// may be `music` and `mono` may be `voice`, as each frame is read before it is written.
 void mix_block(mix_t *m, const int16_t *voice, const int16_t *music, size_t music_frames, uint32_t gain, bool duck,
                size_t frames, int16_t *out, int16_t *mono);
 
