@@ -80,15 +80,26 @@ export default function App() {
     return () => window.removeEventListener("popstate", onPop);
   }, []);
 
+  // On a narrow screen the sidebar is hidden and opens over the page from the top bar's menu
+  // button (styles.css, max-width 820px); picking an item, the scrim or Escape closes it.
+  const [menu, setMenu] = useState(false);
+  useEffect(() => {
+    if (!menu) return undefined;
+    const onKey = (e) => { if (e.key === "Escape") setMenu(false); };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [menu]);
+
   const Page = PAGES[active] || (() => (
     <div className="z-page"><div className="z-empty"><b>{TITLES[active]}</b>Section coming up.</div></div>
   ));
 
   return (
     <div className="z-app">
-      <Sidebar active={active} onNav={(id) => { if (id !== active) nav(id); }} />
+      <Sidebar active={active} open={menu} onNav={(id) => { setMenu(false); if (id !== active) nav(id); }} />
+      {menu && <div className="z-side-scrim" data-testid="menu-scrim" onClick={() => setMenu(false)} />}
       <div className="z-main">
-        <Topbar active={active} />
+        <Topbar active={active} onMenu={() => setMenu(true)} />
         <div className="z-scroll">
           {loading
             ? <div className="z-page"><div className="z-card"><Loading /></div></div>

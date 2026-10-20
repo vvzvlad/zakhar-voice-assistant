@@ -6,10 +6,10 @@ import React, { useState, useEffect, useCallback, useRef } from "react";
 import { Ic } from "../components/icons.jsx";
 import { PageHeader, Waterfall, KV, Loading, ErrorBox, Select, fillerMarkerPct } from "../components/primitives.jsx";
 import { getRuns, getRun, openRunsStream, runAudioUrl, downloadRunAudio, runTtsAudioUrl, downloadRunTtsAudio } from "../api.js";
-import { STAGE_COLOR, fmtSec, mapRun, totalMs, statusMeta, isAnnouncement, applyStreamedRun, pageWindow } from "../runsModel.js";
+import { STAGE_COLOR, fmtSec, fmtTime, mapRun, totalMs, statusMeta, isAnnouncement, applyStreamedRun, pageWindow } from "../runsModel.js";
 import { FILLER_COLOR } from "../stageMeta.js";
 import { matchesFilters } from "../runsFilters.js";
-import { useDeviceList } from "../appData.jsx";
+import { useDeviceList, useChainList, useProviderLabel } from "../appData.jsx";
 import { deviceLabel } from "../format.js";
 
 const SC = STAGE_COLOR;
@@ -36,6 +36,8 @@ function Gantt({ r }) {
   const present = GSTAGES.filter((g) => r.t[g.k] > 0);
   const tot = present.reduce((a, g) => a + r.t[g.k], 0) || 1;
   const maxK = present.reduce((m, g) => (r.t[g.k] > r.t[m.k] ? g : m), present[0] || { k: "vad" });
+  // A spoken phrase that got its reply: the only kind of run whose Total spans what the label says.
+  const spoken = r.result === "ok" && r.t.vad > 0;
   // Early-filler marker: the announcement spoken mid-run. fillerMarkerPct gives
   // its x-position on the same 0..100% axis the stage bars use (null when no
   // filler fired). The tick is drawn inside the track of the stage it falls in
@@ -74,8 +76,13 @@ function Gantt({ r }) {
       <div className="z-gtrack"><div className="z-gseg" style={{ left: off + "%", width: (100 - off) + "%", background: "repeating-linear-gradient(45deg,#dc2626,#dc2626 4px,#fecaca 4px,#fecaca 8px)" }} /></div>
       <div className="ms" style={{ color: "var(--bad)" }}>fail</div>
     </div>}
+    {/* t_total runs from the end of the captured phrase to the end of the reply's playback
+        (src/pipeline.py _run → _store_run), so it leaves out the capture and wake-word verify
+        rows above and takes in the time the reply plays. */}
     <div className="z-grow" style={{ borderTop: "1px solid var(--line)", paddingTop: 8, marginTop: 2 }}>
-      <div className="lbl" style={{ fontWeight: 700 }}>Total</div><div />
+      <div className="lbl" style={{ fontWeight: 700 }}>Total</div>
+      {/* An empty cell when there is no label keeps the value in the value column. */}
+      {spoken ? <div style={{ fontSize: 11, color: "var(--mut)" }}>end of phrase → end of reply playback</div> : <div />}
       <div className="ms" style={{ fontWeight: 700 }}>{fmtSec(totalMs(r))}</div>
     </div>
   </div>;
@@ -94,6 +101,7 @@ const ATTEMPT_TONE = {
 // a TTS attempt is {kind:"tts", provider, outcome, error, t} (times in ms);
 // a follow-up check is {kind:"followup", provider, text, outcome, probability, t}.
 function Attempts({ attempts }) {
+  const label = useProviderLabel();
   return <div className="z-card"><div style={{ padding: "4px 17px" }}>
     {attempts.map((a, i) => {
       const tts = a.kind === "tts";
@@ -103,10 +111,10 @@ function Attempts({ attempts }) {
           <span style={{ display: "flex", alignItems: "baseline", gap: 8, minWidth: 0 }}>
             <span className="mono" style={{ color: "var(--mut2)", fontSize: 11 }}>{i + 1}</span>
             {tts
-              ? <b>TTS · <span className="mono">{a.provider}</span></b>
+              ? <b>TTS · <span>{label("tts", a.provider)}</span></b>
               : followup
-              ? <b>Follow-up check · <span className="mono">{a.provider}</span></b>
-              : <b>{a.chain} · <span className="mono" style={{ fontWeight: 500 }}>{a.stt ? `${a.stt} → ${a.handler}` : a.handler}</span></b>}
+              ? <b>Follow-up check · <span>{label("followup", a.provider)}</span></b>
+              : <b>{a.chain} · <span style={{ fontWeight: 500 }}>{a.stt ? `${label("stt", a.stt)} → ${label("llm", a.handler)}` : label("llm", a.handler)}</span></b>}
           </span>
           <span style={{ display: "flex", alignItems: "center", gap: 10 }}>
             <span className="mono" style={{ fontSize: 11, color: "var(--mut)" }}>
@@ -145,16 +153,31 @@ function Drawer({ r, loading, error, onClose }) {
   const device = deviceLabel(useDeviceList(), r && r.device);
   // Another device heard the same phrase and kept it; the verifier did not reject it.
   const duplicate = !!r && r.result === "rejected" && r.reason === "duplicate";
+  // The LLM block: its header carries the model and the tokens.
+  const hasRounds = !!r && ((r.rounds && r.rounds.length > 0) || !!r.request);
   // A phrase of the follow-up window that the follow-up check did not take for a
   // continuation of the dialog (followup_reject) or could not judge (followup_error).
   const followupReject = !!r && r.result === "rejected" && (r.reason || "").startsWith("followup_");
   const followupCheck = followupReject ? (r.attempts || []).find((a) => a.kind === "followup") : null;
+  const meta = !r ? [] : [
+    ["Chain", r.chain],
+    ["Model", !hasRounds && r.model],
+    ["Total tokens", !hasRounds && r.tokens],
+    ["Filler spoken at", r.filler_text && r.t_filler != null && fmtSec(r.t_filler)],
+    ["TTS audio", r.audio && `${(r.audio.bytes / 1024).toFixed(0)} kB · ${r.audio.fmt}`],
+  ].filter(([, v]) => v);
+  // Escape closes the drawer like its close button, as it does a dialog.
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === "Escape" && !e.defaultPrevented) onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
   return <>
     <div className="z-scrim" onClick={onClose} />
     <div className="z-drawer" role="dialog">
       <div className="z-drawer-h">
         <div>
-          <h2>{device || "Run"} {r && <span style={{ color: "var(--mut2)", fontWeight: 500, fontFamily: "var(--mono)", fontSize: 13 }}>· {r.time}</span>}</h2>
+          <h2>{device || "Run"} {r && <span style={{ color: "var(--mut2)", fontWeight: 500, fontFamily: "var(--mono)", fontSize: 13 }}>· {r.stamp}</span>}</h2>
           {r && <div style={{ fontSize: 11.5, color: "var(--mut)", marginTop: 2, fontFamily: "var(--mono)" }}>id {r.id} · end: {r.reason || "—"}</div>}
         </div>
         {r && <span className={"z-pill " + m.tone} style={{ marginLeft: 12 }}><span className={"z-dot " + (m.tone === "good" ? "ok" : m.tone === "bad" ? "error" : "off")} />{m.label}</span>}
@@ -185,15 +208,15 @@ function Drawer({ r, loading, error, onClose }) {
           <div className="z-sl" style={{ marginTop: 0 }}>Stage timeline</div>
           <div className="z-card"><div style={{ padding: "15px 17px" }}><Gantt r={r} /></div></div>
 
-          {/* Wake-word verifier confidence + time, shown whenever the stage produced a
+          {/* Wake-word verifier confidence, shown whenever the stage produced a
               score (a passed run) or actively rejected the phrase — not for a
-              duplicate, which the verifier did not reject. */}
+              duplicate, which the verifier did not reject. Its time is the stage
+              timeline's wake-word row. */}
           {!duplicate && (r.wakeword_score != null || (r.result === "rejected" && !followupReject)) && <>
-            <div className="z-sl">Wake-word verify<div className="ln" />{r.t && r.t.wakeword ? <span style={{ fontFamily: "var(--mono)", fontSize: 10.5, color: "var(--mut2)", textTransform: "none", letterSpacing: 0 }}>{fmtSec(r.t.wakeword)}</span> : null}</div>
+            <div className="z-sl">Wake-word verify<div className="ln" /></div>
             <div className="z-card"><div style={{ padding: "6px 17px" }}>
               <KV k="Score" v={r.wakeword_score != null ? r.wakeword_score.toFixed(3) : "—"} />
               <KV k="Verdict" v={r.result === "rejected" ? "Rejected" : "Passed"} />
-              <KV k="Verify time" v={fmtSec(r.t && r.t.wakeword)} />
             </div></div>
           </>}
 
@@ -239,7 +262,7 @@ function Drawer({ r, loading, error, onClose }) {
                 </div></div>}
           </> : null}
 
-          {((r.rounds && r.rounds.length > 0) || r.request) && <>
+          {hasRounds && <>
             <div className="z-sl">Rounds & tool calls<div className="ln" /><span style={{ fontFamily: "var(--mono)", fontSize: 10.5, color: "var(--mut2)", textTransform: "none", letterSpacing: 0 }}>{r.model || "—"} · {r.tokens || 0} tok</span></div>
             {r.request && <div className="z-round">
               <div className="z-round-h"><span className="rn">IN</span><span style={{ color: "var(--ink2)" }}>Model input — full debug</span></div>
@@ -305,34 +328,39 @@ function Drawer({ r, loading, error, onClose }) {
             </div></div>
           </> : null}
 
-          <div className="z-sl">Metadata</div>
-          <div className="z-card"><div style={{ padding: "6px 17px" }}>
-            <KV k="Device" v={device || "—"} />
-            <KV k="Chain" v={r.chain || "—"} />
-            <KV k="End reason" v={r.reason || "—"} />
-            <KV k="Model" v={r.model || "—"} />
-            <KV k="Total tokens" v={r.tokens || "—"} />
-            {r.filler_text && <KV k="Filler spoken at" v={fmtSec(r.t_filler)} />}
-            <KV k="Audio" v={r.audio ? `${(r.audio.bytes / 1024).toFixed(0)} kB · ${r.audio.fmt}` : "—"} />
-            <KV k="Total duration" v={fmtSec(totalMs(r))} />
-          </div></div>
+          {/* The device, time, id, end reason and status are in the header, the total under the
+              timeline, the model and tokens over the rounds when there are any. Only rows with
+              a value show, and no section when none has one. r.audio is the reply's speech
+              (audio_bytes/audio_fmt), the same audio as the TTS audio section. */}
+          {meta.length > 0 && <>
+            <div className="z-sl">Metadata</div>
+            <div className="z-card"><div style={{ padding: "6px 17px" }}>
+              {meta.map(([k, v]) => <KV key={k} k={k} v={v} />)}
+            </div></div>
+          </>}
         </>}
       </div>
     </div>
   </>;
 }
 
+// A filter dropdown with its caption.
+function FilterSelect({ label, w, value, options, onChange }) {
+  return <span data-testid={`filter-${label.toLowerCase()}`} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11.5, color: "var(--ink2)" }}>
+    {label}<Select w={w} value={value} options={options} onChange={onChange} />
+  </span>;
+}
+
 function Log() {
   const devices = useDeviceList();
+  const chains = useChainList();
   const [runs, setRuns] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [result, setResult] = useState("all");       // all → errors → ok → rejected
+  const [result, setResult] = useState("all");       // all | errors | ok | rejected
   const [search, setSearch] = useState("");
-  const [device, setDevice] = useState("");
-  // The table shows labels, so a typed label filters by its device's id.
-  const deviceFilter = devices.find((d) => d.label && d.label === device.trim())?.name ?? device.trim();
-  const [chain, setChain] = useState("");
+  const [device, setDevice] = useState("");           // a device id, "" = all
+  const [chain, setChain] = useState("");             // a chain name, "" = all
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
   const [total, setTotal] = useState(0);              // total matching rows across all pages
@@ -357,8 +385,8 @@ function Log() {
     const params = { limit: pageSize, offset: (page - 1) * pageSize };
     if (result !== "all") params.result = result;
     if (search.trim()) params.search = search.trim();
-    if (deviceFilter) params.device = deviceFilter;
-    if (chain.trim()) params.chain = chain.trim();
+    if (device) params.device = device;
+    if (chain) params.chain = chain;
     getRuns(params)
       .then((data) => {
         if (gen !== genRef.current) return;            // a newer load superseded this one
@@ -366,14 +394,14 @@ function Log() {
       })
       .catch((e) => { if (gen === genRef.current) setError(e); })
       .finally(() => { if (gen === genRef.current) setLoading(false); }); // a newer load owns the spinner otherwise
-  }, [result, search, deviceFilter, chain, page, pageSize]);
+  }, [result, search, device, chain, page, pageSize]);
 
   useEffect(() => { load(); }, [load]);
 
   // Keep the latest filter values in a ref so the single live subscription below
   // always matches against current filters without re-subscribing per keystroke.
-  const filtersRef = useRef({ result, search, device: deviceFilter, chain });
-  useEffect(() => { filtersRef.current = { result, search, device: deviceFilter, chain }; }, [result, search, deviceFilter, chain]);
+  const filtersRef = useRef({ result, search, device, chain });
+  useEffect(() => { filtersRef.current = { result, search, device, chain }; }, [result, search, device, chain]);
   // Mirror page/pageSize so the single live subscription can read them without
   // resubscribing (same pattern as filtersRef).
   const pageRef = useRef(page);
@@ -427,22 +455,22 @@ function Log() {
   useEffect(() => { if (page > totalPages) setPage(totalPages); }, [page, totalPages]);
 
   return <div className="z-page">
-    <PageHeader title="Request log" desc="Every pipeline run with per-stage timings. Click a row for the full waterfall, tool calls and metadata." />
+    <PageHeader title="Request Log" desc="Every pipeline run with per-stage timings. Click a row for the full waterfall, tool calls and metadata." />
     <div className="z-card">
       <div className="z-filters">
         <div className="z-search"><Ic n="search" w={13} />
           <input placeholder="Search recognized / response…" value={search}
             onChange={(e) => { setSearch(e.target.value); setPage(1); }} />
         </div>
-        <div className="z-search" style={{ maxWidth: 180 }}>
-          <input placeholder="Device…" value={device}
-            onChange={(e) => { setDevice(e.target.value); setPage(1); }} />
-        </div>
-        <div className="z-search" style={{ maxWidth: 180 }}>
-          <input placeholder="Chain…" value={chain}
-            onChange={(e) => { setChain(e.target.value); setPage(1); }} />
-        </div>
-        <div className="z-fchip" onClick={() => { setResult(result === "all" ? "errors" : result === "errors" ? "ok" : result === "ok" ? "rejected" : "all"); setPage(1); }}>Result · <b>{result}</b> ▾</div>
+        <FilterSelect label="Device" w={170} value={device}
+          options={[{ value: "", label: "All" }, ...devices.map((d) => ({ value: d.name, label: d.label || d.name }))]}
+          onChange={(v) => { setDevice(v); setPage(1); }} />
+        <FilterSelect label="Chain" w={150} value={chain}
+          options={[{ value: "", label: "All" }, ...chains.map((c) => c.name)]}
+          onChange={(v) => { setChain(v); setPage(1); }} />
+        <FilterSelect label="Result" w={120} value={result}
+          options={[{ value: "all", label: "All" }, { value: "errors", label: "Errors" }, { value: "ok", label: "OK" }, { value: "rejected", label: "Rejected" }]}
+          onChange={(v) => { setResult(v); setPage(1); }} />
         <span style={{ flex: 1 }} />
         <span style={{ fontSize: 11, color: "var(--mut2)", fontFamily: "var(--mono)" }}>{total} runs</span>
       </div>
@@ -453,12 +481,12 @@ function Log() {
             : <>
               <div className="z-tblwrap">
                 <table className="z-tbl" style={{ minWidth: 820 }}>
-                  <thead><tr><th style={{ width: 80 }}>Time</th><th style={{ width: 150 }}>Device</th><th style={{ width: 80 }}>Chain</th><th>Recognized</th><th>Response</th><th style={{ width: 64, textAlign: "right" }}>Tok</th><th style={{ width: "20%" }}>Stage waterfall</th><th style={{ width: 80, textAlign: "right" }}>Σ</th><th style={{ width: 92 }}>Status</th></tr></thead>
+                  <thead><tr><th style={{ width: 128 }}>Time</th><th style={{ width: 150 }}>Device</th><th style={{ width: 80 }}>Chain</th><th>Recognized</th><th>Response</th><th style={{ width: 64, textAlign: "right" }}>Tok</th><th style={{ width: "20%" }}>Stage waterfall</th><th style={{ width: 80, textAlign: "right" }}>Σ</th><th style={{ width: 92 }}>Status</th></tr></thead>
                   <tbody>
                     {runs.map((r) => {
                       const m = statusMeta(r);
                       return <tr key={r.key} className={openId === r.id ? "sel" : ""} onClick={() => { if (r.id != null) openRow(r.id); }}>
-                        <td className="tm">{r.time}</td>
+                        <td className="tm">{fmtTime(r.ts)}</td>
                         <td style={{ fontWeight: 600 }}>{deviceLabel(devices, r.device)}</td>
                         <td className="mono" data-testid="run-chain" style={{ fontSize: 11.5, color: r.chain ? "var(--ink2)" : "var(--mut2)" }}>{r.chain || "—"}</td>
                         <td><div className={"z-tx" + (r.stt ? "" : " mut")}>{r.stt || (r.live ? "…" : isAnnouncement(r) ? "—" : r.reason === "duplicate" ? "(duplicate)" : "(silence)")}</div></td>

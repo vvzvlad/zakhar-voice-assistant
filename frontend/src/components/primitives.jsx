@@ -182,7 +182,10 @@ export function Select({ value, options, onChange, w, itemAction, itemActionBusy
     return spaceBelow < est + 8 && spaceAbove > spaceBelow;
   };
   const toggle = () => setOpen((o) => { const next = !o; if (next) setUp(wantUp()); return next; });
-  return <div ref={ref} style={{ position: "relative", width: w || "100%" }}>
+  // Escape anywhere in an open Select (trigger, search, option) closes only the dropdown:
+  // preventDefault tells an enclosing Modal the key is taken.
+  return <div ref={ref} style={{ position: "relative", width: w || "100%" }}
+    onKeyDown={(e) => { if (open && e.key === "Escape") { e.preventDefault(); setOpen(false); } }}>
     <div className="z-select" role="button" tabIndex={0} aria-haspopup="listbox" aria-expanded={open}
       onClick={toggle}
       onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); } }}>
@@ -203,7 +206,7 @@ export function Select({ value, options, onChange, w, itemAction, itemActionBusy
               // picks the first one; the custom "Use ..." row stays reachable by click.
               if (shown.length > 0) pick(shown[0].value);
               else if (customRow) pick(query.trim());
-            } else if (e.key === "Escape") { e.preventDefault(); setOpen(false); }
+            }
           }}
           style={{ width: "100%", boxSizing: "border-box", padding: "7px 10px", border: "none", outline: "none", fontSize: 12, fontFamily: "inherit", color: "var(--ink)", background: "transparent" }}
         />
@@ -354,10 +357,19 @@ export function ErrorBox({ error, onRetry }) {
 // `top` pins the dialog near the top of the window instead of centring it, so a dialog whose
 // height changes (tabs) does not jump; `wide` makes it wide enough for label-left, control-right
 // rows (.z-rowctl) and caps it at the window height, so its body scrolls between a fixed header
-// and footer.
+// and footer. Escape closes it like its Close button, unless a control inside took the key (an
+// open Select closes only its dropdown); a click on the backdrop does not, so a stray click
+// never drops unsaved edits.
 export function Modal({ title, children, footer, onClose, top, wide }) {
-  return <div className="z-modal" onClick={onClose}>
-    <div className={"z-modal-c" + (top ? " top" : "") + (wide ? " wide" : "")} onClick={(e) => e.stopPropagation()}>
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
+  useEffect(() => {
+    const h = (e) => { if (e.key === "Escape" && !e.defaultPrevented) closeRef.current(); };
+    document.addEventListener("keydown", h);
+    return () => document.removeEventListener("keydown", h);
+  }, []);
+  return <div className="z-modal">
+    <div className={"z-modal-c" + (top ? " top" : "") + (wide ? " wide" : "")}>
       <div className="z-modal-h"><b>{title}</b><button className="z-x" aria-label="Close" style={{ marginLeft: "auto" }} onClick={onClose}><svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" /></svg></button></div>
       <div className="z-modal-b">{children}</div>
       {footer && <div className="z-modal-f">{footer}</div>}

@@ -1,17 +1,22 @@
 // @vitest-environment jsdom
 // Integration tests (jsdom) for the chain parts of the Request Log: the Chain
-// column, the chain filter forwarded to /api/runs, and the run detail listing
+// column, the chain dropdown filter forwarded to /api/runs, and the run detail listing
 // the chain and TTS attempts in the order they ran, with why a handler declined.
-// Also the device column, which shows a device's label and filters by it, the
-// request of an announcement, which is no request rather than silence, and the
-// detail of a duplicate, which is no verifier reject.
+// Also the device column, which shows a device's label and filters by it from a
+// dropdown, the Result dropdown, the request of an announcement, which is no request
+// rather than silence, the detail of a duplicate, which is no verifier reject, and the
+// detail's dated header, its Metadata and what its Total spans.
 import React from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, cleanup, waitFor, within } from "@testing-library/react";
 import Log from "../pages/log.jsx";
 import { getRuns, getRun } from "../api.js";
 
-vi.mock("../appData.jsx", () => ({ useDeviceList: () => [{ name: "kitchen", label: "Кухня" }] }));
+vi.mock("../appData.jsx", () => ({
+  useDeviceList: () => [{ name: "kitchen", label: "Кухня" }],
+  useChainList: () => [{ name: "fast" }, { name: "smart" }],
+  useProviderLabel: () => (cat, id) => ({ vosk: "Vosk (offline)", "simple-nlu": "Simple NLU (no LLM)" })[id] || id,
+}));
 vi.mock("../api.js", () => ({
   getRuns: vi.fn(),
   getRun: vi.fn(),
@@ -30,21 +35,70 @@ beforeEach(() => {
 });
 afterEach(cleanup);
 
+// Pick `option` in the filter dropdown captioned `label`, after checking its options.
+function pick(label, options, option) {
+  fireEvent.click(within(screen.getByTestId(`filter-${label}`)).getByRole("button"));
+  expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual(options);
+  fireEvent.click(screen.getByRole("option", { name: option }));
+}
+
 describe("Request log — chains", () => {
   it("shows a Chain column and forwards the chain filter to /api/runs", async () => {
     render(<Log />);
-    await screen.findByText("Chain");
-    expect(screen.getAllByTestId("run-chain").map((td) => td.textContent)).toEqual(["smart", "—"]);
+    expect((await screen.findAllByTestId("run-chain")).map((td) => td.textContent)).toEqual(["smart", "—"]);
 
-    fireEvent.change(screen.getByPlaceholderText("Chain…"), { target: { value: " fast " } });
+    pick("chain", ["All", "fast", "smart"], "fast");
     await waitFor(() => expect(getRuns).toHaveBeenLastCalledWith({ limit: 100, offset: 0, chain: "fast" }));
   });
 
   it("shows the device's label and filters by it as the device id", async () => {
     render(<Log />);
     expect(await screen.findAllByText("Кухня")).toHaveLength(2);
-    fireEvent.change(screen.getByPlaceholderText("Device…"), { target: { value: "Кухня" } });
+    pick("device", ["All", "Кухня"], "Кухня");
     await waitFor(() => expect(getRuns).toHaveBeenLastCalledWith({ limit: 100, offset: 0, device: "kitchen" }));
+  });
+
+  it("filters by result from a dropdown", async () => {
+    render(<Log />);
+    await screen.findAllByTestId("run-chain");
+    pick("result", ["All", "Errors", "OK", "Rejected"], "Rejected");
+    await waitFor(() => expect(getRuns).toHaveBeenLastCalledWith({ limit: 100, offset: 0, result: "rejected" }));
+  });
+
+  it("dates the detail's header, keeps the header's fields out of Metadata, shows the wake-word time once and says what Total spans", async () => {
+    getRun.mockResolvedValue({ ...ROW, ts: 1760854865, reason: "endpoint", t_vad: 1500, t_wakeword: 230, wakeword_score: 0.9, t_stt: 400, t_total: 9000 });
+    render(<Log />);
+    fireEvent.click((await screen.findAllByText("Солнечно"))[0]);
+    await screen.findByText("Metadata");
+    expect(within(screen.getByRole("dialog")).getByRole("heading").textContent).toBe("Кухня · Oct 19 2025 06:21:05");
+    expect([...document.querySelectorAll(".z-kv .k")].map((k) => k.textContent)).toEqual(["Score", "Verdict", "Chain"]);
+    expect(screen.getByText("Wakeword verify").closest(".z-grow").querySelector(".ms").textContent).toBe("230 ms");
+    expect(screen.queryByText("0.23s")).toBeNull();
+    expect(screen.getByText("end of phrase → end of reply playback").nextSibling.textContent).toBe("9.00s");
+    fireEvent.keyDown(window, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+
+  it("shows only Metadata rows with a value, no section without one, and the reply's speech as TTS audio", async () => {
+    // An announcement with its recording but no chain, model, tokens or reply speech: no Metadata.
+    getRun.mockResolvedValueOnce({ ...ROW, chain: null, reason: "say", has_audio: 1 });
+    getRun.mockResolvedValueOnce({ ...ROW, id: 8, audio_bytes: 12288, audio_fmt: "wav" });
+    render(<Log />);
+    fireEvent.click((await screen.findAllByText("Солнечно"))[0]);
+    await screen.findByText("Utterance audio");
+    expect(screen.queryByText("Metadata")).toBeNull();
+    fireEvent.click(screen.getAllByText("Солнечно")[1]);
+    await screen.findByText("Metadata");
+    expect([...document.querySelectorAll(".z-kv")].map((kv) => kv.textContent)).toEqual(["Chainsmart", "TTS audio12 kB · wav"]);
+  });
+
+  it("keeps the model and tokens out of Metadata when the rounds header shows them", async () => {
+    getRun.mockResolvedValue({ ...ROW, model: "haiku", tokens: 120, rounds: [{ round: 1, note: "", tokens: 120, calls: [], content: "Солнечно" }] });
+    render(<Log />);
+    fireEvent.click((await screen.findAllByText("Солнечно"))[0]);
+    await screen.findByText("Metadata");
+    expect([...document.querySelectorAll(".z-kv .k")].map((k) => k.textContent)).not.toContain("Model");
+    expect(screen.getByText("haiku · 120 tok")).toBeInTheDocument();
   });
 
   it("lists the run's attempts in order with text, outcome, error and timings", async () => {
@@ -63,7 +117,7 @@ describe("Request log — chains", () => {
 
     const items = screen.getAllByTestId("attempt");
     expect(items).toHaveLength(4);
-    expect(items[0].textContent).toContain("fast · vosk → simple-nlu");
+    expect(items[0].textContent).toContain("fast · Vosk (offline) → Simple NLU (no LLM)");
     expect(items[0].textContent).toContain("STT 0.31s · handler 0.01s");
     expect(items[0].textContent).toContain("declined");
     expect(items[0].textContent).toContain("какая погода");

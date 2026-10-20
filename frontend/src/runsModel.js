@@ -41,18 +41,27 @@ export function fmtSec(ms) {
 // Authoritative total run time: prefer the backend t_total, fall back to summing r.t.
 export const totalMs = (r) => (r.t_total != null ? r.t_total : total(r.t));
 
-// epoch seconds (float) -> "HH:MM:SS" in local time.
-function fmtTime(ts) {
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+// epoch seconds (float) -> "HH:MM:SS" in local time for a run from today, else
+// "Oct 19 06:21:05" ("Oct 19 2025 06:21:05" from another year); `withDate` always puts the
+// date in front. Called at render, so a page left open past midnight dates yesterday's rows.
+export function fmtTime(ts, withDate = false) {
   if (ts == null || isNaN(ts)) return "—";
   const d = new Date(ts * 1000);
+  const now = new Date();
   const pad = (n) => String(n).padStart(2, "0");
-  return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+  const time = `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+  if (!withDate && d.toDateString() === now.toDateString()) return time;
+  const year = d.getFullYear() === now.getFullYear() ? "" : ` ${d.getFullYear()}`;
+  return `${MONTHS[d.getMonth()]} ${d.getDate()}${year} ${time}`;
 }
 
 // Map a backend row to the UI run object. `t` groups per-stage timings (ms);
 // 0/null are coerced to 0 so the waterfall's `> 0` filter drops empty stages
 // (stress shows only when the stage actually ran, i.e. t_stress > 0).
-// `audio`/`error` are null unless the detail payload carries them.
+// `audio`/`error` are null unless the detail payload carries them. `stamp` is the dated
+// time of the run drawer's header; list rows format `ts` at render (fmtTime).
 export function mapRun(row) {
   if (!row) return row;
   // Live (in-progress) rows have no DB id yet; they are upserted by device, so
@@ -63,7 +72,7 @@ export function mapRun(row) {
     ...row,
     key,
     live,
-    time: fmtTime(row.ts),
+    stamp: fmtTime(row.ts, true),
     stt: row.stt_text,
     llm: row.llm_text,
     stress: row.stress_text,

@@ -1,7 +1,7 @@
 // Unit tests for the display formatters (src/format.js).
 // TZ is pinned to UTC in src/test/setup.js so fmtStarted is deterministic.
 import { describe, it, expect } from "vitest";
-import { fmtUptime, fmtStarted, fmtBytes, deviceVersion, deviceLabel, shortLabel } from "../format.js";
+import { fmtUptime, fmtStarted, fmtBytes, deviceVersion, deviceLabel, shortLabel, fwVersion } from "../format.js";
 
 describe("fmtUptime", () => {
   it("renders an em dash for null / NaN input", () => {
@@ -101,6 +101,14 @@ describe("deviceVersion", () => {
   it("returns null when the version value has not arrived yet", () => {
     // The backend reports value: null until the first state push.
     expect(deviceVersion({ versions: [{ id: "config_version", value: null }] }, "config_version")).toBeNull();
+  });
+});
+
+describe("fwVersion", () => {
+  it("drops the build hash in parentheses; a version without one and null pass through", () => {
+    expect(fwVersion("voicepe 0.1.0 (dc1868d-dirty)")).toBe("voicepe 0.1.0");
+    expect(fwVersion("espanel 0.2.0")).toBe("espanel 0.2.0");
+    expect(fwVersion(null)).toBeNull();
   });
 });
 

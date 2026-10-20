@@ -7,7 +7,8 @@ import { STAGES } from "../stageMeta.js";
 // Map a backend category id to its short stage name for the loading badge.
 const RELOAD_LABELS = Object.fromEntries(STAGES.map((s) => [s.cat, s.name]));
 
-export function Topbar({ active }) {
+// `onMenu` opens the sidebar; its button shows only on a narrow screen (styles.css).
+export function Topbar({ active, onMenu }) {
   const { system, connected } = useAppData();
   const reloading = system?.reloading || [];
   // Match both top-level item ids and nested children ids so nested
@@ -17,6 +18,9 @@ export function Topbar({ active }) {
   );
 
   return <div className="z-top">
+    <button className="z-iconbtn z-menubtn" aria-label="Menu" onClick={onMenu}>
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" aria-hidden="true"><path d="M2.5 4h11M2.5 8h11M2.5 12h11" /></svg>
+    </button>
     <div className="z-bcrumb"><s>{grp ? grp.grp + " / " : ""}</s>{TITLES[active] || active}</div>
     <div className="sp" />
     {/* Global loading badge: shown whenever a backend category is being hot-reloaded
