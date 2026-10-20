@@ -59,8 +59,10 @@ struct Model {
 static Model s_wake(0);
 static Model s_vad(0);
 static std::atomic<bool> s_cutoffs_set{false};
-// The stop model's cutoff is compiled in: stop.json's probability_cutoff 0.5, trunc(0.5 * 255).
-static Model s_stop(127);
+// The stop model's cutoff is compiled in, below stop.json's probability_cutoff 0.5: over the
+// speaker's own reply at volume 79 % an ordinary «стоп» scored 0.51-0.84 on the window mean, while
+// long replies without one stayed at or below 0.18. trunc(0.35 * 255).
+static Model s_stop(89);
 
 static FrontendState s_fs;
 static FrontendState s_fs_stop;  // the stop model's own input, when wake_word_feed() gets one
