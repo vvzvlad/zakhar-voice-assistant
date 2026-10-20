@@ -45,18 +45,21 @@ static bool get_percent(const cJSON *v, double *out)
     return true;
 }
 
-// An optional integer field in lo..hi: its value, or -1 when it is absent or anything else.
-static int get_setting(const cJSON *v, int lo, int hi)
+// An integer field in lo..hi.
+static bool get_int(const cJSON *v, int lo, int hi, int *out)
 {
-    if (!cJSON_IsNumber(v)) return -1;
+    if (!cJSON_IsNumber(v)) return false;
     const double d = v->valuedouble;
-    return d >= lo && d <= hi && d == floor(d) ? (int)d : -1;
+    if (!(d >= lo && d <= hi && d == floor(d))) return false;
+    *out = (int)d;
+    return true;
 }
 
-// An optional boolean field: 1 true, 0 false, -1 when it is absent or anything else.
-static int get_flag(const cJSON *v)
+static bool get_bool(const cJSON *v, bool *out)
 {
-    return cJSON_IsBool(v) ? cJSON_IsTrue(v) : -1;
+    if (!cJSON_IsBool(v)) return false;
+    *out = cJSON_IsTrue(v);
+    return true;
 }
 
 // A string field: *out is its text, `absent` when the field is missing.
@@ -77,15 +80,16 @@ static bool decode_fields(const cJSON *o, const char *type, zl_msg_t *m)
     double a, b;
     if (strcmp(type, "config") == 0) {
         m->type = ZL_MSG_CONFIG;
-        if (!get_percent(field(o, "wake_cutoff"), &a) || !get_percent(field(o, "vad_cutoff"), &b)) return false;
+        if (!get_percent(field(o, "wake_cutoff"), &a) || !get_percent(field(o, "vad_cutoff"), &b) ||
+            !get_int(field(o, "echo_cancel"), 0, 3, &m->echo_cancel) ||
+            !get_int(field(o, "echo_cancel_mode"), 0, 3, &m->echo_mode) ||
+            !get_int(field(o, "echo_cancel_filter"), 1, 8, &m->echo_filter) ||
+            !get_int(field(o, "play_prime_ms"), 0, 2000, &m->play_prime_ms) ||
+            !get_bool(field(o, "auto_volume"), &m->auto_volume)) {
+            return false;
+        }
         m->wake = zl_cutoff_u8(a);
         m->vad = zl_cutoff_u8(b);
-        // Optional: a setting this device cannot take leaves its own, and the cutoffs apply.
-        m->echo_cancel = get_setting(field(o, "echo_cancel"), 0, 3);
-        m->echo_mode = get_setting(field(o, "echo_cancel_mode"), 0, 3);
-        m->echo_filter = get_setting(field(o, "echo_cancel_filter"), 1, 8);
-        m->play_prime_ms = get_setting(field(o, "play_prime_ms"), 0, 2000);
-        m->auto_volume = get_flag(field(o, "auto_volume"));
         return true;
     }
     if (strcmp(type, "state") == 0) {

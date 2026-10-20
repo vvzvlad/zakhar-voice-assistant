@@ -162,7 +162,7 @@ class FakeDevice:
         while not got or got[-1]["type"] != "state" or got[-1]["value"] not in ("idle", "error"):
             got.append(await self.recv())
             if got[-1]["type"] == "play_end":
-                await self.send(type="played", id=got[-1]["id"])
+                await self.send(type="played", id=got[-1]["id"], dry=0, gap_ms=0)
         return got
 
     async def log_switch(self, timeout=5.0) -> bool:
@@ -227,17 +227,15 @@ class Server:
         self.http = aiohttp.ClientSession()
 
     async def connect(self, id="kitchen", *, speaker=True, rate=16000, buffer_ms=4000,
-                      capture=None, follow_up=False, uptime=None) -> FakeDevice:
+                      capture=None, follow_up=False, uptime=0) -> FakeDevice:
         ws = await self.http.ws_connect(f"http://127.0.0.1:{self.manager.port}/device")
-        hello = {"type": "hello", "id": id, "fw": "voicepe 0.1.0 (a1b2c3d)",
+        hello = {"type": "hello", "id": id, "fw": "voicepe 0.1.0 (a1b2c3d)", "uptime": uptime,
                  "caps": {"speaker": speaker, "screen": False, "follow_up": follow_up},
                  "mic": {"channels": 2}}
         if speaker:
             hello.update(play={"rate": rate, "buffer_ms": buffer_ms}, volume=60)
         if capture is not None:
             hello["capture"] = capture
-        if uptime is not None:
-            hello["uptime"] = uptime
         await ws.send_str(json.dumps(hello))
         return FakeDevice(ws)
 
@@ -313,14 +311,11 @@ async def test_hello_gets_config_and_the_models(srv):
 
 async def test_status_counts_the_uptime_on_from_the_hello(srv, monkeypatch):
     kitchen = await srv.connect(uptime=3725)
-    panel = await srv.connect(id="panel", speaker=False)  # a firmware whose hello has no uptime
     await kitchen.recv()  # config: the hello is taken in
-    await panel.recv()
     now = device_server.time.time()
     monkeypatch.setattr(device_server.time, "time", lambda: now + 600)  # ten minutes on
     uptimes = {s["name"]: s["uptime_seconds"] for s in srv.manager.statuses()}
     assert 4325 <= uptimes["kitchen"] <= 4327
-    assert uptimes["panel"] is None
 
 
 async def test_models_follow_the_config_and_the_reload_command(srv, tmp_path):
@@ -455,7 +450,7 @@ async def test_new_wake_drops_the_older_session(srv):
     await dev.phrase()
     got = [await dev.recv() for _ in range(7)]
     new = got[5]["id"]
-    await dev.send(type="played", id=new)
+    await dev.send(type="played", id=new, dry=0, gap_ms=0)
     got.append(await dev.recv())
     assert got == session_msgs(
         2,
@@ -583,7 +578,7 @@ async def test_a_rejected_wake_leaves_the_answer_playing(srv, tmp_path):
     # The rejected wake is in the run log before the answer is reported played: its
     # record does not wait for the answering run, which holds the run lock until then.
     await until(lambda: srv.rt.runs_store.list(result="rejected"))
-    await dev.send(type="played", id=old)
+    await dev.send(type="played", id=old, dry=0, gap_ms=0)
     assert await dev.recv() == state(1, "idle")
     await until(lambda: len(srv.rt.runs_store.list()) == 2)
     [row] = srv.rt.runs_store.list(result="rejected")
@@ -603,7 +598,7 @@ async def test_a_rejected_wake_over_an_announcement_ends_its_session(srv):
     assert await dev.recv() == state(1, "idle")
     assert (await dev.recv())["type"] == "play_end"
     assert len(dev.plays[start["id"]]) == 32000
-    await dev.send(type="played", id=start["id"])
+    await dev.send(type="played", id=start["id"], dry=0, gap_ms=0)
     await asyncio.wait_for(say, 2)
 
 
@@ -841,7 +836,7 @@ async def test_follow_up_listens_after_a_played_answer_only(srv):
     await dev.wake(1)
     await dev.phrase()
     got = [await dev.recv() for _ in range(7)]
-    await dev.send(type="played", id=got[-1]["id"])
+    await dev.send(type="played", id=got[-1]["id"], dry=0, gap_ms=0)
     # The answer played out: the session stays open and the microphone reopens.
     assert await dev.recv() == state(1, "listening")
     # A phrase the follow-up check drops ends the session without a transcript.
@@ -905,18 +900,17 @@ async def test_playback_is_paced_to_the_device_buffer(srv, prime):
     # The last frame leaves once 0.6 s of the 0.8 s has played.
     assert 0.35 <= dev.frame_times[-1][0] - t0 < 0.8
     assert not play.done()  # still waiting for `played`
-    await dev.send(type="played", id=start["id"])
+    await dev.send(type="played", id=start["id"], dry=0, gap_ms=0)
     await asyncio.wait_for(play, 2)
 
 
 async def test_played_reports_how_the_stream_ran_dry(srv):
-    # A stream that played out returns the device's dry/gap_ms; a dropped one and a
-    # device that does not count them return None for both.
+    # A stream that played out returns the device's dry/gap_ms; a dropped one returns None
+    # for both.
     dev = await srv.connect()
     await dev.recv()  # config
     for reply, stats in (
             ({"dry": 2, "gap_ms": 90}, {"outcome": "played", "dry": 2, "gap_ms": 90}),
-            ({}, {"outcome": "played", "dry": None, "gap_ms": None}),
             ({"dropped": True}, {"outcome": "dropped", "dry": None, "gap_ms": None})):
         play = asyncio.create_task(srv.device().play(pcm_mime(16000), b"\x01\x00" * 1600))
         start = await dev.recv()
@@ -938,7 +932,7 @@ async def test_audio_is_converted_to_the_device_rate(srv):
         play = asyncio.create_task(srv.device().play(mime, clip))
         start = await dev.recv()
         await dev.recv()  # play_end
-        await dev.send(type="played", id=start["id"])
+        await dev.send(type="played", id=start["id"], dry=0, gap_ms=0)
         await play
         out = np.frombuffer(dev.plays[start["id"]], dtype="<i2")
         # 0.5 s mono at 48 kHz; the stereo WAV is downmixed to 200.
@@ -963,7 +957,7 @@ async def test_pcm_split_mid_sample_resamples_like_one_shot(srv):
     play = asyncio.create_task(srv.device().play(pcm_mime(44100), chunks()))
     start = await dev.recv()
     await dev.recv()  # play_end
-    await dev.send(type="played", id=start["id"])
+    await dev.send(type="played", id=start["id"], dry=0, gap_ms=0)
     await play
     out = np.frombuffer(dev.plays[start["id"]], dtype="<i2").astype(int)
     ref = soxr.resample(x, 44100, 48000).astype(int)
@@ -990,7 +984,7 @@ async def test_compress_replies_holds_the_peaks_at_the_ceiling(srv):
             play = asyncio.create_task(srv.device().play(mime, clip))
             start = await dev.recv()
             await dev.recv()  # play_end
-            await dev.send(type="played", id=start["id"])
+            await dev.send(type="played", id=start["id"], dry=0, gap_ms=0)
             await play
             out = dev.plays[start["id"]]
             if not on:
@@ -1325,7 +1319,7 @@ async def test_say_speaks_on_an_online_device_only(srv, tmp_path):
     assert await dev.recv() == {"type": "reply", "text": "проверка громкости"}
     start = await dev.recv()
     assert (await dev.recv())["type"] == "play_end"
-    await dev.send(type="played", id=start["id"])
+    await dev.send(type="played", id=start["id"], dry=0, gap_ms=0)
     await asyncio.wait_for(say, 2)
     [row] = srv.rt.runs_store.list()
     assert (row["reason"], row["result"], row["llm_text"]) == ("say", "ok", "проверка громкости")
@@ -1422,7 +1416,7 @@ async def test_unknown_disabled_and_replaced_ids(srv):
     start = await second.recv()
     assert start["type"] == "play_start"
     assert (await second.recv())["type"] == "play_end"
-    await second.send(type="played", id=start["id"])
+    await second.send(type="played", id=start["id"], dry=0, gap_ms=0)
     await asyncio.wait_for(plays[0], 2)
     assert await first.closed_with() == 4001
     await asyncio.sleep(0.1)
@@ -1489,7 +1483,7 @@ async def test_one_phrase_heard_by_three_devices_runs_on_the_first_speaker(srv, 
 
     await speaker.phrase()
     got = [await speaker.recv() for _ in range(7)]
-    await speaker.send(type="played", id=got[5]["id"])
+    await speaker.send(type="played", id=got[5]["id"], dry=0, gap_ms=0)
     assert await speaker.recv() == state(8, "listening")  # the follow-up window
     await speaker.phrase()
     got = []

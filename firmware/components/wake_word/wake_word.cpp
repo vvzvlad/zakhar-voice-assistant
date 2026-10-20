@@ -54,10 +54,11 @@ struct Model {
   bool fresh = false;  // a probability arrived since the last detection check
 };
 
-// The cutoffs are the device defaults until the server's `config`: wake 80 % and VAD 30 %, as
-// trunc(percent / 100 * 255).
-static Model s_wake(204);
-static Model s_vad(76);
+// The wake and VAD cutoffs come from the server's `config` (wake_word_set_cutoffs); until the first
+// one (s_cutoffs_set) neither the wake word nor the stop word, which the VAD gates too, is detected.
+static Model s_wake(0);
+static Model s_vad(0);
+static std::atomic<bool> s_cutoffs_set{false};
 // The stop model's cutoff is compiled in: stop.json's probability_cutoff 0.5, trunc(0.5 * 255).
 static Model s_stop(127);
 
@@ -178,7 +179,10 @@ static void stop_feed(const int8_t *features) {
     return;
   }
   s_stop_peak = std::max(s_stop_peak, window_sum(s_stop));
-  if (s_vad.interp == nullptr || !s_stop.fresh || s_stop.ignore < 0) return;
+  if (s_vad.interp == nullptr || !s_cutoffs_set.load(std::memory_order_acquire) || !s_stop.fresh ||
+      s_stop.ignore < 0) {
+    return;
+  }
   s_stop.fresh = false;
   if (!model_above_cutoff(s_stop)) return;
   if (!model_above_cutoff(s_vad)) {
@@ -268,7 +272,7 @@ extern "C" void wake_word_feed(const int16_t *wake, const int16_t *stop, size_t 
       continue;
     }
     if (stop == nullptr) stop_feed(features);
-    if (!wake_on || !vad) continue;
+    if (!wake_on || !vad || !s_cutoffs_set.load(std::memory_order_acquire)) continue;
     // As WakeWordModel::determine_detected: during the cool-off the probability stays unprocessed,
     // so the window is checked on the very slice the cool-off ends.
     if (!s_wake.fresh || s_wake.ignore < 0) continue;
@@ -296,6 +300,7 @@ extern "C" void wake_word_feed(const int16_t *wake, const int16_t *stop, size_t 
 extern "C" void wake_word_set_cutoffs(uint8_t wake, uint8_t vad) {
   s_wake.cutoff.store(wake, std::memory_order_relaxed);
   s_vad.cutoff.store(vad, std::memory_order_relaxed);
+  s_cutoffs_set.store(true, std::memory_order_release);
 }
 
 extern "C" uint8_t wake_word_take_peak(void) { return s_peak.exchange(0, std::memory_order_relaxed); }

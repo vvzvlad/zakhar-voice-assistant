@@ -88,7 +88,7 @@ class FakePlayer:
 
     def __init__(self):
         self.calls = []
-        self.stats = {"outcome": "played", "dry": None, "gap_ms": None}
+        self.stats = {"outcome": "played", "dry": 0, "gap_ms": 0}
 
     async def __call__(self, mime, audio):
         if not isinstance(audio, (bytes, bytearray)):

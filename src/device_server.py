@@ -288,10 +288,9 @@ class Connection:
         self.name = hello["id"]
         self.fw = hello.get("fw")
         # When the device booted, on the server clock: its hello `uptime` counted back from now.
-        # None for a firmware whose hello has no uptime.
-        self.booted_at = time.time() - hello["uptime"] if "uptime" in hello else None
-        # The wake model the device reported loaded; an older firmware names its own in hello.
-        self.model = hello.get("model")
+        self.booted_at = time.time() - hello["uptime"]
+        # The wake model the device reported loaded (`model_loaded`); None until it does.
+        self.model = None
         self.speaker = bool(hello.get("caps", {}).get("speaker"))
         # The device reopens its microphone on a follow-up `listening`.
         self.follow_up = bool(hello.get("caps", {}).get("follow_up"))
@@ -423,8 +422,7 @@ class Connection:
 
         Returns {"outcome", "dry", "gap_ms"}: outcome "played" or "dropped"; dry how
         many times a played stream ran dry before its play_end and gap_ms the ms of
-        silence played meanwhile, both None for a dropped stream or a device that does
-        not count them."""
+        silence played meanwhile, both None for a dropped stream."""
         chunks = _one_chunk(audio) if isinstance(audio, (bytes, bytearray)) else audio
         try:
             out = _PcmOut(mime, self.play_rate, compress)
@@ -457,7 +455,7 @@ class Connection:
         if stream.ended.result() == "closed":
             raise ConnectionError(f"{self.name} disconnected during playback")
         outcome = stream.ended.result()
-        if outcome != "played" or stream.dry is None:
+        if outcome != "played":
             return {"outcome": outcome, "dry": None, "gap_ms": None}
         if stream.dry > 0:
             logger.warning(f"{self.name}: stream {stream.id} ran dry {stream.dry} times, "
@@ -611,7 +609,10 @@ class Device:
                 conn.session_open = False
             logger.info(f"{self.name}: stop word, playback{' and run' if in_session else ''} stopped")
         elif kind == "played":
-            conn.on_played(msg["id"], bool(msg.get("dropped")), msg.get("dry"), msg.get("gap_ms"))
+            if msg.get("dropped"):
+                conn.on_played(msg["id"], True)
+            else:
+                conn.on_played(msg["id"], False, msg["dry"], msg["gap_ms"])
         elif kind == "volume":
             conn.volume = msg["value"]
         elif kind == "ambient":
@@ -968,14 +969,13 @@ class DeviceManager:
         for cfg in self.rt.core.devices:
             device = self._devices.get(cfg.name)
             online = bool(device and device.online)
-            booted_at = device.conn.booted_at if online else None
             out.append({
                 "name": cfg.name,
                 "enabled": cfg.enabled,
                 "online": online,
                 "versions": device.versions() if online else [],
-                # Seconds since the device booted; None while offline or when its hello had none.
-                "uptime_seconds": int(time.time() - booted_at) if booted_at is not None else None,
+                # Seconds since the device booted; None while offline.
+                "uptime_seconds": int(time.time() - device.conn.booted_at) if online else None,
             })
         return out
 
