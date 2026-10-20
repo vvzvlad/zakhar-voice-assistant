@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 
 from src.plugins.base import MODEL_FIELD_EXTRA, SECRET_FIELD_EXTRA, Deps, Provider, register
 from src.stage_errors import StageError
-from src.stt import SttBackend, contains_stt_hallucination, pcm_to_wav
+from src.stt import SttBackend, pcm_to_wav, strip_stt_hallucination
 
 OPENROUTER_STT_URL = "https://openrouter.ai/api/v1/audio/transcriptions"
 # Public model catalog filtered server-side to transcription-capable models;
@@ -46,9 +46,10 @@ class OpenRouterSttBackend(SttBackend):
     async def transcribe(self, pcm: bytes) -> str:
         """Transcribe raw 16 kHz/16-bit mono PCM via OpenRouter transcriptions.
 
-        Returns the recognized text on success; "" on empty input (nothing to
-        transcribe), a 200 with empty text (no speech recognized), or a known
-        Whisper hallucination (discarded as if nothing was said). Raises
+        Returns the recognized text on success, with the sentences carrying a known
+        Whisper hallucination cut; "" on empty input (nothing to transcribe), a 200
+        with empty text (no speech recognized), or a transcript that is nothing but
+        a hallucination. Raises
         StageError("stt", ...) on a non-200 response or any httpx error.
         """
         if not pcm:
@@ -80,13 +81,13 @@ class OpenRouterSttBackend(SttBackend):
             if resp.status_code == 200:
                 text = resp.json().get("text", "").strip()
                 # The catalog is whisper-family heavy, so the same subtitle-credit
-                # artifacts surface on silence/noise. Discard such hallucinated text
-                # and return "" — the SttBackend contract for "no speech
-                # recognized" — so the pipeline ends the run like an empty result.
-                if contains_stt_hallucination(text):
-                    logger.info(f"OpenRouter STT: discarding hallucination: {text!r}")
-                    return ""
-                return text
+                # artifacts surface on silence/noise and in pauses of a request.
+                # Their sentences are cut; when nothing else is left the result is
+                # "" — the SttBackend contract for "no speech recognized".
+                cleaned = strip_stt_hallucination(text)
+                if cleaned != text:
+                    logger.info(f"OpenRouter STT: cut hallucination: {text!r} -> {cleaned!r}")
+                return cleaned
             logger.error(f"OpenRouter STT error: {resp.status_code} - {resp.text}")
             raise StageError("stt", f"OpenRouter STT error: {resp.status_code} - {resp.text}")
         except httpx.HTTPError as e:
