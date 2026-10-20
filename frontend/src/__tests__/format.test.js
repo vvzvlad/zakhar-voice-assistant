@@ -1,7 +1,7 @@
 // Unit tests for the display formatters (src/format.js).
 // TZ is pinned to UTC in src/test/setup.js so fmtStarted is deterministic.
 import { describe, it, expect } from "vitest";
-import { fmtUptime, fmtStarted, fmtBytes, deviceVersion, deviceLabel } from "../format.js";
+import { fmtUptime, fmtStarted, fmtBytes, deviceVersion, deviceLabel, shortLabel } from "../format.js";
 
 describe("fmtUptime", () => {
   it("renders an em dash for null / NaN input", () => {
@@ -113,5 +113,14 @@ describe("deviceLabel", () => {
     expect(deviceLabel(devices, "unknown")).toBe("unknown");
     expect(deviceLabel(undefined, "kitchen")).toBe("kitchen");
     expect(deviceLabel(devices, null)).toBe(null);
+  });
+});
+
+describe("shortLabel", () => {
+  it("drops the trailing parenthesized note, nothing else", () => {
+    expect(shortLabel("Silero VAD (neural)")).toBe("Silero VAD");
+    expect(shortLabel("Piper (offline)")).toBe("Piper");
+    expect(shortLabel("Yandex SpeechKit")).toBe("Yandex SpeechKit");
+    expect(shortLabel("Fish Audio")).toBe("Fish Audio");
   });
 });

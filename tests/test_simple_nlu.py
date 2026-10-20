@@ -135,7 +135,7 @@ def test_provider_is_registered():
     prov = get_provider("llm", "simple-nlu")
     assert prov.category == "llm"
     assert prov.id == "simple-nlu"
-    assert prov.label == "Simple NLU (no LLM)"
+    assert prov.label == "Commands (no LLM)"
     assert prov.uses_http_cloud is False
 
 

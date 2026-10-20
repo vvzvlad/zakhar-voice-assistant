@@ -129,17 +129,21 @@ class RuAccentConfig(BaseModel):
         "acute accent, 'uppercase' capitalises the stressed vowel — use these for "
         "engines that strip '+' (e.g. Fish Audio).",
     )
+    # Placed before `use_dictionary`, which the panel hides while this is on.
+    tiny_mode: bool = Field(
+        False,
+        title="Low-memory mode",
+        description="Uses ~512 MB RAM: disables the rule pipeline and swaps the full stress "
+        "dictionary for a small one. Lower quality on homographs.",
+    )
+    # RUAccent.load() takes the small NN accent dictionary whenever tiny_mode is
+    # on, whatever use_dictionary says, so the panel hides this switch then.
     use_dictionary: bool = Field(
         True,
         title="Stress dictionary",
         description="Load the full stress dictionary (more RAM, better accuracy). "
-        "Ignored in tiny mode.",
-    )
-    tiny_mode: bool = Field(
-        False,
-        title="Tiny mode",
-        description="Minimal mode (~512MB RAM): disables the rule pipeline and the "
-        "dictionary. Lower quality on homographs.",
+        "Ignored in low-memory mode.",
+        json_schema_extra={"hiddenWhen": "tiny_mode"},
     )
     device: Literal["CPU", "CUDA"] = Field(
         "CPU",

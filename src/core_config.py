@@ -283,7 +283,7 @@ class AckConfig(BaseModel):
     enabled: bool = Field(
         True,
         title="End-of-phrase chime",
-        description="Play a short confirmation chime to the speaker the instant your phrase is end-pointed — immediate \"got it\" feedback before STT/LLM/TTS run. The full spoken reply still plays afterwards.",
+        description="Play a short confirmation chime to the speaker the instant the server detects that your phrase has ended — immediate \"got it\" feedback before STT/LLM/TTS run. The full spoken reply still plays afterwards.",
     )
     # The dropdown is fed by GET /api/chimes (bundled assets/chimes clips); an empty
     # value keeps the synthesized chime, which is built once and cached.

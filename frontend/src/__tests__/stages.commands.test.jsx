@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 // Integration tests (jsdom) for the Providers → Commands page: the vocabulary
-// editor comes first, the engine settings card below it starts collapsed, and
+// editor comes first, the engine settings below it start collapsed in the same
+// <details> disclosure as the forms' "Advanced", and
 // the page's one Save sends the editor's and the engine card's edits together:
 // the catalog into core.commands, the engine's settings into its llm instance.
 // The editor itself is stubbed (it has its own tests); only its wiring is pinned.
@@ -43,14 +44,15 @@ beforeEach(() => {
 });
 afterEach(cleanup);
 
-const engineHeader = () => screen.getByRole("button", { name: /Engine settings/ });
+const engineHeader = () => screen.getByText("Engine settings");
 
 describe("Commands page", () => {
-  it("puts the vocabulary editor first and the engine settings collapsed below it", () => {
+  it("puts the vocabulary editor first and the engine settings collapsed below it, as a disclosure", () => {
     render(<Commands />);
     const editor = screen.getByLabelText("Vocabulary");
     expect(editor.compareDocumentPosition(engineHeader()) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(engineHeader()).toHaveAttribute("aria-expanded", "false");
+    expect(engineHeader().tagName).toBe("SUMMARY");
+    expect(engineHeader().closest("details").open).toBe(false);
     expect(screen.queryByRole("switch")).toBeNull();
   });
 
@@ -59,7 +61,7 @@ describe("Commands page", () => {
     fireEvent.change(screen.getByLabelText("Vocabulary"), { target: { value: "люстра" } });
     fireEvent.click(engineHeader());
     // The catalog's filler words sit in the engine card, the textareas the editor covers do not.
-    expect(screen.getByText("Filler words")).toBeInTheDocument();
+    expect(await screen.findByText("Filler words")).toBeInTheDocument();
     expect(screen.queryByText(/^aliases$/i)).toBeNull();
     fireEvent.click(screen.getByRole("switch"));
     fireEvent.click(screen.getByRole("button", { name: "Save changes" }));

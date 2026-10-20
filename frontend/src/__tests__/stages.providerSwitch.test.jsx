@@ -7,10 +7,12 @@
 //   - saving patches only that provider's instance, never routing; edits on
 //     several tabs survive the switch and go out in one patch,
 //   - the "used in chains" line, the offline command engine kept off the LLM tabs,
+//   - tabs named by the providers' labels, an "in use" marker on the providers
+//     an enabled chain runs,
 //   - a "configure" link from another page opens its provider's tab.
 import React from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, cleanup, waitFor, within } from "@testing-library/react";
 import { LLM, STT } from "../pages/stages.jsx";
 import { useAppData } from "../appData.jsx";
 import { navTab, setNavigate } from "../navStore.js";
@@ -41,7 +43,7 @@ function makeCatalog() {
         providers: [
           { id: "openrouter", label: "OpenRouter", schema, values: { model: "openrouter/auto" } },
           { id: "groq", label: "Groq", schema, values: { model: "llama-3-70b" } },
-          { id: "simple-nlu", label: "Commands", schema: { type: "object", properties: {} }, values: {}, has_vocabulary: true },
+          { id: "simple-nlu", label: "Commands (no LLM)", schema: { type: "object", properties: {} }, values: {}, has_vocabulary: true },
         ],
       },
       {
@@ -72,6 +74,10 @@ beforeEach(() => {
   useAppData.mockReturnValue({ catalog: makeCatalog(), config, patch });
 });
 
+// The provider tab named `label`, and the labels of the tabs marked "in use".
+const tab = (label) => within(document.querySelector(".z-seg")).getByText(label);
+const inUse = () => screen.queryAllByTestId("in-use").map((m) => m.parentElement.firstChild.textContent);
+
 describe("LLM page — provider tabs", () => {
   it("switching a tab sends no patch and refetches the model options for the new provider", async () => {
     render(<LLM />);
@@ -79,7 +85,7 @@ describe("LLM page — provider tabs", () => {
     // page opens on the first LLM provider.
     await waitFor(() => expect(api.getOptions).toHaveBeenCalledWith("llm", "openrouter", "model"));
 
-    fireEvent.click(screen.getByText("groq"));
+    fireEvent.click(tab("Groq"));
     await waitFor(() => expect(api.getOptions).toHaveBeenCalledWith("llm", "groq", "model"));
     await Promise.resolve();
     expect(patch).not.toHaveBeenCalled();
@@ -93,16 +99,23 @@ describe("LLM page — provider tabs", () => {
 
   it("keeps the offline command engine off the tabs and shows which chains use the provider", async () => {
     render(<LLM />);
-    expect(screen.queryByText("simple-nlu")).toBeNull();
+    expect(screen.queryByText("Commands (no LLM)")).toBeNull();
     expect(screen.getByText("Used in chains: smart")).toBeInTheDocument();
-    fireEvent.click(screen.getByText("groq"));
+    fireEvent.click(tab("Groq"));
     expect(screen.getByText("Not used in any chain")).toBeInTheDocument();
     await waitFor(() => expect(api.getOptions).toHaveBeenCalledWith("llm", "groq", "model"));
   });
 
+  it("names the tabs by label and marks the provider an enabled chain runs", async () => {
+    render(<LLM />);
+    expect(Array.from(document.querySelectorAll(".z-seg button")).map((b) => b.firstChild.textContent)).toEqual(["OpenRouter", "Groq"]);
+    expect(inUse()).toEqual(["OpenRouter"]);
+    await waitFor(() => expect(api.getOptions).toHaveBeenCalled());
+  });
+
   it("saving patches only the shown provider's instance", async () => {
     render(<LLM />);
-    fireEvent.click(screen.getByText("groq"));
+    fireEvent.click(tab("Groq"));
     fireEvent.click(screen.getByRole("button", { name: /llama-3-70b/ }));
     fireEvent.click(await screen.findByText("mixtral-8x7b"));
     fireEvent.click(screen.getByText("Save changes"));
@@ -114,8 +127,8 @@ describe("LLM page — provider tabs", () => {
     render(<LLM />);
     fireEvent.click(screen.getByRole("button", { name: /openrouter\/auto/ }));
     fireEvent.click(await screen.findByText("anthropic/claude"));
-    fireEvent.click(screen.getByText("groq"));
-    expect(screen.getByText("openrouter").querySelector("[data-testid=unsaved-dot]")).toBeTruthy();
+    fireEvent.click(tab("Groq"));
+    expect(tab("OpenRouter").querySelector("[data-testid=unsaved-dot]")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: /llama-3-70b/ }));
     fireEvent.click(await screen.findByText("mixtral-8x7b"));
     fireEvent.click(screen.getByText("Save changes"));
@@ -130,18 +143,30 @@ describe("STT page — provider tabs", () => {
   it("opens on the first enabled chain's STT", () => {
     render(<STT />);
     expect(screen.getByText("Used in chains: fast")).toBeInTheDocument();
-    expect(screen.getByText("vosk")).toHaveClass("on");
+    expect(tab("Vosk")).toHaveClass("on");
+  });
+
+  it("marks only the STTs that an enabled chain runs", () => {
+    render(<STT />);
+    expect(inUse()).toEqual(["Vosk", "Groq Whisper"]);
+    cleanup();
+    useAppData.mockReturnValue({
+      catalog: makeCatalog(), patch,
+      config: { core: { chains: [config.core.chains[0], { ...config.core.chains[1], enabled: false }] } },
+    });
+    render(<STT />);
+    expect(inUse()).toEqual(["Vosk"]);
   });
 
   it("opens the tab a configure link asked for", () => {
     setNavigate(() => {});
     navTab("stt", "groq");
     render(<STT />);
-    expect(screen.getByText("groq")).toHaveClass("on");
+    expect(tab("Groq Whisper")).toHaveClass("on");
     expect(screen.getByText("Used in chains: smart")).toBeInTheDocument();
     // The request is consumed: a later plain visit opens the default tab.
     cleanup();
     render(<STT />);
-    expect(screen.getByText("vosk")).toHaveClass("on");
+    expect(tab("Vosk")).toHaveClass("on");
   });
 });

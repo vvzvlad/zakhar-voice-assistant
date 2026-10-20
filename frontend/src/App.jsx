@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
 import { TITLES } from "./nav.js";
-import { setNavigate, nav, confirmLeave } from "./navStore.js";
+import { setNavigate, nav, confirmLeave, takeCard } from "./navStore.js";
 import { Sidebar } from "./components/Sidebar.jsx";
 import { Topbar } from "./components/Topbar.jsx";
 import { PAGES } from "./pages/index.js";
@@ -53,6 +53,13 @@ export default function App() {
 
   // Register the navigate fn so pages can call nav(id) from the module-level store.
   useEffect(() => { setNavigate(navigate); });
+
+  // A "configure" link asked for one card of the page just opened (navCard):
+  // the page has rendered by now, so scroll that card to the top.
+  useEffect(() => {
+    const card = takeCard();
+    if (card) document.getElementById(card)?.scrollIntoView({ block: "start" });
+  }, [active]);
 
   // On mount: sync the address bar with the actually selected section (no history entry),
   // and handle browser Back/Forward via popstate.

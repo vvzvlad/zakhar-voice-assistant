@@ -9,9 +9,10 @@
 //   set_lock   : action {lock, unlock}
 //   set_scene  : scene {night, morning}
 //   set_dimmer : device_id {night_light}, brightness (integer, required, no enum)
+//   web_search : query (string, required, no enum)
 import React from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent, cleanup } from "@testing-library/react";
+import { render, screen, fireEvent, cleanup, within } from "@testing-library/react";
 import NluCatalogEditor from "../components/NluCatalogEditor.jsx";
 import * as api from "../api.js";
 
@@ -67,6 +68,10 @@ function makeSources() {
               },
             },
           },
+          {
+            name: "web_search",
+            parameters: { type: "object", required: ["query"], properties: { query: { type: "string" } } },
+          },
         ],
       },
     ],
@@ -110,14 +115,30 @@ function typeChip(value, phrase) {
   fireEvent.change(input, { target: { value: phrase } });
   fireEvent.keyDown(input, { key: "Enter" });
 }
+// The title of the card an element sits in ("Devices & scenes", "Commands", ...).
+const cardOf = (el) => el.closest(".z-card").querySelector(".z-card-h b").textContent;
+// The read-only row of a slot without a dictionary, by slot name.
+const slotRow = (slot) => screen.getByText(`· ${slot}`).closest(".z-f");
+// Two sources that each own one enum slot.
+const TWO_SOURCES = {
+  sources: [
+    {
+      id: "home",
+      tools: [{ name: "set_light", parameters: { type: "object", properties: { device_id: { type: "string", enum: ["lamp"] } } } }],
+    },
+    {
+      id: "garden",
+      tools: [{ name: "set_pump", parameters: { type: "object", properties: { device_id: { type: "string", enum: ["fountain"] } } } }],
+    },
+  ],
+};
 
 describe("NluCatalogEditor (catalog port)", () => {
   it("places device ids under the Devices & scenes zone", async () => {
     render(<NluCatalogEditor draft={draft} onChange={vi.fn()} />);
     // device ids resolve to ENTITY rows under the dev zone.
     const code = await screen.findByText("bright_room_light");
-    const zone = code.closest(".e-zone");
-    expect(zone).toHaveClass("dev");
+    expect(cardOf(code)).toBe("Devices & scenes");
     expect(screen.getByText("table_light")).toBeInTheDocument();
     expect(screen.getByText("night_light")).toBeInTheDocument();
   });
@@ -127,9 +148,9 @@ describe("NluCatalogEditor (catalog port)", () => {
     // "on" and "off" appear exactly once each despite two tools exposing the slot.
     expect(await screen.findAllByText("on")).toHaveLength(1);
     expect(screen.getAllByText("off")).toHaveLength(1);
-    // They live in the Commands (cmd) zone.
-    const cmdZone = screen.getByText("on").closest(".e-zone");
-    expect(cmdZone).toHaveClass("cmd");
+    // They live in the Commands card.
+    expect(cardOf(screen.getByText("on"))).toBe("Commands");
+    const cmdZone = screen.getByText("on").closest(".z-card");
     // The merged action group advertises both tools via "used in:" <i> tags.
     const usedIn = Array.from(cmdZone.querySelectorAll(".e-used i")).map((el) => el.textContent);
     expect(usedIn).toEqual(["set_light", "set_switch"]);
@@ -138,8 +159,8 @@ describe("NluCatalogEditor (catalog port)", () => {
   it("classifies set_lock.action lock/unlock as Commands", async () => {
     render(<NluCatalogEditor draft={draft} onChange={vi.fn()} />);
     const lock = await screen.findByText("lock");
-    expect(lock.closest(".e-zone")).toHaveClass("cmd");
-    expect(screen.getByText("unlock").closest(".e-zone")).toHaveClass("cmd");
+    expect(cardOf(lock)).toBe("Commands");
+    expect(cardOf(screen.getByText("unlock"))).toBe("Commands");
   });
 
   it("typing a device phrase chip writes aliases as '<phrase> = <id>'", async () => {
@@ -167,20 +188,28 @@ describe("NluCatalogEditor (catalog port)", () => {
   it("renders a scene value with the scene tone in the Devices zone", async () => {
     render(<NluCatalogEditor draft={draft} onChange={vi.fn()} />);
     const night = await screen.findByText("night");
-    expect(night.closest(".e-zone")).toHaveClass("dev");
+    expect(cardOf(night)).toBe("Devices & scenes");
     // scene chips use the scene tone — the empty input row marks it as empty.
     expect(rowForValue("night").querySelector(".e-rid")).toHaveClass("is-empty");
   });
 
-  it("shows brightness as a numeric info card, not a chip input", async () => {
+  it("shows brightness as a read-only number row in an ordinary card, not a chip input", async () => {
     render(<NluCatalogEditor draft={draft} onChange={vi.fn()} />);
-    const brightness = await screen.findByText(/brightness/);
-    const numCard = brightness.closest(".e-num");
-    expect(numCard).toBeTruthy();
-    // It is an info card — no chip input inside it.
-    expect(numCard.querySelector(".e-chips")).toBeNull();
-    // brightness (integer) is a plain number, not off-capable.
-    expect(numCard.querySelector(".tag").textContent).toBe("number");
+    await screen.findByText("· brightness");
+    const row = slotRow("brightness");
+    expect(cardOf(row)).toBe("Slots without a dictionary");
+    expect(row.querySelector(".e-chips")).toBeNull();
+    expect(within(row).getByText("number")).toBeInTheDocument();
+    expect(within(row).getByText(/Set by a number/)).toBeInTheDocument();
+  });
+
+  it("shows a free-text slot as text, not as a number", async () => {
+    render(<NluCatalogEditor draft={draft} onChange={vi.fn()} />);
+    await screen.findByText("· query");
+    const row = slotRow("query");
+    expect(within(row).getByText("text")).toBeInTheDocument();
+    expect(within(row).queryByText("number")).toBeNull();
+    expect(within(row).queryByText(/Set by a number/)).toBeNull();
   });
 
   it("prefills existing words as removable chips and marks the row filled", async () => {
@@ -234,53 +263,36 @@ describe("NluCatalogEditor (catalog port)", () => {
     expect(aliasCall[1]).not.toContain("night"); // stale alias stripped
   });
 
-  it("hides the Sources bar when only one source owns slots", async () => {
+  it("hides the source filter when only one source owns slots", async () => {
     render(<NluCatalogEditor draft={draft} onChange={vi.fn()} />);
     await screen.findByText("bright_room_light");
-    // Single source "home" -> no Sources bar.
-    expect(screen.queryByText("Sources")).toBeNull();
+    // Single source "home" -> no source chip.
+    expect(screen.queryByText("home")).toBeNull();
   });
 
-  it("shows the Sources bar and a per-source value count with two slot-owning sources", async () => {
-    api.getTools.mockResolvedValue({
-      sources: [
-        {
-          id: "home",
-          tools: [{ name: "set_light", parameters: { type: "object", properties: { device_id: { type: "string", enum: ["lamp"] } } } }],
-        },
-        {
-          id: "garden",
-          tools: [{ name: "set_pump", parameters: { type: "object", properties: { device_id: { type: "string", enum: ["fountain"] } } } }],
-        },
-      ],
-    });
+  it("puts one chip per slot-owning source, with its value count, beside the All/Empty filter", async () => {
+    api.getTools.mockResolvedValue(TWO_SOURCES);
     render(<NluCatalogEditor draft={draft} onChange={vi.fn()} />);
     await screen.findByText("lamp");
-    expect(screen.getByText("Sources")).toBeInTheDocument();
-    // Both sources are listed by id; both default to active so both ids render.
-    expect(screen.getByText("home")).toBeInTheDocument();
-    expect(screen.getByText("garden")).toBeInTheDocument();
+    const filters = screen.getByText("All").closest(".e-filters");
+    // Both sources default to shown, each chip counting its enum values.
+    for (const id of ["home", "garden"]) {
+      const chip = screen.getByText(id);
+      expect(chip.closest(".e-filters")).toBe(filters);
+      expect(chip).toHaveClass("on");
+      expect(chip.querySelector(".ct").textContent).toBe("1");
+    }
     expect(screen.getByText("fountain")).toBeInTheDocument();
   });
 
   it("clicking a source chip hides its values and remembers it in this browser, not in the config", async () => {
-    api.getTools.mockResolvedValue({
-      sources: [
-        {
-          id: "home",
-          tools: [{ name: "set_light", parameters: { type: "object", properties: { device_id: { type: "string", enum: ["lamp"] } } } }],
-        },
-        {
-          id: "garden",
-          tools: [{ name: "set_pump", parameters: { type: "object", properties: { device_id: { type: "string", enum: ["fountain"] } } } }],
-        },
-      ],
-    });
+    api.getTools.mockResolvedValue(TWO_SOURCES);
     const onChange = vi.fn();
     render(<NluCatalogEditor draft={draft} onChange={onChange} />);
     await screen.findByText("fountain");
 
-    fireEvent.click(screen.getByText("garden").closest(".e-srv"));
+    fireEvent.click(screen.getByText("garden"));
+    expect(screen.getByText("garden")).not.toHaveClass("on");
     expect(screen.queryByText("fountain")).toBeNull();
     expect(onChange).not.toHaveBeenCalled();
     expect(JSON.parse(localStorage.getItem("zakhar.commands.hidden_sources"))).toEqual(["garden"]);
@@ -293,25 +305,14 @@ describe("NluCatalogEditor (catalog port)", () => {
   });
 
   it("shows every source when localStorage is unavailable", async () => {
-    api.getTools.mockResolvedValue({
-      sources: [
-        {
-          id: "home",
-          tools: [{ name: "set_light", parameters: { type: "object", properties: { device_id: { type: "string", enum: ["lamp"] } } } }],
-        },
-        {
-          id: "garden",
-          tools: [{ name: "set_pump", parameters: { type: "object", properties: { device_id: { type: "string", enum: ["fountain"] } } } }],
-        },
-      ],
-    });
+    api.getTools.mockResolvedValue(TWO_SOURCES);
     const blocked = () => { throw new Error("blocked"); };
     vi.stubGlobal("localStorage", { getItem: blocked, setItem: blocked });
     render(<NluCatalogEditor draft={draft} onChange={vi.fn()} />);
     await screen.findByText("lamp");
     expect(screen.getByText("fountain")).toBeInTheDocument();
     // Hiding still works for the session.
-    fireEvent.click(screen.getByText("garden").closest(".e-srv"));
+    fireEvent.click(screen.getByText("garden"));
     expect(screen.queryByText("fountain")).toBeNull();
   });
 

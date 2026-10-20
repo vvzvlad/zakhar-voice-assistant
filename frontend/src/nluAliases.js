@@ -111,12 +111,13 @@ export function enumSlotsWithSource(sources) {
   return out;
 }
 
-// Discover the NUMERIC slots: every REQUIRED tool property that has NO enum and a
-// type in ("integer", "number", "string"). These are filled by a number spoken in
-// the command itself (brightness/temperature) — there is no value dictionary, so
-// they are shown as read-only info cards. A `string` type signals an off-capable
-// number ("set X to 30" or "off"). Only properties listed in the tool's `required`
-// array are emitted: an optional free-form arg is not a slot the operator must map.
+// Discover the slots WITHOUT a dictionary: every REQUIRED tool property that has
+// NO enum and a type in ("integer", "number", "string"). A number type is filled
+// by a number spoken in the command itself (brightness/temperature); a `string`
+// one is free text (a search query, a URL). There is no value dictionary for
+// either, so they are shown as read-only rows. Only properties listed in the
+// tool's `required` array are emitted: an optional arg is not a slot the
+// operator must map.
 // Emits `{server, tool, slot, type}` in stable encounter order.
 const NUMBER_SLOT_TYPES = new Set(["integer", "number", "string"]);
 export function numberSlotsFromTools(sources) {

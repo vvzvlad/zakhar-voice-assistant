@@ -40,13 +40,18 @@ export function KeyInput({ value, onChange, placeholder }) {
     </div>
   );
 }
-// `marked` (optional) lists options that get a dot after their label, e.g.
-// provider tabs holding unsaved edits.
-export function Seg({ options, value, onChange, full, marked = [] }) {
-  return <div className={"z-seg" + (full ? " full" : "")}>
-    {options.map((o) => <button key={o} className={o === value ? "on" : ""} onClick={() => onChange && onChange(o)}>
-      {o}
-      {marked.includes(o) && <span data-testid="unsaved-dot" style={{ display: "inline-block", width: 6, height: 6, borderRadius: "50%", background: "var(--warn)", marginLeft: 6, verticalAlign: "middle" }} />}
+// Options may be plain values or {value, label} objects (label shown, value
+// emitted). `marked` (optional) lists option values that get a dot after their
+// label, e.g. provider tabs holding unsaved edits; `inUse` lists values that get
+// an "in use" marker, e.g. the providers the pipeline runs. `wrap` keeps every
+// option on one line and lets the options wrap into rows when they do not fit.
+export function Seg({ options, value, onChange, full, wrap, marked = [], inUse = [] }) {
+  const opts = options.map((o) => (o && typeof o === "object" ? o : { value: o, label: String(o) }));
+  return <div className={"z-seg" + (full ? " full" : "") + (wrap ? " wrap" : "")}>
+    {opts.map((o) => <button key={String(o.value)} className={o.value === value ? "on" : ""} onClick={() => onChange && onChange(o.value)}>
+      {o.label}
+      {inUse.includes(o.value) && <span data-testid="in-use" style={{ marginLeft: 6, fontSize: 9.5, fontWeight: 600, color: "var(--good)", verticalAlign: "middle" }}>in use</span>}
+      {marked.includes(o.value) && <span data-testid="unsaved-dot" style={{ display: "inline-block", width: 6, height: 6, borderRadius: "50%", background: "var(--warn)", marginLeft: 6, verticalAlign: "middle" }} />}
     </button>)}
   </div>;
 }
@@ -67,13 +72,13 @@ export function ScaleSeg({ options, value, onChange, poles, readout }) {
     {readout && cur && <div style={{ marginTop: 5, fontSize: 11, color: "var(--mut)", fontFamily: "var(--mono)" }}>{cur.label} · {String(value)}</div>}
   </div>;
 }
-export function Selector({ label, caption, options, value, onChange, marked }) {
+export function Selector({ label, caption, options, value, onChange, marked, inUse }) {
   return <div style={{ marginBottom: 18 }}>
     <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 8, gap: 12 }}>
       <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: ".05em", textTransform: "uppercase", color: "var(--ink2)" }}>{label}</span>
       {caption && <span style={{ fontSize: 11.5, color: "var(--mut2)", textAlign: "right" }}>{caption}</span>}
     </div>
-    <Seg full options={options} value={value} onChange={onChange} marked={marked} />
+    <Seg full wrap options={options} value={value} onChange={onChange} marked={marked} inUse={inUse} />
   </div>;
 }
 export function Toggle({ on, onChange, sm }) {
@@ -293,8 +298,9 @@ export function SaveBar({ noTest }) {
   </div>;
 }
 
-export function Card({ title, sub, children, foot }) {
-  return <div className="z-card">
+// `id` makes the card the scroll target of a cross-page "configure" link (navCard).
+export function Card({ id, title, sub, children, foot }) {
+  return <div className="z-card" id={id}>
     {title && <div className="z-card-h"><b>{title}</b>{sub && <span className="sub">{sub}</span>}</div>}
     <div className="z-card-b">{children}</div>
     {foot}

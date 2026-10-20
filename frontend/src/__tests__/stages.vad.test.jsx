@@ -4,7 +4,9 @@
 //   - the wake-word and chime cards leave `enabled` out (the Capture page switches them),
 //   - the page's one Save sends every dirty card and engine tab as ONE patch, the two
 //     core.vad cards staying disjoint,
-//   - an engine tab switch sends no patch and keeps the other tab's unsaved edits.
+//   - an engine tab switch sends no patch and keeps the other tab's unsaved edits,
+//   - engine tabs named by label, the Capture page's engine marked "in use",
+//   - the engine, wake-word and chime sections carry the ids configure links scroll to.
 import React from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, cleanup, waitFor, within } from "@testing-library/react";
@@ -96,6 +98,7 @@ async function settle() {
 }
 
 const cardByTitle = (title) => screen.getByText(title, { selector: "b" }).closest(".z-card");
+const tab = (label) => within(document.querySelector(".z-seg")).getByText(label);
 
 function setStepper(card, value) {
   const input = card.querySelector(".z-stepper input");
@@ -112,16 +115,30 @@ async function saved() {
 describe("VAD page — layout", () => {
   it("shows the selected engine's settings next to the core cards", async () => {
     renderPage();
-    expect(screen.getByText("silero")).toBeInTheDocument(); // engine tabs
+    expect(tab("Silero VAD")).toBeInTheDocument(); // engine tabs
     expect(cardByTitle("WebRTC VAD")).toBeTruthy();
     expect(screen.getByText("End-pointing thresholds")).toBeInTheDocument();
+    await settle();
+  });
+
+  it("marks the engine the Capture page selected as in use", async () => {
+    renderPage();
+    expect(screen.getAllByTestId("in-use").map((m) => m.parentElement)).toEqual([tab("WebRTC VAD")]);
+    await settle();
+  });
+
+  it("gives the engine, wake-word and chime sections the ids configure links scroll to", async () => {
+    renderPage();
+    expect(document.getElementById("card-vad")).toContainElement(cardByTitle("WebRTC VAD"));
+    expect(document.getElementById("card-wakeword")).toBe(cardByTitle("Wake-word verify"));
+    expect(document.getElementById("card-ack")).toBe(cardByTitle("End-of-phrase chime"));
     await settle();
   });
 
   it("says which engine the Capture page selected", async () => {
     renderPage();
     expect(screen.getByText("Selected on Capture")).toBeInTheDocument();
-    fireEvent.click(screen.getByText("silero"));
+    fireEvent.click(tab("Silero VAD"));
     expect(screen.getByText("Not selected")).toBeInTheDocument();
     await settle();
   });
@@ -156,7 +173,7 @@ describe("VAD page — one Save", () => {
     fireEvent.click(within(cardByTitle("Microphone input & conditioning")).getAllByRole("switch")[0]);
     fireEvent.change(within(cardByTitle("Wake-word verify")).getByDisplayValue("захар"), { target: { value: "алиса" } });
     setStepper(cardByTitle("WebRTC VAD"), "3");
-    fireEvent.click(screen.getByText("silero"));
+    fireEvent.click(tab("Silero VAD"));
     setStepper(cardByTitle("Silero VAD"), "0.7");
     expect(patch).not.toHaveBeenCalled();
 
@@ -171,9 +188,9 @@ describe("VAD page — one Save", () => {
     renderPage();
     await settle();
     setStepper(cardByTitle("WebRTC VAD"), "3");
-    fireEvent.click(screen.getByText("silero"));
-    expect(within(screen.getByText("webrtc")).getByTestId("unsaved-dot")).toBeInTheDocument();
-    fireEvent.click(screen.getByText("webrtc"));
+    fireEvent.click(tab("Silero VAD"));
+    expect(within(tab("WebRTC VAD")).getByTestId("unsaved-dot")).toBeInTheDocument();
+    fireEvent.click(tab("WebRTC VAD"));
     expect(cardByTitle("WebRTC VAD").querySelector(".z-stepper input")).toHaveValue("3");
     expect(patch).not.toHaveBeenCalled();
   });

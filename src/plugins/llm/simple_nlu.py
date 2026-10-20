@@ -748,7 +748,7 @@ class SimpleNluBackend(LlmBackend):
 class SimpleNluProvider(Provider):
     category = "llm"
     id = "simple-nlu"
-    label = "Simple NLU (no LLM)"
+    label = "Commands (no LLM)"
     ConfigModel = SimpleNluConfig
     uses_http_cloud = False
 

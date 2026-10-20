@@ -276,6 +276,10 @@ export default function SchemaForm({ schema, values, onChange, optionsFor, root,
     if (skipSet.has(name)) continue;
     const r = resolve(node, doc);
     if (node.hidden || (r && r.hidden)) continue; // hidden companion fields (e.g. *_label)
+    // `hiddenWhen: <sibling>` — the backend ignores this field while that boolean
+    // sibling is on, so the form leaves it out then.
+    const hiddenWhen = node.hiddenWhen || r.hiddenWhen;
+    if (hiddenWhen && values && values[hiddenWhen]) continue;
     const labelField = name + "_label";
     const hasLabel = Object.prototype.hasOwnProperty.call(props, labelField);
     (node.advanced || r.advanced ? advanced : fields).push(
@@ -298,7 +302,7 @@ export default function SchemaForm({ schema, values, onChange, optionsFor, root,
     <>
       {fields}
       {advanced.length > 0 && <details>
-        <summary style={{ padding: "13px 0", fontSize: 12.5, fontWeight: 600, color: "var(--ink2)", cursor: "pointer" }}>Advanced</summary>
+        <summary className="z-disclosure">Advanced</summary>
         {advanced}
       </details>}
     </>

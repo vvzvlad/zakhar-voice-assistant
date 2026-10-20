@@ -44,3 +44,8 @@ export function fmtBytes(n) {
   do { v /= 1024; i++; } while (v >= 1024 && i < units.length - 1);
   return `${v >= 10 ? Math.round(v) : v.toFixed(1)} ${units[i]}`;
 }
+
+// A provider's name in a compact control (segmented switch, "+ provider" button):
+// its catalog label without the trailing parenthesized note, "Silero VAD (neural)"
+// -> "Silero VAD". Tabs and dropdowns show the full label.
+export const shortLabel = (label) => label.replace(/\s*\([^()]*\)$/, "");
