@@ -146,6 +146,11 @@ The owner's words:
   and does not change. Then, against the dial being the floor: «зачем ты сделал так, что оно не
   опускается само?» — below the threshold the boost is negative and the reply is quieter than the
   dial. See [Auto volume](#auto-volume).
+- Replies too quiet over music even at 99 % of the dial: of «Сжать речь на сервере», «Поднять
+  аналоговое усиление», «Всё вместе», «Поднять аналоговое усиление»; told the amplifier has only
+  ~3 dB left, «+3 dB и сжатие», then «тоже за фичетогглом сделай»; told the compression measures
+  +2–3 dB, «Да, +3 dB и сжатие» — the Voice PE drives its line outputs at +3 dB, and the server
+  compresses the audio it plays on a device whose `core.devices[].compress_replies` is on.
 
 ## Transport
 

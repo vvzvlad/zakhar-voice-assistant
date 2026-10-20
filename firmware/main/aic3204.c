@@ -49,8 +49,11 @@ static const regval_t SETUP[] = {
     {0x0F, 0x08},  // LOR <- right DAC
     {0x10, 0x3E},  // HPL -2 dB, unmuted (for the 0.75 V common mode)
     {0x11, 0x3E},  // HPR -2 dB, unmuted
-    {0x12, 0x00},  // LOL 0 dB, unmuted
-    {0x13, 0x00},  // LOR 0 dB, unmuted
+    // LOL and LOR feed the speaker amplifier (TPA6211A1, gain 40k / 15k from each, both summed
+    // into IN-). At 0 dB a full-scale DAC gives it 2.0 Vrms out of the ~2.7 Vrms it drives at 1 %
+    // THD from 5 V; +3 dB takes that headroom.
+    {0x12, 0x03},  // LOL +3 dB, unmuted
+    {0x13, 0x03},  // LOR +3 dB, unmuted
     {0x09, 0x3C},  // HPL, HPR, LOL, LOR powered up
 };
 

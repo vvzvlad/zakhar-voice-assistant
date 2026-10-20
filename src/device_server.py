@@ -29,6 +29,7 @@ from src import captures, config_store, context, device_logs
 from src.chime import build_ack_clip
 from src.pipeline import Pipeline
 from src.pipeline_events import StageEvent
+from src.reply_compressor import ReplyCompressor
 from src.run_events import record_run
 from src.runs_store import new_record
 from src.tts import pcm_rate
@@ -203,9 +204,9 @@ async def _aclose(chunks) -> None:
 class _PcmOut:
     """The delivery boundary for one play() stream: WAV (a whole clip) or raw PCM
     (pcm_mime, in chunks) in, s16le mono at the device's rate out, resampled with a
-    streaming soxr resampler."""
+    streaming soxr resampler and, with `compress`, run through a ReplyCompressor."""
 
-    def __init__(self, mime: str, out_rate: int):
+    def __init__(self, mime: str, out_rate: int, compress: bool):
         self._wav = mime == "audio/wav"
         self._rate = pcm_rate(mime)
         if not self._wav and self._rate is None:
@@ -213,6 +214,7 @@ class _PcmOut:
         self._out_rate = out_rate
         self._pending = b""  # WAV: the clip so far; PCM: an odd byte split across chunks
         self._resampler = None
+        self._compressor = ReplyCompressor(out_rate) if compress else None
 
     def feed(self, chunk: bytes) -> bytes:
         data = self._pending + chunk
@@ -221,25 +223,33 @@ class _PcmOut:
             return b""
         n = len(data) - len(data) % 2
         self._pending = data[n:]
-        return self._resample(np.frombuffer(data[:n], dtype="<i2"), last=False)
+        return self._out(np.frombuffer(data[:n], dtype="<i2"), last=False)
 
     def flush(self) -> bytes:
         if not self._wav:
-            return self._resample(np.zeros(0, dtype="<i2"), last=True)
+            return self._out(np.zeros(0, dtype="<i2"), last=True)
         with wave.open(io.BytesIO(self._pending), "rb") as w:
             if w.getsampwidth() != 2:
                 raise ValueError(f"expected 16-bit WAV, got {w.getsampwidth() * 8}-bit")
             self._rate, channels = w.getframerate(), w.getnchannels()
             frames = np.frombuffer(w.readframes(w.getnframes()), dtype="<i2")
         mono = frames.reshape(-1, channels).mean(axis=1).astype("<i2")
-        return self._resample(mono, last=True)
+        return self._out(mono, last=True)
 
-    def _resample(self, samples, last: bool) -> bytes:
+    def _out(self, samples, last: bool) -> bytes:
+        samples = self._resample(samples, last)
+        if self._compressor is not None:
+            samples = self._compressor.process(samples)
+            if last:
+                samples = np.concatenate([samples, self._compressor.flush()])
+        return samples.astype("<i2").tobytes()
+
+    def _resample(self, samples, last: bool):
         if self._rate == self._out_rate:
-            return samples.tobytes()
+            return samples
         if self._resampler is None:
             self._resampler = soxr.ResampleStream(self._rate, self._out_rate, 1, dtype="int16")
-        return self._resampler.resample_chunk(samples, last=last).astype("<i2").tobytes()
+        return self._resampler.resample_chunk(samples, last=last)
 
 
 class _Stream:
@@ -405,10 +415,11 @@ class Connection:
             msg["session"] = stream.session
         return msg
 
-    async def play(self, mime: str, audio) -> dict:
+    async def play(self, mime: str, audio, compress: bool) -> dict:
         """Send one clip (bytes or an async chunk iterator) as a play stream, paced to
         the device's buffer, and return once the device reports it. Streams go out back
-        to back in call order. The iterator is always closed.
+        to back in call order. The iterator is always closed. With `compress` the audio
+        goes through a ReplyCompressor.
 
         Returns {"outcome", "dry", "gap_ms"}: outcome "played" or "dropped"; dry how
         many times a played stream ran dry before its play_end and gap_ms the ms of
@@ -416,7 +427,7 @@ class Connection:
         not count them."""
         chunks = _one_chunk(audio) if isinstance(audio, (bytes, bytearray)) else audio
         try:
-            out = _PcmOut(mime, self.play_rate)
+            out = _PcmOut(mime, self.play_rate, compress)
             async with self._play_lock:
                 stream = _Stream(self.session if self.session_open else None)
                 if self.closed:
@@ -555,13 +566,14 @@ class Device:
             conn.session_open = False
 
     async def play(self, mime: str, audio) -> dict:
-        """The pipeline's play hook; returns what Connection.play does."""
+        """The pipeline's play hook; returns what Connection.play does. The device's
+        compress_replies is read per stream, so a change applies from the next one."""
         conn = self.conn
         if conn is None or not conn.speaker:
             if not isinstance(audio, (bytes, bytearray)):
                 await _aclose(audio)
             raise RuntimeError(f"{self.name} cannot play: offline or no speaker")
-        return await conn.play(mime, audio)
+        return await conn.play(mime, audio, self.cfg.compress_replies)
 
     def _take_session(self, session) -> None:
         """The pipeline's take_session hook: the run of the `wake` that opened `session`

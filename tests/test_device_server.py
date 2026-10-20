@@ -24,6 +24,7 @@ from src.device_server import (
 from src.plugins.base import Deps
 from src.plugins.vad.webrtc import WebRtcVadBackend
 from src.prompt_store import PromptStore
+from src.reply_compressor import CEILING_DBFS
 from src.runs_store import RunsStore
 from src.runtime import Runtime
 from src.tts import TtsBackend, pcm_mime
@@ -968,6 +969,35 @@ async def test_pcm_split_mid_sample_resamples_like_one_shot(srv):
     ref = soxr.resample(x, 44100, 48000).astype(int)
     assert len(out) == len(ref)
     assert np.abs(out - ref).max() <= 4
+
+
+async def test_compress_replies_holds_the_peaks_at_the_ceiling(srv):
+    # Read per stream, raw PCM and WAV alike: off the clip goes out as it came, on its peaks
+    # are held at the ceiling.
+    dev = await srv.connect()
+    await dev.recv()  # config
+    pcm = np.round(32767 * np.sin(2 * np.pi * 1000 * np.arange(8000) / 16000)).astype("<i2").tobytes()
+    wav = io.BytesIO()
+    with wave.open(wav, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(16000)
+        w.writeframes(pcm)
+    ceiling = 10 ** (CEILING_DBFS / 20) * 32768
+    for on in (False, True):
+        srv.svc.apply({"core": {"devices": [{"name": "kitchen", "compress_replies": on}]}})
+        for mime, clip in ((pcm_mime(16000), pcm), ("audio/wav", wav.getvalue())):
+            play = asyncio.create_task(srv.device().play(mime, clip))
+            start = await dev.recv()
+            await dev.recv()  # play_end
+            await dev.send(type="played", id=start["id"])
+            await play
+            out = dev.plays[start["id"]]
+            if not on:
+                assert out == pcm
+            else:
+                assert len(out) == len(pcm)
+                assert np.abs(np.frombuffer(out, dtype="<i2").astype(int)).max() <= ceiling + 1
 
 
 def capture_status(srv):
