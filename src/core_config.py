@@ -102,10 +102,10 @@ class VadConfig(BaseModel):
     mic_channel: Literal[0, 1] = Field(
         1,
         title="Mic processing level",
-        # Rendered as a segment control with pole captions (see SchemaForm.ScaleSeg).
-        # Lower = more processed / louder; higher = rawer / cleaner.
-        json_schema_extra={"poles": ["more processed / louder", "raw / cleaner"]},
-        description="Which microphone stream feeds the pipeline: lower is louder, higher is cleaner.",
+        # 0 is the XMOS AGC output (louder), 1 the less-processed noise-suppressed one
+        # (cleaner, quieter).
+        json_schema_extra={"enumLabels": {0: "Processed", 1: "Raw"}},
+        description="Which microphone stream feeds the pipeline: processed is louder, raw is cleaner.",
     )
     # Peak-normalizes each captured utterance so its loudest sample reaches ~-3 dBFS: the
     # quieter, less-processed channel gets a steady loudness without clipping; near-silent

@@ -234,7 +234,8 @@ class VoskWakewordConfig(BaseModel):
     on_error: Literal["open", "closed"] = Field(
         "open",
         title="On error",
-        description="Verdict when the check fails or times out: open accepts the wake, closed rejects it.",
+        json_schema_extra={"enumLabels": {"open": "Accept the wake", "closed": "Reject the wake"}},
+        description="What happens to the wake when the check fails or times out.",
     )
 
 

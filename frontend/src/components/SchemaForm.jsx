@@ -154,9 +154,9 @@ function SchemaField({ name, node, root, value, labelValue, onLabelChange, onCha
   const readout = node.readout || r.readout;
   // A phrase spoken or heard as words is text, not an id: it keeps the text font.
   const phrase = !!(node.phrase || r.phrase);
-  // Labeled/scale segment control: explicit `choices` (value+label per segment), or an
-  // enum decorated with `poles` (numeric segments + edge captions). Stores the numeric value.
-  const segOptions = choices || (enums && poles ? enums.map((v) => ({ value: v, label: String(v) })) : null);
+  // Labeled scale segment control: explicit `choices` (value+label per segment), with
+  // optional `poles` edge captions. Stores the numeric value.
+  const segOptions = choices || null;
 
   // `freeform` marks a dynamic select that also accepts arbitrary typed values
   // (e.g. an LLM model id missing from the provider's catalog).
@@ -199,15 +199,15 @@ function SchemaField({ name, node, root, value, labelValue, onLabelChange, onCha
   } else if (enums && type !== "boolean") {
     // Numeric enums (e.g. mic.channel = Literal[0,1]) render as a Seg/Select too,
     // not a Stepper — an explicit enum always means "pick one of these".
-    // Optional `enumLabels` (value -> display string) decorates each Select option
-    // (e.g. append a model's RAM footprint) while the STORED value stays the bare
-    // enum entry. Only the Select path honors it; Seg (<=3) renders bare values.
+    // Optional `enumLabels` (value -> display string) names each option in words (or
+    // appends e.g. a model's RAM footprint) while the STORED value stays the bare enum
+    // entry; the Seg (<=3) and the Select both show it.
     const enumLabels = node.enumLabels || r.enumLabels;
     const selectOptions = enumLabels
       ? enums.map((v) => ({ value: v, label: enumLabels[v] ?? String(v) }))
       : enums;
     control = enums.length <= 3
-      ? <Seg full options={enums} value={value} onChange={set} />
+      ? <Seg full options={selectOptions} value={value} onChange={set} />
       : <Select value={value} options={selectOptions} onChange={set} />;
   } else if (type === "boolean") {
     control = <Toggle on={!!value} onChange={set} />;
