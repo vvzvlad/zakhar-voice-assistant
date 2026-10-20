@@ -166,6 +166,7 @@ button{font-family:inherit;}
 .z-stepper button{width:30px;height:32px;border:none;background:var(--panel2);color:var(--ink2);font-size:15px;cursor:pointer;}
 .z-stepper button:hover{background:var(--line2);}
 .z-stepper input{width:64px;border:none;border-left:1px solid var(--line);border-right:1px solid var(--line);text-align:center;font:inherit;font-family:var(--mono);outline:none;}
+.z-stepper.sm input{width:40px;}
 .z-select{display:flex;align-items:center;justify-content:space-between;border:1px solid var(--line);border-radius:var(--r-sm);padding:8px 11px;background:var(--panel);cursor:pointer;font-size:13px;font-weight:500;}
 .z-select svg{color:var(--mut2);}
 

@@ -767,10 +767,11 @@ function CaptureControl({ device, online }) {
               >{stopping ? "Stopping…" : "Stop"}</button>
             </>
           : <>
-              <Stepper value={seconds} min={1} max={300} onChange={setSeconds} unit="s" />
-              <Stepper value={count} min={1} max={1000} onChange={setCount} unit="takes" />
-              <button className="z-btn p" disabled={!online} title={online ? "" : "Speaker offline"}
-                onClick={run}>{count > 1 ? `Record ×${count}` : "Record sample"}</button>
+              <Stepper sm value={seconds} min={1} max={300} onChange={setSeconds} unit="s" />
+              <span title="takes" style={{ color: "var(--mut)" }}>×</span>
+              <Stepper sm value={count} min={1} max={1000} onChange={setCount} />
+              <button className="z-btn p" style={{ marginLeft: "auto" }} disabled={!online} title={online ? "" : "Speaker offline"}
+                onClick={run}>Record</button>
             </>}
       </div>
       {!running && phase && <div className="z-fh">{phase}</div>}

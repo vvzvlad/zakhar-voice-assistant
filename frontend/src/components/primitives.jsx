@@ -98,7 +98,8 @@ export function Slider({ min = 0, max = 100, step = 1, value, onChange, fmt }) {
     <span className="z-sval">{fmt ? fmt(value) : value}</span>
   </div>;
 }
-export function Stepper({ value, onChange, min = -Infinity, max = Infinity, step = 1, unit }) {
+// `sm` narrows the number field for a row that holds several steppers.
+export function Stepper({ value, onChange, min = -Infinity, max = Infinity, step = 1, unit, sm }) {
   const clamp = (v) => Math.max(min, Math.min(max, v));
   // Integer steppers (capture seconds, ports, TTLs, default step=1) must never emit a
   // fractional value: a typed "1.5" would propagate a float that pydantic int fields reject
@@ -117,7 +118,7 @@ export function Stepper({ value, onChange, min = -Infinity, max = Infinity, step
     if (c !== value) onChange(c);  // onChange always gets a clamped, step-normalised number
   };
   return <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
-    <div className="z-stepper">
+    <div className={"z-stepper" + (sm ? " sm" : "")}>
       <button onClick={() => onChange(clamp(norm(value - step)))}>−</button>
       <input value={text} inputMode="numeric"
         onChange={(e) => setText(e.target.value.replace(/[^\d.-]/g, ""))}
