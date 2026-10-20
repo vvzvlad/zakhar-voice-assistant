@@ -29,7 +29,14 @@ configured under `core.mcp_servers` in `data/config.json`.
   before changing it.
 - `docs/device-protocol.md` — the normative server↔device contract; a change to the protocol
   changes this file, `src/device_server.py` and `firmware/components/zakhar_link` together.
-- `firmware/` — Voice PE speaker firmware, plain ESP-IDF C. `components/zakhar_link` is the
+- `firmware/` — Voice PE speaker firmware, ESP-IDF C; the Music Assistant player
+  (`main/music.cpp`, sendspin-cpp over the Sendspin protocol) is the only C++. Internal RAM is
+  what runs out first: every `operator new` goes to PSRAM (`main/psram_new.cpp`), libraries'
+  `.bss` too, and the link needs a free 6 KB internal block for its WebSocket task at every
+  connect — after adding anything resident, check free/largest in the boot line `music: player up`
+  (serial console, or the port-23 network log held open across the reboot; the server's device
+  log starts after it).
+  `components/zakhar_link` is the
   device side of the protocol; the espanel wall panel takes it as an ESP-IDF component manager
   git dependency pinned to a commit of this repo, so a protocol change reaches the panel by
   moving that pin.
