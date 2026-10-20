@@ -108,7 +108,7 @@ def test_action_for_representative_paths():
         "vad.instances.silero.threshold": "rebuild_backends",
         "vad.instances.ten.threshold": "rebuild_backends",
         "vad.selected": "rebuild_backends",
-        "something.unknown.path": "restart",
+        "something.unknown.path": "unknown",
     }
     for path, expected in cases.items():
         assert action_for(path) == expected, path
@@ -208,6 +208,21 @@ def _make_reconf(rt, *, deps=None):
 def test_reconfigurator_live_only_no_job():
     reconf = _make_reconf(_stub_runtime())
     reconf.on_config_change({"core.context.max_turns", "core.vad.aggressiveness"})
+    assert reconf.queue.qsize() == 0
+
+
+def test_reconfigurator_logs_a_path_without_a_rule():
+    # A path no rule covers (e.g. a mistyped key in a config patch) is applied by
+    # nothing: it is logged once, by name, and enqueues no job.
+    from loguru import logger
+    reconf = _make_reconf(_stub_runtime())
+    records = []
+    sink_id = logger.add(records.append, level="WARNING")
+    try:
+        reconf.on_config_change({"core.loglevel"})
+    finally:
+        logger.remove(sink_id)
+    assert len([r for r in records if "core.loglevel" in str(r)]) == 1
     assert reconf.queue.qsize() == 0
 
 

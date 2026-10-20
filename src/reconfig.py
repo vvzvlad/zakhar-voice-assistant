@@ -3,8 +3,8 @@ without a process restart.
 
 `changed_paths` and `action_for` are pure functions (also used by ConfigService
 to compute the change set). `Reconfigurator` is wired in app.py: it is registered
-via ConfigService.on_change and decides, per change, whether the running process
-can absorb it live or still needs a restart.
+via ConfigService.on_change and applies each change live or by rebuilding the part
+it belongs to.
 """
 
 import asyncio
@@ -53,7 +53,9 @@ def action_for(path: str) -> str:
     """Map one changed dotted path to a reconfiguration action.
     Actions: 'live', 'logging', 'rebuild_backends', 'rebuild_http',
     'rebuild_tools', 'rebuild_audio', 'rebuild_devices', 'rebuild_runs',
-    'rebuild_reminders', 'restart'. Unknown paths default to 'restart' (safe)."""
+    'rebuild_reminders'. A path no rule covers is 'unknown': nothing applies it, so
+    on_config_change logs it, and test_every_config_field_has_an_apply_rule fails on
+    a config field without a rule."""
     # Display-only "<field>_label" companion fields (the persisted human label of a
     # dynamic-select choice) are panel metadata that no backend reads, so an isolated
     # change needs no rebuild — apply it live. (In the normal flow the label changes
@@ -102,7 +104,7 @@ def action_for(path: str) -> str:
     if path.startswith("llm"):
         leaf = path.rsplit(".", 1)[-1]
         return "live" if leaf in _LLM_LIVE_LEAVES else "rebuild_backends"
-    return "restart"
+    return "unknown"
 
 
 # Actions whose work is performed off the panel request task, in the queue-draining
@@ -185,7 +187,13 @@ class Reconfigurator:
         (a) reinit logging if the level changed and (b) hand heavy/blocking rebuilds
         to the main-task queue.
         Must stay fast: no blocking work and no model loads happen here."""
-        actions = {action_for(p) for p in paths}
+        by_path = {p: action_for(p) for p in paths}
+        for path, action in by_path.items():
+            if action == "unknown":
+                logger.warning(f"config path {path} has no apply rule in reconfig.action_for: "
+                               f"not applied live (a key the config model does not define "
+                               f"is ignored entirely)")
+        actions = set(by_path.values())
         if "logging" in actions:
             setup_logging(self.rt.core.log_level)
         # Hand heavy/blocking rebuilds to the main-task queue (drained by run_loop).
