@@ -70,7 +70,8 @@ void zl_msg_free(zl_msg_t *m);
 // Each returns a NUL-terminated JSON text (NULL when out of memory); release with zl_free().
 
 // capture: the held capture's id, 0 when none is held. uptime_s: seconds since the device booted.
-char *zl_encode_hello(const zl_config_t *cfg, int volume, uint32_t capture, uint32_t uptime_s);
+// reset: why it booted, the wire value ("poweron" ...).
+char *zl_encode_hello(const zl_config_t *cfg, int volume, uint32_t capture, uint32_t uptime_s, const char *reset);
 char *zl_encode_wake(uint32_t session, const char *word);
 // A stream that played out carries `dry` and `gap_ms`; a dropped one only `dropped`.
 char *zl_encode_played(uint32_t id, bool dropped, uint32_t dry, uint32_t gap_ms);
@@ -84,6 +85,22 @@ char *zl_encode_stop(bool has_session, uint32_t session);
 char *zl_encode_log(const char *text, size_t len);
 // The room's noise level, dBFS, as the caller rounded it.
 char *zl_encode_ambient(double dbfs);
+
+// The device's health for `stats`. A field whose has_ flag is false is left out.
+typedef struct {
+    bool has_rssi;
+    int rssi;      // dBm of the access point
+    int ncpu;      // cpu0 .. of the first ncpu cores go out (ESP chips have one or two)
+    int cpu[2];    // each core's load, percent
+    bool has_temp;
+    double temp;   // the chip's temperature, °C; goes out rounded to one decimal
+    uint32_t heap, heap_min, heap_block;  // internal RAM: free, lowest free, largest free block
+    bool has_psram;
+    uint32_t psram, psram_min;
+    uint32_t wifi_drops;  // Wi-Fi disconnect events since zl_start() at boot, failed reconnects included
+    int wifi_reason;      // the last one's reason code: goes out only after one (wifi_drops > 0)
+} zl_stats_t;
+char *zl_encode_stats(const zl_stats_t *st);
 void zl_free(char *json);
 
 // ---------------------------------------------------------------- numbers

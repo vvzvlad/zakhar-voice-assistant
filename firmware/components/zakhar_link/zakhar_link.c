@@ -4,15 +4,15 @@
 // Two tasks. The component task owns the client: it creates it, and when the link is lost
 // destroys it and connects a new one after the backoff. It sends everything the device starts:
 // the wake, `stop`, the session's and the capture's mic frames, audio_end, wake_peak once a second,
-// `played` of finished streams, `volume`, `ambient` and, while the server asks for it, the device log in
-// `log` messages. It also owns the microphone position, so a `capture` and a `capture_resume`
-// are handed to it; only a follow-up `listening` sets the position on the client's task, under
-// the mutex, together with turning the mic on. A capture outlives a lost link: the next hello
-// names it, and a `capture_resume` sends it on from the frame the server asks for. The client's
-// own task runs the event handler: the hello on connect and every received frame in arrival
-// order, so a play_start, its 0x02 frames and its play_end reach the playback queue in the order
-// sent; a model is assembled from its 0x03 frames and handed to on_model there too. One mutex
-// guards the shared state.
+// `played` of finished streams, `volume`, `ambient`, `stats` after each hello and every 30 s and,
+// while the server asks for it, the device log in `log` messages. It also owns the microphone
+// position, so a `capture` and a `capture_resume` are handed to it; only a follow-up `listening`
+// sets the position on the client's task, under the mutex, together with turning the mic on. A
+// capture outlives a lost link: the next hello names it, and a `capture_resume` sends it on from
+// the frame the server asks for. The client's own task runs the event handler: the hello on
+// connect and every received frame in arrival order, so a play_start, its 0x02 frames and its
+// play_end reach the playback queue in the order sent; a model is assembled from its 0x03 frames
+// and handed to on_model there too. One mutex guards the shared state.
 // Nothing sends or calls back while holding it: the client's task holds the client lock around
 // the handler, and a send from the component task takes that lock.
 #include "zakhar_link.h"
@@ -21,11 +21,16 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "driver/temperature_sensor.h"
+#include "esp_event.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "esp_system.h"
 #include "esp_timer.h"
 #include "esp_websocket_client.h"
+#include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/idf_additions.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "mdns.h"
@@ -47,6 +52,7 @@ static const char *TAG = "zakhar_link";
 #define SILENCE_MS 30000       // nothing heard for this long drops the link
 #define RX_CAP 4096            // a text frame larger than this is skipped; fits a long reply
 #define PEAK_MS 1000           // wake_peak period
+#define STATS_MS 30000         // stats period
 #define LOG_CHUNK 2048  // the most log text one `log` message carries; one goes out per pass
 // Core 0, priority 3, for both tasks: next to the wake-word task, away from the UI on core 1.
 #define TASK_STACK (6 * 1024)
@@ -62,6 +68,7 @@ static const char *TAG = "zakhar_link";
 #define EV_CAPTURE_RESUME (1u << 5)
 #define EV_STOP (1u << 6)
 #define EV_AMBIENT (1u << 7)
+#define EV_STATS (1u << 8)  // a hello went out: the connection's first stats
 
 static zl_config_t s_cfg;
 static zl_callbacks_t s_cb;
@@ -126,6 +133,17 @@ static uint32_t s_capture_start, s_capture_frames;
 static char s_url[sizeof "ws://255.255.255.255:65535/device"];
 // The component task only: log text for one `log` message (PSRAM, only with log_read).
 static char *s_log;
+// The chip's temperature sensor for `stats`, NULL when it did not start.
+static temperature_sensor_handle_t s_tsens;
+// Under s_lock, written by the Wi-Fi event handler on the event loop's task: the station's
+// disconnects since zl_start() and the reason of the last one.
+static uint32_t s_wifi_drops;
+static int s_wifi_reason;
+#if CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS
+// The component task only: each core's idle task run time and the run time clock at the last
+// `stats` sample, zero at boot.
+static configRUN_TIME_COUNTER_TYPE s_idle_at[portNUM_PROCESSORS], s_clock_at;
+#endif
 
 static void lock(void)
 {
@@ -206,6 +224,45 @@ static void model_write(esp_websocket_client_handle_t ws, const uint8_t *p, size
     model_discard();
 }
 
+// esp_reset_reason() as `hello` names it.
+static const char *reset_name(esp_reset_reason_t reason)
+{
+    switch (reason) {
+    case ESP_RST_POWERON:
+        return "poweron";
+    case ESP_RST_EXT:
+        return "ext";
+    case ESP_RST_SW:
+        return "sw";
+    case ESP_RST_PANIC:
+        return "panic";
+    case ESP_RST_INT_WDT:
+        return "int_wdt";
+    case ESP_RST_TASK_WDT:
+        return "task_wdt";
+    case ESP_RST_WDT:
+        return "wdt";
+    case ESP_RST_DEEPSLEEP:
+        return "deepsleep";
+    case ESP_RST_BROWNOUT:
+        return "brownout";
+    case ESP_RST_SDIO:
+        return "sdio";
+    case ESP_RST_USB:
+        return "usb";
+    case ESP_RST_JTAG:
+        return "jtag";
+    case ESP_RST_EFUSE:
+        return "efuse";
+    case ESP_RST_PWR_GLITCH:
+        return "pwr_glitch";
+    case ESP_RST_CPU_LOCKUP:
+        return "cpu_lockup";
+    default:
+        return "unknown";
+    }
+}
+
 static void on_connected(esp_websocket_client_handle_t ws)
 {
     model_discard();
@@ -214,10 +271,12 @@ static void on_connected(esp_websocket_client_handle_t ws)
     const uint32_t capture = s_sess.capture ? s_capture_id : 0;
     unlock();
     ESP_LOGI(TAG, "connected to %s", s_url);
-    send_json(ws, zl_encode_hello(&s_cfg, volume, capture, (uint32_t)(esp_timer_get_time() / 1000000)));
+    send_json(ws, zl_encode_hello(&s_cfg, volume, capture, (uint32_t)(esp_timer_get_time() / 1000000),
+                                  reset_name(esp_reset_reason())));
     lock();
     s_online = true;
     unlock();
+    notify(EV_STATS);
     if (s_cb.on_connection != NULL) s_cb.on_connection(true);
 }
 
@@ -782,10 +841,83 @@ static void log_poll(void)
     zl_free(json);
 }
 
+// The access point's signal, dBm; false while the station is not associated. Not inlined: the
+// record stays off the frame of stats_poll(), which is live through the send.
+static __attribute__((noinline)) bool rssi_read(int *rssi)
+{
+    wifi_ap_record_t ap;
+    if (esp_wifi_sta_get_ap_info(&ap) != ESP_OK) return false;
+    *rssi = ap.rssi;
+    return true;
+}
+
+#if CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS
+// Each core's load since the last sample into load[], percent: 100 minus its idle task's share of
+// the run time clock (esp_timer microseconds, 32 bits by default: the unsigned deltas hold across
+// its wrap at 71 min, as the samples come every STATS_MS). Returns the number of cores.
+static int cpu_sample(int *load)
+{
+    const configRUN_TIME_COUNTER_TYPE clock = portGET_RUN_TIME_COUNTER_VALUE();
+    const uint64_t total = (configRUN_TIME_COUNTER_TYPE)(clock - s_clock_at);
+    s_clock_at = clock;
+    for (int core = 0; core < portNUM_PROCESSORS; core++) {
+        const configRUN_TIME_COUNTER_TYPE idle_now = ulTaskGetIdleRunTimeCounterForCore(core);
+        const uint64_t idle = (configRUN_TIME_COUNTER_TYPE)(idle_now - s_idle_at[core]);
+        s_idle_at[core] = idle_now;
+        const uint64_t idle_pct = total == 0 ? 100 : (idle * 100 + total / 2) / total;
+        load[core] = idle_pct >= 100 ? 0 : 100 - (int)idle_pct;
+    }
+    return portNUM_PROCESSORS;
+}
+#endif
+
+// `stats`, after each hello and every STATS_MS. The CPU load is sampled every time, online or
+// not, so the window it covers never exceeds STATS_MS: the first `stats` after a long outage
+// carries the last window, not the outage.
+static void stats_poll(void)
+{
+    zl_stats_t st = {0};
+#if CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS
+    st.ncpu = cpu_sample(st.cpu);
+#endif
+    lock();
+    const bool online = s_online;
+    st.wifi_drops = s_wifi_drops;
+    st.wifi_reason = s_wifi_reason;
+    unlock();
+    if (!online) return;
+    st.has_rssi = rssi_read(&st.rssi);
+    float celsius = 0;
+    st.has_temp = s_tsens != NULL && temperature_sensor_get_celsius(s_tsens, &celsius) == ESP_OK;
+    st.temp = celsius;
+    st.heap = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+    st.heap_min = heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL);
+    st.heap_block = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
+    st.has_psram = heap_caps_get_total_size(MALLOC_CAP_SPIRAM) > 0;
+    if (st.has_psram) {
+        st.psram = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+        st.psram_min = heap_caps_get_minimum_free_size(MALLOC_CAP_SPIRAM);
+    }
+    send_json(s_ws, zl_encode_stats(&st));
+}
+
+// WIFI_EVENT_STA_DISCONNECTED, on the event loop's task: counted for `stats`.
+static void on_wifi_disconnected(void *arg, esp_event_base_t base, int32_t id, void *event_data)
+{
+    (void)arg;
+    (void)base;
+    (void)id;
+    const wifi_event_sta_disconnected_t *d = event_data;
+    lock();
+    s_wifi_drops++;
+    s_wifi_reason = d->reason;
+    unlock();
+}
+
 static void link_task(void *arg)
 {
     (void)arg;
-    TickType_t connect_at = xTaskGetTickCount(), peak_at = connect_at;
+    TickType_t connect_at = xTaskGetTickCount(), peak_at = connect_at, stats_at = connect_at;
     for (;;) {
         uint32_t ev = 0;
         xTaskNotifyWait(0, UINT32_MAX, &ev, pdMS_TO_TICKS(PASS_MS));
@@ -810,6 +942,10 @@ static void link_task(void *arg)
         if (now - peak_at >= pdMS_TO_TICKS(PEAK_MS)) {
             peak_at = now;
             peak_poll();
+        }
+        if ((ev & EV_STATS) || now - stats_at >= pdMS_TO_TICKS(STATS_MS)) {
+            stats_at = now;
+            stats_poll();
         }
         log_poll();
     }
@@ -843,11 +979,22 @@ void zl_start(const zl_config_t *cfg, const zl_callbacks_t *cb)
     }
     const esp_err_t err = mdns_init();
     if (err != ESP_OK) ESP_LOGE(TAG, "mDNS init failed: %s", esp_err_to_name(err));
+    const temperature_sensor_config_t tsens = TEMPERATURE_SENSOR_CONFIG_DEFAULT(-10, 80);
+    esp_err_t terr = temperature_sensor_install(&tsens, &s_tsens);
+    if (terr == ESP_OK && (terr = temperature_sensor_enable(s_tsens)) != ESP_OK) {
+        temperature_sensor_uninstall(s_tsens);
+        s_tsens = NULL;
+    }
+    if (terr != ESP_OK) ESP_LOGE(TAG, "temperature sensor not started: %s; no `temp` in stats", esp_err_to_name(terr));
     s_lock = xSemaphoreCreateMutex();
     if (s_lock == NULL ||
         xTaskCreatePinnedToCore(link_task, "zakhar_link", TASK_STACK, NULL, TASK_PRIO, &s_task, TASK_CORE) != pdPASS) {
         ESP_LOGE(TAG, "task create failed");
+        return;
     }
+    // The caller has created the default event loop; drops before this are not counted.
+    const esp_err_t werr = esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_STA_DISCONNECTED, on_wifi_disconnected, NULL);
+    if (werr != ESP_OK) ESP_LOGE(TAG, "Wi-Fi event handler not registered: %s; stats count no drops", esp_err_to_name(werr));
 }
 
 void zl_wake(const char *word)
