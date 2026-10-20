@@ -656,7 +656,8 @@ async def test_a_held_wake_keeps_the_arbitration_open_until_its_check_rules(srv,
     await until(lambda: len(verifier.calls) == 2)
     assert await panel.recv() == state(3, "listening")  # its own check confirmed it
     await asyncio.sleep(0.3)  # the panel's window runs out, the group stays open
-    assert srv.device("panel").pipeline._arbitration_pending
+    panel_pipeline = srv.device("panel").pipeline
+    assert panel_pipeline.awaits_arbitration(panel_pipeline._arbitration_token)
 
     if outcome == "dropped":
         # The speaker's link goes before its check rules: the held wake is dropped and
@@ -693,15 +694,15 @@ async def test_a_confirmed_wake_holds_the_arbitration_until_its_run_is_registere
     await asyncio.sleep(0.3)  # past the cooldown of session 1's phrase
     verifier = srv.rt.wakeword_backend = HeldVerifier()
     pipeline = srv.device().pipeline
-    reset_run, release = pipeline._reset_run, asyncio.Event()
+    new_run, release = pipeline._new_run, asyncio.Event()
 
-    async def slow_reset_run(*args, **kw):
+    async def slow_new_run(*args, **kw):
         # An await inside on_start after it cancelled the older run, before the new run
         # registers with the arbiter (closing a stale streaming STT session).
         await release.wait()
-        await reset_run(*args, **kw)
+        return await new_run(*args, **kw)
 
-    pipeline._reset_run = slow_reset_run
+    pipeline._new_run = slow_new_run
     await wake_over(speaker, 2)
     await until(lambda: verifier.calls)
     await panel.send(type="wake", session=3, word="Захар")
@@ -714,7 +715,8 @@ async def test_a_confirmed_wake_holds_the_arbitration_until_its_run_is_registere
     verifier.verdict(500).set_result(WakewordVerdict(accepted=True, score=0.9))
     assert await panel.recv() == state(3, "listening")  # its own check confirmed it
     await asyncio.sleep(0.3)  # the speaker's run is not registered yet: the group stays open
-    assert srv.device("panel").pipeline._arbitration_pending
+    panel_pipeline = srv.device("panel").pipeline
+    assert panel_pipeline.awaits_arbitration(panel_pipeline._arbitration_token)
     release.set()
     await speaker.send(type="played", id=old, dropped=True)
     assert await speaker.recv() == state(2, "listening")

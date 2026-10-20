@@ -94,8 +94,9 @@ async def test_a_played_answer_opens_the_window_instead_of_ending(tmp_path, monk
     await _answer(pipeline)
     # No RUN_END: the device gets `listening` again in the same session.
     assert types_of(events) == [*ANSWERED, StageEvent.STT_VAD_START]
-    assert pipeline._followup == ("Захар", "включи свет", "готово")
-    assert pipeline._finalized is False
+    # The next phrase is heard and checked against the turn that opened the window.
+    await _say(pipeline, "а в спальне")
+    assert pipeline.rt.followup_backend.calls == [("Захар", "включи свет", "готово", "а в спальне")]
 
 
 @pytest.mark.parametrize("outcome, capable, gate", [
@@ -110,7 +111,9 @@ async def test_no_window_unless_played_capable_and_enabled(tmp_path, monkeypatch
     pipeline.rt.followup_backend = gate
     await _answer(pipeline)
     assert types_of(events) == [*ANSWERED, StageEvent.RUN_END]
-    assert pipeline._followup is None
+    # Nothing listens any more: a phrase starts no run.
+    await _say(pipeline, "а в спальне")
+    assert types_of(events) == [*ANSWERED, StageEvent.RUN_END]
 
 
 async def test_silence_in_the_window_ends_the_session_unrecorded(tmp_path, monkeypatch):
@@ -179,14 +182,15 @@ async def test_an_accepted_phrase_chimes_runs_and_opens_the_window_again(tmp_pat
     ]
     assert len(gate.calls) == 1
     assert dict(events)[StageEvent.STT_END] == {"text": "а в спальне"}
-    # The name stays the session wake's across follow-up turns.
-    assert pipeline._followup == ("Захар", "а в спальне", "готово")
     assert _context(tmp_path)[-2:] == [{"role": "user", "content": "а в спальне"},
                                        {"role": "assistant", "content": "готово"}]
     rec = store.records[-1]
     assert (rec["result"], rec["stt_text"]) == ("ok", "а в спальне")
     assert [(a["kind"], a["outcome"]) for a in rec["attempts"]][:2] == [
         ("followup", "accepted"), ("chain", "answered")]
+    # The name stays the session wake's across follow-up turns.
+    await _say(pipeline, "и в коридоре")
+    assert gate.calls[-1] == ("Захар", "а в спальне", "готово", "и в коридоре")
 
 
 async def test_proactive_speech_closes_the_window_first(tmp_path, monkeypatch):
@@ -197,7 +201,6 @@ async def test_proactive_speech_closes_the_window_first(tmp_path, monkeypatch):
     events.clear()
     await pipeline.speak("напоминаю: выключить духовку")
     assert events == [(StageEvent.STT_END, {"text": ""}), (StageEvent.RUN_END, {})]
-    assert pipeline._followup is None
     await _say(pipeline, "напоминаю: выключить духовку")
     assert pipeline.rt.followup_backend.calls == []
 
@@ -223,7 +226,6 @@ async def test_no_window_while_proactive_speech_is_queued(tmp_path, monkeypatch)
         await asyncio.sleep(0)
     await _answer(pipeline)
     assert types_of(events) == [*ANSWERED, StageEvent.RUN_END]
-    assert pipeline._followup is None
     release.set()
     await reminder
     events.clear()
@@ -237,7 +239,6 @@ async def test_a_cancelled_run_ends_the_window(tmp_path, monkeypatch):
     pipeline, _ = _make(tmp_path, monkeypatch)
     await _answer(pipeline)
     pipeline.cancel_run()
-    assert pipeline._followup is None
     await _say(pipeline, "стоп")
     assert pipeline.rt.followup_backend.calls == []
 
@@ -261,11 +262,10 @@ async def _text():
 async def test_a_wake_in_the_window_starts_a_normal_run(tmp_path, monkeypatch):
     pipeline, events = _make(tmp_path, monkeypatch)
     await _answer(pipeline)
-    assert pipeline._followup is not None
+    assert types_of(events)[-1] == StageEvent.STT_VAD_START  # the window is open
 
     pipeline.play.outcome = "dropped"
     events.clear()
     await _answer(pipeline)
     assert pipeline.rt.followup_backend.calls == []   # no follow-up check of a wake run
     assert types_of(events) == [*ANSWERED, StageEvent.RUN_END]
-    assert pipeline._followup is None

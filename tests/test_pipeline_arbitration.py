@@ -20,7 +20,7 @@ from tests.test_pipeline import (
     types_of,
 )
 from src.wake_arbiter import WakeArbiter
-from tests.test_pipeline_wakeword_gate import WAKE, FakeWakewordVerifier, _drain_verify
+from tests.test_pipeline_wakeword_gate import WAKE, FakeWakewordVerifier
 from tests.test_wake_arbiter import preroll
 
 
@@ -93,7 +93,7 @@ async def test_a_winner_the_verifier_rejects_leaves_the_phrase_to_the_other_devi
         await p.on_audio(preroll(100, 1000))
     for p in (speaker, panel):
         await p.on_audio(bytes(16000))  # 500 ms of live audio fills the verify window
-        await _drain_verify(p)
+        await settle(p)
     assert StageEvent.STT_VAD_START in types_of(panel_events)
     assert (store.records[-1]["result"], store.records[-1]["reason"]) == ("rejected", "wakeword_reject")
 
@@ -110,17 +110,20 @@ async def test_a_device_that_loses_by_its_own_confirmation_is_not_shown_listenin
         p.rt.wakeword_backend = FakeWakewordVerifier(accepted=True, window_ms=2500)
         install_fake_vad(p, [True] * 400)  # no end-point: each check waits for its window
     first.arbiter = second.arbiter = WakeArbiter(online_count=lambda: 2)
+    verdicts = []
+    ruled = second.arbitration_verdict
+    second.arbitration_verdict = lambda token, won: (verdicts.append(won), ruled(token, won))
 
     for p in (first, second):
         await p.on_start("cid", WAKE)
         await p.on_audio(preroll(100, 1000))
     await first.on_audio(bytes(16000))  # 500 ms of live audio fills the verify window
-    await _drain_verify(first)
+    await settle(first)
     assert StageEvent.STT_VAD_START in types_of(first_events)
-    assert not second._duplicate  # its check still holds the group open
+    assert verdicts == []  # its check still holds the group open
     await second.on_audio(bytes(16000))
-    await _drain_verify(second)
-    assert second._duplicate
+    await settle(second)
+    assert verdicts == [False]
     assert StageEvent.STT_VAD_START not in types_of(second_events)
 
 
@@ -133,7 +136,7 @@ async def test_a_lone_false_wake_leaves_no_cooldown_for_another_device(tmp_path,
 
     await speaker.on_start("cid", WAKE)
     await speaker.on_audio(b"\x01\x02" * 30000)  # > the verify window
-    await _drain_verify(speaker)
+    await settle(speaker)
     await panel.on_start("cid", WAKE)
     assert StageEvent.STT_VAD_START in types_of(panel_events)
 
@@ -272,7 +275,7 @@ async def test_a_won_run_with_a_verifier_shows_listening_once_the_verifier_confi
     await pipeline.on_start("cid", WAKE)
     if verifier_first:
         await pipeline.on_audio(b"\x01\x02" * 30000)  # > the verify window
-        await _drain_verify(pipeline)
+        await settle(pipeline)
         # Confirmed while the arbitration still holds the run: `listening` at once.
         assert types_of(events).count(StageEvent.STT_VAD_START) == 1
         pipeline.arbitration_verdict(arbiter.tokens[-1], True)
@@ -281,7 +284,7 @@ async def test_a_won_run_with_a_verifier_shows_listening_once_the_verifier_confi
         # Won, but the wake word is not confirmed yet: nothing shown.
         assert StageEvent.STT_VAD_START not in types_of(events)
         await pipeline.on_audio(b"\x01\x02" * 30000)
-        await _drain_verify(pipeline)
+        await settle(pipeline)
     assert types_of(events).count(StageEvent.STT_VAD_START) == 1
 
 
@@ -295,7 +298,7 @@ async def test_an_utterance_that_ended_during_the_hold_is_finalized_on_release(
 
     await pipeline.on_start("cid", WAKE)
     await pipeline.on_audio(FRAME * 9)  # speech then silence: an end-point
-    assert not pipeline._finalized
+    assert StageEvent.STT_VAD_END not in types_of(events) and store.records == []
 
     pipeline.arbitration_verdict(arbiter.tokens[-1], True)
     await settle(pipeline)

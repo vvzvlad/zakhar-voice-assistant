@@ -439,14 +439,12 @@ async def test_pipeline_opens_streams_for_first_and_parallel_chains_only(tmp_pat
     install_phrase_vad(pipeline)
 
     await pipeline.on_start("cid", None)
-    assert set(pipeline._stt_streams) == {"a", "b"}
     await pipeline.on_audio(PHRASE)
     assert a.fed == b.fed == [PHRASE] and c.fed == []
     await settle(pipeline)
 
     assert a.finished and not c.finished and c.calls == []
     assert b.closed                    # the unused parallel session is released
-    assert pipeline._stt_streams == {}
 
 
 class GatedStreamingStt(StreamingStt):
