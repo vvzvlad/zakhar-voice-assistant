@@ -20,7 +20,6 @@
 
 #include <math.h>
 #include <stdatomic.h>
-#include <stdlib.h>
 #include <string.h>
 
 #include "audio_core.h"
@@ -91,11 +90,6 @@ static const aec_mode_t AEC_MODES[] = {
 // The lag in use until the first clear estimate: 1344 frames = 84 ms, where the estimator settled
 // on a raw XMOS microphone of the Voice PE (docs/echo-cancellation.md).
 #define LAG_INIT (21 * LAG_BIN)
-// An estimate is the correlation peak of the energy envelopes, which the room's echo tail puts up
-// to a few bins after the echo's onset; the reference is aligned this much earlier, since the
-// filter models a delay but not an advance. A new estimate is taken only when it moves the lag by
-// more than a bin.
-#define LAG_GUARD (4 * LAG_BIN)
 #define LAG_EVERY 8  // chunks between estimates while the AEC runs: 256 ms
 
 // Auto volume: a measurement starts every AMBIENT_EVERY chunks of quiet (15 s) and takes
@@ -220,6 +214,7 @@ static void mic_task(void *arg)
     int made_mode = -1, made_filter = -1;  // the settings aec was made with, or failed to be
     int applied = 0;                       // the level aec suppresses at
     int32_t lag_in_use = LAG_INIT;
+    bool lag_set = false;  // the lag in use is decided, until a reboot (lag_next)
     unsigned since_estimate = 0;
     bool wrote = false;  // the stage write the previous chunk asked for went through
     bool stack_logged = false;
@@ -315,7 +310,7 @@ static void mic_task(void *arg)
             if (cancel && c.lag_ok && ++since_estimate == LAG_EVERY) {
                 since_estimate = 0;
                 const int est = lag_track_run(&lag, &s_ref, c.pos + CHUNK, c.offset, corr);
-                if (est >= 0 && abs(est - LAG_GUARD - (int)lag_in_use) > LAG_BIN) lag_in_use = est - LAG_GUARD;
+                lag_in_use = lag_next(lag_in_use, est, &lag_set);
                 st.corr = corr[(lag_in_use + LAG_GUARD) / LAG_BIN];
             }
         } else {

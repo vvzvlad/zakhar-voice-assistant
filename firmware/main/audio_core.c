@@ -1,6 +1,7 @@
 #include "audio_core.h"
 
 #include <math.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "music_ring.h"
@@ -202,6 +203,13 @@ int lag_track_run(lag_track_t *t, tap_t *ref, uint32_t mic_end, uint32_t offset,
         if ((lag < best - LAG_PEAK_AWAY || lag > best + LAG_PEAK_AWAY) && corr[lag] > away) away = corr[lag];
     }
     return corr[best] >= LAG_CORR_MIN && corr[best] - away >= LAG_CORR_MARGIN ? best * LAG_BIN : -1;
+}
+
+int32_t lag_next(int32_t in_use, int est, bool *set)
+{
+    if (est < 0 || *set) return in_use;
+    *set = true;
+    return abs(est - LAG_GUARD - (int)in_use) > LAG_BIN ? est - LAG_GUARD : in_use;
 }
 
 void mic_chunks_init(mic_chunks_t *c, uint32_t frames, uint32_t ref_settle)

@@ -201,6 +201,20 @@ static void test_lag(void)
     assert(lag_track_run(&lt, &r, N, offset, corr) == -1);
 }
 
+static void test_lag_next(void)
+{
+    bool set = false;
+    // No clear peak: the lag stays, still undecided.
+    assert(lag_next(1344, -1, &set) == 1344 && !set);
+    // The first clear estimate decides it, the reference aligned LAG_GUARD earlier...
+    assert(lag_next(1344, 1600 + LAG_GUARD, &set) == 1600 && set);
+    // ...and a later one does not move it: each move sets the AEC adapting anew.
+    assert(lag_next(1600, 1280 + LAG_GUARD, &set) == 1600 && set);
+    // A first estimate within a bin of the lag in use decides on that lag.
+    set = false;
+    assert(lag_next(1344, 1344 + LAG_BIN + LAG_GUARD, &set) == 1344 && set);
+}
+
 // One chunk of 512 frames with nothing dropped and the reference not yet settled.
 static mic_chunk_t chunk(mic_chunks_t *c, bool want_raw, bool wrote)
 {
@@ -624,6 +638,7 @@ int main(void)
     test_decimator();
     test_skip();
     test_lag();
+    test_lag_next();
     test_chunk_stages();
     test_chunk_stage_change();
     test_chunk_loss();

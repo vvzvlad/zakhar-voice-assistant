@@ -96,6 +96,15 @@ void lag_track_push(lag_track_t *t, const int16_t *x, size_t n, size_t stride);
 // frames of a clear peak (correlation >= 0.7 and 0.2 above every lag more than 100 ms away from
 // it), else -1.
 int lag_track_run(lag_track_t *t, tap_t *ref, uint32_t mic_end, uint32_t offset, float *corr);
+// An estimate is the correlation peak of the energy envelopes, which the room's echo tail puts up
+// to a few bins after the echo's onset; the reference is aligned this much earlier, since the
+// filter models a delay but not an advance.
+#define LAG_GUARD (4 * LAG_BIN)
+// The lag in use after an estimate `est` of lag_track_run (-1: no clear peak); `*set` holds
+// whether the lag is already decided. The first clear estimate decides it until a reboot and later
+// ones leave it, since every move of the reference sets the AEC adapting anew. A first estimate
+// within a bin of the lag in use keeps that lag.
+int32_t lag_next(int32_t in_use, int est, bool *set);
 
 // ---------------------------------------------------------------- the mic task's chunks
 
