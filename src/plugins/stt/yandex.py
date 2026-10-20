@@ -96,8 +96,8 @@ class YandexSttStream(StreamingSttSession):
         self._error: Exception | None = None
         self._closed = False
         self._stopped = False  # set once the drive task ends (normally or via error/cancel)
-        # open_stream() is called from on_start, which runs on the event loop, so
-        # creating the drive task here is valid.
+        # open_stream() is called from the pipeline's _release, which runs on the event
+        # loop, so creating the drive task here is valid.
         self._drive_task = asyncio.create_task(self._drive())
 
     def _session_options(self):

@@ -54,13 +54,6 @@ from src.vad import SAMPLE_RATE, EndpointPolicy  # noqa: F401  (SAMPLE_RATE re-e
 # misbehaves, and also forces a finalize when reached.
 HARD_CAP_BYTES = SAMPLE_RATE * 2 * 60
 
-# Run reasons that end a wake run before its handler: the wake-word verifier rejected
-# it (or timed out under fail-closed), or another device's wake of the same phrase won
-# the cross-device arbitration (only a duplicate's phrase is still recognized, for the
-# run log). Such a run is recorded as "rejected", without the ack chime or a capture
-# file.
-REJECT_REASONS = ("wakeword_reject", "wakeword_error", "duplicate")
-
 
 class _PrefetchedChunks:
     """A TTS chunk stream whose first chunk was already pulled: iterating yields that
@@ -106,19 +99,24 @@ class Pipeline:
         self.rt = runtime
         self._lock = asyncio.Lock()
 
-        # The run this pipeline serves (a wake's, a follow-up window's), None before the
-        # first wake. A new run replaces it (_new_run).
+        # A wake is held as a proposal until the wake-word check and the cross-device
+        # arbitration have ruled on it (on_wake); taken (_take), it becomes the current
+        # run: the one the device's session belongs to — a wake's or a follow-up
+        # window's, None before the first taken wake. The mic audio goes to the
+        # proposal while there is one, else to the current run.
+        self._proposed: Run | None = None
         self._current: Run | None = None
         # The token is bumped for every run registered with the cross-device wake
         # arbitration (src/wake_arbiter.py), so a verdict meant for an older run of
         # this device is told apart and ignored.
         self._arbitration_token = 0
 
-        # The finalized run (STT -> LLM -> TTS) started from on_audio; a new wake
-        # cancels it (see on_start).
+        # The finalized run (STT -> LLM -> TTS) started from on_audio; a taken wake
+        # cancels it (see _take).
         self._run_task: asyncio.Task | None = None
-        # The runs' wake-word checks (_run_wakeword_verify), kept referenced until
-        # they finish.
+        # The runs' wake-word checks (_check), the run log records of runs that ended
+        # held (_record_held) and the closing of a replaced run's STT sessions, kept
+        # referenced until they finish.
         self._background: set[asyncio.Task] = set()
 
         # Transport hooks, injected by the device server: send_event(event, data)
@@ -129,12 +127,17 @@ class Pipeline:
         # the cross-device WakeArbiter
         # (src/wake_arbiter.py) a wake run registers with and reports to — its
         # pre-roll is in, its verifier ruled, it stopped waiting (sync calls); None
-        # runs every wake unarbitrated.
+        # runs every wake unarbitrated. take_session(cid) and end_wake(cid) (sync): the
+        # run of the wake that opened session `cid` is taken (the session starts, the
+        # playback is dropped) or ends without being taken (the running session goes
+        # on under the new number).
         self.send_event = None
         self.play = None
         self.has_speaker = False
         self.has_follow_up = False
         self.arbiter = None
+        self.take_session = lambda cid: None
+        self.end_wake = lambda cid: None
         # speak() calls not yet played out (see speak()).
         self._speaking = 0
 
@@ -231,71 +234,41 @@ class Pipeline:
             and not isinstance(wb, PassthroughVerifier)
         )
 
-    async def on_start(self, conversation_id, wake_word_phrase, verified=None) -> None:
-        """Handle a wake: cancel the older run, start a new one, announce it.
+    def on_wake(self, cid, word, over_answer: bool = False) -> None:
+        """A wake of the device: propose its run (docs/device-protocol.md, "Voice session").
 
-        Everything before the first await is synchronous, so the older run (its run
-        task, a pending wake-word verify, its ack/filler plays) is cancelled before
-        any of it can run again. `verified` is (score, t_ms) of a wake the device
-        server already confirmed with verify_wake: it is not gated again, and its run
-        record carries that verify."""
-        old = self._current
-        if any(t is not None and not t.done()
-               for t in (self._run_task, old.verify if old is not None else None)):
-            logger.info(f"{self.name}: new wake cancels the running run")
-        # Also ends a follow-up window the previous answer opened.
-        self.cancel_run()
-        run = await self._new_run(
-            conversation_id or "", wake_word_phrase or "",
-            preroll_ms=PREROLL_MS if wake_word_phrase else 0,
-            no_speech_timeout_ms=self.core.vad.no_speech_timeout_ms,
-        )
-        if verified is not None:
-            run.score, run.verify_ms = verified
-        logger.info(f"{self.name}: ▶️ run started (cid={conversation_id})")
-        self._emit(StageEvent.RUN_START, {})
-        self._emit(StageEvent.STT_START, {})
-        # Server-side wake-word gate decision (gates_wake). RUN_START / STT_START above
-        # fire for BOTH paths (they don't light the LED).
-        gate = verified is None and self.gates_wake(wake_word_phrase)
-        if gate:
-            # Hold the run: do NOT emit STT_VAD_START and do NOT open the STT stream
-            # until the verdict lands. The VAD session opened above still tracks the
-            # end-point; on_audio buffers + defers any finalize until confirm/reject.
-            logger.info(f"{self.name}: 🛡️ wake-word gate pending (cid={conversation_id})")
+        Synchronous. The run registers with the cross-device arbitration at once and is
+        held — its audio buffered, nothing shown on the device — until the wake-word
+        check confirms it, when it is taken (_take), and the arbitration lets it
+        through, when it is released (_release); a wake its check rejects or one that
+        loses ends held (_end_held). Until a wake is taken the current run goes on
+        untouched: a wake over the device's own answer or open session (`over_answer`,
+        which the check is told) stops that answer only once confirmed. A newer wake
+        replaces a proposal silently."""
+        if self._proposed is not None:
+            self._drop(self._proposed)
+        run = self._proposed = self._new_run(
+            cid, word or "", preroll_ms=PREROLL_MS if word else 0,
+            no_speech_timeout_ms=self.core.vad.no_speech_timeout_ms, over_answer=over_answer)
+        if self.gates_wake(word):
+            logger.info(f"{self.name}: 🛡️ wake (cid={cid}) waits for the wake-word check"
+                        + (" over the running answer" if over_answer else ""))
         else:
-            # Ungated (disabled/None/passthrough/non-wake): the verifier's part of
-            # the hold is satisfied at once.
+            # Unchecked (disabled/None/passthrough/no wake word): its verdict is in.
             run.verdict = True
-        if wake_word_phrase and self.arbiter is not None:
-            # Cross-device arbitration holds a wake run the same way until its
-            # verdict (arbitration_verdict). The arbiter may rule inside register(),
-            # so what follows checks its outcome: _show_listening skips a run that
-            # lost, and one that won has shown it already.
-            run.arbitrating = True
+        if word and self.arbiter is not None:
             self._arbitration_token += 1
             run.token = self._arbitration_token
+            run.arbitrating = True
+            # The arbiter may rule inside the call, on this run too: _advance below
+            # finds a run that won (and is taken now) or lost.
             self.arbiter.register(self, run.token)
-            if not gate:
-                self._show_listening(run)
-        elif not gate:
-            # Speech is already in-stream (pre-roll captured the command), so the
-            # device should show the active "listening for command" LED right away;
-            # the matching STT_VAD_END (thinking) is emitted in _run once VAD
-            # finalizes the utterance.
-            self._show_listening(run)
-            self._open_stt_streams(run)
+        self._advance(run)
 
-    async def _new_run(self, cid, word: str, *, preroll_ms: int, no_speech_timeout_ms: int,
-                       followup=None) -> Run:
-        """Start a new run with its VAD session and make it the current one: a wake
-        (on_start) and a follow-up listen (_arm_followup) start a run the same way.
-        Cancels nothing; synchronous up to closing the stale STT sessions."""
-        # The streaming STT sessions of a run that was never finalized; a finalized
-        # run owns (and closes) its own sessions.
-        stale_streams = {}
-        if self._current is not None:
-            stale_streams, self._current.stt_streams = self._current.stt_streams, {}
+    def _new_run(self, cid, word: str, *, preroll_ms: int, no_speech_timeout_ms: int,
+                 **fields) -> Run:
+        """A new run with its VAD session: a wake's (on_wake) and a follow-up window's
+        (_arm_followup) start the same way. `fields` go to the Run."""
         # Open the per-run VAD session. The end-pointing POLICY (generic thresholds)
         # is read live off core.vad here, while the speech classifier itself is the
         # swappable vad stage backend. One session per run, so a hot-swapped backend
@@ -311,52 +284,164 @@ class Pipeline:
             no_speech_timeout_ms=no_speech_timeout_ms,
             preroll_ms=preroll_ms,
         ))
-        run = self._current = Run(cid, word, vad, self._backend_desc(vad_backend),
-                                  followup=followup)
-        await self._close_stt_streams(stale_streams)
-        return run
+        return Run(cid, word, vad, self._backend_desc(vad_backend), **fields)
 
-    async def _arm_followup(self, answered: Run, request: str, reply: str) -> None:
+    def _drop(self, run: Run) -> None:
+        """Forget a proposal without a trace (a newer wake replaced it, its device
+        vanished): its check is cancelled and it leaves the arbitration."""
+        run.finalized = True
+        if run.verify is not None:
+            run.verify.cancel()
+        self._leave_arbitration(run)
+
+    def _advance(self, run: Run) -> None:
+        """Move a wake's run on after anything it waits for changed: its check ruled,
+        the arbiter ruled, its utterance ended while held.
+
+        Synchronous, and called from inside the check's task and the arbiter's calls,
+        so it never awaits and starts a run as its own task. Rejected: ended
+        (_end_held). Lost: held until its utterance ends, then ended as a duplicate.
+        Confirmed and not ruled out: taken (_take) — a run its own confirmation makes
+        lose (the arbiter rules inside _check's run_changed) is never shown
+        `listening`. Taken and let through by the arbitration: released (_release).
+        """
+        if run.finalized:
+            return
+        if run.verdict is False:
+            self._end_held(run, "wakeword_error" if run.error else "wakeword_reject")
+        elif run.lost:
+            if run.endpoint is not None:
+                self._end_held(run, "duplicate")
+        elif run.verdict:
+            if not run.taken:
+                self._take(run)
+            if not run.arbitrating and not run.released:
+                self._release(run)
+
+    def _take(self, run: Run) -> None:
+        """Take a confirmed wake: it becomes the current run and its session starts.
+
+        Fully synchronous, so nothing of the older run can run in between: the older
+        run is cancelled (cancel_run; never the proposal's check, which may be the
+        task this runs in), the device server starts the wake's session
+        (take_session: `play_stop` before anything else of it) and the device is shown
+        `listening` at once — the arbitration may hold the run for seconds more, and
+        the device shows nothing until `listening`. A taken run that later loses keeps
+        it (docs/device-protocol.md, the decisions)."""
+        run.taken = True
+        self._proposed = None
+        old = self._current
+        if self._run_task is not None and not self._run_task.done():
+            logger.info(f"{self.name}: new wake cancels the running run")
+        # Also ends a follow-up window the previous answer opened.
+        self.cancel_run()
+        self._current = run
+        # The streaming STT sessions of a claimed older run whose cancelled run task
+        # never started (cancel_run closes those of a run never claimed); a running
+        # _run owns (and closes) its own.
+        if old is not None and old.stt_streams:
+            streams, old.stt_streams = old.stt_streams, {}
+            self._spawn(self._close_stt_streams(streams))
+        self.take_session(run.cid)
+        logger.info(f"{self.name}: ▶️ run started (cid={run.cid})")
+        self._emit(StageEvent.RUN_START, {})
+        self._emit(StageEvent.STT_START, {})
+        # Speech is already in-stream (pre-roll captured the command); the matching
+        # STT_VAD_END (thinking) is emitted in _run once VAD finalizes the utterance.
+        self._emit(StageEvent.STT_VAD_START, {})
+
+    def _release(self, run: Run) -> None:
+        """Let a taken run's audio through to STT, once per run: the arbitration let it
+        through, or it has none (a follow-up window).
+
+        Synchronously opens its STT streams and feeds each the audio held so far once
+        — no await in between, so a concurrent on_audio can't double-feed or lose a
+        chunk. If the utterance already ended while held (Run.endpoint), the run is
+        claimed here as well and its _run started as the run task."""
+        run.released = True
+        self._open_stt_streams(run)
+        # Feed the whole backlog buffered during the hold once, so streaming STT sees
+        # the same audio the batch path would.
+        if run.buffer:
+            backlog = bytes(run.buffer)
+            for stream in run.stt_streams.values():
+                stream.feed(backlog)
+        if run.endpoint is not None:
+            pcm, pcm2 = run.claim()
+            self._run_task = asyncio.create_task(self._run(run, run.endpoint, pcm, pcm2=pcm2))
+
+    def _end_held(self, run: Run, reason: str) -> None:
+        """End a held run that will not be released: its check rejected it
+        (wakeword_reject, or wakeword_error when the check timed out or failed and its
+        policy rejects), or it lost the arbitration and its utterance ended (duplicate).
+
+        Synchronous: the run is claimed and leaves the arbitration. A taken one ends
+        its own session (an empty STT_END and RUN_END, the device's `state idle`). One
+        never taken sends nothing through send_event — its RUN_END would end the
+        session of the answer the current run may be playing — and the device server
+        ends its wake instead (end_wake). The run log record follows as its own task
+        (_record_held), outside the run lock, which an answering run holds for its
+        whole playback."""
+        pcm, pcm2 = run.claim()
+        self._leave_arbitration(run)
+        if reason == "duplicate":
+            logger.info(f"{self.name}: 🚫 wake dropped as a duplicate of another device's wake")
+        else:
+            logger.info(f"{self.name}: 🚫 wake word rejected by verifier "
+                        f"(reason={reason}, score={run.score})")
+        if run.taken:
+            self._emit(StageEvent.STT_END, {"text": ""})
+            self._emit(StageEvent.RUN_END, {})
+        else:
+            self._proposed = None
+            self.end_wake(run.cid)
+        self._spawn(self._record_held(run, reason, pcm, pcm2))
+
+    def _arm_followup(self, answered: Run, request: str, reply: str) -> None:
         """Keep the session open after its answer played out and listen again without
-        a wake word (docs/device-protocol.md, "Follow-up"). A new run, as for a wake,
-        but it cancels nothing (it runs inside the answering run) and has no wake
-        word of its own: it keeps the session wake's for the follow-up check, has no
-        pre-roll and no wake-word gate, and the VAD ends it with no_speech when speech
-        does not start within the stage's window."""
+        a wake word (docs/device-protocol.md, "Follow-up"). A new run, taken and
+        released at once: it cancels nothing (it is armed inside the answering run),
+        keeps the session wake's word for the follow-up check, has no pre-roll and no
+        wake-word check, and the VAD ends it with no_speech when speech does not start
+        within the stage's window."""
         window_ms = self.rt.followup_backend.window_ms
-        run = await self._new_run(answered.cid, answered.word, preroll_ms=0,
-                                  no_speech_timeout_ms=window_ms,
-                                  followup=(answered.word, request, reply))
+        run = self._current = self._new_run(
+            answered.cid, answered.word, preroll_ms=0, no_speech_timeout_ms=window_ms,
+            followup=(answered.word, request, reply), taken=True)
         run.verdict = True
         logger.info(f"{self.name}: 👂 listening for a follow-up ({window_ms} ms)")
-        self._show_listening(run)
-        self._open_stt_streams(run)
+        self._emit(StageEvent.STT_VAD_START, {})
+        self._release(run)
 
     def cancel_run(self) -> None:
-        """Cancel the running run: its run task, the wake-word verify (and a run it
-        started) and its ack/filler plays, and end an open follow-up window: audio
-        that still arrives is dropped. Synchronous; the cancelled run emits no
-        RUN_END (its stages catch Exception, which a cancellation is not). The run
-        stops waiting for the arbitration, so the arbiter skips it."""
-        run = self._current
+        """Cancel the current run: its run task and its ack/filler plays. A run still
+        listening (a phrase, a follow-up window) is abandoned: audio that still
+        arrives is dropped, so it can never end its phrase and answer later, and its
+        streaming STT sessions are closed. A proposal is not touched (its check may be
+        what is taking it). Synchronous; the cancelled run emits no RUN_END (its stages
+        catch Exception, which a cancellation is not). The run stops waiting for the
+        arbitration, so the arbiter skips it."""
         # Cancellation of an already-finished task is a no-op. Not awaited: each
         # cancelled task unwinds on its own (the ack/filler sets self-clean via their
         # done-callbacks); snapshot the sets first since those callbacks mutate them.
-        for task in (self._run_task, run.verify if run is not None else None,
-                     *self._ack_tasks, *self._filler_tasks):
+        for task in (self._run_task, *self._ack_tasks, *self._filler_tasks):
             if task is not None:
                 task.cancel()
         self._run_task = None
+        run = self._current
         if run is None:
             return
-        if run.followup is not None:
+        if not run.finalized:
+            # A claimed run is finalized already, and its _run closes its own streams.
             run.finalized = True
+            if run.stt_streams:
+                streams, run.stt_streams = run.stt_streams, {}
+                self._spawn(self._close_stt_streams(streams))
         self._leave_arbitration(run)
 
     def _leave_arbitration(self, run: Run) -> None:
-        """Stop waiting for the arbitration verdict (the run was cancelled or its
-        device vanished, which ends a pending verifier gate too): the arbiter
-        re-checks the group without this run."""
+        """Stop waiting for the arbitration verdict (the run was cancelled, ended held,
+        or its device vanished): the arbiter re-checks the group without this run."""
         if run.arbitrating:
             run.arbitrating = False
             self.arbiter.run_changed(self, run.token)
@@ -369,9 +454,8 @@ class Pipeline:
 
         A batch-only backend (no open_stream(), or one returning None) gets no
         session — NOT an error — and is transcribed in one shot at VAD end; only a
-        genuine open failure warns and falls back to that batch route. Shared by
-        on_start's ungated path, _wakeword_confirm and _arm_followup so the open
-        logic stays identical.
+        genuine open failure warns and falls back to that batch route. Called by
+        _release only, for a wake's run and a follow-up window alike.
         """
         run.stt_streams = {}
         for chain in chains.starts_at_speech(self.rt, self.core.chains):
@@ -405,11 +489,14 @@ class Pipeline:
         detect it here: VAD over the PCM finalizes the utterance once speech is
         followed by enough trailing silence (or a max length / no-speech timeout).
 
+        The audio goes to the proposed wake while there is one (on_wake), else to the
+        current run.
+
         Never suspends: the whole update is synchronous and a finalized run is
         started as its own task (_run_task), so the device server's read loop can
         await this per frame without ever waiting on a run.
         """
-        run = self._current
+        run = self._proposed or self._current
         if run is None or run.finalized:
             return  # No run, or late audio for an already-finalized one.
 
@@ -432,19 +519,18 @@ class Pipeline:
         else:
             other = data2  # may be None when the device streams a single channel
 
-        # Held: the wake-word verifier or the cross-device arbitration hasn't ruled
-        # yet, or the run lost the arbitration. Keep accumulating the buffer
-        # (channel-select below feeds Run.buffer/buffer2) but DON'T feed the STT
+        # Held (not released): the wake-word check or the cross-device arbitration
+        # hasn't ruled yet, or the run lost the arbitration. Keep accumulating the
+        # buffer (channel-select above picks Run.buffer/buffer2) but DON'T feed the STT
         # streams (there are none yet) and DON'T finalize the utterance — if VAD
         # end-points, stash the reason and stop feeding VAD; the finalize is deferred
-        # until the hold is lifted (_release_hold replays it). A lost run is never
-        # lifted: its end-point finalizes it as a duplicate at once. While the
-        # verifier gate is active, trigger the verify task EXACTLY once, when enough
-        # pre-roll is buffered (window_bytes) or the utterance already ended. While
-        # the arbitration is pending, tell the arbiter once when the whole pre-roll is
-        # in. This branch is fully SYNCHRONOUS (every await lives inside the task) so
-        # the eager-on_audio atomicity invariant holds.
-        if run.verdict is None or run.arbitrating or run.lost:
+        # until the release replays it, and a lost run ends at it (_advance). While the
+        # check has yet to rule, start it EXACTLY once, when enough pre-roll is
+        # buffered (window_bytes) or the utterance already ended. While the
+        # arbitration is pending, tell the arbiter once when the whole pre-roll is in.
+        # This branch is fully SYNCHRONOUS (every await lives inside the check's task)
+        # so the eager-on_audio atomicity invariant holds.
+        if not run.released:
             if not run.audio_logged:
                 run.audio_logged = True
                 logger.info(f"{self.name}: 🎤 receiving audio (held)...")
@@ -458,20 +544,18 @@ class Pipeline:
                 del run.buffer2[HARD_CAP_BYTES:]
             if len(run.buffer) >= HARD_CAP_BYTES:
                 del run.buffer[HARD_CAP_BYTES:]
-            # Track the end-point while gating, but DON'T finalize here: stash the
-            # reason and stop feeding VAD (the utterance end is replayed on confirm).
+            # Track the end-point while held, but DON'T finalize here: stash the
+            # reason and stop feeding VAD (the utterance end is replayed on release).
             if run.endpoint is None and run.vad is not None:
                 run.endpoint = run.vad.feed(data)
-            if run.lost and run.endpoint is not None:
-                self._finalize_duplicate(run)
-                return
+                if run.endpoint is not None:
+                    self._advance(run)
             wb = self.rt.wakeword_backend
-            if run.verdict is None and run.verify is None and wb is not None:
+            if run.verdict is None and run.verify is None and not run.finalized and wb is not None:
                 window_bytes = wb.window_ms * SAMPLE_RATE * 2 // 1000
                 if len(run.buffer) >= window_bytes or run.endpoint is not None:
                     # Snapshot the pre-roll head SYNCHRONOUSLY; the task then awaits.
-                    run.verify = self._spawn(
-                        self._run_wakeword_verify(run, bytes(run.buffer[:window_bytes])))
+                    run.verify = self._spawn(self._check(run, bytes(run.buffer[:window_bytes])))
             # Last: the buffer just reached the whole pre-roll. The arbiter may rule
             # inside the call, on this run too, so nothing follows it.
             if run.arbitrating and buffered < PREROLL_BYTES <= len(run.buffer):
@@ -570,108 +654,53 @@ class Pipeline:
             logger.info(f"{self.name}: 🚫 wake word rejected (score={score}, {t_ms} ms)")
         return accepted, score, t_ms, verdict is None
 
-    async def _run_wakeword_verify(self, run: Run, pcm: bytes) -> None:
-        """Run verify_wake on the pre-roll head, then gate.
+    async def _check(self, run: Run, pcm: bytes) -> None:
+        """The wake-word check of a held run on its pre-roll head, then the run moves on
+        (_advance).
 
-        Spawned exactly once per gated run (from on_audio). All the awaits live here,
-        so the on_audio gating branch that schedules this stays synchronous and the
-        eager-on_audio atomicity invariant holds. Decides confirm vs reject.
-        """
-        if self.rt.wakeword_backend is None or run.finalized:
-            return  # backend vanished, or the run is already gone.
-        accepted, run.score, run.verify_ms, error = await self.verify_wake(pcm)
+        Spawned exactly once per checked run (from on_audio). All the awaits live here,
+        so the on_audio branch that schedules this stays synchronous and the
+        eager-on_audio atomicity invariant holds. A confirmation goes to the arbiter
+        first — it may rule inside the call, on this run too — so the run is taken only
+        if it did not lose by it (docs/device-protocol.md, the decisions)."""
+        if self.rt.wakeword_backend is None:
+            return  # backend vanished.
+        verdict = await self.verify_wake(pcm, over_answer=run.over_answer)
         if run.finalized:
-            return  # the run was finalized while we were verifying.
-        if accepted:
-            await self._wakeword_confirm(run)
-        else:
-            await self._wakeword_reject(run, error=error)
-
-    async def _wakeword_confirm(self, run: Run) -> None:
-        """Accept verdict: the verifier lets the run through.
-
-        Synchronously flips the gate. A run that already lost the arbitration stays
-        held until its end-point. While the cross-device arbitration is still
-        pending, the arbiter is told the verifier has ruled — it may rule inside the
-        call, on this run too — and arbitration_verdict releases the run. Otherwise
-        the hold is lifted here (_release_hold) and, if the utterance already ended
-        while we were verifying, its finalize is awaited now; otherwise subsequent
-        on_audio drives the normal VAD finalize.
-        """
-        if run.finalized:
-            return
-        run.verdict = True
-        if run.lost:
-            return
-        if run.arbitrating:
+            return  # the run was dropped while we were verifying.
+        run.verdict, run.score, run.verify_ms, run.error = verdict
+        if run.verdict and run.arbitrating:
             self.arbiter.run_changed(self, run.token)
-            self._show_listening(run)
-            return
-        finalize = self._release_hold(run)
-        if finalize is not None:
-            await finalize
+        self._advance(run)
 
-    def _show_listening(self, run: Run) -> None:
-        """Send the device its `listening` (STT_VAD_START) once per run, as soon as the
-        wake word is confirmed: the arbitration may hold the run for seconds more, and the
-        device shows nothing until `listening`. A run that later loses may keep it
-        (docs/device-protocol.md, the decisions); one already known to have lost is not
-        shown it."""
-        if run.taken or run.lost:
-            return
-        run.taken = True
-        self._emit(StageEvent.STT_VAD_START, {})
-
-    def _release_hold(self, run: Run):
-        """Lift the hold on a wake run once both the verifier and the arbitration let
-        it through; shared by _wakeword_confirm and arbitration_verdict.
-
-        Synchronously shows `listening` unless a confirmed wake already did, opens the
-        STT streams and
-        replays the whole buffered backlog into each once — no await between the
-        caller clearing its pending flag, opening, and feeding, so a concurrent
-        on_audio can't double-feed or lose the chunk. If the utterance already ended
-        during the hold (Run.endpoint), the run is claimed here as well and the
-        un-awaited coroutine of its _run is returned for the caller to await or
-        schedule; otherwise None.
-        """
-        self._show_listening(run)
-        self._open_stt_streams(run)
-        # Feed the whole backlog buffered during the hold once, so streaming STT sees
-        # the same audio the batch path would.
-        backlog = bytes(run.buffer)
-        for stream in run.stt_streams.values():
-            stream.feed(backlog)
-        if run.endpoint is None:
-            return None
-        claimed = run.claim()
-        if claimed is None:
-            return None
-        return self._run(run, run.endpoint, claimed[0], pcm2=claimed[1])
+    def _run_of(self, token: int) -> Run | None:
+        """The run (the proposal or the current one) registered with the arbitration
+        under `token`."""
+        return next((r for r in (self._proposed, self._current)
+                     if r is not None and r.token == token), None)
 
     @property
     def preroll_pcm(self) -> bytes:
-        """The pre-roll of the current wake run received so far (the selected mic
-        channel), for the arbiter's signal-to-noise comparison."""
-        return self._current.preroll_pcm if self._current is not None else b""
+        """The pre-roll of the device's latest wake (the proposal, else the current
+        run) received so far (the selected mic channel), for the arbiter's
+        signal-to-noise comparison."""
+        run = self._proposed or self._current
+        return run.preroll_pcm if run is not None else b""
 
     @property
     def verifier_pending(self) -> bool:
-        """Whether the wake-word verifier has yet to rule on this run; the arbiter
-        waits for it, except that a run without a speaker loses as it is once a ready
-        candidate has one."""
-        return self._current is not None and self._current.verdict is None
+        """Whether the wake-word verifier has yet to rule on the device's latest wake;
+        the arbiter waits for it, except that a run without a speaker loses as it is
+        once a ready candidate has one."""
+        run = self._proposed or self._current
+        return run is not None and run.verdict is None
 
     def awaits_arbitration(self, token: int) -> bool:
-        """Whether this run still waits for the arbitration verdict registered under
-        `token`: not an older run's token, not finalized, still held for it."""
-        run = self._current
-        return (
-            run is not None
-            and token == run.token
-            and run.arbitrating
-            and not run.finalized
-        )
+        """Whether the run registered under `token` still waits for the arbitration
+        verdict: it is still this device's proposal or current run, not finalized,
+        still held for it."""
+        run = self._run_of(token)
+        return run is not None and run.arbitrating and not run.finalized
 
     def arbitration_verdict(self, token: int, won: bool) -> None:
         """The cross-device arbiter's verdict on the run registered under `token`.
@@ -680,59 +709,36 @@ class Pipeline:
         to the arbiter, or from one of its timers — the module docstring of
         src/wake_arbiter.py lists them. A verdict the run no longer awaits is ignored.
         Lost: the run stays held — its device streams the rest of the phrase on,
-        keeping the `listening` a confirmed wake already showed it — and on_audio
-        finalizes it as a duplicate at its VAD end-point, or it is finalized at once
-        when the end-point was already stashed. Won: the arbitration hold is lifted
-        and the run released, unless the wake-word verifier is still pending — its
-        _wakeword_confirm then releases it.
+        keeping the `listening` a taken run was already shown — until its VAD
+        end-point, when it ends as a duplicate; a run not taken by then is never taken.
+        Won: the run is released once its wake-word check confirms it (_advance).
         """
         if not self.awaits_arbitration(token):
             return
-        run = self._current
+        run = self._run_of(token)
         run.arbitrating = False
-        if not won:
-            run.lost = True
-            if run.endpoint is not None:
-                self._finalize_duplicate(run)
-            return
-        if run.verdict is None:
-            return
-        finalize = self._release_hold(run)
-        if finalize is not None:
-            self._run_task = asyncio.create_task(finalize)
+        run.lost = not won
+        self._advance(run)
 
-    def _finalize_duplicate(self, run: Run) -> None:
-        """Claim the lost run and start its _run as a duplicate (as _run_task, like
-        on_audio's finalize): its phrase is recognized for the run log only."""
-        claimed = run.claim()
-        if claimed is not None:
-            # A phrase the VAD found no speech in is not transcribed, as for any run:
-            # the STT would make up words for the noise.
-            self._run_task = asyncio.create_task(self._run(
-                run, "duplicate", claimed[0], pcm2=claimed[1],
-                transcribe=run.endpoint != "no_speech",
-            ))
-
-    async def _wakeword_reject(self, run: Run, error: bool) -> None:
-        """Reject verdict: abort the run silently and stop the device.
-
-        Claims the run (so a concurrent VAD finalize can't also run it)
-        and funnels through _run with a reject reason. _run records the run as
-        'rejected', skips STT/LLM/TTS and the ack chime, and emits RUN_END — which the
-        device server sends as `state idle`, so the device stops streaming the mic and
-        ends its session. `error` distinguishes a timeout/internal error (wakeword_error)
-        from a genuine non-match (wakeword_reject).
-        """
-        reason = "wakeword_error" if error else "wakeword_reject"
-        claimed = run.claim()
-        if claimed is None:
-            return  # already finalized by a concurrent path.
-        run.verdict = False
-        if run.arbitrating:
-            # The rejected run drops out of its arbitration group (awaits_arbitration
-            # is now False); the arbiter may rule on the other candidates.
-            self.arbiter.run_changed(self, run.token)
-        await self._run(run, reason, claimed[0], pcm2=claimed[1])
+    async def _record_held(self, run: Run, reason: str, pcm: bytes, pcm2: bytes) -> None:
+        """The run log record of a run _end_held ended: `rejected`, with its reason, its
+        check's latency and score and its stored audio, no ack chime and no capture
+        file. A duplicate's phrase is recognized by the first enabled chain's STT for
+        the run log only — the device never gets that transcript — unless the VAD found
+        no speech in it: the STT would make up words for the noise."""
+        t0 = time.perf_counter()
+        pcm, pcm2 = self._condition_audio(pcm, pcm2, trim=True)
+        record = self._new_record(reason, pcm, run.verify_ms, run.score)
+        record["result"] = "rejected"
+        if reason == "duplicate" and run.endpoint != "no_speech":
+            stt_t = time.perf_counter()
+            try:
+                first = chains.enabled_chains(self.core.chains)[0]
+                record["stt_text"] = await chains.transcribe(self.rt, first, pcm)
+            except Exception as e:  # noqa: BLE001 - the run is recorded without it
+                logger.error(f"{self.name}: duplicate STT failed: {e}")
+            record["t_stt"] = int((time.perf_counter() - stt_t) * 1000)
+        await self._broadcast_run(await self._store_run(record, t0, pcm, pcm2))
 
     def _emit_live(self, record) -> None:
         """Schedule a best-effort broadcast of the current in-progress run snapshot.
@@ -822,26 +828,27 @@ class Pipeline:
             record["result"] = "ok"
 
     async def on_disconnect(self) -> None:
-        """Device dropped its connection. If streaming STT sessions are open for a
-        run that was never finalized (the speaker vanished mid-utterance), close them
-        so the gRPC streams/channels don't linger until the next run. A FINALIZED run
-        owns the sessions and closes them in _run's finally, so skip it here to avoid
-        racing finish() against aclose()."""
+        """Device dropped its connection. A proposed wake is forgotten without a
+        record, its check cancelled so a late verdict can't act on a dead run. A current
+        run that was never finalized (the speaker vanished mid-utterance) is abandoned:
+        it takes no more audio, so frames after a later wake can't end its phrase and
+        run the old command, and its streaming STT sessions are closed so the gRPC
+        streams/channels don't linger. A FINALIZED run owns the sessions and closes them
+        in _run's finally, so skip it here to avoid racing finish() against aclose()."""
+        proposed, self._proposed = self._proposed, None
+        if proposed is not None:
+            self._drop(proposed)
         run = self._current
         if run is None:
             return
-        # Best-effort cancel an in-flight wake-word verify for the vanished speaker so
-        # a late verdict can't act on (confirm/reject) a dead run. No-op if already done.
-        if run.verify is not None:
-            run.verify.cancel()
         # A vanished device no longer waits for the arbitration: the arbiter skips it.
         self._leave_arbitration(run)
         if not run.finalized:
+            run.finalized = True
             streams, run.stt_streams = run.stt_streams, {}
             await self._close_stt_streams(streams)
 
-    async def _run(self, run: Run, reason, pcm, pcm2: bytes = b"",
-                   transcribe: bool = True) -> None:
+    async def _run(self, run: Run, reason, pcm, pcm2: bytes = b"") -> None:
         """Run the recognition chains -> TTS -> events on the already-claimed audio, once.
 
         The caller claims `run` via Run.claim() (which sets its finalized flag,
@@ -850,8 +857,6 @@ class Pipeline:
         entry. RUN_END is always sent, unless the played answer opens a follow-up
         window (_arm_followup). The run takes over the streaming STT sessions of the
         claimed utterance, so a cancelled run's cleanup never touches the next one.
-        `transcribe` is read for a duplicate only: whether its phrase is recognized for
-        the run log.
         """
         stt_streams, run.stt_streams = run.stt_streams, {}
         conversation_id = run.cid
@@ -881,13 +886,11 @@ class Pipeline:
                 # mid-playback. The ack, a filler and the reply are separate play()
                 # streams, queued in call order on the device.
                 #
-                # A rejected wake (verifier, duplicate) and a wake word with no command
-                # after it (no_speech) end the run silently — no ack chime — so a
-                # mis-trigger, a second device or a bare wake word never beeps. A
-                # follow-up phrase gets its chime only once the follow-up check accepts
-                # it (_followup_gate).
-                if (reason not in REJECT_REASONS and reason != "no_speech"
-                        and followup is None):
+                # A wake word with no command after it (no_speech) ends the run
+                # silently — no ack chime — so a bare wake word never beeps (a rejected
+                # wake never gets here: _end_held). A follow-up phrase gets its chime
+                # only once the follow-up check accepts it (_followup_gate).
+                if reason != "no_speech" and followup is None:
                     self._schedule_ack()
 
                 # A follow-up phrase has no lead-in: its audio starts at the
@@ -908,46 +911,11 @@ class Pipeline:
                 keep_record = True
                 record = self._new_record(reason, pcm, run.verify_ms, run.score)
                 try:
-                    # REJECT: the second-stage verifier did not confirm the wake word,
-                    # or another device's wake of the same phrase won the arbitration.
-                    # Abort the run silently — NO handler/TTS, NO ack (guarded above),
-                    # NO STT_VAD_END (that would trigger the thinking indicator). Emit
-                    # an empty STT_END (to balance STT_START) and RUN_END (which stops
-                    # the device streaming). A duplicate's phrase is then recognized by
-                    # the first enabled chain's STT for the run log only; the device
-                    # never gets that transcript. Placed INSIDE the inner try so the
-                    # finally still records the run + stores its audio.
-                    if reason in REJECT_REASONS:
-                        if reason == "duplicate":
-                            logger.info(
-                                f"{self.name}: 🚫 wake dropped as a duplicate of another "
-                                f"device's wake"
-                            )
-                        else:
-                            logger.info(
-                                f"{self.name}: 🚫 wake word rejected by verifier "
-                                f"(reason={reason}, score={run.score})"
-                            )
-                        record["result"] = "rejected"
-                        record["reason"] = reason
-                        await self._close_stt_streams(stt_streams)
-                        stt_streams = {}
-                        self._emit(StageEvent.STT_END, {"text": ""})
-                        self._emit(StageEvent.RUN_END, {})
-                        if reason == "duplicate" and transcribe:
-                            stt_t = time.perf_counter()
-                            try:
-                                first = chains.enabled_chains(self.core.chains)[0]
-                                record["stt_text"] = await chains.transcribe(self.rt, first, pcm)
-                            except Exception as e:  # noqa: BLE001 - the run is recorded without it
-                                logger.error(f"{self.name}: duplicate STT failed: {e}")
-                            record["t_stt"] = int((time.perf_counter() - stt_t) * 1000)
-                        return
                     # VAD found no speech in the whole window — this is silence/noise,
                     # not an utterance. Skip STT entirely: Whisper hallucinates stray
                     # phrases on non-speech audio (e.g. "Продолжение следует..."), which
                     # would then pollute the run log or flow into the LLM/TTS. Balance the
-                    # STT_START emitted in on_start with an empty STT_END, end the run, and
+                    # STT_START emitted in _take with an empty STT_END, end the run, and
                     # let the finally below record it as an empty run (result="empty",
                     # stt_text="", t_stt=0 — all left at their defaults).
                     if reason == "no_speech":
@@ -1063,7 +1031,7 @@ class Pipeline:
                             return
                     if chain_run.reply is None:
                         # No chain heard anything (or every STT failed): nothing is spoken.
-                        # Balance the STT_START emitted in on_start with an empty STT_END
+                        # Balance the STT_START emitted in _take with an empty STT_END
                         # and end the run; the finally records it ("empty" or an STT error).
                         logger.info(f"{self.name}: no chain heard a request, ending run")
                         self._emit(StageEvent.STT_END, {"text": ""})
@@ -1195,7 +1163,7 @@ class Pipeline:
                     if (played is not None and played["outcome"] == "played"
                             and self.has_follow_up and not self._speaking
                             and fb is not None and not isinstance(fb, NoFollowup)):
-                        await self._arm_followup(run, chain_run.text, chain_run.reply)
+                        self._arm_followup(run, chain_run.text, chain_run.reply)
                     else:
                         self._emit(StageEvent.RUN_END, {})
                 except Exception as e:
@@ -1383,18 +1351,6 @@ class Pipeline:
             await self.run_events.broadcast({"type": "run", "run": row})
         except Exception as e:
             logger.error(f"{self.name}: run broadcast failed: {e}")
-
-    async def record_rejected_wake(self, reason, pcm: bytes, pcm2: bytes,
-                                   score: float | None, t_ms: int) -> None:
-        """Record a wake the device server rejected with verify_wake before it started
-        a run: the run-log record and stored audio of a wakeword_reject/wakeword_error
-        run (_run's REJECT path) and its finalized broadcast. Emits no events and takes
-        no run lock: the running run of this device goes on untouched."""
-        t0 = time.perf_counter()
-        pcm, pcm2 = self._condition_audio(pcm, pcm2, trim=True)
-        record = self._new_record(reason, pcm, t_ms, score)
-        record["result"] = "rejected"
-        await self._broadcast_run(await self._store_run(record, t0, pcm, pcm2))
 
     async def run_text(self, text: str, speak: bool = True) -> dict:
         """Public entry for TEXT requests (agent MCP `ask`): a full handler turn

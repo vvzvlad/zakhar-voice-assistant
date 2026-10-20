@@ -73,7 +73,7 @@ def _make(tmp_path, monkeypatch, *, gate=None, outcome="played", capable=True, *
 
 async def _answer(pipeline):
     """One wake run, answered and played."""
-    await pipeline.on_start("cid", "Захар")
+    pipeline.on_wake("cid", "Захар")
     await pipeline.on_audio(PHRASE)
     await settle(pipeline)
 

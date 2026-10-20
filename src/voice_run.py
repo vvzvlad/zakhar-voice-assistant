@@ -1,9 +1,10 @@
 """One voice run of a device: a wake's run or a follow-up window's.
 
-The pipeline (src/pipeline.py) keeps the run it serves as a Run; everything that belongs
+The pipeline (src/pipeline.py) keeps each run it serves as a Run; everything that belongs
 to one run — its audio, its VAD session, its STT sessions, how far its wake got through
 the wake-word check and the cross-device arbitration — lives on it, so starting a run
-is constructing one, and a run another wake replaces keeps its own state.
+is constructing one, and a proposed wake and the run it would replace keep their own
+state side by side.
 """
 
 from src.vad import SAMPLE_RATE
@@ -17,7 +18,8 @@ PREROLL_BYTES = PREROLL_MS * SAMPLE_RATE * 2 // 1000
 class Run:
     """The state of one run, from its wake (or its follow-up window) to its end."""
 
-    def __init__(self, cid, word: str, vad, vad_desc: str, *, followup=None, taken=False):
+    def __init__(self, cid, word: str, vad, vad_desc: str, *, over_answer=False,
+                 followup=None, taken=False):
         # The conversation id (the device's session) the run's events are labelled with.
         self.cid = cid
         # The wake word; a follow-up window keeps the word of its session's wake.
@@ -26,6 +28,9 @@ class Run:
         # the backend that opened it, for the finalize log line.
         self.vad = vad
         self.vad_desc = vad_desc
+        # A wake over the device's own answer or open session, which the wake-word
+        # check is told (WakewordVerifier.verify).
+        self.over_answer = over_answer
         # (name, recognized request, un-accented spoken reply) of the turn before a
         # follow-up window, for the follow-up check; None for a wake's run.
         self.followup = followup
@@ -49,10 +54,12 @@ class Run:
         self.token = 0
         self.arbitrating = False
         self.lost = False
-        # The device was shown `listening` for this run.
+        # The hold: taken — confirmed, it became the pipeline's current run and the
+        # device was shown `listening`; released — its audio goes to STT. The VAD's end
+        # of the utterance seen while the run was held; its finalize waits for the
+        # release.
         self.taken = taken
-        # The VAD's end of the utterance seen while the run was held; its finalize
-        # waits for the hold to lift.
+        self.released = False
         self.endpoint: str | None = None
         # Claimed for its _run (or ended): later audio is dropped.
         self.finalized = False

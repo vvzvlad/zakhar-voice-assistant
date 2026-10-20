@@ -63,9 +63,9 @@ async def test_the_cleaner_wake_wins_though_its_pre_roll_comes_after_its_wake(tm
     second, second_events = make_pipeline(tmp_path, monkeypatch, name="second")
     first.arbiter = second.arbiter = WakeArbiter(online_count=lambda: 2)
 
-    await first.on_start("a", WAKE)
+    first.on_wake("a", WAKE)
     await first.on_audio(preroll(1000, 3162))  # 10 dB
-    await second.on_start("b", WAKE)
+    second.on_wake("b", WAKE)
     await second.on_audio(preroll(100, 1000))  # 20 dB
     assert StageEvent.STT_VAD_START in types_of(second_events)
     # The loser keeps the `listening` it was shown at its wake and stays held until its
@@ -89,7 +89,7 @@ async def test_a_winner_the_verifier_rejects_leaves_the_phrase_to_the_other_devi
     speaker.arbiter = panel.arbiter = WakeArbiter(online_count=lambda: 2)
 
     for p in (panel, speaker):
-        await p.on_start("cid", WAKE)
+        p.on_wake("cid", WAKE)
         await p.on_audio(preroll(100, 1000))
     for p in (speaker, panel):
         await p.on_audio(bytes(16000))  # 500 ms of live audio fills the verify window
@@ -115,7 +115,7 @@ async def test_a_device_that_loses_by_its_own_confirmation_is_not_shown_listenin
     second.arbitration_verdict = lambda token, won: (verdicts.append(won), ruled(token, won))
 
     for p in (first, second):
-        await p.on_start("cid", WAKE)
+        p.on_wake("cid", WAKE)
         await p.on_audio(preroll(100, 1000))
     await first.on_audio(bytes(16000))  # 500 ms of live audio fills the verify window
     await settle(first)
@@ -134,10 +134,10 @@ async def test_a_lone_false_wake_leaves_no_cooldown_for_another_device(tmp_path,
     speaker.rt.wakeword_backend = FakeWakewordVerifier(accepted=False)
     speaker.arbiter = panel.arbiter = WakeArbiter(online_count=lambda: 1)
 
-    await speaker.on_start("cid", WAKE)
+    speaker.on_wake("cid", WAKE)
     await speaker.on_audio(b"\x01\x02" * 30000)  # > the verify window
     await settle(speaker)
-    await panel.on_start("cid", WAKE)
+    panel.on_wake("cid", WAKE)
     assert StageEvent.STT_VAD_START in types_of(panel_events)
 
 
@@ -151,7 +151,7 @@ async def test_a_held_run_shows_listening_at_once_and_is_released_once_it_won(
         tmp_path, monkeypatch, stt_text="включи свет", runs_store=store)
     held_phrase(pipeline)
 
-    await pipeline.on_start("cid", WAKE)
+    pipeline.on_wake("cid", WAKE)
     await pipeline.on_audio(FRAME * 3)  # the phrase goes on
     assert types_of(events) == [StageEvent.RUN_START, StageEvent.STT_START, StageEvent.STT_VAD_START]
 
@@ -171,26 +171,27 @@ def held_phrase(pipeline):
 
 async def test_a_lost_run_streams_on_to_its_end_point_and_is_logged_with_its_transcript(
         tmp_path, monkeypatch):
-    # Lost inside its registration (as in the cooldown): no `listening`, no transcript to the
-    # device, no handler, no ack — the phrase is only recognized for the run log.
+    # Lost inside its registration (as in the cooldown): never taken — no `listening`, no
+    # transcript to the device, no handler, no ack — the phrase is only recognized for the
+    # run log, and at its end the device server ends the wake (end_wake).
     patch_llm(monkeypatch, reply="готово")
     store = FakeRunsStore()
     pipeline, events, arbiter = make_arbitrated(
         tmp_path, monkeypatch, stt_text="включи свет", runs_store=store, ack=True)
     pipeline.arbiter = RecordingArbiter(rule_on_register=False)
+    pipeline.end_wake = lambda cid: events.append(("end_wake", cid))
     ack_calls = []
     pipeline._schedule_ack = lambda: ack_calls.append(1)
     held_phrase(pipeline)
 
-    await pipeline.on_start("cid", WAKE)
+    pipeline.on_wake("cid", WAKE)
     await pipeline.on_audio(FRAME * 3)  # the phrase goes on
     await settle(pipeline)
-    assert types_of(events) == [StageEvent.RUN_START, StageEvent.STT_START]
+    assert events == []
     await pipeline.on_audio(FRAME * 6)  # ...and ends
     await settle(pipeline)
 
-    assert events == [(StageEvent.RUN_START, {}), (StageEvent.STT_START, {}),
-                      (StageEvent.STT_END, {"text": ""}), (StageEvent.RUN_END, {})]
+    assert events == [("end_wake", "cid")]
     assert ack_calls == []
     rec = store.records[-1]
     assert (rec["result"], rec["reason"], rec["stt_text"], rec["llm_text"]) == (
@@ -210,8 +211,8 @@ async def test_a_speakerless_device_the_cooldown_dropped_is_shown_the_winners_an
     for p in (speaker, panel):
         held_phrase(p)
 
-    await speaker.on_start("a", WAKE)  # the lone online device wins at once
-    await panel.on_start("b", WAKE)  # in the cooldown: dropped
+    speaker.on_wake("a", WAKE)  # the lone online device wins at once
+    panel.on_wake("b", WAKE)  # in the cooldown: dropped
     for p in (panel, speaker):
         await p.on_audio(FRAME * 9)
         await settle(p)
@@ -231,7 +232,7 @@ async def test_a_duplicate_whose_stt_fails_is_still_logged(tmp_path, monkeypatch
     pipeline, _, arbiter = make_arbitrated(tmp_path, monkeypatch, stt_backend=stt, runs_store=store)
     held_phrase(pipeline)
 
-    await pipeline.on_start("cid", WAKE)
+    pipeline.on_wake("cid", WAKE)
     await pipeline.on_audio(FRAME * 9)
     pipeline.arbitration_verdict(arbiter.tokens[-1], False)
     await settle(pipeline)
@@ -256,7 +257,7 @@ async def test_a_duplicate_without_speech_is_not_transcribed(tmp_path, monkeypat
     set_small_vad_thresholds(pipeline)
     install_fake_vad(pipeline, [False] * 400)
 
-    await pipeline.on_start("cid", WAKE)
+    pipeline.on_wake("cid", WAKE)
     pipeline.arbitration_verdict(arbiter.tokens[-1], False)
     for _ in range(300):
         await pipeline.on_audio(FRAME)
@@ -272,7 +273,7 @@ async def test_a_won_run_with_a_verifier_shows_listening_once_the_verifier_confi
     pipeline, events, arbiter = make_arbitrated(
         tmp_path, monkeypatch, verifier=FakeWakewordVerifier(accepted=True))
 
-    await pipeline.on_start("cid", WAKE)
+    pipeline.on_wake("cid", WAKE)
     if verifier_first:
         await pipeline.on_audio(b"\x01\x02" * 30000)  # > the verify window
         await settle(pipeline)
@@ -296,7 +297,7 @@ async def test_an_utterance_that_ended_during_the_hold_is_finalized_on_release(
         tmp_path, monkeypatch, stt_text="свет", runs_store=store)
     held_phrase(pipeline)
 
-    await pipeline.on_start("cid", WAKE)
+    pipeline.on_wake("cid", WAKE)
     await pipeline.on_audio(FRAME * 9)  # speech then silence: an end-point
     assert StageEvent.STT_VAD_END not in types_of(events) and store.records == []
 

@@ -3,8 +3,9 @@
 One aiohttp app on core.audio.host/port serves GET /device (the device protocol) and
 GET /health. DeviceManager keeps one Device per name; a Device keeps its Pipeline and its
 running capture across reconnects and binds the pipeline's transport hooks (send_event,
-play, has_speaker, has_follow_up) to its live Connection. This module alone maps
-StageEvents onto wire messages and converts outgoing audio to what the device plays.
+play, has_speaker, has_follow_up, take_session, end_wake) to its live Connection. This
+module alone maps StageEvents onto wire messages and converts outgoing audio to what the
+device plays.
 """
 
 import asyncio
@@ -26,7 +27,7 @@ from loguru import logger
 
 from src import captures, config_store, context, device_logs
 from src.chime import build_ack_clip
-from src.pipeline import SAMPLE_RATE, Pipeline
+from src.pipeline import Pipeline
 from src.pipeline_events import StageEvent
 from src.run_events import record_run
 from src.tts import pcm_rate
@@ -293,9 +294,10 @@ class Connection:
         self.wake_peak = None
         # The session the server stamps its messages with, and whether its run is still
         # going (from wake until the terminal state): plays in that window belong to
-        # the session. While a wake is held (Device._pending_wake) the device is already
-        # on the held wake's number and drops the states and text stamped with this one;
-        # play_start/play_end pass whatever their session.
+        # the session. While a wake's run is held before the server takes it (the
+        # pipeline's proposal) the device is already on the held wake's number and drops
+        # the states and text stamped with this one; play_start/play_end pass whatever
+        # their session.
         self.session = None
         self.session_open = False
         # The last `state`, `transcript` and `reply` sent in the current session, by type.
@@ -496,22 +498,6 @@ def _channels(payload: bytes, channels: int) -> tuple[bytes, bytes | None]:
     return payload, None
 
 
-class _PendingWake:
-    """A wake over a running answer, held until the wake-word verifier rules on it: the
-    device's session number and word, and its mic audio meanwhile."""
-
-    def __init__(self, session, word):
-        self.session = session
-        self.word = word
-        self.frames: list[tuple[bytes, bytes | None]] = []  # (channel 0, channel 1), in order
-        self.pcm = bytearray()   # the channel the pipeline uses (core.vad.mic_channel)
-        self.pcm2 = bytearray()  # the other channel, for the stored stereo audio
-        self.task: asyncio.Task | None = None
-        # Its run is registered with the arbiter (on_start returned); its audio is still
-        # held until replayed.
-        self.confirmed = False
-
-
 class Device:
     """One device name: its Pipeline and its running capture (both kept across reconnects)
     and its live Connection."""
@@ -523,12 +509,12 @@ class Device:
         self.pipeline = Pipeline(name, runtime)
         self.pipeline.send_event = self._send_event
         self.pipeline.play = self.play
+        self.pipeline.take_session = self._take_session
+        self.pipeline.end_wake = self._end_wake
         self.capture: captures.Capture | None = None
         self._capture_watchdog: asyncio.TimerHandle | None = None
         # The device log could not be written last time: warned once until a write succeeds.
         self._log_write_failed = False
-        # A wake of the live connection waiting for the verifier (on_text "wake").
-        self._pending_wake: _PendingWake | None = None
 
     @property
     def cfg(self):
@@ -541,7 +527,6 @@ class Device:
     def attach(self, conn: Connection) -> Connection | None:
         """Make `conn` the live connection; return the one it replaces, if any."""
         old, self.conn = self.conn, conn
-        self._drop_pending_wake()
         self.pipeline.has_speaker = conn.speaker
         self.pipeline.has_follow_up = conn.speaker and conn.follow_up
         return old
@@ -550,25 +535,8 @@ class Device:
         conn.close()
         if self.conn is conn:
             self.conn = None
-            self._drop_pending_wake()
             logger.info(f"{self.name}: disconnected")
             await self.pipeline.on_disconnect()
-
-    @property
-    def wake_held(self) -> bool:
-        """Whether a wake is held (on_text "wake") and its run is not yet registered with
-        the arbiter; the arbiter rules on no group meanwhile. Once a confirmed wake's run
-        is registered, _verify_wake re-checks the group."""
-        return self._pending_wake is not None and not self._pending_wake.confirmed
-
-    def _drop_pending_wake(self) -> None:
-        """Forget the pending wake and cancel its verify: its connection is gone."""
-        pending, self._pending_wake = self._pending_wake, None
-        if pending is None:
-            return
-        if pending.task is not None:
-            pending.task.cancel()
-        self.pipeline.arbiter.recheck()
 
     def _send_event(self, event, data) -> None:
         """The pipeline's send_event hook: map a StageEvent onto wire messages."""
@@ -599,23 +567,43 @@ class Device:
             raise RuntimeError(f"{self.name} cannot play: offline or no speaker")
         return await conn.play(mime, audio)
 
+    def _take_session(self, session) -> None:
+        """The pipeline's take_session hook: the run of the `wake` that opened `session`
+        is taken — the session starts, `play_stop` before anything else of it."""
+        if self.conn is not None:
+            self.conn.start_session(session)
+
+    def _end_wake(self, session) -> None:
+        """The pipeline's end_wake hook: the run of the `wake` that opened `session` ends
+        without being taken (its check rejected it, or it lost the arbitration). The
+        running answer goes on under the new session number, so the device hears the
+        rest of it: what the device dropped while it was on the new number, now stamped
+        with it — the run's text for a screen, then its state, which the device follows
+        as it would have (the mic stops, a follow-up `listening` keeps it streaming);
+        `state idle` when no run is going. The run's later messages carry the new
+        number."""
+        conn = self.conn
+        if conn is None:
+            return
+        conn.session = session
+        if conn.session_open:
+            for kind in ("transcript", "reply"):
+                if kind in conn.last_sent:
+                    conn.send_session(conn.last_sent[kind])
+            conn.send_session(conn.last_sent["state"])
+        else:
+            conn.send_session({"type": "state", "value": "idle"})
+
     async def on_text(self, conn: Connection, msg: dict) -> None:
         if conn is not self.conn:
             return  # a replaced connection still draining
         kind = msg.get("type")
         if kind == "wake":
-            session, word = msg["session"], msg.get("word")
-            if self.pipeline.gates_wake(word) and (conn.session_open or conn.playing):
-                # The wake may be the speaker's own voice: the running answer goes on
-                # until the verifier rules (_verify_wake); its mic audio is held meanwhile.
-                self._pending_wake = _PendingWake(session, word)
-                logger.info(f"{self.name}: wake (session {session}) over a running answer "
-                            f"waits for the wake-word check")
-                return
-            # Synchronously, before any await: the new session, the dropped plays and
-            # (at the top of on_start) the cancelled older run.
-            conn.start_session(session)
-            await self.pipeline.on_start(str(session), word)
+            # Over a running answer or an open session the wake may be the speaker's
+            # own voice, which the check is told; the answer goes on until the wake is
+            # taken (take_session).
+            self.pipeline.on_wake(msg["session"], msg.get("word"),
+                                  over_answer=conn.session_open or conn.playing)
         elif kind == "stop":
             # Synchronously, as a wake: the dropped plays and the cancelled run. A cancelled
             # run emits no RUN_END, so the session's terminal `state idle` goes out here.
@@ -673,63 +661,7 @@ class Device:
                 use_ch1 = self.rt.core.vad.mic_channel == 1 and ch1
                 self.capture.write(int.from_bytes(data[1:5], "little"), ch1 if use_ch1 else ch0)
         elif data[0] == MIC:
-            ch0, ch1 = _channels(data[1:], conn.mic_channels)
-            pending = self._pending_wake
-            if pending is None:
-                await self.pipeline.on_audio(ch0, ch1)
-                return
-            pending.frames.append((ch0, ch1))
-            # The channel the pipeline would use, picked per frame as on_audio does.
-            use_ch1 = self.rt.core.vad.mic_channel == 1 and ch1
-            pcm, other = (ch1, ch0) if use_ch1 else (ch0, ch1)
-            pending.pcm += pcm
-            if other:
-                pending.pcm2 += other
-            window = self.pipeline.wakeword_backend.window_ms * SAMPLE_RATE * 2 // 1000
-            if pending.task is None and len(pending.pcm) >= window:
-                # A task: the read loop keeps receiving while the verifier runs.
-                pending.task = asyncio.create_task(
-                    self._verify_wake(conn, pending, bytes(pending.pcm[:window])))
-
-    async def _verify_wake(self, conn: Connection, pending: _PendingWake, pcm: bytes) -> None:
-        """The verifier's verdict on a pending wake. Confirmed: the wake is taken as any
-        wake (play_stop, the new session's run) and the audio held meanwhile goes to the
-        run. Rejected: the running answer goes on under the new session number, so the
-        device hears the rest of it, and the wake is recorded as a rejected run."""
-        accepted, score, t_ms, error = await self.pipeline.verify_wake(pcm, over_answer=True)
-        if self.conn is not conn or self._pending_wake is not pending:
-            return
-        if accepted:
-            conn.start_session(pending.session)
-            await self.pipeline.on_start(str(pending.session), pending.word, verified=(score, t_ms))
-            if self.conn is not conn or self._pending_wake is not pending:
-                return
-            # Its run is in the arbitration now: the group may be ruled, with it.
-            pending.confirmed = True
-            self.pipeline.arbiter.recheck()
-            # The audio held so far, frames that came during on_start included; on_audio
-            # never suspends, so no frame arrives between this drain and the switch.
-            for ch0, ch1 in pending.frames:
-                await self.pipeline.on_audio(ch0, ch1)
-            self._pending_wake = None
-            return
-        self._pending_wake = None
-        conn.session = pending.session
-        # What the device dropped while it was on the held wake's number, now stamped
-        # with it: the run's text for a screen, then its state, which the device follows
-        # as it would have (the mic stops, a follow-up `listening` keeps it streaming).
-        # The run's later messages carry the new number.
-        if conn.session_open:
-            for kind in ("transcript", "reply"):
-                if kind in conn.last_sent:
-                    conn.send_session(conn.last_sent[kind])
-            conn.send_session(conn.last_sent["state"])
-        else:
-            conn.send_session({"type": "state", "value": "idle"})
-        self.pipeline.arbiter.recheck()
-        await self.pipeline.record_rejected_wake(
-            "wakeword_error" if error else "wakeword_reject",
-            bytes(pending.pcm), bytes(pending.pcm2), score, t_ms)
+            await self.pipeline.on_audio(*_channels(data[1:], conn.mic_channels))
 
     def update_boost(self) -> None:
         """Send `volume_boost` to a connected device whose boost (_boost of its config and its
@@ -954,7 +886,6 @@ class DeviceManager:
         self._runner: web.AppRunner | None = None
         # One phrase heard by several devices keeps one session (docs/device-protocol.md).
         self.arbiter = WakeArbiter(online_count=lambda: sum(1 for d in self.clients if d.online),
-                                   held_wakes=lambda: any(d.wake_held for d in self.clients if d.online),
                                    send_reply=self._send_reply)
 
     def _device(self, name: str) -> Device:

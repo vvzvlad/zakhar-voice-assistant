@@ -1,11 +1,12 @@
 """Cross-device wake arbitration: one phrase heard by several devices keeps one session.
 
 docs/device-protocol.md, "Voice session": when several online devices wake on one
-phrase, the server keeps exactly one session. Each wake run registers here and is held
-by its pipeline until the verdict; its device is shown `listening` as soon as its wake
-word is confirmed, not at the verdict, unless it has lost by then. A lost run stays
-held — its device streams the rest of the phrase on — until its VAD end-points; it then ends with `state idle` and is recorded as a duplicate, its
-phrase recognized for the run log only (Pipeline.arbitration_verdict). A device
+phrase, the server keeps exactly one session. Each wake run registers here at its wake
+and is held by its pipeline until the verdict; its device is shown `listening` as soon as
+its wake word is confirmed, not at the verdict, unless it has lost by then. A lost run
+stays held — its device streams the rest of the phrase on — until its VAD end-points; it
+then ends (with `state idle` once shown `listening`) and is recorded as a duplicate, its
+phrase recognized for the run log only (Pipeline._end_held). A device
 without a speaker that lost the phrase (in the group or in its cooldown) is shown the
 winner's answer as an announcement, a `reply` without `session` (run_event).
 
@@ -29,20 +30,12 @@ cannot outrank it, so it loses as it is. Its verifier still rules on it later: a
 reject ends its run there and then (logged as wakeword_reject, untranscribed), not
 at its end-point as a duplicate; either way it is shown the winner's answer.
 
-A device answering when its wake word fires holds that wake until its verifier rules
-(the device server's pending wake) and registers only once the verifier confirms it.
-While any online device holds a wake, the open group is not ruled: the held wake may
-be the same phrase, and ruling without it would leave it, once confirmed, to the
-cooldown after its answer was already stopped.
-
 Everything here is synchronous on the event loop. The group is re-checked, and a
 verdict delivered by calling `pipeline.arbitration_verdict(token, won)`, from
-inside `register()` (a pipeline's on_start), `preroll_in()` (a pipeline's on_audio,
+inside `register()` (a pipeline's on_wake), `preroll_in()` (a pipeline's on_audio,
 or the candidate's own window timer), `run_changed()` (a pipeline whose verifier
-ruled, or whose run stopped waiting), `recheck()` (the device server, once a held
-wake is rejected, dropped with its connection, or confirmed and its run registered)
-or the group's window timer — so a verdict for one pipeline
-may arrive inside a call made by another.
+ruled, or whose run stopped waiting) or the group's window timer — so a verdict for
+one pipeline may arrive inside a call made by another.
 """
 
 import asyncio
@@ -94,13 +87,8 @@ class WakeArbiter:
     """Decides which of the devices that woke on one phrase keeps its session."""
 
     def __init__(self, online_count: Callable[[], int],
-                 held_wakes: Callable[[], bool] = lambda: False,
                  send_reply: Callable | None = None):
         self._online_count = online_count
-        # Whether an online device holds a wake over its running answer until its
-        # wake-word check rules (the device server's pending wake); the open group is
-        # not ruled meanwhile.
-        self._held_wakes = held_wakes
         # send_reply(pipeline, text) shows text on that pipeline's device as an
         # announcement; the winner's answer goes to the speakerless devices that lost
         # its phrase (run_event).
@@ -167,13 +155,6 @@ class WakeArbiter:
         if candidate is not None and candidate.token == token:
             self._maybe_close()
 
-    def recheck(self) -> None:
-        """A held wake was rejected, dropped with its connection, or confirmed and its run
-        registered: re-check the open group it kept from being ruled. Without an open group there is nothing to rule
-        (and ruling an empty one would end the latest group's cooldown)."""
-        if self._open:
-            self._maybe_close()
-
     def run_event(self, pipeline, event, data) -> None:
         """A stage event of `pipeline`. The latest winner's first answer (TTS_START) is
         sent to the speakerless devices that lost its phrase, once; that answer, or its
@@ -195,11 +176,11 @@ class WakeArbiter:
 
     def _maybe_close(self) -> None:
         """Rule once the verdict is settled and either every online device has woken
-        or the window has run out, and no device holds a wake. A lone candidate needs
-        no SNR, so it does not wait for its pre-roll; every candidate waits for its
-        verifier — except a speakerless one once a ready candidate has a speaker: it
-        cannot outrank that one, so it loses without being waited for (a panel whose
-        audio lags would otherwise hold the speaker's phrase for seconds)."""
+        or the window has run out. A lone candidate needs no SNR, so it does not wait
+        for its pre-roll; every candidate waits for its verifier — except a speakerless
+        one once a ready candidate has a speaker: it cannot outrank that one, so it
+        loses without being waited for (a panel whose audio lags would otherwise hold
+        the speaker's phrase for seconds)."""
         n = len(self._candidates)
         waiting = [(p, c) for p, c in self._candidates.items()
                    if p.awaits_arbitration(c.token)]
@@ -208,8 +189,7 @@ class WakeArbiter:
         can_rule = not unready or (
             not any(p.has_speaker for p in unready)
             and any(p.has_speaker and r for (p, _), r in zip(waiting, ready)))
-        if (can_rule and (n >= self._online_count() or self._window_fired)
-                and not self._held_wakes()):
+        if can_rule and (n >= self._online_count() or self._window_fired):
             self._close()
 
     def _close(self) -> None:
