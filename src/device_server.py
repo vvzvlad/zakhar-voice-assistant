@@ -30,6 +30,7 @@ from src.chime import build_ack_clip
 from src.pipeline import Pipeline
 from src.pipeline_events import StageEvent
 from src.run_events import record_run
+from src.runs_store import new_record
 from src.tts import pcm_rate
 from src.wake_arbiter import WakeArbiter
 
@@ -781,28 +782,17 @@ class Device:
         (if any), `text` is the reply, and a failure carries the error stage ("device"
         when offline, "TTS" when the speech failed). An announcement that reached the
         device also joins its conversation context as a note that it was spoken, so
-        a follow-up question can refer to it. Raises on failure, after the run is
-        recorded."""
+        a follow-up question can refer to it. The text is spoken as it is, without the
+        stress stage. Raises on failure, after the run is recorded."""
         t0 = time.perf_counter()
-        record = {"ts": time.time(), "device": self.name, "reason": reason, "result": "ok",
-                  "stt_text": request, "llm_text": text,
-                  "error_stage": None, "error_text": None, "attempts": [],
-                  "play_dry": None, "play_gap_ms": None}
+        record = new_record(self.name, reason, result="ok", stt_text=request, llm_text=text)
         try:
             conn = self.conn
             if conn is None:
                 record.update(result="error", error_stage="device", error_text="offline")
                 raise RuntimeError(f"{self.name} is offline")
             conn.send({"type": "reply", "text": text})
-            try:
-                played = await self.pipeline.speak(text, record["attempts"])
-            except Exception as e:
-                record.update(result="error", error_stage="TTS", error_text=str(e))
-                raise
-            if played is not None:
-                record.update(play_dry=played["dry"], play_gap_ms=played["gap_ms"])
-            # Time to the start of the speech, as a text run counts it.
-            record["t_tts"] = sum(a["t"] for a in record["attempts"] if a["kind"] == "tts")
+            await self.pipeline.speak_reply(text, record, accent=False)
             ctx = self.rt.core.context
             context.append_spoken(self.pipeline._context_path, text,
                                   max_turns=ctx.max_turns, ttl_seconds=ctx.ttl_seconds)
