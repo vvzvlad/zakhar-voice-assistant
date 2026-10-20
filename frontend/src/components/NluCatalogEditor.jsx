@@ -5,20 +5,23 @@
 // Instead of asking the operator to hand-edit the raw `aliases`/`actions`
 // textareas, this editor discovers every enum slot live from the tool catalog and
 // offers one chip-input per unique enum VALUE: devices/scenes get spoken NAMES
-// (→ `aliases`), state/command slots get VERBS (→ `actions`). Numeric slots
-// (brightness/temperature) have no dictionary and render as read-only info cards.
+// (→ `aliases`), state/command slots get VERBS (→ `actions`). Slots without an
+// enum (a number such as brightness, free text such as a search query) have no
+// dictionary and render as read-only rows.
 //
 // The source of truth stays `draft.aliases` / `draft.actions`: everything visible
 // is DERIVED from those two fields each render, and every edit re-serializes the
 // whole field through onChange — so this editor and the SchemaForm textareas stay
 // in sync. Only transient view state (slot-type overrides, per-group collapse,
-// search, filter) lives in local React state. Which sources are hidden in the
-// Sources bar is a view preference of this browser, kept in localStorage, so it
+// search, filter) lives in local React state. Which sources the toolbar's source
+// filter hides is a view preference of this browser, kept in localStorage, so it
 // survives a reload without touching the config.
 //
-// Renders as a section inside the Commands page (no page chrome of its own).
+// Renders as a section inside the Commands page (no page chrome of its own), in
+// the panel's ordinary cards.
 import React, { useState, useRef, useEffect, useMemo } from "react";
 import { Ic } from "./icons.jsx";
+import { Card, Field } from "./primitives.jsx";
 import { getTools } from "../api.js";
 import {
   parseActions,
@@ -33,7 +36,7 @@ import {
   joinWords,
 } from "../nluAliases.js";
 
-// The ids of the sources hidden in the Sources bar. localStorage can throw in
+// The ids of the sources the source filter hides. localStorage can throw in
 // privacy modes, so every access is guarded — the selection then lives in memory,
 // starting with nothing hidden.
 const HIDDEN_SOURCES_KEY = "zakhar.commands.hidden_sources";
@@ -254,111 +257,35 @@ function GroupBlock({ group, scene, vis, open, onToggle, wordsFor, setWords, onR
 }
 
 // ── zone (devices/scenes OR commands) ──────────────────────
-function Zone({ kind, title, sub, icon, groups, total, children }) {
+// A card; its subtitle carries filled / all values (`total` = {filled, all}).
+function Zone({ title, sub, groups, total, children }) {
   if (!groups.length) return null;
-  return (
-    <div className={"e-zone " + kind}>
-      <div className="e-zone-h">
-        <div className="e-zicon">
-          <Ic n={icon} w={18} />
-        </div>
-        <div className="tt">
-          <b>{title}</b>
-          <span>{sub}</span>
-        </div>
-        <span className="e-zcount">
-          {/* filled / total values, computed by the caller via `total` = {filled,all} */}
-          {total.filled}
-          <s>/{total.all} values</s>
-        </span>
-      </div>
-      <div className="e-zbody">{children}</div>
-    </div>
-  );
+  return <Card title={title} sub={`${sub} · ${total.filled}/${total.all} filled`}>{children}</Card>;
 }
 
-// ── numeric info block ─────────────────────────────────────
-// brightness/temperature: no dictionary, set by a number in the spoken command.
-// A `string`-typed numeric slot is off-capable ("number / off").
+// ── slots without a dictionary ─────────────────────────────
+// A required slot with no enum. A number (brightness/temperature) is said in the
+// command itself. Free text (a search query, a URL) gets nothing from the offline
+// engine but a spoken number or, on a turn-off verb, the catalog's off token
+// (src/commands.py index_tools, fill_numbers).
 function NumBlock({ slots, showServer }) {
   if (!slots.length) return null;
   return (
-    <div className="e-zbody" style={{ marginTop: 14 }}>
+    <Card title="Slots without a dictionary">
       {slots.map((s) => {
-        const offCapable = s.type === "string";
+        const text = s.type === "string";
+        const hint = text
+          ? "Free text. The offline engine can put here only a number said in the command, or the off token for a turn-off command."
+          : "Set by a number in the command itself — e.g. «поставь ночник на 30». No dictionary needed.";
         return (
-          <div className="e-num" key={`${s.server}.${s.tool}.${s.slot}`}>
-            <div className="ic">
-              <Ic n="hash" w={15} />
-            </div>
-            <div className="tx">
-              <b>
-                {s.tool}
-                <s> · {s.slot}</s>
-              </b>
-              <span>
-                Set by a number in the command itself{offCapable ? " (or “off”)" : ""} — e.g. «поставь ночник на 30». No
-                dictionary needed.{showServer && s.server ? "  ·  " + s.server : ""}
-              </span>
-            </div>
-            <span className="tag">{offCapable ? "number / off" : "number"}</span>
-          </div>
+          <Field row key={`${s.server}.${s.tool}.${s.slot}`}
+            label={<span className="mono">{s.tool}<span style={{ color: "var(--mut2)" }}> · {s.slot}</span></span>}
+            hint={hint + (showServer && s.server ? "  ·  " + s.server : "")}>
+            <span className="z-fh" style={{ marginTop: 0 }}>{text ? "text" : "number"}</span>
+          </Field>
         );
       })}
-    </div>
-  );
-}
-
-// ── sources bar ────────────────────────────────────────────
-// Only sources that own ≥1 enum slot. Offline sources are disabled/excluded.
-function Sources({ servers, counts, active, online, onToggle }) {
-  return (
-    <div className="e-src">
-      <div className="e-src-lb">
-        <Ic n="mcp" w={14} />
-        Sources
-      </div>
-      <div className="e-srvs">
-        {servers.map((id) => {
-          const offline = !online.has(id);
-          const on = active.has(id) && !offline;
-          return (
-            <div
-              key={id}
-              className={"e-srv" + (offline ? " disabled" : on ? " on" : " off")}
-              onClick={() => !offline && onToggle(id)}
-              title={
-                offline
-                  ? "Server offline — its tools aren't advertised"
-                  : on
-                  ? "Active — entities shown"
-                  : "Hidden from the list"
-              }
-            >
-              <span className="e-cb">
-                {on && (
-                  <svg
-                    width="11"
-                    height="11"
-                    viewBox="0 0 16 16"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2.4"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  >
-                    <path d="M3 8l3.5 3.5L13 4" />
-                  </svg>
-                )}
-              </span>
-              <span className="nm">{id}</span>
-              <span className={"dot " + (offline ? "off" : "ok")} />
-              {offline ? <span className="ofl">offline</span> : <span className="ct">{counts[id] || 0}</span>}
-            </div>
-          );
-        })}
-      </div>
-    </div>
+    </Card>
   );
 }
 
@@ -423,7 +350,7 @@ export default function NluCatalogEditor({ draft, onChange }) {
   const [collapsed, setCollapsed] = useState({});
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState("all"); // "all" | "empty"
-  const [hidden, setHidden] = useState(loadHiddenSources); // source ids hidden in the Sources bar
+  const [hidden, setHidden] = useState(loadHiddenSources); // source ids hidden by the toolbar's source chips
 
   useEffect(() => {
     let alive = true;
@@ -453,7 +380,7 @@ export default function NluCatalogEditor({ draft, onChange }) {
   const { map: aliasMap, extraLines: aliasExtras } = parseAliasText(draft.aliases || "");
 
   // Online source ids: the backend reports `online: false` only for a source that
-  // advertised zero tools (so it owns no slots and never reaches the bar anyway);
+  // advertised zero tools (so it owns no slots and never reaches the chips anyway);
   // we still honour the flag for the offline styling. Absent flag defaults online.
   const onlineIds = useMemo(
     () => new Set((sources || []).filter((s) => s.online !== false).map((s) => s.id)),
@@ -469,7 +396,7 @@ export default function NluCatalogEditor({ draft, onChange }) {
   }, [allEnumSlots]);
 
   // The active set is DERIVED — every online slot-owning source MINUS the ones the
-  // operator HID in the Sources bar — so a newly advertised source is visible by
+  // operator HID with the source chips — so a newly advertised source is visible by
   // default and only explicit opt-outs persist across reloads.
   const hiddenSet = useMemo(() => new Set(hidden), [hidden]);
   const effectiveActive = useMemo(
@@ -632,12 +559,12 @@ export default function NluCatalogEditor({ draft, onChange }) {
     entityValues.filter((v) => entityWords(v).length === 0).length +
     actionValues.filter((v) => actionWords(v).length === 0).length;
 
-  // Per-source enum value counts for the Sources bar.
+  // Per-source enum value counts for the source filter.
   const counts = {};
   for (const s of allEnumSlots) counts[s.server] = (counts[s.server] || 0) + s.values.length;
 
-  // Whether the Sources bar shows at all (hide when only one source owns slots).
-  const showSourcesBar = slotServers.length > 1;
+  // Whether the source filter shows at all (hide when only one source owns slots).
+  const showSourceFilter = slotServers.length > 1;
   const showServerTag = effectiveActive.size > 1;
 
   // ── states ──
@@ -661,18 +588,8 @@ export default function NluCatalogEditor({ draft, onChange }) {
   const nothing = renderedEntities.length === 0 && renderedActions.length === 0 && !numVisible;
 
   return (
-    <div className="z-card" style={{ padding: 16, background: "transparent", border: "none", boxShadow: "none" }}>
-      {showSourcesBar && (
-        <Sources
-          servers={slotServers}
-          counts={counts}
-          active={effectiveActive}
-          online={onlineIds}
-          onToggle={toggleSource}
-        />
-      )}
-
-      {/* sticky toolbar: progress + search + filters */}
+    <div>
+      {/* sticky toolbar: progress + search + filters (All/Empty, then one chip per source) */}
       <div className="e-bar">
         <div className="e-bar-in">
           <div className="e-prog">
@@ -711,42 +628,58 @@ export default function NluCatalogEditor({ draft, onChange }) {
                 {ct != null && <span className="ct">{ct}</span>}
               </div>
             ))}
+            {/* Source filter: which MCP servers' slots are shown; a view setting, not config.
+                Only sources that own ≥1 enum slot; an offline one cannot be toggled. */}
+            {showSourceFilter && <div className="e-bar-sep" />}
+            {showSourceFilter && slotServers.map((id) => {
+              const offline = !onlineIds.has(id);
+              const on = effectiveActive.has(id);
+              return (
+                <div
+                  key={id}
+                  className={"e-fchip" + (offline ? " disabled" : on ? " on" : "")}
+                  onClick={() => !offline && toggleSource(id)}
+                  title={offline ? "Server offline — its tools aren't advertised" : on ? `Showing ${id}'s slots` : `${id}'s slots hidden`}
+                >
+                  {id}
+                  <span className="ct">{offline ? "offline" : counts[id] || 0}</span>
+                </div>
+              );
+            })}
           </div>
         </div>
       </div>
 
-      <Zone
-        kind="dev"
-        icon="lex"
-        title="Devices & scenes"
-        sub="what you call these things out loud"
-        groups={entityGroups}
-        total={{ filled: filledEntity, all: entityValues.length }}
-      >
-        {renderedEntities}
-      </Zone>
-      <Zone
-        kind="cmd"
-        icon="bolt"
-        title="Commands"
-        sub="the verbs you say — identical actions shown once"
-        groups={actionGroups}
-        total={{ filled: filledAction, all: actionValues.length }}
-      >
-        {renderedActions}
-      </Zone>
-      {filter === "all" && <NumBlock slots={numberSlots} showServer={showServerTag} />}
+      <div className="z-grid">
+        <Zone
+          title="Devices & scenes"
+          sub="what you call these things out loud"
+          groups={entityGroups}
+          total={{ filled: filledEntity, all: entityValues.length }}
+        >
+          {renderedEntities}
+        </Zone>
+        <Zone
+          title="Commands"
+          sub="the verbs you say — identical actions shown once"
+          groups={actionGroups}
+          total={{ filled: filledAction, all: actionValues.length }}
+        >
+          {renderedActions}
+        </Zone>
+        {filter === "all" && <NumBlock slots={numberSlots} showServer={showServerTag} />}
 
-      {nothing && (
-        <div className="z-card" style={{ marginTop: 20 }}>
-          <div className="z-empty">
-            <b>Nothing to show</b>
-            {effectiveActive.size === 0
-              ? "No sources selected — enable an MCP server above."
-              : "No slots match the current filter."}
+        {nothing && (
+          <div className="z-card">
+            <div className="z-empty">
+              <b>Nothing to show</b>
+              {effectiveActive.size === 0
+                ? "No sources selected — enable an MCP server above."
+                : "No slots match the current filter."}
+            </div>
           </div>
-        </div>
-      )}
+        )}
+      </div>
     </div>
   );
 }

@@ -174,9 +174,9 @@ class VoskWakewordConfig(BaseModel):
     enabled: bool = Field(
         True,
         title="Wake-word verify",
-        description="Verify the on-device wake trigger with a grammar-restricted "
-        "Vosk decode before running the pipeline. A reject suppresses STT/LLM/TTS. "
-        "Loads a model on first enable.",
+        description="Verify the on-device wake trigger with offline Vosk recognition "
+        "that listens only for the wake words, before running the pipeline. A reject "
+        "suppresses STT/LLM/TTS. Loads a model on first enable.",
     )
     model_path: str = Field(
         "models/vosk-model-small-ru-0.22",

@@ -3,7 +3,8 @@ import { NAV } from "../nav.js";
 import { Ic } from "./icons.jsx";
 import { useAppData } from "../appData.jsx";
 
-export function Sidebar({ active, onNav }) {
+// `open`: shown over the page on a narrow screen (styles.css); ignored on a wide one.
+export function Sidebar({ active, open, onNav }) {
   const { config, system } = useAppData();
   const mcpCount = (config?.core?.mcp_servers || []).length;
   const devCfg = config?.core?.devices || [];
@@ -25,7 +26,7 @@ export function Sidebar({ active, onNav }) {
     </div>
   );
 
-  return <div className="z-side">
+  return <div className={"z-side" + (open ? " open" : "")}>
     <div className="z-brand">
       <div className="logo">Z</div>
       <div><b>Zakhar</b></div>

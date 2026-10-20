@@ -38,3 +38,20 @@ export const navTab = (id, tab) => {
 };
 export const pendingTab = (id) => _tabs[id];
 export const clearTab = (id) => { delete _tabs[id]; };
+
+// Card requested by a cross-page "configure" link: navCard() records the DOM id
+// of one card on page `id` (and, like navTab, an optional provider tab) and
+// navigates; App scrolls that card into view once the page has rendered and
+// drops the request with takeCard().
+let _card = null;
+export const navCard = (id, card, tab) => {
+  if (!confirmLeave()) return;
+  if (tab !== undefined) _tabs[id] = tab;
+  _card = card;
+  _navigate(id);
+};
+export const takeCard = () => {
+  const card = _card;
+  _card = null;
+  return card;
+};

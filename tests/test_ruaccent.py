@@ -129,3 +129,13 @@ def test_provider_describe():
 
 def test_provider_is_registered():
     assert "ruaccent" in REGISTRY["stress"]
+
+
+def test_schema_hides_the_dictionary_switch_in_low_memory_mode():
+    # RUAccent.load() ignores use_dictionary when tiny_mode is on, so the panel must
+    # hide that switch then (SchemaForm `hiddenWhen`), and the switch it depends on
+    # comes first so hiding it does not move that switch.
+    props = RuAccentConfig.model_json_schema()["properties"]
+    assert props["use_dictionary"]["hiddenWhen"] == "tiny_mode"
+    names = list(props)
+    assert names.index("tiny_mode") < names.index("use_dictionary")

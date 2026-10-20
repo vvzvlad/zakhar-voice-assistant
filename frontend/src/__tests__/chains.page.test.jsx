@@ -2,9 +2,9 @@
 // Integration tests (jsdom) for the Logic page (chains). Every edit (add / reorder /
 // delete / field change) changes one draft, and Save sends ONE patch carrying
 // the whole core.chains array (PATCH replaces lists). Also pins which per-chain
-// controls appear (narrow checkbox, parallel toggle, the last-chain warning),
-// the server error banner, the "configure" links, and that a switched-off chain fades
-// none of its controls.
+// controls appear (narrow switch, parallel toggle, the last-chain warning), the
+// providers named by their catalog labels in the dropdowns, the server error
+// banner, the "configure" links, and that a switched-off chain fades none of its controls.
 import React from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, cleanup, waitFor, within } from "@testing-library/react";
@@ -17,8 +17,8 @@ vi.mock("../appData.jsx", () => ({ useAppData: vi.fn() }));
 
 const catalog = {
   categories: [
-    { id: "stt", providers: [{ id: "vosk", supports_vocabulary: true }, { id: "groq" }] },
-    { id: "llm", providers: [{ id: "simple-nlu", has_vocabulary: true }, { id: "openrouter" }] },
+    { id: "stt", providers: [{ id: "vosk", label: "Vosk (offline)", supports_vocabulary: true }, { id: "groq", label: "Groq Whisper" }] },
+    { id: "llm", providers: [{ id: "simple-nlu", label: "Commands (no LLM)", has_vocabulary: true }, { id: "openrouter", label: "OpenRouter" }] },
   ],
   core: { schema: {}, values: {} },
 };
@@ -43,6 +43,8 @@ function pick(card, current, next) {
   fireEvent.click(within(card).getByRole("button", { name: current }));
   fireEvent.click(screen.getByRole("option", { name: next }));
 }
+const NARROW = "Narrow STT to handler vocabulary";
+const narrowSwitch = (card) => within(card).queryByText(NARROW)?.closest(".z-f").querySelector("[role=switch]") ?? null;
 
 describe("Chains page — patch shape", () => {
   it("Add chain appends a new chain and Save patches the whole list", async () => {
@@ -72,7 +74,7 @@ describe("Chains page — patch shape", () => {
   it("edits name, providers and toggles", async () => {
     render(<Chains />);
     fireEvent.change(within(cards()[1]).getByLabelText("Chain name"), { target: { value: "cloud" } });
-    pick(cards()[1], "groq", "vosk");
+    pick(cards()[1], "Groq Whisper", "Vosk (offline)");
     const [enabled, parallel] = within(cards()[1]).getAllByRole("switch");
     fireEvent.click(parallel);
     fireEvent.click(enabled);
@@ -93,6 +95,14 @@ describe("Chains page — patch shape", () => {
 });
 
 describe("Chains page — per-chain controls", () => {
+  it("Delete is the panel's danger button, the other card actions its plain small buttons", () => {
+    render(<Chains />);
+    const card = cards()[0];
+    expect(within(card).getByRole("button", { name: "Delete" })).toHaveClass("z-btn", "d", "sm");
+    for (const name of ["Move up", "Move down"]) expect(within(card).getByRole("button", { name })).toHaveClass("z-btn", "g", "sm");
+    for (const btn of within(card).getAllByRole("button", { name: "configure →" })) expect(btn).toHaveClass("z-btn", "g", "sm");
+  });
+
   it("a switched-off chain fades none of its controls", () => {
     useAppData.mockReturnValue({ catalog, config: { core: { chains: [FAST, { ...SMART, enabled: false }] } }, patch });
     render(<Chains />);
@@ -101,24 +111,31 @@ describe("Chains page — per-chain controls", () => {
     for (const el of controls) expect(faded(el)).toBe(false);
   });
 
-  it("shows the narrow checkbox only for an STT with vocabulary support and a handler with a vocabulary", async () => {
+  it("names the providers in the chain dropdowns by their catalog labels", () => {
     render(<Chains />);
-    expect(within(cards()[0]).getByLabelText("Narrow STT to handler vocabulary")).toBeChecked();
-    expect(within(cards()[1]).queryByLabelText("Narrow STT to handler vocabulary")).toBeNull();
+    expect(within(cards()[0]).getByRole("button", { name: "Vosk (offline)" })).toBeInTheDocument();
+    fireEvent.click(within(cards()[0]).getByRole("button", { name: "Commands (no LLM)" }));
+    expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual(["Commands (no LLM)", "OpenRouter"]);
+  });
+
+  it("shows the narrow switch only for an STT with vocabulary support and a handler with a vocabulary", async () => {
+    render(<Chains />);
+    expect(narrowSwitch(cards()[0])).toHaveAttribute("aria-checked", "true");
+    expect(narrowSwitch(cards()[1])).toBeNull();
     // groq STT + simple-nlu: the STT cannot narrow.
-    pick(cards()[1], "openrouter", "simple-nlu");
-    expect(within(cards()[1]).queryByLabelText("Narrow STT to handler vocabulary")).toBeNull();
+    pick(cards()[1], "OpenRouter", "Commands (no LLM)");
+    expect(narrowSwitch(cards()[1])).toBeNull();
     // A handler without a vocabulary hides it too; the flag itself is kept
     // (the backend ignores it for a pair that cannot narrow).
-    pick(cards()[0], "simple-nlu", "openrouter");
-    expect(within(cards()[0]).queryByLabelText("Narrow STT to handler vocabulary")).toBeNull();
+    pick(cards()[0], "Commands (no LLM)", "OpenRouter");
+    expect(narrowSwitch(cards()[0])).toBeNull();
     const body = await saved();
     expect(body.core.chains[0]).toEqual({ ...FAST, handler: "openrouter" });
   });
 
-  it("unchecking narrow saves narrow:false", async () => {
+  it("switching narrow off saves narrow:false", async () => {
     render(<Chains />);
-    fireEvent.click(within(cards()[0]).getByLabelText("Narrow STT to handler vocabulary"));
+    fireEvent.click(narrowSwitch(cards()[0]));
     expect((await saved()).core.chains[0]).toEqual({ ...FAST, narrow: false });
   });
 
