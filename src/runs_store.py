@@ -515,7 +515,7 @@ def new_record(device: str, reason: str, **fields) -> dict:
         # TTS variants (Pipeline._start_tts).
         "attempts": [],
         # The reply's playback as the device reports it: times it ran dry and the ms
-        # of silence played meanwhile. None when it does not count.
+        # of silence played meanwhile. None when it did not play out.
         "play_dry": None, "play_gap_ms": None,
         **fields,
     }

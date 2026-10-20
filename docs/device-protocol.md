@@ -225,15 +225,17 @@ The owner's words:
    [Auto volume](#auto-volume); default false.
 
    A new mode or filter length re-creates the canceller on the device; when it cannot be created
-   the device works as with `echo_cancel` 0. The three are optional: a device without echo
-   cancellation ignores them, and an absent field or one out of its range leaves the device's own.
+   the device works as with `echo_cancel` 0. A device without echo cancellation ignores the three.
    `play_prime_ms`, 0..2000, default 700, is the playback reserve: the audio the device holds
-   before it starts a stream, and again after the stream runs dry (see [Playback](#playback)).
-   It is optional the same way; a device without a speaker ignores it.
-   So is `auto_volume`: a device that does not measure ignores it, and an absent one or one that is
-   not a boolean leaves the device's own.
-   All these values live in the server config, not on the device; until the first `config` the
-   device uses its compiled-in defaults.
+   before it starts a stream, and again after the stream runs dry (see [Playback](#playback)); a
+   device without a speaker ignores it. A device that does not measure ignores `auto_volume`.
+
+   Every field is required, and the server sends all of them to every device: a `config` that
+   lacks one, or holds one out of its range or of the wrong type, is ignored whole. These values
+   live in the server config (`core.devices[]`, whose defaults are the ones named above), not on
+   the device, which keeps none of them across a restart and does nothing that depends on them
+   before its first `config`: no wake word or stop word is detected, a `play_start` is answered
+   with `played {id, "dropped": true}`, the echo canceller is off and auto volume does not measure.
 4. Server → `volume_boost {value}` right after `config`: 0, a new connection has no `ambient` yet;
    see [Auto volume](#auto-volume).
 5. Server → `log_stream {on}` with the device's `core.devices[].log`, on or off, after
@@ -273,8 +275,6 @@ its manifest's cutoff, 0.5. Only a device with a speaker (`caps.speaker: true`) 
 
 - The device swaps a model live, without a restart. It detects the wake word only while the wake
   and VAD models are loaded, and the stop word only while the stop and VAD models are.
-- A device that does not know `model` (an older firmware) ignores it and its `0x03` frames; a
-  firmware that does not know kind `stop` ignores that `model` and its `0x03` frames the same way.
 
 ## Voice session
 
@@ -414,9 +414,7 @@ the answer, so the next phrase needs no wake word:
   answer) and sends `played {id, dry, gap_ms}` when the last sample of a stream is out: `dry` is
   how many times the stream ran dry after it had started and before its `play_end` came (a
   `play_end` that comes after the last sample is out counts too), `gap_ms` the silence the speaker
-  played meanwhile, in ms. The wait before a stream's first sample is not
-  counted. Both are optional: a device that does not count them (an older firmware) sends
-  `played {id}`, and the server then records nothing for the stream.
+  played meanwhile, in ms. The wait before a stream's first sample is not counted.
 - `play_stop` flushes everything queued and playing; the device answers `played {id, "dropped":
   true}` for each stream it dropped. The stop word flushes the same way, and the server answers it
   with `play_stop`; a new `wake` flushes nothing on the device, and the server sends `play_stop`
@@ -429,8 +427,8 @@ the answer, so the next phrase needs no wake word:
   `play_prime_ms` is the last one it sent to that connection in `config`. The device buffer holds
   `buffer_ms`.
 - The device starts a stream, and resumes one that ran dry before its `play_end`, once it holds
-  `play_prime_ms` (default 700) of it or its `play_end` has come; pacing leaves that much room in
-  the buffer for the wait.
+  `play_prime_ms` of it or its `play_end` has come; pacing leaves that much room in the buffer
+  for the wait.
 - Indication while playing outside a session (an announcement) is the device's own choice.
 
 ## Settings and diagnostics

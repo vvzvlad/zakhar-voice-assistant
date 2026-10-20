@@ -67,14 +67,10 @@ _Static_assert(TAP_FRAMES - TAP_MARGIN >= (2000 + 3000) * MIC_RATE / 1000,
 #define CHUNK 512
 #define MIC_DMA_FRAMES (CHUNK / 2)
 
-// The echo canceller's settings until the server's first `config`, all in one place: echo_cancel 1
-// (on, the residual echo suppression at AEC_NLP_LEVEL_NORMAL: levels 1..3 are NORMAL, AGGR and
-// VERYAGGR, in the full-duplex modes only), echo_cancel_mode 2 (AEC_MODES[2], AEC_MODE_FD_LOW_COST)
-// and echo_cancel_filter 4 (the filter length). The AEC takes channel 0 in and out and one
-// reference.
-#define ECHO_CANCEL_DEFAULT 1
-#define ECHO_MODE_DEFAULT 2
-#define ECHO_FILTER_DEFAULT 4
+// The echo canceller's settings come from the server's `config`: echo_cancel 1..3 is the residual
+// echo suppression AEC_NLP_LEVEL_NORMAL, AGGR and VERYAGGR (in the full-duplex modes only),
+// echo_cancel_mode indexes AEC_MODES and echo_cancel_filter is the filter length. The AEC takes
+// channel 0 in and out and one reference.
 static const aec_mode_t AEC_MODES[] = {
     AEC_MODE_SR_LOW_COST, AEC_MODE_SR_HIGH_PERF, AEC_MODE_FD_LOW_COST, AEC_MODE_FD_HIGH_PERF,
 };
@@ -108,9 +104,10 @@ static tap_t s_tap;
 static tap_t s_ref;
 static dec3_t s_dec;
 // The server's echo_cancel, echo_cancel_mode and echo_cancel_filter, taken by the mic task per chunk.
-static _Atomic int s_echo_cancel = ECHO_CANCEL_DEFAULT;
-static _Atomic int s_echo_mode = ECHO_MODE_DEFAULT;
-static _Atomic int s_echo_filter = ECHO_FILTER_DEFAULT;
+// Until the first `config` echo_cancel is 0: no AEC is made and channel 0 stays AGC.
+static _Atomic int s_echo_cancel;
+static _Atomic int s_echo_mode;
+static _Atomic int s_echo_filter;
 // The server's auto_volume, taken by the mic task per chunk; off until the first `config`.
 static _Atomic bool s_auto_volume;
 // Microphone frames the RX driver dropped since the mic task last took them.
@@ -154,9 +151,9 @@ static aec_nlp_level_t nlp_level(int echo_cancel)
     return (aec_nlp_level_t)(AEC_NLP_LEVEL_NORMAL + echo_cancel - 1);
 }
 
-// A new AEC in AEC_MODES[mode] with the filter length `filter`, its suppression at `level` (the
-// default one when off); NULL, logged, when ESP-SR cannot make it or makes it with another frame
-// than CHUNK.
+// A new AEC in AEC_MODES[mode] with the filter length `filter`, its suppression at `level`
+// (AEC_NLP_LEVEL_NORMAL when off: the mic task sets the level once echo_cancel turns on); NULL,
+// logged, when ESP-SR cannot make it or makes it with another frame than CHUNK.
 static aec_handle_t *aec_make(int mode, int filter, int level)
 {
     aec_config_t ac = {
@@ -167,7 +164,7 @@ static aec_handle_t *aec_make(int mode, int filter, int level)
         .sample_rate = MIC_RATE,
         .caps = MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT,
         .mode = AEC_MODES[mode],
-        .nlp_level = nlp_level(level > 0 ? level : ECHO_CANCEL_DEFAULT),
+        .nlp_level = level > 0 ? nlp_level(level) : AEC_NLP_LEVEL_NORMAL,
     };
     aec_handle_t *aec = aec_create_from_config(&ac);
     if (aec != NULL && aec_get_chunksize(aec) != CHUNK) {
@@ -444,9 +441,9 @@ esp_err_t audio_start(void)
 
 void audio_set_echo_cancel(int level, int mode, int filter)
 {
-    if (level >= 0) atomic_store_explicit(&s_echo_cancel, level, memory_order_relaxed);
-    if (mode >= 0) atomic_store_explicit(&s_echo_mode, mode, memory_order_relaxed);
-    if (filter >= 0) atomic_store_explicit(&s_echo_filter, filter, memory_order_relaxed);
+    atomic_store_explicit(&s_echo_cancel, level, memory_order_relaxed);
+    atomic_store_explicit(&s_echo_mode, mode, memory_order_relaxed);
+    atomic_store_explicit(&s_echo_filter, filter, memory_order_relaxed);
 }
 
 void audio_set_auto_volume(bool on)

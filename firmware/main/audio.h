@@ -25,11 +25,11 @@ esp_err_t audio_start_playback(void);
 uint32_t audio_mic_position(void);
 size_t audio_mic_read(uint32_t *pos, int16_t *out, size_t max_frames);
 
-// The server's echo cancellation settings for the stop word, each -1 to keep the current one:
-// level (echo_cancel) 0 off, 1..3 on, with the AEC's residual echo suppression from mild to
-// strongest; mode (echo_cancel_mode) 0..3 SR low cost, SR high performance, FD low cost, FD high
-// performance; filter (echo_cancel_filter) 1..8, its filter length. Taken from the next microphone
-// chunk on, a new mode or filter length re-creating the AEC; 1, 2 and 4 until the first call.
+// The server's echo cancellation settings for the stop word: level (echo_cancel) 0 off, 1..3 on,
+// with the AEC's residual echo suppression from mild to strongest; mode (echo_cancel_mode) 0..3 SR
+// low cost, SR high performance, FD low cost, FD high performance; filter (echo_cancel_filter)
+// 1..8, its filter length. Taken from the next microphone chunk on, a new mode or filter length
+// re-creating the AEC; off, with no AEC, until the first call.
 void audio_set_echo_cancel(int level, int mode, int filter);
 
 // The server's auto_volume: while on, every 15 s of quiet (nothing playing, no session open, no

@@ -84,11 +84,10 @@ typedef struct {
     bool (*on_model)(zl_model_t kind, uint8_t *data, size_t size);
     // The `config` echo cancellation: level (echo_cancel) 0 off, 1..3 the echo suppression from mild
     // to strongest; mode (echo_cancel_mode) 0..3 SR low cost, SR high performance, FD low cost, FD
-    // high performance; filter (echo_cancel_filter) 1..8, the filter length. Each is -1 when its
-    // field is absent or out of its range, for the device to keep its own; called when any is not.
+    // high performance; filter (echo_cancel_filter) 1..8, the filter length.
     void (*on_echo_cancel)(int level, int mode, int filter);
     // The `config` auto_volume: the device measures the room's noise and reports it with
-    // zl_report_ambient() (true) or not (false); called only when the field is present.
+    // zl_report_ambient() (true) or not (false).
     void (*on_auto_volume)(bool on);
     // A `volume_boost`: percent points, -100..100, the speaker adds to its own volume on the DAC (a
     // volume of 0 stays muted), not stored and not reported as `volume`.
@@ -126,8 +125,8 @@ bool zl_mic_busy(void);
 
 // Speakers: the next playback samples (mono, play_rate) for the I2S writer task, after
 // zl_start(). Returns the count copied, fewer than max (0 included) when the buffer runs dry or
-// the stream at its head is still priming (`config`'s play_prime_ms of it, 700 ms until the
-// first `config`, or its play_end).
+// the stream at its head is still priming (`config`'s play_prime_ms of it, or its play_end). A
+// stream that starts before the first `config` is dropped.
 size_t zl_play_read(int16_t *out, size_t max);
 
 // Whether a stream is in the playback buffer (from its play_start until its last sample is out);

@@ -22,51 +22,77 @@ static void encoded_is(char *got, const char *want)
     zl_free(got);
 }
 
+// A valid `config`, field by field: its name, its JSON value and what that decodes to (the cutoffs
+// as uint8).
+static const struct {
+    const char *name, *json;
+    int decoded;
+} CONFIG[] = {
+    {"wake_cutoff", "80", 204},   {"vad_cutoff", "30", 76},         {"echo_cancel", "2", 2},
+    {"echo_cancel_mode", "3", 3}, {"echo_cancel_filter", "6", 6},   {"play_prime_ms", "450", 450},
+    {"auto_volume", "true", 1},
+};
+#define CONFIG_FIELDS (sizeof CONFIG / sizeof CONFIG[0])
+
+// CONFIG as one message, but the field `name` set to the JSON `value`, or left out when value is
+// NULL; name NULL changes nothing.
+static bool decode_config(const char *name, const char *value, zl_msg_t *m)
+{
+    char json[300];
+    int n = snprintf(json, sizeof json, "{\"type\": \"config\"");
+    for (size_t i = 0; i < CONFIG_FIELDS; i++) {
+        const bool named = name != NULL && strcmp(name, CONFIG[i].name) == 0;
+        if (named && value == NULL) continue;
+        n += snprintf(json + n, sizeof json - (size_t)n, ", \"%s\": %s", CONFIG[i].name, named ? value : CONFIG[i].json);
+    }
+    snprintf(json + n, sizeof json - (size_t)n, "}");
+    return decode(json, m);
+}
+
+// The decoded value of the `config` field `name`.
+static int config_value(const zl_msg_t *m, const char *name)
+{
+    return strcmp(name, "wake_cutoff") == 0          ? m->wake
+           : strcmp(name, "vad_cutoff") == 0         ? m->vad
+           : strcmp(name, "echo_cancel") == 0        ? m->echo_cancel
+           : strcmp(name, "echo_cancel_mode") == 0   ? m->echo_mode
+           : strcmp(name, "echo_cancel_filter") == 0 ? m->echo_filter
+           : strcmp(name, "play_prime_ms") == 0      ? m->play_prime_ms
+                                                     : m->auto_volume;
+}
+
 static void test_decode(void)
 {
     zl_msg_t m;
-    assert(decode("{\"type\": \"config\", \"wake_cutoff\": 80, \"vad_cutoff\": 30}", &m));
-    assert(m.type == ZL_MSG_CONFIG && m.wake == 204 && m.vad == 76 && !m.has_session);
-    assert(m.echo_cancel == -1 && m.echo_mode == -1 && m.echo_filter == -1 && m.play_prime_ms == -1 &&
-           m.auto_volume == -1);
+    // `config` carries every field, each in its range.
+    assert(decode_config(NULL, NULL, &m) && m.type == ZL_MSG_CONFIG && !m.has_session);
+    for (size_t i = 0; i < CONFIG_FIELDS; i++) assert(config_value(&m, CONFIG[i].name) == CONFIG[i].decoded);
     zl_msg_free(&m);
-    // auto_volume: a boolean, else -1 (the device keeps its own), and the cutoffs apply.
-    assert(decode("{\"type\": \"config\", \"wake_cutoff\": 80, \"vad_cutoff\": 30, \"auto_volume\": true}", &m));
-    assert(m.auto_volume == 1 && m.wake == 204);
-    zl_msg_free(&m);
-    assert(decode("{\"type\": \"config\", \"wake_cutoff\": 80, \"vad_cutoff\": 30, \"auto_volume\": false}", &m));
-    assert(m.auto_volume == 0);
-    zl_msg_free(&m);
-    assert(decode("{\"type\": \"config\", \"wake_cutoff\": 80, \"vad_cutoff\": 30, \"auto_volume\": 1}", &m));
-    assert(m.auto_volume == -1 && m.wake == 204);
-    zl_msg_free(&m);
-    assert(decode("{\"type\": \"config\", \"wake_cutoff\": 100, \"vad_cutoff\": 0}", &m));
-    assert(m.wake == 255 && m.vad == 0);
-    zl_msg_free(&m);
-    assert(!decode("{\"type\": \"config\", \"wake_cutoff\": 101, \"vad_cutoff\": 30}", &m));
-    // The echo cancellation settings and the playback reserve: absent (above), out of range or not
-    // an integer, -1, and the cutoffs apply.
+    // One that lacks any of them is rejected whole.
+    for (size_t i = 0; i < CONFIG_FIELDS; i++) assert(!decode_config(CONFIG[i].name, NULL, &m));
+    // So is one with a field out of its range or of the wrong type (want -1); the ends of each
+    // range decode.
     const struct {
-        const char *json;
-        int level, mode, filter, prime;
-    } optional[] = {
-        {"\"echo_cancel\": 0, \"echo_cancel_mode\": 3, \"echo_cancel_filter\": 1, \"play_prime_ms\": 0", 0, 3, 1, 0},
-        {"\"echo_cancel\": 3, \"echo_cancel_mode\": 0, \"echo_cancel_filter\": 8, \"play_prime_ms\": 2000", 3, 0, 8,
-         2000},
-        {"\"echo_cancel\": 4, \"echo_cancel_mode\": -1, \"echo_cancel_filter\": 0, \"play_prime_ms\": 2001", -1, -1, -1,
-         -1},
-        {"\"echo_cancel\": 1.5, \"echo_cancel_mode\": \"2\", \"echo_cancel_filter\": 9, \"play_prime_ms\": -50", -1, -1,
-         -1, -1},
-        {"\"echo_cancel_filter\": 6, \"play_prime_ms\": 700.5", -1, -1, 6, -1},
-        {"\"play_prime_ms\": 700", -1, -1, -1, 700},
+        const char *name, *value;
+        int want;
+    } one[] = {
+        {"wake_cutoff", "100", 255},       {"wake_cutoff", "101", -1},        {"vad_cutoff", "0", 0},
+        {"vad_cutoff", "-1", -1},          {"echo_cancel", "0", 0},           {"echo_cancel", "3", 3},
+        {"echo_cancel", "4", -1},          {"echo_cancel", "1.5", -1},        {"echo_cancel_mode", "0", 0},
+        {"echo_cancel_mode", "3", 3},      {"echo_cancel_mode", "-1", -1},    {"echo_cancel_mode", "\"2\"", -1},
+        {"echo_cancel_filter", "1", 1},    {"echo_cancel_filter", "8", 8},    {"echo_cancel_filter", "0", -1},
+        {"echo_cancel_filter", "9", -1},   {"play_prime_ms", "0", 0},         {"play_prime_ms", "2000", 2000},
+        {"play_prime_ms", "2001", -1},     {"play_prime_ms", "-50", -1},      {"play_prime_ms", "450.5", -1},
+        {"auto_volume", "false", 0},       {"auto_volume", "1", -1},          {"auto_volume", "null", -1},
     };
-    for (size_t i = 0; i < sizeof optional / sizeof optional[0]; i++) {
-        char json[200];
-        snprintf(json, sizeof json, "{\"type\": \"config\", \"wake_cutoff\": 80, \"vad_cutoff\": 30, %s}",
-                 optional[i].json);
-        assert(decode(json, &m) && m.wake == 204);
-        assert(m.echo_cancel == optional[i].level && m.echo_mode == optional[i].mode &&
-               m.echo_filter == optional[i].filter && m.play_prime_ms == optional[i].prime);
+    for (size_t i = 0; i < sizeof one / sizeof one[0]; i++) {
+        const bool ok = decode_config(one[i].name, one[i].value, &m);
+        if (ok != (one[i].want >= 0)) {
+            fprintf(stderr, "config %s: %s\n", one[i].name, one[i].value);
+            assert(0);
+        }
+        if (!ok) continue;
+        assert(config_value(&m, one[i].name) == one[i].want);
         zl_msg_free(&m);
     }
 
