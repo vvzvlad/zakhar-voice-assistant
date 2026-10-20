@@ -471,7 +471,8 @@ the answer, so the next phrase needs no wake word:
   (dBFS, default −60) or `auto_volume_gain` (percent per dB, default 2.0) changes; 0 while
   `auto_volume` is off. The threshold and the gain stay on the server.
 - The device plays the replies at its own volume plus the boost, within 1..100 % (0 would mute
-  the reply), and the speaker's music player at its volume alone; a volume of 0 mutes both.
+  the reply), and the music of its Sendspin player at that volume without the boost; a volume of
+  0 mutes both.
   It does not store the boost, does not report it as `volume`, and shows its volume without it.
   It is 0 from boot until the server sends one.
 
