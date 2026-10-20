@@ -216,6 +216,11 @@ button{font-family:inherit;}
    the waterfall stretches to its column, so the table follows the card width. Only
    below the table's min-width does .z-tblwrap scroll. */
 .z-tblwrap .z-tbl{table-layout:fixed;min-width:680px;}
+.z-tblwrap .z-tbl.z-runs{min-width:820px;}
+/* Run tables keep the text columns readable as the window narrows: below 1200 px chain,
+   tokens and the waterfall go (the run drawer has them), below 1000 px device and Σ too. */
+@media (max-width:1200px){ .z-tblwrap .z-tbl.z-runs{min-width:0;} .z-runs .z-cwide{display:none;} }
+@media (max-width:1000px){ .z-runs .z-cmid{display:none;} }
 .z-tblwrap .z-tbl td{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .z-tblwrap .z-tx{max-width:none;}
 .z-tblwrap .z-wf{width:100%;}
@@ -329,12 +334,12 @@ button{font-family:inherit;}
 .z-tabs .z-seg button.on{background:none;box-shadow:none;border-bottom-color:var(--acc);}
 /* Five KPI tiles get too narrow between the sidebar's collapse point and ~1000 px: three a row. */
 @media (min-width:821px) and (max-width:1000px){ .z-kpis{grid-template-columns:repeat(3,1fr);} }
+/* The service map stacks below 1000 px: three tiles side by side clip the engine and voice names. */
+@media (max-width:1000px){ .z-map{flex-direction:column;} .z-arrow{flex-basis:22px;transform:rotate(90deg);} }
 @media (max-width:820px){ .z-tabs .z-seg button{white-space:nowrap;padding-left:4px;padding-right:4px;}
   .z-bcrumb s{display:none;}
   .z-devtbl :is(th,td):is(:nth-child(2),:nth-child(4)){display:none;}
   .z-top .z-env{white-space:nowrap;}
-  .z-map{flex-direction:column;}
-  .z-arrow{flex-basis:22px;transform:rotate(90deg);}
   .z-modal-c.wide .z-f.row:has(.z-rowctl){flex-direction:column;align-items:stretch;}
   .z-modal-c.wide .z-rowctl{width:100%;}
   .z-modal-c.wide .z-f.row .z-fmeta{max-width:none;}

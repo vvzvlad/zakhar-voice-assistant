@@ -207,18 +207,18 @@ function Dashboard() {
         : recent.length === 0 ? <div className="z-empty"><div className="ic"><Ic n="log" w={20} /></div><b>No runs</b>Recent requests will appear here after the first one is processed.</div>
           : <>
             <div className="z-tblwrap">
-              <table className="z-tbl">
-                <thead><tr><th style={{ width: 128 }}>Time</th><th style={{ width: 150 }}>Device</th><th>Recognized</th><th>Response</th><th style={{ width: "20%" }}>Stage waterfall</th><th style={{ width: 80, textAlign: "right" }}>Σ</th><th style={{ width: 92 }}>Status</th></tr></thead>
+              <table className="z-tbl z-runs">
+                <thead><tr><th style={{ width: 128 }}>Time</th><th className="z-cmid" style={{ width: 150 }}>Device</th><th>Recognized</th><th>Response</th><th className="z-cwide" style={{ width: "20%" }}>Stage waterfall</th><th className="z-cmid" style={{ width: 80, textAlign: "right" }}>Σ</th><th style={{ width: 92 }}>Status</th></tr></thead>
                 <tbody>
                   {recent.map((r) => {
                     const rm = statusMeta(r);
                     return <tr key={r.key} onClick={() => { if (r.id == null) return; try { localStorage.setItem("z-openreq", String(r.id)); } catch { /* ignore */ } nav("log"); }}>
                       <td className="tm">{fmtTime(r.ts)}</td>
-                      <td style={{ fontWeight: 600 }}>{deviceLabel(catalog?.core?.values?.devices, r.device)}</td>
+                      <td className="z-cmid" style={{ fontWeight: 600 }}>{deviceLabel(catalog?.core?.values?.devices, r.device)}</td>
                       <td><div className={"z-tx" + (r.stt ? "" : " mut")}>{r.stt || (r.live ? "…" : isAnnouncement(r) ? "—" : r.reason === "duplicate" ? "(duplicate)" : "(silence)")}</div></td>
                       <td><div className={"z-tx wide" + (r.llm ? "" : " mut")}>{r.llm || (r.live ? "…" : "—")}</div></td>
-                      <td><Waterfall r={r} /></td>
-                      <td className="num" style={{ fontWeight: 600 }}>{fmtSec(totalMs(r))}</td>
+                      <td className="z-cwide"><Waterfall r={r} /></td>
+                      <td className="num z-cmid" style={{ fontWeight: 600 }}>{fmtSec(totalMs(r))}</td>
                       <td><span className={"z-st " + rm.tone}><span className={"z-dot " + (rm.tone === "good" ? "ok" : rm.tone === "bad" ? "error" : "off")} />{rm.label}</span></td>
                     </tr>;
                   })}

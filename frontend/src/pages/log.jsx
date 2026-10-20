@@ -480,20 +480,20 @@ function Log() {
           : runs.length === 0 && total === 0 ? <div className="z-empty"><div className="ic"><Ic n="log" w={20} /></div><b>No recorded runs yet</b>Once the assistant processes a request, it will appear here.</div>
             : <>
               <div className="z-tblwrap">
-                <table className="z-tbl" style={{ minWidth: 820 }}>
-                  <thead><tr><th style={{ width: 128 }}>Time</th><th style={{ width: 150 }}>Device</th><th style={{ width: 80 }}>Chain</th><th>Recognized</th><th>Response</th><th style={{ width: 64, textAlign: "right" }}>Tok</th><th style={{ width: "20%" }}>Stage waterfall</th><th style={{ width: 80, textAlign: "right" }}>Σ</th><th style={{ width: 92 }}>Status</th></tr></thead>
+                <table className="z-tbl z-runs">
+                  <thead><tr><th style={{ width: 128 }}>Time</th><th className="z-cmid" style={{ width: 150 }}>Device</th><th className="z-cwide" style={{ width: 80 }}>Chain</th><th>Recognized</th><th>Response</th><th className="z-cwide" style={{ width: 64, textAlign: "right" }}>Tok</th><th className="z-cwide" style={{ width: "20%" }}>Stage waterfall</th><th className="z-cmid" style={{ width: 80, textAlign: "right" }}>Σ</th><th style={{ width: 92 }}>Status</th></tr></thead>
                   <tbody>
                     {runs.map((r) => {
                       const m = statusMeta(r);
                       return <tr key={r.key} className={openId === r.id ? "sel" : ""} onClick={() => { if (r.id != null) openRow(r.id); }}>
                         <td className="tm">{fmtTime(r.ts)}</td>
-                        <td style={{ fontWeight: 600 }}>{deviceLabel(devices, r.device)}</td>
-                        <td className="mono" data-testid="run-chain" style={{ fontSize: 11.5, color: r.chain ? "var(--ink2)" : "var(--mut2)" }}>{r.chain || "—"}</td>
+                        <td className="z-cmid" style={{ fontWeight: 600 }}>{deviceLabel(devices, r.device)}</td>
+                        <td className="mono z-cwide" data-testid="run-chain" style={{ fontSize: 11.5, color: r.chain ? "var(--ink2)" : "var(--mut2)" }}>{r.chain || "—"}</td>
                         <td><div className={"z-tx" + (r.stt ? "" : " mut")}>{r.stt || (r.live ? "…" : isAnnouncement(r) ? "—" : r.reason === "duplicate" ? "(duplicate)" : "(silence)")}</div></td>
                         <td><div className={"z-tx" + (r.llm ? "" : " mut")}>{r.llm || (r.live ? "…" : "—")}</div></td>
-                        <td className="num">{r.tokens || "—"}</td>
-                        <td><Waterfall r={r} /></td>
-                        <td className="num" style={{ fontWeight: 600 }}>{fmtSec(totalMs(r))}</td>
+                        <td className="num z-cwide">{r.tokens || "—"}</td>
+                        <td className="z-cwide"><Waterfall r={r} /></td>
+                        <td className="num z-cmid" style={{ fontWeight: 600 }}>{fmtSec(totalMs(r))}</td>
                         <td><span className={"z-st " + m.tone}><span className={"z-dot " + (m.tone === "good" ? "ok" : m.tone === "bad" ? "error" : "off")} />{m.label}</span></td>
                       </tr>;
                     })}
