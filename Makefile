@@ -166,9 +166,8 @@ fw-host-test: $(CJSON_D)/cJSON.c $(CJSON_D)/cJSON.h ## Host-test the firmware za
 # The container is thrown away, its /root/.cache is not: the cirunner volume zakhar-fw-cache keeps
 # ccache and the component manager's downloads, shared by every branch and session (the sources
 # always sit at /w/firmware, so ccache hits across them).
-# ninja runs 24 jobs instead of idf.py's one per CPU: on a cold cache 74 parallel cc1plus of
-# ~430 MB each run cirunner's 19 GB out of memory. The container is not pinned to CPUs, so parallel
-# builds spread over all 72.
+# The container is not pinned to CPUs, so parallel builds spread over all 72 of cirunner's; the
+# 24-compile cap that keeps a cold build inside its 19 GB lives in firmware/CMakeLists.txt.
 FW_DOCKER := docker -c cirunner
 FW_IDF    := espressif/idf:v5.5.4
 FW_OUT    := build/voicepe.bin build/bootloader/bootloader.bin build/partition_table/partition-table.bin \
@@ -186,7 +185,7 @@ fw-build fw-build-seed:
 	| $(FW_DOCKER) run --rm -i -v zakhar-fw-cache:/root/.cache --entrypoint bash $(FW_IDF) -c 'set -e; mkdir /w; cd /w; tar -xf -; \
 		cd firmware; . $$IDF_PATH/export.sh >&2; \
 		idf.py -DZAKHAR_GIT_VERSION=$(shell git describe --always --dirty) -DZAKHAR_WIFI_SEED=$(FW_SEED) \
-			reconfigure >&2; ninja -C build -j 24 >&2; idf.py size >&2; tar -cf - $(FW_OUT)' \
+			build size >&2; tar -cf - $(FW_OUT)' \
 	| tar -C firmware -xf -
 
 fw-flash: ## Flash firmware/build/ over USB: make fw-flash PORT=/dev/cu.usbmodem...

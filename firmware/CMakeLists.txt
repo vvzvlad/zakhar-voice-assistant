@@ -16,5 +16,12 @@ set(EXCLUDE_COMPONENTS wifi_provisioning)
 # hello.fw is "voicepe <PROJECT_VER>".
 set(PROJECT_VER "0.1.0 (${ZAKHAR_GIT_VERSION})")
 
+# At most 24 compiles at once, however the build is started (make fw-build, a bare idf.py build):
+# idf.py starts ninja with a job per CPU, and on cirunner's 72 CPUs the ~74 parallel cc1plus of
+# esp-tflite-micro (~430 MB each) run its 19 GB out of memory. Set before project(), which creates
+# the component targets that take the pool.
+set_property(GLOBAL PROPERTY JOB_POOLS compile=24)
+set(CMAKE_JOB_POOL_COMPILE compile)
+
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(voicepe)
