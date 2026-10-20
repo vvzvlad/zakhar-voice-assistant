@@ -1,8 +1,8 @@
 // The pure audio pieces of the Voice PE firmware: no ESP headers, host-tested
 // (make fw-voicepe-host-test). The microphone sample conversion, the microphone tap ring, the echo
 // reference (decimator, aligned reads, the skip decision), the echo delay estimator, the mic
-// task's per-chunk bookkeeping, the room's noise level and the speaker volume -> DAC register
-// mapping.
+// task's per-chunk bookkeeping, the room's noise level, the speaker's mix of zakhar's playback and
+// the music, and the speaker volume -> DAC register mapping.
 #pragma once
 
 #include <stdatomic.h>
@@ -175,6 +175,27 @@ bool ambient_sched_want(ambient_sched_t *s, bool quiet);
 // `frames` 32-bit stereo frames in `in`) is measured, any other is not. True when this chunk
 // completes the measurement; ambient_dbfs(&s->level) is then its level.
 bool ambient_sched_take(ambient_sched_t *s, bool raw, const int32_t *in, size_t frames);
+
+// ---------------------------------------------------------------- the speaker's mix
+
+// Gains are Q16: 65536 is 1.0.
+#define MIX_UNITY 65536u
+// The music under a voice session or zakhar's playback: -20 dB, a tenth of its gain.
+#define MIX_DUCK_DIV 10
+
+typedef struct {
+    uint32_t gain;  // the music's gain at the end of the previous block
+} mix_t;
+
+// The music starts from silence.
+void mix_init(mix_t *m);
+// One speaker block of `frames` frames. `out` (interleaved stereo) is `voice` (mono, `frames`
+// samples) on both channels plus `music` (interleaved stereo; its first music_frames frames, then
+// silence) times the music's gain, saturating; `mono` is (L + R) / 2 of `out`, the echo reference.
+// The music's gain moves linearly across the block from where the previous block left it to
+// `gain`, or to a tenth of it while `duck`, reaching it at the block's last frame.
+void mix_block(mix_t *m, const int16_t *voice, const int16_t *music, size_t music_frames, uint32_t gain, bool duck,
+               size_t frames, int16_t *out, int16_t *mono);
 
 // ---------------------------------------------------------------- speaker volume
 

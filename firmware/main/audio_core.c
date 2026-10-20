@@ -291,6 +291,30 @@ bool ambient_sched_take(ambient_sched_t *s, bool raw, const int32_t *in, size_t 
     return true;
 }
 
+void mix_init(mix_t *m)
+{
+    m->gain = 0;
+}
+
+void mix_block(mix_t *m, const int16_t *voice, const int16_t *music, size_t music_frames, uint32_t gain, bool duck,
+               size_t frames, int16_t *out, int16_t *mono)
+{
+    const int64_t from = m->gain;
+    const int64_t to = duck ? gain / MIX_DUCK_DIV : gain;
+    for (size_t i = 0; i < frames; i++) {
+        int32_t l = voice[i], r = voice[i];
+        if (i < music_frames) {
+            const int64_t g = from + (to - from) * (int64_t)(i + 1) / (int64_t)frames;
+            l += (int32_t)((music[2 * i] * g + (1 << 15)) >> 16);
+            r += (int32_t)((music[2 * i + 1] * g + (1 << 15)) >> 16);
+        }
+        out[2 * i] = sat16(l);
+        out[2 * i + 1] = sat16(r);
+        mono[i] = (int16_t)((out[2 * i] + out[2 * i + 1]) / 2);
+    }
+    m->gain = (uint32_t)to;
+}
+
 uint8_t volume_dac_byte(int percent)
 {
     // -127 + (0.40 + p / 100 * 0.45) * 175 = (7875 p - 570000) / 10000; C division truncates

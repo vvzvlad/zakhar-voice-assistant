@@ -45,3 +45,17 @@ CONFIG_ESP_PROTOCOMM_SUPPORT_SECURITY_VERSION_1=y
 # buffer holds under three frames: after one lost segment too little follows it for a fast
 # retransmit, and the stream waits out the retransmission timeout.
 CONFIG_LWIP_TCP_SND_BUF_DEFAULT=32768
+
+# The Sendspin music player (main/music.cpp): the player role alone, FLAC and PCM.
+CONFIG_SENDSPIN_ENABLE_PLAYER=y
+# CONFIG_SENDSPIN_ENABLE_OPUS is not set
+# CONFIG_SENDSPIN_ENABLE_CONTROLLER is not set
+# CONFIG_SENDSPIN_ENABLE_METADATA is not set
+# CONFIG_SENDSPIN_ENABLE_COLOR is not set
+# CONFIG_SENDSPIN_ENABLE_ARTWORK is not set
+# CONFIG_SENDSPIN_ENABLE_VISUALIZER is not set
+# CONFIG_SENDSPIN_ENABLE_SOURCE is not set
+
+# Sockets at most: POST /ota's server 3 of its own + 7 open, the Sendspin server 3 + 4, the
+# network log's listener and client, the zakhar_link connection.
+CONFIG_LWIP_MAX_SOCKETS=20

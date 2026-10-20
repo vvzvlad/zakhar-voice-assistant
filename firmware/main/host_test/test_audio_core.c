@@ -1,7 +1,7 @@
 // Host test of the Voice PE firmware's pure audio core (audio_core.c): the microphone sample
 // conversion against ESPHome's MicrophoneSource, the tap ring, the echo reference and delay
-// estimator, the mic task's chunk bookkeeping, the room's noise level, and the stock volume -> DAC
-// byte table.
+// estimator, the mic task's chunk bookkeeping, the room's noise level, the speaker's mix, and the
+// stock volume -> DAC byte table.
 // `make fw-voicepe-host-test` builds it.
 #include <assert.h>
 #include <math.h>
@@ -416,6 +416,64 @@ static void test_ambient_sched(void)
     assert(ambient_dbfs(&s.level) == -90.3);
 }
 
+static void test_mix(void)
+{
+    enum { N = 720 };
+    static int16_t voice[N], music[2 * N], out[2 * N], mono[N];
+    mix_t m;
+
+    // Voice only: on both channels as it is, and the reference is the voice itself.
+    mix_init(&m);
+    for (size_t i = 0; i < N; i++) voice[i] = (int16_t)(i * 37 - 13000);
+    mix_block(&m, voice, music, 0, MIX_UNITY, false, N, out, mono);
+    for (size_t i = 0; i < N; i++) assert(out[2 * i] == voice[i] && out[2 * i + 1] == voice[i] && mono[i] == voice[i]);
+
+    // The music ramps in from silence across the first block, then plays at its gain; the
+    // reference is (L + R) / 2.
+    mix_init(&m);
+    memset(voice, 0, sizeof voice);
+    for (size_t i = 0; i < N; i++) {
+        music[2 * i] = 20000;
+        music[2 * i + 1] = -10000;
+    }
+    mix_block(&m, voice, music, N, MIX_UNITY, false, N, out, mono);
+    assert(out[0] < 100 && out[2 * (N - 1)] == 20000 && out[2 * (N - 1) + 1] == -10000);
+    for (size_t i = 1; i < N; i++) assert(out[2 * i] >= out[2 * (i - 1)]);
+    mix_block(&m, voice, music, N, MIX_UNITY, false, N, out, mono);
+    for (size_t i = 0; i < N; i++) assert(out[2 * i] == 20000 && out[2 * i + 1] == -10000 && mono[i] == 5000);
+
+    // Ducked: down to a tenth across one block, monotonically, then held there.
+    mix_block(&m, voice, music, N, MIX_UNITY, true, N, out, mono);
+    assert(out[0] > 19900 && out[2 * (N - 1)] == 2000 && out[2 * (N - 1) + 1] == -1000);
+    for (size_t i = 1; i < N; i++) assert(out[2 * i] <= out[2 * (i - 1)]);
+    mix_block(&m, voice, music, N, MIX_UNITY, true, N, out, mono);
+    for (size_t i = 0; i < N; i++) assert(out[2 * i] == 2000 && out[2 * i + 1] == -1000);
+    // And back up once the duck ends.
+    mix_block(&m, voice, music, N, MIX_UNITY, false, N, out, mono);
+    assert(out[0] < 2100 && out[2 * (N - 1)] == 20000);
+
+    // Fewer music frames than the block: the rest is the voice alone.
+    for (size_t i = 0; i < N; i++) voice[i] = 100;
+    mix_block(&m, voice, music, 300, MIX_UNITY, false, N, out, mono);
+    assert(out[2 * 299] == 20100 && out[2 * 299 + 1] == -9900);
+    for (size_t i = 300; i < N; i++) assert(out[2 * i] == 100 && out[2 * i + 1] == 100 && mono[i] == 100);
+
+    // Voice plus music saturates instead of wrapping, and the reference is of what was saturated.
+    for (size_t i = 0; i < N; i++) {
+        voice[i] = 30000;
+        music[2 * i] = 20000;
+        music[2 * i + 1] = -32768;
+    }
+    mix_block(&m, voice, music, N, MIX_UNITY, false, N, out, mono);
+    assert(out[0] == INT16_MAX && out[1] == 30000 - 32768 && mono[0] == (INT16_MAX + 30000 - 32768) / 2);
+    for (size_t i = 0; i < N; i++) {
+        voice[i] = -30000;
+        music[2 * i] = -20000;
+    }
+    mix_block(&m, voice, music, N, MIX_UNITY, false, N, out, mono);
+    assert(out[0] == INT16_MIN && out[1] == INT16_MIN && mono[0] == INT16_MIN);
+}
+
 static void test_volume(void)
 {
     // The stock table: UI volume -> register byte (0.5 dB steps from 0 dB = 0x00).
@@ -456,6 +514,7 @@ int main(void)
     test_chunk_offset();
     test_ambient();
     test_ambient_sched();
+    test_mix();
     test_volume();
     printf("audio_core: all tests passed\n");
     return 0;

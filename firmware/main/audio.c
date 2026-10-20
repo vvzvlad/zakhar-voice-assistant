@@ -34,6 +34,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "leds.h"
+#include "music.h"
 #include "wake_word.h"
 #include "xmos.h"
 #include "zakhar_link.h"
@@ -255,11 +256,12 @@ static void mic_task(void *arg)
             made_filter = filter;
             applied = level;
         }
-        // Quiet is auto volume on, nothing playing, no session open and no capture held; its end
-        // ends a measurement.
+        // Quiet is auto volume on, nothing playing (zakhar's playback or a music stream), no session
+        // open and no capture held; its end ends a measurement.
+        const bool playing = zl_playing() || music_active();
         const bool measuring = ambient_sched_want(
-            &amb, atomic_load_explicit(&s_auto_volume, memory_order_relaxed) && !zl_playing() && !zl_mic_busy());
-        const bool want_raw = (level > 0 && aec != NULL && zl_playing()) || measuring;
+            &amb, atomic_load_explicit(&s_auto_volume, memory_order_relaxed) && !playing && !zl_mic_busy());
+        const bool want_raw = (level > 0 && aec != NULL && playing) || measuring;
         const mic_chunk_t c = mic_chunks_step(&chunks, dropped, want_raw, wrote, tap_position(&s_ref));
         // Written as soon as the chunk is in, so the chunk's processing does not delay the switch.
         wrote = c.write && xmos_ch0_raw(c.write_raw) == ESP_OK;
@@ -325,13 +327,20 @@ static void mic_task(void *arg)
     }
 }
 
+// Per block: zakhar's playback (mono) on both channels plus the music stream (stereo, music.h) at
+// its gain, a tenth of it while a session is open or zakhar plays; the echo reference is the mono
+// downmix of the block as it goes to the wire. The LEDs follow zakhar's playback alone.
 static void speaker_task(void *arg)
 {
     (void)arg;
     static int16_t mono[SPK_BLOCK];
+    static int16_t music[SPK_BLOCK * 2];
     static int16_t stereo[SPK_BLOCK * 2];
+    static int16_t wire[SPK_BLOCK];
     static int16_t ref[SPK_BLOCK / 3];
     static const int16_t silence[SPK_BLOCK / 3];
+    static mix_t mix;
+    mix_init(&mix);
     // The buffers that went out before this task started are not late.
     uint32_t seen = atomic_load_explicit(&s_late, memory_order_relaxed);
     uint32_t ref_late = seen;
@@ -353,14 +362,13 @@ static void speaker_task(void *arg)
         const size_t n = zl_play_read(mono, SPK_BLOCK);
         leds_set_playing(n > 0);
         memset(mono + n, 0, (SPK_BLOCK - n) * sizeof mono[0]);
-        for (size_t i = 0; i < SPK_BLOCK; i++) {
-            stereo[2 * i] = mono[i];
-            stereo[2 * i + 1] = mono[i];
-        }
+        const size_t m = music_read(music, SPK_BLOCK);
+        mix_block(&mix, mono, music, m, music_gain(), zl_mic_busy() || zl_playing(), SPK_BLOCK, stereo, wire);
         // The echo reference: this block, silence included, as it goes to the wire.
-        tap_write(&s_ref, ref, dec3_run(&s_dec, mono, SPK_BLOCK, ref));
+        tap_write(&s_ref, ref, dec3_run(&s_dec, wire, SPK_BLOCK, ref));
         size_t written;
         i2s_channel_write(s_tx, stereo, sizeof stereo, &written, portMAX_DELAY);
+        if (m > 0) music_played(m);
     }
 }
 
