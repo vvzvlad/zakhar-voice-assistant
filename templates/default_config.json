@@ -10,7 +10,7 @@
   "core": {
     "context": {"max_turns": 5, "ttl_seconds": 300},
     "audio": {"host": "0.0.0.0", "port": 8200},
-    "vad": {"silence_ms": 800, "min_speech_ms": 200, "max_utterance_ms": 15000, "no_speech_timeout_ms": 4000, "trim_start_ms": 200, "mic_channel": 0, "mic_normalize": false, "mic_highpass": false},
+    "vad": {"silence_ms": 800, "min_speech_ms": 200, "max_utterance_ms": 15000, "no_speech_timeout_ms": 4000, "trim_start_ms": 200, "mic_channel": 1, "mic_normalize": false, "mic_highpass": false},
     "network": {"external_proxy": ""},
     "openweathermap": {"api_key": "", "city": "Moscow", "prompt": ""},
     "mcp_servers": [],

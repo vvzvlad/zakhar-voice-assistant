@@ -94,7 +94,7 @@ class VadConfig(BaseModel):
         description="Drop this many ms off the start of the captured sample before STT: the oldest part of the 2000 ms pre-roll, before the wake word. 0 disables.",
     )
     mic_channel: Literal[0, 1] = Field(
-        0,
+        1,
         title="Mic processing level",
         # Rendered as a segment control with pole captions (see SchemaForm.ScaleSeg).
         # Lower = more processed / louder; higher = rawer / cleaner.
