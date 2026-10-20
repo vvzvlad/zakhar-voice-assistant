@@ -79,7 +79,7 @@ describe("Dashboard service map", () => {
 
     const capture = tile("capture");
     expect(capture.querySelector(".prov").textContent).toBe("WebRTC VAD");
-    expect(capture.textContent).toContain("wake-word verify on");
+    expect(capture.textContent).toContain("Wake word verify on");
     expect(capture.textContent).toContain("1.20s avg");
 
     // Logic rows name the chain, not its stt → handler pair.
@@ -89,8 +89,8 @@ describe("Dashboard service map", () => {
     const speech = tile("speech");
     expect(speech.querySelector(".prov").textContent).toBe("Fish Audio");
     expect(within(speech).getByTestId("speech-voice").textContent).toBe("Anna · +1 fallback");
-    expect(speech.textContent).toContain("stress on");
-    expect(speech.textContent).toContain("follow-up on");
+    expect(speech.textContent).toContain("Stress on");
+    expect(speech.textContent).toContain("Follow-up on");
     expect(speech.textContent).toContain("0.60s avg");
 
     expect([capture, tile("logic"), speech].map(dots)).toEqual([["ok", "ok"], ["ok"], ["ok", "ok", "ok"]]);
@@ -102,9 +102,9 @@ describe("Dashboard service map", () => {
       config: { core: { chains: chains.map((c) => ({ ...c, enabled: false })) } },
     });
     await renderDashboard();
-    expect(tile("capture").textContent).toContain("wake-word verify off");
-    expect(tile("speech").textContent).toContain("stress off");
-    expect(tile("speech").textContent).toContain("follow-up off");
+    expect(tile("capture").textContent).toContain("Wake word verify off");
+    expect(tile("speech").textContent).toContain("Stress off");
+    expect(tile("speech").textContent).toContain("Follow-up off");
     expect([tile("capture"), tile("logic"), tile("speech")].map(dots)).toEqual([["ok", "off"], ["off"], ["ok", "off", "off"]]);
     expect(within(tile("logic")).getByText("no enabled chain")).toBeInTheDocument();
   });

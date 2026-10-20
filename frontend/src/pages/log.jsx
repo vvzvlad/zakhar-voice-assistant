@@ -10,20 +10,20 @@ import { STAGE_COLOR, fmtSec, fmtTime, mapRun, totalMs, statusMeta, isAnnounceme
 import { FILLER_COLOR } from "../stageMeta.js";
 import { matchesFilters } from "../runsFilters.js";
 import { useDeviceList, useChainList, useProviderLabel } from "../appData.jsx";
-import { deviceLabel } from "../format.js";
+import { deviceLabel, fmtPct } from "../format.js";
 
 const SC = STAGE_COLOR;
 
 const PAGE_SIZES = [50, 100, 200]; // selectable rows-per-page for numbered pagination
 const DEFAULT_PAGE_SIZE = 100;
 
-// Stage rows for the drawer Gantt, in pipeline order. The accent (RuAccent)
+// Stage rows for the drawer Gantt, in pipeline order. The stress (RuAccent)
 // stage sits between LLM and TTS; the Gantt only renders stages whose timing is
 // > 0 (see `present` below), so it shows up only on runs where it actually ran.
 const GSTAGES = [
-  { k: "vad", label: "VAD capture" }, { k: "wakeword", label: "Wakeword verify" },
+  { k: "vad", label: "VAD capture" }, { k: "wakeword", label: "Wake word verify" },
   { k: "stt", label: "STT" }, { k: "llm", label: "Handler + tools" },
-  { k: "stress", label: "Accents" }, { k: "tts", label: "TTS synth" },
+  { k: "stress", label: "Stress" }, { k: "tts", label: "TTS synth" },
 ];
 
 // matchesFilters lives in ../runsFilters.js; it is the client-side mirror of the
@@ -72,7 +72,7 @@ function Gantt({ r }) {
       </div>;
     })}
     {r.error && <div className="z-grow">
-      <div className="lbl"><s style={{ background: "#dc2626" }} />{r.error.stage}</div>
+      <div className="lbl"><s style={{ background: "#dc2626" }} />{capitalize(r.error.stage)}</div>
       <div className="z-gtrack"><div className="z-gseg" style={{ left: off + "%", width: (100 - off) + "%", background: "repeating-linear-gradient(45deg,#dc2626,#dc2626 4px,#fecaca 4px,#fecaca 8px)" }} /></div>
       <div className="ms" style={{ color: "var(--bad)" }}>fail</div>
     </div>}
@@ -94,6 +94,10 @@ const ATTEMPT_TONE = {
   answered: "good", spoke: "good", accepted: "good",
   stt_error: "bad", handler_error: "bad", error: "bad",
 };
+// An error stage as the server writes it ("STT", "pipeline", "device") with a capital first letter.
+const capitalize = (s) => (s ? s[0].toUpperCase() + s.slice(1) : s);
+// The outcomes whose id is not a word; every other outcome shows as it is.
+const OUTCOME_LABELS = { stt_error: "STT error", handler_error: "handler error" };
 
 // The run's chain and TTS attempts in the order they ran. A chain attempt is
 // {kind:"chain", chain, stt, handler, text, outcome, error, detail, t_stt, t_handler}
@@ -118,12 +122,12 @@ function Attempts({ attempts }) {
           </span>
           <span style={{ display: "flex", alignItems: "center", gap: 10 }}>
             <span className="mono" style={{ fontSize: 11, color: "var(--mut)" }}>
-              {followup ? `${a.probability != null ? `probability ${Math.round(a.probability * 100)}% · ` : ""}${fmtSec(a.t)}`
+              {followup ? `${a.probability != null ? `probability ${fmtPct(a.probability)} · ` : ""}${fmtSec(a.t)}`
                 : tts ? fmtSec(a.t)
                 : a.stt ? `STT ${fmtSec(a.t_stt)} · handler ${fmtSec(a.t_handler)}`
                 : `handler ${fmtSec(a.t_handler)}`}
             </span>
-            <span className={"z-pill " + (ATTEMPT_TONE[a.outcome] || "muted")}>{a.outcome}</span>
+            <span className={"z-pill " + (ATTEMPT_TONE[a.outcome] || "muted")}>{OUTCOME_LABELS[a.outcome] || a.outcome}</span>
           </span>
         </div>
         {!tts && a.text && <div style={{ fontSize: 13, color: "var(--ink)" }}>{a.text}</div>}
@@ -147,8 +151,31 @@ function Collapsible({ summary, children }) {
   </>;
 }
 
+// The run's reason in words: how a phrase ended, or what started a run without one (say,
+// text, assistant, reminder); an unknown reason shows as it is.
+const REASONS = {
+  endpoint: "end of phrase", no_speech: "no speech", maxlen: "length limit",
+  duplicate: "duplicate wake", wakeword_reject: "wake word not confirmed",
+  wakeword_error: "wake word check failed", followup_reject: "not a follow-up",
+  followup_error: "follow-up check failed", say: "spoken on request", text: "text request",
+  assistant: "assistant task",
+};
+
+// A model-free handler (simple-nlu, jev) records "<provider id>/<what it decided>": shown as the
+// provider's name; an LLM records its upstream model id (e.g. "anthropic/claude-haiku-4.5"),
+// shown as it is.
+function modelText(model, providerLabel) {
+  if (!model) return "—";
+  const [id, ...rest] = model.split("/");
+  const label = providerLabel("llm", id);
+  if (label === id) return model;
+  const name = rest.join("/");
+  return label + (name && name !== "none" ? ` · ${name}` : "");
+}
+
 // Right-side drawer with the full run detail. `r` is the mapped detail row.
 function Drawer({ r, loading, error, onClose }) {
+  const providerLabel = useProviderLabel();
   const m = statusMeta(r);
   const device = deviceLabel(useDeviceList(), r && r.device);
   // Another device heard the same phrase and kept it; the verifier did not reject it.
@@ -178,7 +205,7 @@ function Drawer({ r, loading, error, onClose }) {
       <div className="z-drawer-h">
         <div>
           <h2>{device || "Run"} {r && <span style={{ color: "var(--mut2)", fontWeight: 500, fontFamily: "var(--mono)", fontSize: 13 }}>· {r.stamp}</span>}</h2>
-          {r && <div style={{ fontSize: 11.5, color: "var(--mut)", marginTop: 2, fontFamily: "var(--mono)" }}>id {r.id} · end: {r.reason || "—"}</div>}
+          {r && <div style={{ fontSize: 11.5, color: "var(--mut)", marginTop: 2, fontFamily: "var(--mono)" }}>id {r.id} · {REASONS[r.reason] || r.reason || "—"}</div>}
         </div>
         {r && <span className={"z-pill " + m.tone} style={{ marginLeft: 12 }}><span className={"z-dot " + (m.tone === "good" ? "ok" : m.tone === "bad" ? "error" : "off")} />{m.label}</span>}
         <button className="z-x" aria-label="Close" onClick={onClose}><svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" /></svg></button>
@@ -188,7 +215,7 @@ function Drawer({ r, loading, error, onClose }) {
         {error && <ErrorBox error={error} />}
         {r && !loading && !error && <>
           {r.error && <div className="z-banner" style={{ background: "var(--bad-bg)", border: "1px solid #f3c8c8", color: "#b91c1c", marginBottom: 16 }}>
-            <Ic n="restart" w={15} /><span><b>{r.error.stage} error.</b> {r.error.text}</span>
+            <Ic n="restart" w={15} /><span><b>{capitalize(r.error.stage)} error.</b> {r.error.text}</span>
           </div>}
 
           {/* A run ended before STT. Mirrors the error banner, but muted — it is an
@@ -201,8 +228,8 @@ function Drawer({ r, loading, error, onClose }) {
             <Ic n="wakeword" w={15} />{duplicate
               ? <span><b>Dropped as a duplicate:</b> another device kept the phrase</span>
               : followupReject
-              ? <span><b>Not a continuation (follow-up check).</b> {followupCheck && followupCheck.probability != null ? `probability ${Math.round(followupCheck.probability * 100)}%` : "check failed"}</span>
-              : <span><b>Rejected by wake-word verify.</b> {r.reason === "wakeword_error" ? "verifier error" : "wake word not confirmed"}{r.wakeword_score != null ? ` · score ${r.wakeword_score.toFixed(2)}` : ""}</span>}
+              ? <span><b>Not a continuation (follow-up check).</b> {followupCheck && followupCheck.probability != null ? `probability ${fmtPct(followupCheck.probability)}` : "check failed"}</span>
+              : <span><b>Rejected by wake word verify.</b> {r.reason === "wakeword_error" ? "The check failed" : "Wake word not confirmed"}{r.wakeword_score != null ? ` · score ${fmtPct(r.wakeword_score)}` : ""}</span>}
           </div>}
 
           <div className="z-sl" style={{ marginTop: 0 }}>Stage timeline</div>
@@ -213,9 +240,9 @@ function Drawer({ r, loading, error, onClose }) {
               duplicate, which the verifier did not reject. Its time is the stage
               timeline's wake-word row. */}
           {!duplicate && (r.wakeword_score != null || (r.result === "rejected" && !followupReject)) && <>
-            <div className="z-sl">Wake-word verify<div className="ln" /></div>
+            <div className="z-sl">Wake word verify<div className="ln" /></div>
             <div className="z-card"><div style={{ padding: "6px 17px" }}>
-              <KV k="Score" v={r.wakeword_score != null ? r.wakeword_score.toFixed(3) : "—"} />
+              <KV k="Score" v={fmtPct(r.wakeword_score)} />
               <KV k="Verdict" v={r.result === "rejected" ? "Rejected" : "Passed"} />
             </div></div>
           </>}
@@ -263,9 +290,9 @@ function Drawer({ r, loading, error, onClose }) {
           </> : null}
 
           {hasRounds && <>
-            <div className="z-sl">Rounds & tool calls<div className="ln" /><span style={{ fontFamily: "var(--mono)", fontSize: 10.5, color: "var(--mut2)", textTransform: "none", letterSpacing: 0 }}>{r.model || "—"} · {r.tokens || 0} tok</span></div>
+            <div className="z-sl">Rounds & tool calls<div className="ln" /><span style={{ fontFamily: "var(--mono)", fontSize: 10.5, color: "var(--mut2)", textTransform: "none", letterSpacing: 0 }}>{modelText(r.model, providerLabel)} · {r.tokens || 0} tokens</span></div>
             {r.request && <div className="z-round">
-              <div className="z-round-h"><span className="rn">IN</span><span style={{ color: "var(--ink2)" }}>Model input — full debug</span></div>
+              <div className="z-round-h"><span className="rn">IN</span><span style={{ color: "var(--ink2)" }}>Model input</span></div>
               <div className="z-tool">
                 <Collapsible summary={<><s>prompt</s> System prompt</>}>
                   <div className="z-code" style={{ marginTop: 7 }}>{r.request.system_prompt || "—"}</div>
@@ -274,7 +301,7 @@ function Drawer({ r, loading, error, onClose }) {
               <div className="z-tool">
                 <div className="tn"><s>context</s> Context · {(r.request.context || []).length} msg</div>
                 {(r.request.context && r.request.context.length)
-                  ? r.request.context.map((m, k) => <div className="z-code" style={{ marginTop: 6 }} key={k}><span className="k">{m.role}: </span>{m.content}</div>)
+                  ? r.request.context.map((m, k) => <div className="z-code text" style={{ marginTop: 6 }} key={k}><span className="k">{m.role}: </span>{m.content}</div>)
                   : <div className="z-code" style={{ color: "var(--mut)" }}>— no prior context —</div>}
               </div>
               <div className="z-tool">
@@ -292,7 +319,7 @@ function Drawer({ r, loading, error, onClose }) {
               </div>
               <div className="z-tool">
                 <div className="tn"><s>user</s> User message</div>
-                <div className="z-code">{r.request.user_text || "—"}</div>
+                <div className="z-code text">{r.request.user_text || "—"}</div>
               </div>
             </div>}
             {(r.rounds || []).map((rd, i) => <div className="z-round" key={i}>
@@ -300,10 +327,10 @@ function Drawer({ r, loading, error, onClose }) {
               {(!rd.calls || rd.calls.length === 0)
                 ? <div className="z-tool">
                     <div className="tn"><s>final</s> Final text</div>
-                    <div className="z-code">{rd.content || "— (empty) —"}</div>
+                    <div className="z-code text">{rd.content || "— (empty) —"}</div>
                   </div>
                 : <>
-                    {rd.content ? <div className="z-tool"><div className="tn"><s>note</s> Assistant text</div><div className="z-code">{rd.content}</div></div> : null}
+                    {rd.content ? <div className="z-tool"><div className="tn"><s>note</s> Assistant text</div><div className="z-code text">{rd.content}</div></div> : null}
                     {rd.calls.map((c, j) => <div className="z-tool" key={j}>
                       <div className="tn"><s>call</s> {c.name}</div>
                       <div className="z-code">{JSON.stringify(c.args)}</div>
@@ -314,7 +341,7 @@ function Drawer({ r, loading, error, onClose }) {
           </>}
 
           {r.stress && <>
-            <div className="z-sl">Accents<div className="ln" />{r.t && r.t.stress ? <span style={{ fontFamily: "var(--mono)", fontSize: 10.5, color: "var(--mut2)", textTransform: "none", letterSpacing: 0 }}>{fmtSec(r.t.stress)}</span> : null}</div>
+            <div className="z-sl">Stress<div className="ln" />{r.t && r.t.stress ? <span style={{ fontFamily: "var(--mono)", fontSize: 10.5, color: "var(--mut2)", textTransform: "none", letterSpacing: 0 }}>{fmtSec(r.t.stress)}</span> : null}</div>
             <div className="z-card"><div style={{ padding: "12px 17px" }}>
               <div style={{ fontSize: 14, color: "var(--ink)", lineHeight: 1.6 }}>{r.stress}</div>
             </div></div>

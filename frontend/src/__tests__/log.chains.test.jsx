@@ -65,14 +65,15 @@ describe("Request log — chains", () => {
     await waitFor(() => expect(getRuns).toHaveBeenLastCalledWith({ limit: 100, offset: 0, result: "rejected" }));
   });
 
-  it("dates the detail's header, keeps the header's fields out of Metadata, shows the wake-word time once and says what Total spans", async () => {
+  it("dates the detail's header, keeps the header's fields out of Metadata, shows the wake word score in percent and its time once, and says what Total spans", async () => {
     getRun.mockResolvedValue({ ...ROW, ts: 1760854865, reason: "endpoint", t_vad: 1500, t_wakeword: 230, wakeword_score: 0.9, t_stt: 400, t_total: 9000 });
     render(<Log />);
     fireEvent.click((await screen.findAllByText("Солнечно"))[0]);
     await screen.findByText("Metadata");
     expect(within(screen.getByRole("dialog")).getByRole("heading").textContent).toBe("Кухня · Oct 19 2025 06:21:05");
     expect([...document.querySelectorAll(".z-kv .k")].map((k) => k.textContent)).toEqual(["Score", "Verdict", "Chain"]);
-    expect(screen.getByText("Wakeword verify").closest(".z-grow").querySelector(".ms").textContent).toBe("230 ms");
+    expect(document.querySelector(".z-kv .v").textContent).toBe("90%");
+    expect(screen.getByText("Wake word verify", { selector: ".lbl" }).closest(".z-grow").querySelector(".ms").textContent).toBe("230 ms");
     expect(screen.queryByText("0.23s")).toBeNull();
     expect(screen.getByText("end of phrase → end of reply playback").nextSibling.textContent).toBe("9.00s");
     fireEvent.keyDown(window, { key: "Escape" });
@@ -98,7 +99,31 @@ describe("Request log — chains", () => {
     fireEvent.click((await screen.findAllByText("Солнечно"))[0]);
     await screen.findByText("Metadata");
     expect([...document.querySelectorAll(".z-kv .k")].map((k) => k.textContent)).not.toContain("Model");
-    expect(screen.getByText("haiku · 120 tok")).toBeInTheDocument();
+    expect(screen.getByText("haiku · 120 tokens")).toBeInTheDocument();
+  });
+
+  it("names the handler and how the run ended in words, not ids", async () => {
+    getRun.mockResolvedValue({ ...ROW, reason: "endpoint", model: "simple-nlu/none", tokens: 0, rounds: [{ round: 1, note: "", tokens: 0, calls: [], content: "Солнечно" }] });
+    render(<Log />);
+    fireEvent.click((await screen.findAllByText("Солнечно"))[0]);
+    await screen.findByText("Metadata");
+    expect(screen.getByText("Simple NLU (no LLM) · 0 tokens")).toBeInTheDocument();
+    expect(screen.getByText("id 7 · end of phrase")).toBeInTheDocument();
+  });
+
+  it("names the failed stage with a capital letter", async () => {
+    getRun.mockResolvedValue({ ...ROW, result: "error", error_stage: "pipeline", error_text: "boom" });
+    render(<Log />);
+    fireEvent.click((await screen.findAllByText("Солнечно"))[0]);
+    expect(await screen.findByText("Pipeline error.")).toBeInTheDocument();
+  });
+
+  it("shows an LLM's upstream model id as it is", async () => {
+    getRun.mockResolvedValue({ ...ROW, model: "anthropic/claude-haiku-4.5", tokens: 120, rounds: [{ round: 1, note: "", tokens: 120, calls: [], content: "Солнечно" }] });
+    render(<Log />);
+    fireEvent.click((await screen.findAllByText("Солнечно"))[0]);
+    await screen.findByText("Metadata");
+    expect(screen.getByText("anthropic/claude-haiku-4.5 · 120 tokens")).toBeInTheDocument();
   });
 
   it("lists the run's attempts in order with text, outcome, error and timings", async () => {
@@ -107,6 +132,7 @@ describe("Request log — chains", () => {
       attempts: [
         { kind: "chain", chain: "fast", stt: "vosk", handler: "simple-nlu", text: "какая погода", outcome: "declined", error: null, detail: "no alias phrase matched", t_stt: 310, t_handler: 12 },
         { kind: "chain", chain: "smart", stt: "groq", handler: "openrouter", text: "какая погода", outcome: "answered", error: null, detail: null, t_stt: 800, t_handler: 4100 },
+        { kind: "chain", chain: "smart", stt: "groq", handler: "openrouter", text: null, outcome: "stt_error", error: "429", detail: null, t_stt: 200, t_handler: 0 },
         { kind: "tts", provider: "yandex", outcome: "error", error: "timeout", t: 6000 },
         { kind: "tts", provider: "piper", outcome: "spoke", error: null, t: 900 },
       ],
@@ -116,7 +142,7 @@ describe("Request log — chains", () => {
     await screen.findByText("Attempts");
 
     const items = screen.getAllByTestId("attempt");
-    expect(items).toHaveLength(4);
+    expect(items).toHaveLength(5);
     expect(items[0].textContent).toContain("fast · Vosk (offline) → Simple NLU (no LLM)");
     expect(items[0].textContent).toContain("STT 0.31s · handler 0.01s");
     expect(items[0].textContent).toContain("declined");
@@ -124,10 +150,13 @@ describe("Request log — chains", () => {
     // Why the handler declined shows under its attempt; an answer has no detail.
     expect(screen.getAllByTestId("attempt-detail").map((d) => d.textContent)).toEqual(["no alias phrase matched"]);
     expect(items[1].textContent).toContain("answered");
-    expect(items[2].textContent).toContain("TTS · yandex");
-    expect(items[2].textContent).toContain("timeout");
-    expect(items[2].textContent).toContain("6.00s");
-    expect(items[3].textContent).toContain("spoke");
+    // An outcome id that is not a word shows in words.
+    expect(items[2].textContent).toContain("STT error");
+    expect(items[2].textContent).not.toContain("stt_error");
+    expect(items[3].textContent).toContain("TTS · yandex");
+    expect(items[3].textContent).toContain("timeout");
+    expect(items[3].textContent).toContain("6.00s");
+    expect(items[4].textContent).toContain("spoke");
   });
 
   it("reads a dropped follow-up phrase as not a continuation, with the check's probability", async () => {
@@ -142,7 +171,7 @@ describe("Request log — chains", () => {
     fireEvent.click((await screen.findAllByText("Солнечно"))[0]);
     expect((await screen.findByText("Not a continuation (follow-up check).")).parentElement.textContent)
       .toContain("probability 12%");
-    expect(screen.queryByText("Wake-word verify")).toBeNull();
+    expect(screen.queryByText("Wake word verify")).toBeNull();
     const items = screen.getAllByTestId("attempt");
     expect(items[0].textContent).toContain("Follow-up check · jev");
     expect(items[0].textContent).toContain("probability 12% · 0.64s");
@@ -169,8 +198,8 @@ describe("Request log — chains", () => {
     fireEvent.click(await screen.findByText("Кухня"));
     const banner = await screen.findByText("Dropped as a duplicate:");
     expect(banner.parentElement.textContent).toBe("Dropped as a duplicate: another device kept the phrase");
-    expect(screen.queryByText("Wake-word verify")).toBeNull();
-    expect(screen.queryByText(/Rejected by wake-word verify/)).toBeNull();
+    expect(screen.queryByText("Wake word verify")).toBeNull();
+    expect(screen.queryByText(/Rejected by wake word verify/)).toBeNull();
     expect(screen.queryByText("— silence, no speech detected —")).toBeNull();
   });
 });

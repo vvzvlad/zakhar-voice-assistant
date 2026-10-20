@@ -247,7 +247,7 @@ async def main() -> None:
         reconfig_task = asyncio.create_task(reconf.run_loop())
         # Now that the panel is serving and the drain loop is running, start the deferred
         # accent (stress) model load in the background. It rebuilds via the hot-reload
-        # path: marks reloading() (the panel shows "Loading… Accents") and swaps the real
+        # path: marks reloading() (the panel shows "Loading… Stress") and swaps the real
         # backend into the runtime when ready; the stage is skipped until then.
         reconf.request_initial_load({"stress", "wakeword"})
         # There is no in-app restart trigger anymore: block on a never-fired event

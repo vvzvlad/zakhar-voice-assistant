@@ -1238,7 +1238,7 @@ class Pipeline:
                 )
         # Store the generated TTS reply audio (native backend format) in the same
         # rolling window as the utterance audio (runs.audio_keep) so operators can play
-        # back exactly what the assistant spoke — shown right after the Accents text in
+        # back exactly what the assistant spoke — shown right after the Stress text in
         # the log detail view. Best-effort: a storage failure must never break the run.
         # tts_audio is set only when synthesis produced bytes (see speak_reply).
         if self.core.runs.store_audio and tts_audio:

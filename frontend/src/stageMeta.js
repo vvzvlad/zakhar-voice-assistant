@@ -17,9 +17,9 @@ export const FILLER_COLOR = "#f59e0b";
 // backend is reloading by its stage `name`.
 export const STAGES = [
   { key: "vad", name: "VAD", cat: "vad" },
-  { key: "wakeword", name: "Wakeword", cat: "wakeword" },
+  { key: "wakeword", name: "Wake word", cat: "wakeword" },
   { key: "stt", name: "STT", cat: "stt" },
   { key: "llm", name: "LLM", cat: "llm" },
-  { key: "stress", name: "Accents", cat: "stress" },
+  { key: "stress", name: "Stress", cat: "stress" },
   { key: "tts", name: "TTS", cat: "tts" },
 ];

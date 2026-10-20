@@ -30,7 +30,7 @@ class ContextConfig(BaseModel):
         300, ge=0,
         title="Dialog timeout",
         json_schema_extra={"unit": "s"},
-        description="Idle time after which the next request starts a new dialog; 0 = every request starts fresh.",
+        description="Idle time after which a new dialog starts; 0 starts every request fresh.",
     )
 
 
@@ -38,12 +38,13 @@ class AudioConfig(BaseModel):
     # Bind address of the device server (devices connect to ws://<server>:<port>/device).
     host: str = Field("0.0.0.0", title="Bind host")
     port: int = Field(8200, title="Port")
+    # Announced by mDNS. Empty: the bind host, or this machine's LAN address when it binds
+    # all; in a Docker bridge network that is the container's own address, which the devices
+    # cannot reach, so the host's LAN address goes here.
     advertise_host: str = Field(
         "",
         title="Advertised address",
-        description="LAN address the devices find this server at by mDNS. Empty: the bind host, "
-        "or this machine's LAN address when it binds all; in a Docker bridge network that is the "
-        "container's own address, so set the host's LAN address there.",
+        description="LAN address devices find this server at; set the host's address when in Docker.",
     )
 
 
@@ -66,57 +67,68 @@ class VadConfig(BaseModel):
         800,
         title="End-of-phrase pause",
         json_schema_extra={"unit": "ms", "multipleOf": 100},
-        description="Trailing silence after speech before the utterance is considered finished. Higher tolerates longer mid-phrase pauses but adds the same delay before the reply starts.",
+        description="Silence after speech that ends the phrase; more allows longer pauses but delays the reply.",
     )
     min_speech_ms: int = Field(
         200,
         title="Minimum utterance length",
         json_schema_extra={"unit": "ms", "multipleOf": 100},
-        description="Minimum total detected speech for the audio to count as a real utterance; shorter blips are treated as noise and dropped.",
+        description="Less speech than this is taken for noise and dropped.",
     )
     max_utterance_ms: int = Field(
         15000,
         title="Maximum utterance length",
         json_schema_extra={"unit": "ms", "multipleOf": 100},
-        description="Hard cap on a single utterance — it is force-finalized once it reaches this length even if no trailing silence was seen.",
+        description="A phrase is cut off at this length even without a pause.",
     )
+    # The wake word itself does not count as speech. A run that hears nothing by then ends
+    # silently and sends nothing to STT.
     no_speech_timeout_ms: int = Field(
         4000,
         title="Wait for the command",
         json_schema_extra={"unit": "ms", "multipleOf": 100},
-        description="How long to wait for the command to start after the wake word (the wake word itself does not count as speech). If nothing is said by then, the run ends silently and nothing is sent to STT.",
+        description="How long to wait for the command after the wake word before giving up.",
     )
+    # The oldest part of the device's 2000 ms pre-roll, cut off the captured sample before STT.
     trim_start_ms: int = Field(
         200,
         ge=0,
         title="Trim from start",
         json_schema_extra={**ADVANCED_FIELD_EXTRA, "unit": "ms", "multipleOf": 100},
-        description="Drop this many ms off the start of the captured sample before STT: the oldest part of the 2000 ms pre-roll, before the wake word. 0 disables.",
+        description="Audio dropped from the start, before the wake word, ahead of STT; 0 drops nothing.",
     )
+    # Falls back to the most-processed stream if the device does not send the selected one.
+    # Applies on the next utterance.
     mic_channel: Literal[0, 1] = Field(
-        0,
+        1,
         title="Mic processing level",
-        # Rendered as a segment control with pole captions (see SchemaForm.ScaleSeg).
-        # Lower = more processed / louder; higher = rawer / cleaner.
-        json_schema_extra={"poles": ["more processed / louder", "raw / cleaner"]},
-        description="Selects which mic stream feeds the pipeline. Lower is more processed and louder; higher is rawer and cleaner. Falls back to the most-processed stream if the device does not provide the selected one. Applies on the next utterance.",
+        # 0 is the XMOS AGC output (louder), 1 the less-processed noise-suppressed one
+        # (cleaner, quieter).
+        json_schema_extra={"enumLabels": {0: "Processed", 1: "Raw"}},
+        description="Which microphone stream feeds the pipeline: processed is louder, raw is cleaner.",
     )
+    # Peak-normalizes each captured utterance so its loudest sample reaches ~-3 dBFS: the
+    # quieter, less-processed channel gets a steady loudness without clipping; near-silent
+    # clips are left as they are. Applies on the next utterance.
     mic_normalize: bool = Field(
         False,
         title="Volume normalization",
         json_schema_extra=ADVANCED_FIELD_EXTRA,
-        description="Peak-normalize each captured utterance before STT so its loudest sample reaches a target level (~-3 dBFS). Adapts the quieter less-processed channel to a consistent loudness without clipping; near-silent clips are left untouched. Off by default; applies on the next utterance.",
+        description="Raises each phrase to a steady loudness before STT.",
     )
+    # A ~80 Hz high-pass over the whole utterance strips the DC offset and the rumble (table
+    # thumps, HVAC) that hurt recognition. Applies on the next utterance.
     mic_highpass: bool = Field(
         False,
         title="Low-frequency filter",
         json_schema_extra=ADVANCED_FIELD_EXTRA,
-        description="Apply a ~80 Hz high-pass filter to the whole utterance before STT to strip DC offset and low-frequency rumble (table thumps, HVAC) that hurt recognition. Off by default; applies on the next utterance.",
+        description="Cuts hum and rumble below about 80 Hz before STT.",
     )
+    # Lets any VAD engine end-point the quiet, less-processed mic channel. Read live per chunk.
     mic_auto_gain: bool = Field(
         False,
         title="VAD auto gain",
-        description="Boost quiet audio for the speech/no-speech decision only, before it reaches the VAD engine (the recorded/STT audio is untouched). Lets any VAD engine end-point the quiet, less-processed mic channel. Read live per chunk.",
+        description="Boosts quiet audio for the VAD decision only; the recording stays as it is.",
     )
 
 
@@ -179,14 +191,14 @@ class AssistantTasksConfig(BaseModel):
     # Master switch: a disabled source is removed from the ToolHub and its prompt block is dropped.
     enabled: bool = Field(True, title="Enabled", description=SOURCE_ENABLED_DESCRIPTION)
     url: str = Field("", title="Webhook URL",
-                     description="ZeroClaw webhook channel the tasks are posted to. Its replies go to "
-                     "POST /api/assistant-tasks/reply on this panel.")
+                     description="ZeroClaw webhook channel the tasks are posted to.")
     secret: str = Field("", title="Webhook secret", json_schema_extra=SECRET_FIELD_EXTRA)
     task_suffix: str = Field(
         "Ответ прозвучит на колонке, когда будет готов: начни с того, о чём была задача, "
         "ответь коротко, одним-тремя предложениями, без разметки, списков и ссылок.",
         title="Task suffix",
         description="Appended to every task after a blank line.",
+        json_schema_extra=PHRASE_FIELD_EXTRA,
     )
     # Appended to the system prompt to describe this built-in MCP's tools to the model.
     prompt: str = Field("", title="Tools prompt", description=SOURCE_PROMPT_DESCRIPTION,
@@ -249,11 +261,12 @@ class DeviceConfig(BaseModel):
     wake_model: str = ""
     vad_model: str = ""
     # Sent to the device in `log_stream` after every hello and whenever it changes.
+    # The server keeps it core.device_log_days days under data/device_logs/; off, the device
+    # sends nothing.
     log: bool = Field(
         False,
         title="Device log",
-        description="The speaker streams its whole log to the server, which keeps it "
-        "core.device_log_days days under data/device_logs/. Off: the speaker sends nothing.",
+        description="The device streams its whole log to the server.",
     )
 
 
@@ -270,14 +283,12 @@ class RunsConfig(BaseModel):
     # download/play it from the log to diagnose mis-triggers. Stereo when the device
     # streams both mic channels: left = the pipeline/STT channel exactly as STT
     # received it, right = the other raw mic channel; mono when only one stream is sent.
+    # Older recordings are dropped as new ones arrive, from the next utterance on.
     store_audio: bool = Field(True, title="Record audio")
     audio_keep: int = Field(
         100, ge=1,
         title="Stored recordings",
-        description="How many of the most recent utterance recordings to keep for "
-        "playback in the Request Log. Older recordings are dropped as new ones "
-        "arrive (applied on the next utterance). The audio is stored in runs.db, "
-        "so a higher number uses more disk.",
+        description="Phrase recordings the Request Log keeps; more uses more disk.",
     )  # rolling ring-buffer cap; applied per-utterance via RunsStore.put_audio()
 
 
@@ -308,15 +319,16 @@ class AckConfig(BaseModel):
     enabled: bool = Field(
         True,
         title="End-of-phrase chime",
-        description="Play a short confirmation chime to the speaker the instant the server detects that your phrase has ended — immediate \"got it\" feedback before STT/LLM/TTS run. The full spoken reply still plays afterwards.",
+        description="Plays a short chime on the device the moment your phrase ends.",
     )
     # The dropdown is fed by GET /api/chimes (bundled assets/chimes clips); an empty
-    # value keeps the synthesized chime, which is built once and cached.
+    # value keeps the synthesized chime (a short two-tone sine), which is built once and
+    # cached. Applies per run.
     sound_path: str = Field(
         "",
         title="Chime sound",
         json_schema_extra={"options": "dynamic"},
-        description="Chime audio file (WAV) played on end-of-phrase. Pick a bundled clip to use that exact «блям»; the synthesized default (empty value) plays a short two-tone sine chime. Applies per run.",
+        description="A bundled clip, or the default synthesized two-tone chime.",
     )
 
 
@@ -368,34 +380,28 @@ class CommandsConfig(BaseModel):
         ),
         json_schema_extra={"widget": "textarea"},
     )
+    # In strict mode, when a later recognition chain takes what this one declines, a direct
+    # match runs only if every word is an action verb, a word of the matched alias phrase, a
+    # number that set a value, or one of these; the first word may also be one letter off one
+    # of these of four letters or more (a misheard «захар»).
     filler_words: str = Field(
         _DEFAULT_FILLER_WORDS,
         title="Filler words (strict mode)",
-        description=(
-            "Comma-separated words an utterance may carry besides the command. In "
-            "strict mode, when a later recognition chain takes what this one "
-            "declines, a direct match runs only if every word is an action verb, a "
-            "word of the matched alias phrase, a number that set a value, or one of "
-            "these; the first word may also be one letter off one of these of four "
-            "letters or more (a misheard «захар»)."
-        ),
+        description="Comma-separated extra words a command may contain in strict mode.",
+        json_schema_extra=PHRASE_FIELD_EXTRA,
     )
+    # A numeric level slot with no on/off enum, e.g. dimmer brightness.
     level_on: int = Field(
         100,
         ge=0,
         title="On level",
-        description=(
-            "Value an on-verb assigns to a numeric level slot with no on/off enum "
-            "(e.g. dimmer brightness). An off-verb assigns 0."
-        ),
+        description="Level an on-verb sets on a numeric level slot; an off-verb sets 0.",
     )
+    # A required string level slot with no enum.
     off_token: str = Field(
         "off",
         title="Off token (string level slot)",
-        description=(
-            "Value an off-verb assigns to a required string level slot with no enum "
-            "(e.g. climate temperature)."
-        ),
+        description="Value an off-verb sets on a text level slot, e.g. a climate temperature.",
     )
 
 

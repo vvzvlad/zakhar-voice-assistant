@@ -20,7 +20,7 @@ framing, the per-utterance engine instance, the threshold).
 import numpy as np
 from pydantic import BaseModel, Field
 
-from src.plugins.base import Deps, Provider, register
+from src.plugins.base import PERCENT_FIELD_EXTRA, Deps, Provider, register
 from src.vad import EndpointPolicy, EndpointTracker, VadBackend, VadSession
 
 # TEN VAD consumes fixed 256-sample hops = 16 ms = 512 bytes of 16-bit mono PCM
@@ -119,11 +119,13 @@ class TenVadBackend(VadBackend):
 
 
 class TenVadConfig(BaseModel):
+    # Judged per hop: lower is more sensitive, it catches quiet speech and also takes
+    # more noise for speech.
     threshold: float = Field(
         0.5, ge=0.05, le=0.95,
         title="Speech threshold",
-        json_schema_extra={"widget": "slider"},
-        description="Hops with speech probability at or above this count as speech. Lower = more sensitive.",
+        json_schema_extra={"widget": "slider", **PERCENT_FIELD_EXTRA},
+        description="Speech probability at which audio counts as speech; lower catches quieter speech.",
     )
 
 

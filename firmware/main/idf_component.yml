@@ -7,3 +7,5 @@ dependencies:
     version: "1.2.5"
   espressif/esp-sr:
     version: "2.5.5"
+  sendspin/sendspin-cpp:
+    version: "0.9.5"

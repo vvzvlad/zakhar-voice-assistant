@@ -15,7 +15,7 @@ import { pendingTab, clearTab } from "../navStore.js";
 import { chainsOf, chainsUsing, usedByChains, byVariantOrder, settingsPageFor, COMMANDS_PROVIDER } from "../chains.js";
 import NluCatalogEditor from "../components/NluCatalogEditor.jsx";
 
-// Shared end-of-phrase chime preview: plays a chime on every online speaker via the
+// Shared end-of-phrase chime preview: plays a chime on every online device via the
 // same announce path as the real ack. `busy` holds the sound_path currently playing
 // (or null); `msg` is the last error (success is silent). Used by the "Play now" button AND the
 // per-item play buttons in the chime dropdown, so they share one busy flag + status.
@@ -33,7 +33,7 @@ function useChimePreview() {
       // Success is self-evident (the chime plays through the speaker), so show no
       // confirmation text — only surface a message when nothing actually played.
       if (played.length === 0) {
-        setMsg({ tone: "err", text: offline.length ? `No online speaker (offline: ${offline.join(", ")})` : "No speakers configured" });
+        setMsg({ tone: "err", text: offline.length ? `No online device (offline: ${offline.join(", ")})` : "No devices configured" });
       }
     } catch (e) {
       setMsg({ tone: "err", text: e.message || "Failed to play" });
@@ -500,7 +500,7 @@ export function VAD() {
 
   return <FormPage form={form} narrow>
     <PageHeader title="VAD · Voice capture"
-      desc="The speaker streams audio continuously and never signals end-of-phrase — we detect it server-side with the VAD engine chosen on the Capture page. Tune sensitivity to pauses here." />
+      desc="The device streams audio continuously and never signals end-of-phrase — we detect it server-side with the VAD engine chosen on the Capture page. Tune sensitivity to pauses here." />
     <ReloadingBanner cat="wakeword" label={wake.prov.label} />
     {/* One column, like the other provider pages: VAD engine, end-pointing, mic, chime, wake-word verify. */}
     <div className="z-grid">
@@ -525,7 +525,7 @@ export function VAD() {
         {/* Per-item play buttons live in the dropdown; only surface preview errors here. */}
         {chime.msg && <div className="z-fh" style={{ marginTop: 6, ...(chime.msg.tone === "err" ? { color: "#b91c1c" } : {}) }}>{chime.msg.text}</div>}
       </Card>}
-      <Card id="card-wakeword" title="Wake-word verify" sub={wake.prov.label}>
+      <Card id="card-wakeword" title="Wake word verify" sub={wake.prov.label}>
         <SchemaForm schema={wake.prov.schema} values={form.draftOf(wake.part.key)} onChange={form.onChangeOf(wake.part.key)}
           optionsFor={optionsLoader("wakeword", wake.prov.id)} skip={["enabled"]} />
       </Card>

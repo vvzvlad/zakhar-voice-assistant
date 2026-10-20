@@ -1,0 +1,6 @@
+# The music player library's zero-initialised statics in PSRAM (sdkconfig.defaults,
+# CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY).
+[mapping:sendspin_extram_bss]
+archive: libsendspin__sendspin-cpp.a
+entries:
+    * (extram_bss)

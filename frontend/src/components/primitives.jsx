@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
-import { STAGE_COLOR, STAGE_ORDER, FILLER_COLOR } from "../stageMeta.js";
+import { STAGE_COLOR, STAGE_ORDER, FILLER_COLOR, STAGES } from "../stageMeta.js";
 import { Ic } from "./icons.jsx";
 import { errorLines } from "../useStageForm.js";
 import { useLeaveGuard } from "../navStore.js";
@@ -23,7 +23,7 @@ export function Field({ label, hint, children, row }) {
     </div>
   </div>;
 }
-// Masked secret input (API keys / tokens / PSK) with a SHOW/HIDE reveal toggle.
+// Masked secret input (API keys / tokens / PSK) with a Show/Hide reveal toggle.
 export function KeyInput({ value, onChange, placeholder }) {
   const [show, setShow] = useState(false);
   return (
@@ -35,7 +35,7 @@ export function KeyInput({ value, onChange, placeholder }) {
         onChange={(e) => onChange(e.target.value)}
       />
       <button className="z-mini" type="button" onClick={() => setShow((s) => !s)}>
-        {show ? "HIDE" : "SHOW"}
+        {show ? "Hide" : "Show"}
       </button>
     </div>
   );
@@ -233,6 +233,11 @@ export function Select({ value, options, onChange, w, itemAction, itemActionBusy
     </div>}
   </div>;
 }
+// An in-panel link to another page or card: its sentence-case text, then "→", in one look
+// everywhere. Without `onClick` a click goes to the enclosing clickable element.
+export function NavLink({ children, onClick }) {
+  return <button type="button" className="z-link" onClick={onClick}>{children} →</button>;
+}
 export function Pill({ tone, children }) { return <span className={"z-pill " + tone}>{children}</span>; }
 export function StatusPill({ status }) {
   const map = { online: ["good", "Online"], ok: ["good", "OK"], offline: ["muted", "Offline"], off: ["muted", "Off"], error: ["bad", "Error"] };
@@ -242,6 +247,7 @@ export function StatusPill({ status }) {
 
 // ── Waterfall ──────────────────────────────────────────
 const SC = STAGE_COLOR;
+const STAGE_NAME = Object.fromEntries(STAGES.map((s) => [s.key, s.name]));
 export const total = (t) => Object.values(t).reduce((a, b) => a + b, 0);
 export function segsFor(r) {
   if (r.result === "empty") {
@@ -249,7 +255,7 @@ export function segsFor(r) {
     return [{ label: "no speech · " + (ms / 1000).toFixed(2) + "s", pct: 100, bg: "#cbd2dd", col: "#8a93a4" }];
   }
   const tot = total(r.t) || 1;
-  const arr = STAGE_ORDER.filter((k) => r.t[k] > 0).map((k) => { const pct = r.t[k] / tot * 100; return { label: pct >= 15 ? `${k} ${r.t[k]}` : String(r.t[k]), pct, bg: SC[k], col: SC[k] }; });
+  const arr = STAGE_ORDER.filter((k) => r.t[k] > 0).map((k) => { const pct = r.t[k] / tot * 100; return { label: pct >= 15 ? `${STAGE_NAME[k] || k} ${r.t[k]}` : String(r.t[k]), pct, bg: SC[k], col: SC[k] }; });
   if (r.result === "error") arr.push({ label: "fail", pct: 24, bg: "repeating-linear-gradient(45deg,#dc2626,#dc2626 3px,#fecaca 3px,#fecaca 6px)", col: "#dc2626" });
   // A gate reject (wake-word verify, follow-up check) stops the pipeline: tag the bar with a
   // muted "rejected" segment (amber, matching the wakeword stage accent) so the row

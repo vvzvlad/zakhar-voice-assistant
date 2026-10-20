@@ -4,7 +4,7 @@
 // the whole core.chains array (PATCH replaces lists). Also pins which per-chain
 // controls appear (narrow switch, parallel toggle, the last-chain warning), the
 // providers named by their catalog labels in the dropdowns, the server error
-// banner, the "configure" links, and that a switched-off chain fades none of its controls.
+// banner, the "Configure →" links, and that a switched-off chain fades none of its controls.
 import React from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, cleanup, waitFor, within } from "@testing-library/react";
@@ -95,12 +95,12 @@ describe("Chains page — patch shape", () => {
 });
 
 describe("Chains page — per-chain controls", () => {
-  it("Delete is the panel's danger button, the other card actions its plain small buttons", () => {
+  it("Delete is the panel's danger button, the other card actions its plain small buttons, Configure the panel's link", () => {
     render(<Chains />);
     const card = cards()[0];
     expect(within(card).getByRole("button", { name: "Delete" })).toHaveClass("z-btn", "d", "sm");
     for (const name of ["Move up", "Move down"]) expect(within(card).getByRole("button", { name })).toHaveClass("z-btn", "g", "sm");
-    for (const btn of within(card).getAllByRole("button", { name: "configure →" })) expect(btn).toHaveClass("z-btn", "g", "sm");
+    for (const btn of within(card).getAllByRole("button", { name: "Configure →" })) expect(btn).toHaveClass("z-link");
   });
 
   it("a switched-off chain fades none of its controls", () => {
@@ -162,12 +162,12 @@ describe("Chains page — configure links", () => {
     const go = vi.fn();
     setNavigate(go);
     render(<Chains />);
-    fireEvent.click(within(cards()[1]).getAllByRole("button", { name: "configure →" })[0]);
+    fireEvent.click(within(cards()[1]).getAllByRole("button", { name: "Configure →" })[0]);
     expect(go).toHaveBeenLastCalledWith("stt");
     expect(pendingTab("stt")).toBe("groq");
     clearTab("stt");
 
-    fireEvent.click(within(cards()[0]).getAllByRole("button", { name: "configure →" })[1]);
+    fireEvent.click(within(cards()[0]).getAllByRole("button", { name: "Configure →" })[1]);
     expect(go).toHaveBeenLastCalledWith("commands");
     expect(patch).not.toHaveBeenCalled();
   });

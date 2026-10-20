@@ -21,9 +21,10 @@ describe("Topbar loading badge", () => {
       connected: true,
     });
     render(<Topbar active="dashboard" />);
-    // The badge text uses the stage's short name (Accents) for the stress category.
-    expect(screen.getByText(/Loading/)).toBeInTheDocument();
-    expect(screen.getByText(/Accents/)).toBeInTheDocument();
+    // The badge and its tooltip use the stage's name (Stress) for the stress category.
+    const badge = screen.getByText(/Loading/);
+    expect(badge.textContent).toContain("Stress");
+    expect(badge).toHaveAttribute("title", "Loading: Stress");
   });
 
   it("hides the loading badge when nothing is reloading", () => {

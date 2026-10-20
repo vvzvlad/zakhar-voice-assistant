@@ -210,7 +210,7 @@ class AssistantTasks:
                                f"reply stored, not spoken")
                 await record_run(self.rt, new_record(
                     device, "assistant", result="error", stt_text=task["text"], llm_text=content,
-                    error_stage="device", error_text="speaker unavailable", t_total=0))
+                    error_stage="device", error_text="device unavailable", t_total=0))
                 return
             try:
                 await client.announce(content, "assistant", task["text"])

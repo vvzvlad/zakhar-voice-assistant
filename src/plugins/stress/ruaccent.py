@@ -106,49 +106,48 @@ class RuAccentBackend(Accentizer):
 
 
 class RuAccentConfig(BaseModel):
+    # Loads a model on first enable.
     enabled: bool = Field(
         True,
         title="Stress placement",
-        description="Place Russian stress marks on the assistant's reply before TTS "
-        "so words are pronounced correctly. Loads a model on first enable.",
+        description="Marks Russian word stress on the reply so the TTS pronounces words correctly.",
     )
+    # The RuAccent homograph model; each option names its approximate RAM.
     model_size: str = Field(
         "turbo3.1",
         title="Model",
         # `enum` (not a bare `options` array) is what the panel's SchemaForm reads to
         # render a dropdown; the static `options` list it was using has no widget path.
         json_schema_extra={"widget": "select", "enum": RUACCENT_MODELS, "enumLabels": RUACCENT_MODEL_LABELS},
-        description="RuAccent omograph model. Larger = better homograph handling, more RAM "
-        "(approx per-model RAM shown in each option).",
+        description="Larger models handle homographs better and take more RAM, shown in each option.",
     )
+    # plus keeps the native '+vowel' notation, converted per TTS engine; acute is a
+    # combining acute accent; uppercase capitalises the stressed vowel.
     stress_format: Literal["plus", "acute", "uppercase"] = Field(
         "plus",
         title="Stress output",
-        description="How stress is emitted. 'plus' keeps the native '+vowel' "
-        "notation (default; converted per TTS engine). 'acute' uses a combining "
-        "acute accent, 'uppercase' capitalises the stressed vowel — use these for "
-        "engines that strip '+' (e.g. Fish Audio).",
+        json_schema_extra={"enumLabels": {"plus": "Plus sign (+)", "acute": "Acute accent", "uppercase": "Uppercase vowel"}},
+        description="How stress is marked; for a TTS that drops «+», like Fish Audio, pick another.",
     )
-    # Placed before `use_dictionary`, which the panel hides while this is on.
+    # Placed before `use_dictionary`, which the panel hides while this is on. It also
+    # disables the rule pipeline.
     tiny_mode: bool = Field(
         False,
         title="Low-memory mode",
-        description="Uses ~512 MB RAM: disables the rule pipeline and swaps the full stress "
-        "dictionary for a small one. Lower quality on homographs.",
+        description="Uses about 512 MB of RAM with a small dictionary; worse on homographs.",
     )
     # RUAccent.load() takes the small NN accent dictionary whenever tiny_mode is
     # on, whatever use_dictionary says, so the panel hides this switch then.
     use_dictionary: bool = Field(
         True,
         title="Stress dictionary",
-        description="Load the full stress dictionary (more RAM, better accuracy). "
-        "Ignored in low-memory mode.",
+        description="Loads the full stress dictionary: more accurate, more RAM.",
         json_schema_extra={"hiddenWhen": "tiny_mode"},
     )
     device: Literal["CPU", "CUDA"] = Field(
         "CPU",
         title="Inference device",
-        description="Inference device. CUDA requires onnxruntime-gpu + CUDA.",
+        description="CUDA needs onnxruntime-gpu and a CUDA GPU.",
     )
 
 

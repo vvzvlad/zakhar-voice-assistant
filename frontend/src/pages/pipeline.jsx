@@ -1,9 +1,9 @@
 // Pipeline pages Capture and Speech (Logic is chains.jsx): they only choose
 // what runs and switch stages on and off; every setting lives on the Providers
-// page an item's "configure →" link opens, scrolled to that item's card. One
+// page an item's "Configure →" link opens, scrolled to that item's card. One
 // Save per page sends the whole page as one PATCH (usePageForm, FormPage).
 import React from "react";
-import { Card, FormPage, PageHeader, Seg, Toggle } from "../components/primitives.jsx";
+import { Card, FormPage, NavLink, PageHeader, Seg, Toggle } from "../components/primitives.jsx";
 import { useAppData } from "../appData.jsx";
 import { usePageForm } from "../usePageForm.js";
 import { navCard } from "../navStore.js";
@@ -25,7 +25,7 @@ function enabledPart(category) {
 
 const descriptionOf = (schema, field) => schema?.properties?.[field]?.description;
 
-// One pipeline item: its name with a "configure →" link right after it, a hint
+// One pipeline item: its name with a "Configure →" link right after it, a hint
 // and the control (beside the name with `row`, under it otherwise). `dim` fades
 // the name and hint of a switched-off item, never its link or controls. On a
 // narrow screen the link drops under the name and the controls under the text.
@@ -34,7 +34,7 @@ function Item({ label, hint, onConfigure, row, dim, testId, children }) {
     <div className={row ? "z-fmeta" : ""}>
       <div className="z-fl" style={{ justifyContent: "flex-start", flexWrap: "wrap" }}>
         <b className={dim ? "z-dim" : undefined}>{label}</b>
-        <button type="button" className="z-btn g sm" onClick={onConfigure}>configure →</button>
+        <NavLink onClick={onConfigure}>Configure</NavLink>
       </div>
       {hint && <div className={"z-fh" + (dim ? " z-dim" : "")}>{hint}</div>}
     </div>
@@ -59,7 +59,7 @@ export function Capture() {
 
   return <FormPage form={form} narrow>
     <PageHeader title="Capture"
-      desc="What runs on the speaker's audio before recognition: the VAD engine that detects where your phrase ends, the wake-word check and the confirmation chime. Their settings are on Providers → VAD." />
+      desc="What runs on the device's audio before recognition: the VAD engine that detects where your phrase ends, the wake word check and the confirmation chime. Their settings are on Providers → VAD." />
     <Card>
       {/* Leaving drops an unsaved engine choice, so the link opens the saved engine. */}
       <Item label="VAD engine" hint={choose ? engineLabel : "Detects where your phrase ends."} row={!choose}
@@ -69,7 +69,7 @@ export function Capture() {
             onChange={(id) => form.onChangeOf("vad")("selected", id)} />
           : <span className="z-fh" style={{ marginTop: 0 }}>{engineLabel}</span>}
       </Item>
-      <Item row label="Wake-word verify" hint={descriptionOf(wake.prov.schema, "enabled")} onConfigure={() => navCard("vad", "card-wakeword")}>
+      <Item row label="Wake word verify" hint={descriptionOf(wake.prov.schema, "enabled")} onConfigure={() => navCard("vad", "card-wakeword")}>
         <Toggle on={!!form.draftOf(wake.part.key).enabled} onChange={(on) => form.onChangeOf(wake.part.key)("enabled", on)} />
       </Item>
       <Item row label="End-of-phrase chime" hint={descriptionOf(ackSchema, "enabled")} onConfigure={() => navCard("vad", "card-ack")}>
@@ -81,7 +81,7 @@ export function Capture() {
 
 // TTS variants: the ordered fallback list (tts.variants) — the next enabled
 // variant takes over when a provider fails before the speaker gets any audio.
-// Each row names the provider and the voice it speaks with; "configure →" opens
+// Each row names the provider and the voice it speaks with; "Configure →" opens
 // its tab on Providers → TTS.
 function TtsVariantsCard({ list, providers, onChange }) {
   const unlisted = providers.filter((p) => !list.some((v) => v.provider === p.id));
@@ -99,7 +99,7 @@ function TtsVariantsCard({ list, providers, onChange }) {
           <Toggle sm on={!!v.enabled} onChange={(on) => onChange(list.map((x, j) => (j === i ? { ...x, enabled: on } : x)))} />
           <button type="button" className="z-btn g sm" aria-label="Move up" disabled={i === 0} onClick={() => onChange(moveItem(list, i, -1))}>↑</button>
           <button type="button" className="z-btn g sm" aria-label="Move down" disabled={i === list.length - 1} onClick={() => onChange(moveItem(list, i, 1))}>↓</button>
-          <button type="button" className="z-btn d sm" onClick={() => onChange(list.filter((_, j) => j !== i))}>Remove</button>
+          <button type="button" className="z-btn d sm" onClick={() => onChange(list.filter((_, j) => j !== i))}>Delete</button>
         </div>
       </Item>;
     })}

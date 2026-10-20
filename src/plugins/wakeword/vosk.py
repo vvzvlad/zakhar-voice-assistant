@@ -171,36 +171,35 @@ class VoskWakewordVerifier(WakewordVerifier):
 
 
 class VoskWakewordConfig(BaseModel):
+    # Vosk listens only for the wake words; a reject stops the run before STT, LLM and
+    # TTS. The model loads on first enable.
     enabled: bool = Field(
         True,
-        title="Wake-word verify",
-        description="Verify the on-device wake trigger with offline Vosk recognition "
-        "that listens only for the wake words, before running the pipeline. A reject "
-        "suppresses STT/LLM/TTS. Loads a model on first enable.",
+        title="Wake word verify",
+        description="Checks each wake on the server with offline recognition before the request runs.",
     )
     model_path: str = Field(
         "models/vosk-model-small-ru-0.22",
         title="Model path",
-        description="Path to the Vosk model directory used for the grammar decode.",
+        description="Folder of the Vosk model that decodes the wake word.",
     )
+    # The grammar vocabulary and the accept set: the gate accepts when any entry is
+    # recognised. A multi-word entry is a phrase, all of its words recognised in a row;
+    # an empty list disables the gate.
     keywords: list[str] = Field(
         default_factory=lambda: ["захар"],
         title="Keywords",
-        description="Wake words: the grammar vocabulary AND the accept set. One "
-        "entry per wake word; the gate accepts when ANY entry is recognised (OR). "
-        "A multi-word entry is treated as a phrase — all of its words must be "
-        "recognised contiguously for it to match. Leave empty to accept every wake "
-        "(the gate is disabled).",
+        description="Wake words to accept; empty accepts every wake.",
         json_schema_extra=PHRASE_FIELD_EXTRA,
     )
 
+    # Added to the grammar for a wake heard while the device answers: its own voice then
+    # reaches the check, and a grammar of only the keywords turns e.g. its 'завтра' into
+    # 'захар'. A wake decoded as one of these words is rejected.
     answer_sound_alikes: list[str] = Field(
         default_factory=lambda: ["завтра", "сахар", "захват", "заход", "захочет"],
         title="Sound-alikes rejected during a reply",
-        description="Words that sound like a keyword, added to the grammar for a wake "
-        "heard while the device answers: the speaker's own voice then reaches the "
-        "check, and a grammar of only the keywords turns e.g. its 'завтра' into "
-        "'захар'. A wake decoded as one of these words is rejected.",
+        description="Words like the wake word, rejected when heard while the device answers.",
         json_schema_extra=PHRASE_FIELD_EXTRA,
     )
 
@@ -214,29 +213,29 @@ class VoskWakewordConfig(BaseModel):
         # Empties (left after stripping) are dropped.
         return [kw.strip().lower() for kw in v if kw.strip()]
 
+    # The pre-roll audio decoded for verification. It must be at least the device
+    # firmware's preroll_duration (2000 ms): the wake word sits at the tail of the
+    # pre-roll, so a shorter window decodes only the start of the keyword (e.g. 'заха')
+    # and the gate rejects every wake. The margin keeps the whole keyword inside.
     window_ms: int = Field(
         2500,
         title="Window",
         json_schema_extra={"unit": "ms"},
-        description="Length of the pre-roll audio window decoded for verification. "
-        "MUST be >= the device firmware's preroll_duration (currently 2000 ms): the "
-        "wake word sits at the TAIL of the pre-roll, so a window shorter than the "
-        "pre-roll decodes only the START of the keyword (e.g. 'заха') and the gate "
-        "rejects every wake. Kept with a margin above preroll_duration so the whole "
-        "keyword is always inside the decoded window.",
+        description="Audio decoded to check the wake; keep it longer than the device's 2 s pre-roll.",
     )
+    # The pipeline's time budget per verification, past which the on_error verdict applies.
     timeout_ms: int = Field(
         300,
         title="Timeout",
         json_schema_extra={"unit": "ms"},
-        description="Per-verification time budget the pipeline applies before "
-        "falling back to the on-error policy.",
+        description="Time the check may take before the On error verdict applies.",
     )
+    # open fails open and never blocks a real wake; closed fails closed, stricter.
     on_error: Literal["open", "closed"] = Field(
         "open",
         title="On error",
-        description="Verdict on timeout/decode error: 'open' accepts (fail-open, "
-        "never blocks a real wake), 'closed' rejects (fail-closed, stricter).",
+        json_schema_extra={"enumLabels": {"open": "Accept the wake", "closed": "Reject the wake"}},
+        description="What happens to the wake when the check fails or times out.",
     )
 
 

@@ -2000,7 +2000,8 @@ async def test_mic_channel1_uses_second_stream(tmp_path, monkeypatch):
 
 
 async def test_mic_channel0_uses_first_stream(tmp_path, monkeypatch):
-    pipeline, _ = make_pipeline(tmp_path, monkeypatch)  # default channel 0
+    pipeline, _ = make_pipeline(tmp_path, monkeypatch)
+    pipeline.core.vad.mic_channel = 0
     pipeline.on_wake("cid", None)
     await pipeline.on_audio(b"\x22\x22", b"\x11\x11")
     assert pipeline.preroll_pcm == b"\x22\x22"
@@ -2061,6 +2062,7 @@ async def test_stored_run_audio_is_stereo_when_second_channel_streamed(tmp_path,
     patch_llm(monkeypatch, reply="готово")
     store = FakeRunsStore()
     pipeline, _ = make_pipeline(tmp_path, monkeypatch, stt_text="включи свет", runs_store=store)
+    pipeline.core.vad.mic_channel = 0
 
     other = b"\x03\x04" * (len(PHRASE) // 2)
     await say(pipeline, other)

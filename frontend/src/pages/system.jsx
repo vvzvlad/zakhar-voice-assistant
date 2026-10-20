@@ -39,7 +39,7 @@ function SystemPage() {
         <Card title="External proxy">
           {netSchema
             ? <SchemaForm schema={netSchema} values={net.draft} onChange={net.onChange} />
-            : <Field label="Proxy" hint="SOCKS/HTTP for cloud APIs. Empty = direct."><div className="z-inp mono"><input value={net.draft.external_proxy ?? ""} onChange={(e) => net.onChange("external_proxy", e.target.value)} /></div></Field>}
+            : <Field label="Proxy" hint="SOCKS or HTTP proxy for cloud APIs; empty connects directly."><div className="z-inp mono"><input value={net.draft.external_proxy ?? ""} onChange={(e) => net.onChange("external_proxy", e.target.value)} /></div></Field>}
         </Card>
         <Card title="Device server" sub="voice devices connect to /device over WebSocket">
           {audioSchema
@@ -53,7 +53,7 @@ function SystemPage() {
           {mcpSchema && <SchemaForm schema={mcpSchema} values={form.draftOf("agent_mcp")} onChange={form.onChangeOf("agent_mcp")} />}
           <div style={{ marginTop: 6, fontSize: 12.5, color: "var(--mut)", lineHeight: 1.45 }}>
             A connected agent can: read the request/reply log, read &amp; live-patch the
-            config, list speakers, speak text on a speaker, and send text commands
+            config, list devices, speak text on a device, and send text commands
             through the assistant (LLM + smart-home tools).
           </div>
           <div style={{ marginTop: 4 }}>

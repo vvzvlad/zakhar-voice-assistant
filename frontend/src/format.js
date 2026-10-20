@@ -51,6 +51,10 @@ export function fmtBytes(n) {
   return `${v >= 10 ? Math.round(v) : v.toFixed(1)} ${units[i]}`;
 }
 
+// A 0..1 fraction (a probability, a confidence, a share) in whole percent: 0.5 -> "50%";
+// "—" for null.
+export const fmtPct = (p) => (p == null ? "—" : `${Math.round(p * 100)}%`);
+
 // A provider's name in a compact control (segmented switch, "+ provider" button):
 // its catalog label without the trailing parenthesized note, "Silero VAD (neural)"
 // -> "Silero VAD". Tabs and dropdowns show the full label.

@@ -59,6 +59,9 @@ ADVANCED_FIELD_EXTRA: dict = {"advanced": True}
 # in the text font, not the monospace one of ids, paths and URLs.
 PHRASE_FIELD_EXTRA: dict = {"phrase": True}
 
+# Marks a probability stored as 0..1: the panel shows and edits it as 0-100 %.
+PERCENT_FIELD_EXTRA: dict = {"percent": True}
+
 # Shared annotation for a local-filesystem path field (Piper voice file, Vosk
 # model directory): rendered as a dynamic select whose options the provider
 # scans from disk, while still accepting an arbitrary typed path (freeform) for
