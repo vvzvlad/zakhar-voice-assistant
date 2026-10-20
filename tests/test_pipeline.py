@@ -1,3 +1,4 @@
+import asyncio
 import io
 import wave
 
@@ -182,7 +183,7 @@ def make_pipeline(tmp_path, monkeypatch, name="dev", stt_text="распозна�
     rt = Runtime(
         FakeSvc(core, LlmConfig(), tts_variants=list(tts_backends)),
         # Real WebRTC backend by default: tests that need scripted frame-level
-        # speech/silence decisions swap it via install_fake_vad() before on_start.
+        # speech/silence decisions swap it via install_fake_vad() before on_wake.
         vad_backend=WebRtcVadBackend(),
         stt_backends={"fake": stt_backend or FakeSttBackend(stt_text)},
         llm_backends={"fake": object()},
@@ -228,8 +229,8 @@ class FakeVad:
 def install_fake_vad(pipeline, script):
     """Swap in a real WebRtcVadBackend whose webrtcvad.Vad object is a scripted
     FakeVad, preserving frame-level control over the speech/silence decisions.
-    The pipeline opens its session from rt.vad_backend in on_start, so this must
-    run BEFORE on_start (it does in every test)."""
+    The pipeline opens its session from rt.vad_backend in on_wake, so this must
+    run BEFORE on_wake (it does in every test)."""
     pipeline.rt.vad_backend = WebRtcVadBackend(vad_factory=lambda: FakeVad(script))
 
 
@@ -290,9 +291,17 @@ def assert_all_str(events):
 
 
 async def settle(pipeline):
-    """Wait for the run that a finalizing on_audio started as its own task."""
-    if pipeline._run_task is not None:
-        await pipeline._run_task
+    """Wait until nothing the pipeline started on its own is left running: the run a
+    finalizing on_audio started as its own task and the wake-word checks."""
+    while True:
+        tasks = {t for t in (pipeline._run_task, *pipeline._background)
+                 if t is not None and not t.done()}
+        if not tasks:
+            return
+        done, _ = await asyncio.wait(tasks)
+        for task in done:
+            if not task.cancelled() and task.exception() is not None:
+                raise task.exception()
 
 
 # A phrase as the device streams it, in whole 20 ms VAD frames: two frames of speech
@@ -304,7 +313,7 @@ PHRASE_VAD = [True, True, False]  # FakeVad repeats its last value
 
 def install_phrase_vad(pipeline):
     """Script the VAD of every run to end-point a PHRASE at its last frame. Before
-    on_start: a run opens its VAD session there (a follow-up window as it opens)."""
+    on_wake: a run opens its VAD session there (a follow-up window as it opens)."""
     set_small_vad_thresholds(pipeline)
     install_fake_vad(pipeline, PHRASE_VAD)
 
@@ -314,7 +323,7 @@ async def say(pipeline, pcm2=None):
     the device's second mic channel, if any), which the server's VAD end-points; waits
     for the run that starts."""
     install_phrase_vad(pipeline)
-    await pipeline.on_start("cid", None)
+    pipeline.on_wake("cid", None)
     await pipeline.on_audio(PHRASE, pcm2)
     assert pipeline._run_task is not None  # the VAD end-pointed the PHRASE
     await settle(pipeline)
@@ -419,14 +428,14 @@ def _boosted(chunk, peak):
 async def test_mic_auto_gain_boosts_vad_feed_but_buffers_raw(tmp_path, monkeypatch):
     # With mic_auto_gain on, once a loud chunk has raised the running peak above
     # the floor, the VAD session receives BOOSTED bytes (scaled by
-    # min(target/peak, 128)) while self._buffer keeps the raw chunk bytes.
+    # min(target/peak, 128)) while the run's buffer keeps the raw chunk bytes.
     patch_llm(monkeypatch)
     pipeline, _ = make_pipeline(tmp_path, monkeypatch)
     pipeline.rt.core.vad.mic_auto_gain = True
     backend = RecordingVadBackend()
     pipeline.rt.vad_backend = backend
 
-    await pipeline.on_start("cid", None)
+    pipeline.on_wake("cid", None)
     peak = 3000
     loud = _const_chunk(peak)
     quiet = _const_chunk(100)
@@ -436,10 +445,9 @@ async def test_mic_auto_gain_boosts_vad_feed_but_buffers_raw(tmp_path, monkeypat
     [session] = backend.sessions
     # The peak is tracked from the chunk itself BEFORE boosting, so even the
     # first loud chunk is already lifted with the utterance-level gain.
-    assert pipeline._vad_peak == peak
     assert session.fed == [_boosted(loud, peak), _boosted(quiet, peak)]
     assert session.fed[1] != quiet  # the decision really saw boosted bytes...
-    assert bytes(pipeline._buffer) == loud + quiet  # ...while the buffer kept raw
+    assert pipeline.preroll_pcm == loud + quiet  # ...while the buffer kept raw
 
 
 async def test_mic_auto_gain_off_feeds_verbatim_and_tracks_no_peak(tmp_path, monkeypatch):
@@ -450,13 +458,12 @@ async def test_mic_auto_gain_off_feeds_verbatim_and_tracks_no_peak(tmp_path, mon
     backend = RecordingVadBackend()
     pipeline.rt.vad_backend = backend
 
-    await pipeline.on_start("cid", None)
+    pipeline.on_wake("cid", None)
     loud = _const_chunk(3000)
     await pipeline.on_audio(loud)
 
     [session] = backend.sessions
     assert session.fed == [loud]
-    assert pipeline._vad_peak == 0
 
 
 async def test_mic_auto_gain_preroll_below_floor_fed_verbatim(tmp_path, monkeypatch):
@@ -468,12 +475,11 @@ async def test_mic_auto_gain_preroll_below_floor_fed_verbatim(tmp_path, monkeypa
     backend = RecordingVadBackend()
     pipeline.rt.vad_backend = backend
 
-    await pipeline.on_start("cid", None)
+    pipeline.on_wake("cid", None)
     preroll = _const_chunk(VAD_BOOST_FLOOR - 20)
     await pipeline.on_audio(preroll)
 
     [session] = backend.sessions
-    assert pipeline._vad_peak == VAD_BOOST_FLOOR - 20
     assert session.fed == [preroll]
 
 
@@ -486,15 +492,15 @@ async def test_mic_auto_gain_peak_resets_between_runs(tmp_path, monkeypatch):
     backend = RecordingVadBackend()
     pipeline.rt.vad_backend = backend
 
-    await pipeline.on_start("cid1", None)
-    await pipeline.on_audio(_const_chunk(3000))
-    assert pipeline._vad_peak == 3000
+    pipeline.on_wake("cid1", None)
+    loud = _const_chunk(3000)
+    await pipeline.on_audio(loud)
+    assert backend.sessions[0].fed == [_boosted(loud, 3000)]
 
-    await pipeline.on_start("cid2", None)
+    pipeline.on_wake("cid2", None)
     quiet = _const_chunk(VAD_BOOST_FLOOR - 20)  # would be boosted at peak=3000
     await pipeline.on_audio(quiet)
 
-    assert pipeline._vad_peak == VAD_BOOST_FLOOR - 20
     assert backend.sessions[-1].fed == [quiet]
 
 
@@ -503,11 +509,11 @@ async def test_pipelines_are_independent(tmp_path, monkeypatch):
     a, _ = make_pipeline(tmp_path, monkeypatch, name="a")
     b, _ = make_pipeline(tmp_path, monkeypatch, name="b")
 
-    await a.on_start("cid", None)
+    a.on_wake("cid", None)
     await a.on_audio(b"\x01\x02" * 100)
 
     # Pushing audio only into "a" must not touch "b".
-    assert len(b._buffer) == 0
+    assert b.preroll_pcm == b""
     assert a._context_path != b._context_path
     assert a._context_path.endswith("context_a.txt")
     assert b._context_path.endswith("context_b.txt")
@@ -537,13 +543,12 @@ async def test_vad_endpoint_finalize(tmp_path, monkeypatch):
     # 3 speech frames (>= 40 ms min) then 6 silence frames (>= 100 ms) -> endpoint.
     install_fake_vad(pipeline, [True, True, True, False, False, False, False, False, False])
 
-    await pipeline.on_start("cid", None)
+    pipeline.on_wake("cid", None)
     # 9 frames in one chunk so all are processed in a single on_audio call.
     await pipeline.on_audio(FRAME * 9)
     await settle(pipeline)
 
     assert types_of(events) == FULL_SEQUENCE
-    assert pipeline._finalized is True
     assert_all_str(events)
 
 
@@ -567,7 +572,7 @@ async def test_bare_wake_word_ends_without_stt(tmp_path, monkeypatch):
 
     pipeline.rt.stt_backends["fake"].transcribe = spy_transcribe
 
-    await pipeline.on_start("cid", "Захар")
+    pipeline.on_wake("cid", "Захар")
     await pipeline.on_audio(FRAME * 109)  # 2000 ms pre-roll + 180 ms
     await settle(pipeline)
     assert StageEvent.RUN_END not in types_of(events)
@@ -586,12 +591,11 @@ async def test_vad_maxlen_finalize(tmp_path, monkeypatch):
     # Always speech: no trailing silence, so only the max-length cap can finalize.
     install_fake_vad(pipeline, [True])
 
-    await pipeline.on_start("cid", None)
+    pipeline.on_wake("cid", None)
     # max_utterance_ms=400 -> 20 frames; feed 21 to cross the cap.
     await pipeline.on_audio(FRAME * 21)
     await settle(pipeline)
 
-    assert pipeline._finalized is True
     assert StageEvent.RUN_END in types_of(events)
     # Full happy path because STT returned text.
     assert types_of(events) == FULL_SEQUENCE
@@ -617,15 +621,14 @@ async def test_vad_no_speech_finalize(tmp_path, monkeypatch):
 
     pipeline.rt.stt_backends["fake"].transcribe = spy_transcribe
 
-    await pipeline.on_start("cid", None)
+    pipeline.on_wake("cid", None)
     # no_speech_timeout_ms=200 -> 10 frames; feed 11 to cross it.
     await pipeline.on_audio(FRAME * 11)
     await settle(pipeline)
 
-    assert pipeline._finalized is True
     # STT must never run on a no-speech utterance.
     assert stt_calls == []
-    # STT_START (from on_start) is balanced by an empty STT_END; no intent/TTS.
+    # STT_START (from on_wake) is balanced by an empty STT_END; no intent/TTS.
     assert types_of(events) == [
         StageEvent.RUN_START,
         StageEvent.STT_START,
@@ -657,7 +660,7 @@ async def test_no_speech_run_is_recorded_as_empty(tmp_path, monkeypatch):
 
     pipeline.rt.stt_backends["fake"].transcribe = spy_transcribe
 
-    await pipeline.on_start("cid", None)
+    pipeline.on_wake("cid", None)
     # no_speech_timeout_ms=200 -> 10 frames; feed 11 to cross it.
     await pipeline.on_audio(FRAME * 11)
     await settle(pipeline)
@@ -685,7 +688,7 @@ async def test_run_broadcast_on_no_speech(tmp_path, monkeypatch):
     # Never any speech: only the no-speech timeout can finalize.
     install_fake_vad(pipeline, [False])
 
-    await pipeline.on_start("cid", None)
+    pipeline.on_wake("cid", None)
     # no_speech_timeout_ms=200 -> 10 frames; feed 11 to cross it.
     await pipeline.on_audio(FRAME * 11)
     await settle(pipeline)
@@ -701,7 +704,7 @@ async def test_run_broadcast_on_no_speech(tmp_path, monkeypatch):
 async def test_vad_backend_hot_swap_applies_on_next_run(tmp_path, monkeypatch):
     # The pipeline opens one VadSession per run from rt.vad_backend, so swapping the
     # backend on the runtime (what the reconfigurator does on a vad.* change) takes
-    # effect on the NEXT on_start without rebuilding the pipeline. This replaces the
+    # effect on the NEXT on_wake without rebuilding the pipeline. This replaces the
     # old "on_start rebuilds webrtcvad.Vad when aggressiveness changed" hack.
     pipeline, _ = make_pipeline(tmp_path, monkeypatch)
 
@@ -716,40 +719,29 @@ async def test_vad_backend_hot_swap_applies_on_next_run(tmp_path, monkeypatch):
 
     first, second = RecordingBackend(), RecordingBackend()
     pipeline.rt.vad_backend = first
-    await pipeline.on_start("cid", None)
+    pipeline.on_wake("cid", None)
     assert (first.opened, second.opened) == (1, 0)
 
     # Hot-swap: the next run opens its session from the NEW backend.
     pipeline.rt.vad_backend = second
-    await pipeline.on_start("cid", None)
+    pipeline.on_wake("cid", None)
     assert (first.opened, second.opened) == (1, 1)
 
 
 async def test_finalize_once_race(tmp_path, monkeypatch):
+    # Two chunks that each end the phrase arrive before the run task gets to run: the
+    # run is claimed once, so one run happens and the second chunk is dropped.
     patch_llm(monkeypatch, reply="здравствуйте")
     pipeline, events = make_pipeline(tmp_path, monkeypatch, stt_text="привет")
-    # Give it some audio so the first claim/run runs the full path. We claim+run
-    # directly (no on_start), so it emits only the post-start subset.
-    pipeline._buffer.extend(b"\x00" * 640)
+    install_phrase_vad(pipeline)
 
-    pcm = pipeline._claim()
-    assert pcm is not None
-    await pipeline._run("a", pcm, pipeline._conversation_id)
-    after_first = list(types_of(events))
-    assert after_first == [
-        StageEvent.STT_VAD_END,
-        StageEvent.STT_END,
-        StageEvent.INTENT_START,
-        StageEvent.INTENT_END,
-        StageEvent.TTS_START,
-        StageEvent.RUN_END,
-    ]
-
-    # A second claim is a no-op: already finalized -> returns None, so no second
-    # run happens and no extra events are emitted.
-    second = pipeline._claim()
-    assert second is None
-    assert types_of(events) == after_first
+    pipeline.on_wake("cid", None)
+    await pipeline.on_audio(PHRASE)
+    first = pipeline._run_task
+    await pipeline.on_audio(PHRASE)
+    assert pipeline._run_task is first
+    await settle(pipeline)
+    assert types_of(events) == FULL_SEQUENCE
 
 
 async def test_history_flows_across_runs(tmp_path, monkeypatch):
@@ -793,8 +785,8 @@ async def test_history_flows_across_runs(tmp_path, monkeypatch):
     ]:
         json.loads(ln)
 
-    # Run 2 on the same pipeline instance with a different utterance.
-    # on_start resets all per-run state (including _finalized).
+    # Run 2 on the same pipeline instance with a different utterance: on_wake starts
+    # a new run.
     pipeline.rt.stt_backends["fake"].text = "второй вопрос"
     await say(pipeline)
 
@@ -1031,7 +1023,7 @@ async def test_utterance_audio_stored_on_no_speech_run(tmp_path, monkeypatch):
     # Never any speech: only the no-speech timeout can finalize.
     install_fake_vad(pipeline, [False])
 
-    await pipeline.on_start("cid", None)
+    pipeline.on_wake("cid", None)
     # no_speech_timeout_ms=200 -> 10 frames; feed 11 to cross it.
     await pipeline.on_audio(FRAME * 11)
     await settle(pipeline)
@@ -1128,7 +1120,7 @@ async def test_no_live_partial_on_no_speech(tmp_path, monkeypatch):
     # Never any speech: only the no-speech timeout can finalize.
     install_fake_vad(pipeline, [False])
 
-    await pipeline.on_start("cid", None)
+    pipeline.on_wake("cid", None)
     # no_speech_timeout_ms=200 -> 10 frames; feed 11 to cross it.
     await pipeline.on_audio(FRAME * 11)
     await settle(pipeline)
@@ -1355,12 +1347,11 @@ async def test_normal_run_hard_cap_truncates_at_60s(tmp_path, monkeypatch):
 
     pipeline.rt.stt_backends["fake"].transcribe = spy
 
-    await pipeline.on_start("cid", None)
+    pipeline.on_wake("cid", None)
     # 65 s worth of PCM in a single chunk -> HARD_CAP fires, buffer trimmed to 60 s.
     await pipeline.on_audio(b"\x07\x08" * (SAMPLE_RATE * 65))
     await settle(pipeline)
 
-    assert pipeline._finalized is True
     assert StageEvent.RUN_END in types_of(events)
     # The transcribed PCM was capped at exactly the 60 s HARD_CAP_BYTES.
     assert captured["len"] == HARD_CAP_BYTES
@@ -1934,7 +1925,6 @@ async def test_ack_is_fire_and_forget_does_not_delay_finalize(tmp_path, monkeypa
 
     # The run finalized fully (RUN_END emitted, full happy path) without the ack.
     assert types_of(events) == FULL_SEQUENCE
-    assert pipeline._finalized is True
 
     # Let the scheduled (still-stuck) ack task reach its blocked play call.
     await asyncio.sleep(0)
@@ -2004,24 +1994,24 @@ def test_highpass_empty_safe():
 async def test_mic_channel1_uses_second_stream(tmp_path, monkeypatch):
     pipeline, _ = make_pipeline(tmp_path, monkeypatch)
     pipeline.core.vad.mic_channel = 1  # live config: take the less-processed channel
-    await pipeline.on_start("cid", None)
+    pipeline.on_wake("cid", None)
     await pipeline.on_audio(b"\x00\x00", b"\x11\x11")  # ch0 zeros, ch1 = 0x1111
-    assert bytes(pipeline._buffer) == b"\x11\x11"
+    assert pipeline.preroll_pcm == b"\x11\x11"
 
 
 async def test_mic_channel0_uses_first_stream(tmp_path, monkeypatch):
     pipeline, _ = make_pipeline(tmp_path, monkeypatch)  # default channel 0
-    await pipeline.on_start("cid", None)
+    pipeline.on_wake("cid", None)
     await pipeline.on_audio(b"\x22\x22", b"\x11\x11")
-    assert bytes(pipeline._buffer) == b"\x22\x22"
+    assert pipeline.preroll_pcm == b"\x22\x22"
 
 
 async def test_mic_channel1_falls_back_to_first_when_no_second_stream(tmp_path, monkeypatch):
     pipeline, _ = make_pipeline(tmp_path, monkeypatch)
     pipeline.core.vad.mic_channel = 1
-    await pipeline.on_start("cid", None)
+    pipeline.on_wake("cid", None)
     await pipeline.on_audio(b"\x22\x22", None)  # device sent only one channel
-    assert bytes(pipeline._buffer) == b"\x22\x22"
+    assert pipeline.preroll_pcm == b"\x22\x22"
 
 
 # --- stereo diagnostic WAV (stored run audio carries both mic channels) ---
@@ -2065,33 +2055,6 @@ def test_pcm_to_wav_bytes_stereo_pads_shorter_channel():
     assert (samples[:, 1] == [9, 8, 0, 0]).all()
 
 
-async def test_on_audio_buffers_other_channel_for_mic_channel0(tmp_path, monkeypatch):
-    # With mic_channel=0 the pipeline buffer gets ch0 and the diagnostic buffer ch1.
-    pipeline, _ = make_pipeline(tmp_path, monkeypatch)  # default channel 0
-    await pipeline.on_start("cid", None)
-    await pipeline.on_audio(b"\x22\x22", b"\x11\x11")
-    assert bytes(pipeline._buffer) == b"\x22\x22"
-    assert bytes(pipeline._buffer2) == b"\x11\x11"
-
-
-async def test_on_audio_buffers_other_channel_for_mic_channel1(tmp_path, monkeypatch):
-    # With mic_channel=1 the channels swap: buffer gets ch1, the diagnostic buffer ch0.
-    pipeline, _ = make_pipeline(tmp_path, monkeypatch)
-    pipeline.core.vad.mic_channel = 1
-    await pipeline.on_start("cid", None)
-    await pipeline.on_audio(b"\x22\x22", b"\x11\x11")
-    assert bytes(pipeline._buffer) == b"\x11\x11"
-    assert bytes(pipeline._buffer2) == b"\x22\x22"
-
-
-async def test_on_audio_no_second_stream_leaves_buffer2_empty(tmp_path, monkeypatch):
-    pipeline, _ = make_pipeline(tmp_path, monkeypatch)
-    await pipeline.on_start("cid", None)
-    await pipeline.on_audio(b"\x22\x22", None)
-    assert bytes(pipeline._buffer) == b"\x22\x22"
-    assert bytes(pipeline._buffer2) == b""
-
-
 async def test_stored_run_audio_is_stereo_when_second_channel_streamed(tmp_path, monkeypatch):
     # An end-to-end run with both mic streams stores a STEREO diagnostic WAV:
     # left = the selected (STT) channel, right = the other raw channel.
@@ -2109,6 +2072,22 @@ async def test_stored_run_audio_is_stereo_when_second_channel_streamed(tmp_path,
     samples = np.frombuffer(frames, dtype="<i2").reshape(-1, 2)
     assert samples[:, 0].tobytes() == PHRASE  # left: what STT received
     assert samples[:, 1].tobytes() == other   # right: the other raw channel
+
+
+async def test_stored_run_audio_swaps_the_channels_for_mic_channel1(tmp_path, monkeypatch):
+    # With mic_channel=1 the second stream is what STT gets (left) and the first one
+    # the diagnostic channel (right).
+    patch_llm(monkeypatch, reply="готово")
+    store = FakeRunsStore()
+    pipeline, _ = make_pipeline(tmp_path, monkeypatch, stt_text="включи свет", runs_store=store)
+    pipeline.core.vad.mic_channel = 1
+
+    other = b"\x03\x04" * (len(PHRASE) // 2)
+    await say(pipeline, other)
+
+    nch, _, frames = _parse_wav(store.audio_calls[0][1])
+    samples = np.frombuffer(frames, dtype="<i2").reshape(-1, 2)
+    assert (nch, samples[:, 0].tobytes(), samples[:, 1].tobytes()) == (2, other, PHRASE)
 
 
 async def test_stored_run_audio_stays_mono_without_second_channel(tmp_path, monkeypatch):
@@ -2565,7 +2544,7 @@ class _FakeStreamSession:
 
 class _StreamingSttBackend:
     """STT double whose open_stream() returns a fake live session, so the pipeline
-    opens a streaming STT session in on_start (the streaming-capable path)."""
+    opens a streaming STT session in on_wake (the streaming-capable path)."""
 
     def __init__(self):
         self.session = _FakeStreamSession()
@@ -2578,19 +2557,16 @@ class _StreamingSttBackend:
 
 
 async def test_on_disconnect_closes_unfinalized_streaming_session(tmp_path, monkeypatch):
-    # Speaker vanished mid-utterance: on_start opened a streaming session but the run
+    # Speaker vanished mid-utterance: on_wake opened a streaming session but the run
     # was never finalized. on_disconnect() must close that session and drop the refs so
     # the gRPC stream/channel don't linger until the next run.
     stt = _StreamingSttBackend()
     pipeline, _events = make_pipeline(tmp_path, monkeypatch, stt_backend=stt)
     install_fake_vad(pipeline, [False])  # no endpoint -> run never finalizes
-    await pipeline.on_start("cid", None)
-    assert pipeline._stt_streams == {"main": stt.session}
-    assert pipeline._finalized is False
+    pipeline.on_wake("cid", None)
 
     await pipeline.on_disconnect()
     assert stt.session.closed is True
-    assert pipeline._stt_streams == {}
 
 
 async def test_on_disconnect_skips_finalized_run(tmp_path, monkeypatch):
@@ -2598,14 +2574,15 @@ async def test_on_disconnect_skips_finalized_run(tmp_path, monkeypatch):
     # finally; on_disconnect() must NOT touch it (avoid racing finish() vs aclose()).
     stt = _StreamingSttBackend()
     pipeline, _events = make_pipeline(tmp_path, monkeypatch, stt_backend=stt)
-    install_fake_vad(pipeline, [False])
-    await pipeline.on_start("cid", None)
-    # Simulate _claim() having taken the run (the run is being processed by _run).
-    pipeline._finalized = True
+    install_phrase_vad(pipeline)
+    pipeline.on_wake("cid", None)
+    # The phrase ends: the run is claimed, its run task not started yet.
+    await pipeline.on_audio(PHRASE)
 
     await pipeline.on_disconnect()
     assert stt.session.closed is False
-    assert pipeline._stt_streams == {"main": stt.session}
+    await settle(pipeline)
+    assert stt.session.closed is True  # by the run itself
 
 
 # --- streaming STT open: non-streaming backend vs genuine open failure -----------
@@ -2614,43 +2591,32 @@ async def test_on_disconnect_skips_finalized_run(tmp_path, monkeypatch):
 class _RaisingStreamSttBackend:
     """STT double that DOES expose open_stream() but whose open_stream() raises —
     a streaming-capable backend that fails during live channel setup. Records the
-    call so the test can prove on_start took the warn-and-fall-back-to-batch path."""
+    call so the test can prove the run took the warn-and-fall-back-to-batch path."""
 
     def __init__(self):
         self.open_called = False
 
     async def transcribe(self, pcm):
-        return ""
+        return "включи свет"
 
     def open_stream(self):
         self.open_called = True
         raise RuntimeError("channel setup failed")
 
 
-async def test_on_start_non_streaming_backend_falls_back_silently(tmp_path, monkeypatch):
-    # FakeSttBackend is a duck-typed double WITHOUT open_stream() (a non-streaming
-    # backend): on_start must treat it as "no streaming session", leaving no entry
-    # in _stt_streams for the batch route — NOT as an open failure to warn about.
-    stt = FakeSttBackend()
-    assert not hasattr(stt, "open_stream")
-    pipeline, _events = make_pipeline(tmp_path, monkeypatch, stt_backend=stt)
-    install_fake_vad(pipeline, [False])
+@pytest.mark.parametrize("stt", [FakeSttBackend("включи свет"), _RaisingStreamSttBackend()])
+async def test_a_backend_without_a_streaming_session_is_transcribed_in_one_shot(
+        tmp_path, monkeypatch, stt):
+    # A duck-typed backend WITHOUT open_stream() (a non-streaming backend) has no
+    # streaming session — NOT an open failure to warn about; one whose open_stream()
+    # raises is a GENUINE failure (the warn path), swallowed. Either way the run goes on
+    # via the batch transcribe() route.
+    patch_llm(monkeypatch)
+    pipeline, events = make_pipeline(tmp_path, monkeypatch, stt_backend=stt)
 
-    await pipeline.on_start("cid", None)
-    assert pipeline._stt_streams == {}
-
-
-async def test_on_start_streaming_open_failure_falls_back_to_batch(tmp_path, monkeypatch):
-    # A streaming-capable backend whose open_stream() raises is a GENUINE failure
-    # (the warn path): on_start must still swallow it and leave no session in
-    # _stt_streams so the run continues via the batch transcribe() route.
-    stt = _RaisingStreamSttBackend()
-    pipeline, _events = make_pipeline(tmp_path, monkeypatch, stt_backend=stt)
-    install_fake_vad(pipeline, [False])
-
-    await pipeline.on_start("cid", None)
-    assert stt.open_called is True
-    assert pipeline._stt_streams == {}
+    await say(pipeline)
+    assert getattr(stt, "open_called", True) is True
+    assert dict(events)[StageEvent.STT_END] == {"text": "включи свет"}
 
 
 # --- TTS variants: fallback before the speaker has any audio ---------------------

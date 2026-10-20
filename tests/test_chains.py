@@ -438,15 +438,13 @@ async def test_pipeline_opens_streams_for_first_and_parallel_chains_only(tmp_pat
     pipeline.rt.llm_backends = {"a": Handler("ok"), "b": Handler("x"), "c": Handler("y")}
     install_phrase_vad(pipeline)
 
-    await pipeline.on_start("cid", None)
-    assert set(pipeline._stt_streams) == {"a", "b"}
+    pipeline.on_wake("cid", None)
     await pipeline.on_audio(PHRASE)
     assert a.fed == b.fed == [PHRASE] and c.fed == []
     await settle(pipeline)
 
     assert a.finished and not c.finished and c.calls == []
     assert b.closed                    # the unused parallel session is released
-    assert pipeline._stt_streams == {}
 
 
 class GatedStreamingStt(StreamingStt):
@@ -493,10 +491,10 @@ async def test_new_wake_mid_stt_closes_every_chain_session(tmp_path, monkeypatch
     pipeline.rt.llm_backends = {"a": Handler("ok"), "b": Handler("ok")}
     install_fake_vad(pipeline, [True, True, True] + [False] * 20)
 
-    await pipeline.on_start("c1", None)
+    pipeline.on_wake("c1", None)
     run1 = await _end_utterance(pipeline)
     await asyncio.wait_for(a.finish_started.wait(), 2)
-    await pipeline.on_start("c2", None)
+    pipeline.on_wake("c2", None)
     await asyncio.gather(run1, return_exceptions=True)
 
     assert run1.cancelled()
@@ -515,10 +513,10 @@ async def test_new_wake_while_the_run_waits_for_the_lock_closes_its_sessions(tmp
 
     await pipeline._lock.acquire()  # another run on this speaker, e.g. an agent's `ask`
     try:
-        await pipeline.on_start("c1", None)
+        pipeline.on_wake("c1", None)
         run1 = await _end_utterance(pipeline)
         await asyncio.sleep(0.05)  # the run took its sessions and now waits for the lock
-        await pipeline.on_start("c2", None)
+        pipeline.on_wake("c2", None)
         await asyncio.gather(run1, return_exceptions=True)
     finally:
         pipeline._lock.release()

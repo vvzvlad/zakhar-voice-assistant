@@ -34,7 +34,7 @@ class VoskStreamSession(StreamingSttSession):
         self._error: Exception | None = None
         self._closed = False
         self._stopped = False  # set once the drive task ends (normally/error/cancel)
-        # open_stream() is called from on_start/_wakeword_confirm, which run on the
+        # open_stream() is called from the pipeline's _release, which runs on the
         # event loop, so creating the drive task here is valid (same as Yandex).
         self._drive_task = asyncio.create_task(self._drive())
 
