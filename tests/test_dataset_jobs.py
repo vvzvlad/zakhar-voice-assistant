@@ -6,6 +6,7 @@ beep-then-capture session in the background, writing numbered clips under
 import asyncio
 import io
 import zipfile
+from types import SimpleNamespace
 
 import pytest
 
@@ -21,7 +22,8 @@ def _data_dir(tmp_path, monkeypatch):
 
 
 class FakeDevice:
-    """Stands in for DeviceManager.play_chime/capture; logs the order of beeps and captures.
+    """Stands in for DeviceManager.play_chime and the found Device's record_capture; logs the
+    order of beeps and captures.
 
     Every capture is a real one on disk whose PCM is the number of the clip it would become,
     so every clip is distinguishable; `clips` holds the WAV of each whole one. `outcomes`
@@ -35,9 +37,12 @@ class FakeDevice:
         self.clips = []
         self.outcomes, self.gate = list(outcomes), gate
 
-    async def play(self, sound_path, device):
+    async def play_chime(self, sound_path, device):
         self.calls.append(("beep", sound_path, device))
         return {"played": [device], "offline": []}
+
+    def find(self, device):
+        return SimpleNamespace(record_capture=lambda seconds: self.capture(device, seconds))
 
     async def capture(self, device, seconds):
         self.calls.append(("capture", device, seconds))
@@ -58,7 +63,7 @@ class FakeDevice:
 
 
 async def _wired(tmp_path, fake):
-    return await _client(tmp_path, device_capture=fake.capture, device_play=fake.play)
+    return await _client(tmp_path, devices=fake)
 
 
 async def _set(client, name):

@@ -706,6 +706,56 @@ class Device:
              "value": conn.boost if conn is not None else None, "unit": "%"},
         ]
 
+    def controls_snapshot(self) -> dict:
+        """The panel's controls view: {device, online, controls, readings, versions}."""
+        return {
+            "device": self.name,
+            "online": self.online,
+            "controls": self.controls(),
+            "readings": self.readings(),
+            "versions": self.versions() if self.online else [],
+        }
+
+    def wake_prob(self) -> dict:
+        conn = self.conn
+        return {
+            "device": self.name,
+            "online": conn is not None,
+            "available": conn is not None,
+            "value": conn.wake_peak if conn is not None else None,
+        }
+
+    def set_wake_prob_stream(self, enabled: bool) -> dict:
+        conn = self.conn
+        if conn is None:
+            raise RuntimeError(f"{self.name} is offline")
+        conn.send({"type": "wake_peak_stream", "on": bool(enabled)})
+        if not enabled:
+            conn.wake_peak = None
+        return {"device": self.name, "online": True, "available": True, "value": conn.wake_peak}
+
+    def set_detect(self, enabled: bool) -> dict:
+        """Debug switch for the device's wake-word detection. Not tracked here: the device
+        turns detection back on at every new connection."""
+        conn = self.conn
+        if conn is None:
+            raise RuntimeError(f"{self.name} is offline")
+        conn.send({"type": "detect", "on": bool(enabled)})
+        logger.info(f"{self.name}: wake-word detection {'on' if enabled else 'off'}")
+        return {"device": self.name, "detect": bool(enabled)}
+
+    def reload_model(self) -> dict:
+        """The direct reload command: re-read the model files and send them; the device
+        swaps them without a restart. Returns {device, models: {kind: name sent}}.
+        Raises RuntimeError (offline)."""
+        conn = self.conn
+        if conn is None:
+            raise RuntimeError(f"{self.name} is offline")
+        logger.info(f"{self.name}: reloading the models")
+        sent = {kind: name for kind, (name, path) in _model_paths(self.cfg, conn.speaker).items()
+                if conn.send_model(kind, name, path)}
+        return {"device": self.name, "models": sent}
+
     def set_control(self, control_id: str, value: float) -> None:
         """A cutoff, a stop word echo cancellation setting, the playback reserve or an auto
         volume setting is written to the config (the reconfigure that follows sends `config` or
@@ -756,6 +806,13 @@ class Device:
         self.set_control(SPEAKER_VOLUME, level)
         return self.conn.volume
 
+    async def say(self, text: str) -> None:
+        """Speak `text` (the panel's "Say on speaker"). Raises DeviceOfflineError, or what
+        announce raises when the speech fails."""
+        if not self.online:
+            raise DeviceOfflineError(f"{self.name} is offline")
+        await self.announce(text, "say")
+
     async def announce(self, text: str, reason: str, request: str | None = None) -> None:
         """Proactively say `text`: the text to the device as an announcement and, on
         a device with a speaker, the synthesized speech.
@@ -796,6 +853,12 @@ class Device:
         self._run_capture(cap)
         conn.send({"type": "capture", "id": cap.id, "seconds": seconds})
         logger.info(f"{self.name}: ⏺️ capture {cap.name} {seconds}s")
+        return cap
+
+    async def record_capture(self, seconds: int) -> captures.Capture:
+        """Record a capture and return it once it is finished. Raises like start_capture."""
+        cap = self.start_capture(seconds)
+        await cap.finished.wait()
         return cap
 
     def _run_capture(self, cap: captures.Capture) -> None:
@@ -880,7 +943,8 @@ class DeviceManager:
         """The enabled configured devices."""
         return [self._device(cfg.name) for cfg in self.rt.core.devices if cfg.enabled]
 
-    def _find(self, device_name: str) -> Device:
+    def find(self, device_name: str) -> Device:
+        """The enabled configured device of that name; LookupError for any other name."""
         target = next((c for c in self.clients if c.name == device_name), None)
         if target is None:
             raise LookupError(f"unknown device {device_name!r}")
@@ -914,18 +978,6 @@ class DeviceManager:
             return
         await target.announce(text, "reminder")
 
-    def capture_start(self, device_name: str, seconds: int) -> dict:
-        """Start a capture on the named device; return its snapshot (state `starting`).
-        Raises LookupError (unknown device), DeviceOfflineError or CaptureBusyError."""
-        return self._find(device_name).start_capture(seconds).snapshot()
-
-    async def capture(self, device_name: str, seconds: int) -> captures.Capture:
-        """Record a capture on the named device and return it once it is finished.
-        Raises like capture_start."""
-        cap = self._find(device_name).start_capture(seconds)
-        await cap.finished.wait()
-        return cap
-
     def capture_status(self, device_name: str) -> dict:
         """The device's running capture, else its newest one on disk, else idle."""
         device = self._devices.get(device_name)
@@ -944,86 +996,12 @@ class DeviceManager:
         cap.remove()
         return True
 
-    def device_controls(self, device_name: str) -> dict:
-        target = self._find(device_name)
-        return {
-            "device": device_name,
-            "online": target.online,
-            "controls": target.controls(),
-            "readings": target.readings(),
-            "versions": target.versions() if target.online else [],
-        }
-
-    def set_device_control(self, device_name: str, control_id: str, value: float) -> dict:
-        self._find(device_name).set_control(control_id, value)
-        return self.device_controls(device_name)
-
-    def get_volume(self, device_name: str) -> int:
-        """Device.get_volume on the named device; LookupError for an unknown name."""
-        return self._find(device_name).get_volume()
-
-    def set_volume(self, device_name: str, level: int | None = None, change: int | None = None) -> int:
-        """Device.set_volume on the named device; LookupError for an unknown name."""
-        return self._find(device_name).set_volume(level, change)
-
-    async def say(self, device_name: str, text: str) -> None:
-        """Speak `text` on the named device (the panel's "Say on speaker"). Raises
-        LookupError (unknown device), DeviceOfflineError, or what announce raises when
-        the speech fails."""
-        device = self._find(device_name)
-        if not device.online:
-            raise DeviceOfflineError(f"{device_name} is offline")
-        await device.announce(text, "say")
-
-    def set_wake_prob_stream(self, device_name: str, enabled: bool) -> dict:
-        target = self._find(device_name)
-        conn = target.conn
-        if conn is None:
-            raise RuntimeError(f"{device_name} is offline")
-        conn.send({"type": "wake_peak_stream", "on": bool(enabled)})
-        if not enabled:
-            conn.wake_peak = None
-        return {"device": device_name, "online": True, "available": True, "value": conn.wake_peak}
-
-    def set_detect(self, device_name: str, enabled: bool) -> dict:
-        """Debug switch for the device's wake-word detection. Not tracked here: the device
-        turns detection back on at every new connection."""
-        conn = self._find(device_name).conn
-        if conn is None:
-            raise RuntimeError(f"{device_name} is offline")
-        conn.send({"type": "detect", "on": bool(enabled)})
-        logger.info(f"{device_name}: wake-word detection {'on' if enabled else 'off'}")
-        return {"device": device_name, "detect": bool(enabled)}
-
-    def reload_model(self, device_name: str) -> dict:
-        """The direct reload command: re-read the model files and send them; the device
-        swaps them without a restart. Returns {device, models: {kind: name sent}}.
-        Raises LookupError (unknown device) or RuntimeError (offline)."""
-        target = self._find(device_name)
-        conn = target.conn
-        if conn is None:
-            raise RuntimeError(f"{device_name} is offline")
-        logger.info(f"{device_name}: reloading the models")
-        sent = {kind: name for kind, (name, path) in _model_paths(target.cfg, conn.speaker).items()
-                if conn.send_model(kind, name, path)}
-        return {"device": device_name, "models": sent}
-
-    def wake_prob(self, device_name: str) -> dict:
-        target = self._find(device_name)
-        conn = target.conn
-        return {
-            "device": device_name,
-            "online": conn is not None,
-            "available": conn is not None,
-            "value": conn.wake_peak if conn is not None else None,
-        }
-
     async def play_chime(self, sound_path: str, device_name: str | None = None) -> dict:
         """Play the given chime on the named device, or on every device, for an
         operator preview. Returns {"played": [names], "offline": [names]}; a device
         that fails to play is reported offline. Raises LookupError for an unknown name."""
         mime, audio = await asyncio.to_thread(build_ack_clip, sound_path)
-        targets = [self._find(device_name)] if device_name is not None else self.clients
+        targets = [self.find(device_name)] if device_name is not None else self.clients
         played: list[str] = []
         offline: list[str] = []
         for c in targets:
