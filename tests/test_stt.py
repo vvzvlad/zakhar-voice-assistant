@@ -28,7 +28,7 @@ from src.plugins.stt.vosk import (
     _list_vosk_models,
 )
 from src.stage_errors import StageError
-from src.stt import pcm_to_wav
+from src.stt import pcm_to_wav, strip_stt_hallucination
 
 
 def test_pcm_to_wav_roundtrip():
@@ -255,6 +255,34 @@ async def test_groq_backend_malformed_200_body_raises_stage_error():
     assert "malformed" in str(ei.value)
     # The original decode error is chained for debuggability.
     assert isinstance(ei.value.__cause__, ValueError)
+
+
+@pytest.mark.parametrize("text, expected", [
+    # Whisper put the stock caption into the pause between two wake words.
+    ("Захар.  Продолжение следует...  Захар, расскажи анекдот про лося.",
+     "Захар. Захар, расскажи анекдот про лося."),
+    # The credit line carries no closing punctuation.
+    ("Захар. Субтитры сделал DimaTorzok  Захар, включи свет.", "Захар. Захар, включи свет."),
+    ("Субтитры создавал DimaTorzok", ""),
+    ("Продолжение следует...", ""),
+    ("Захар,  включи свет.", "Захар,  включи свет."),
+])
+def test_strip_stt_hallucination(text, expected):
+    assert strip_stt_hallucination(text) == expected
+
+
+@pytest.mark.parametrize("url, make", [
+    (GROQ_STT_URL, lambda c: GroqSttBackend(c, api_key="k", model="whisper-large-v3-turbo")),
+    (OPENROUTER_STT_URL,
+     lambda c: OpenRouterSttBackend(c, api_key="k", model="openai/whisper-large-v3-turbo")),
+])
+@respx.mock
+async def test_whisper_backend_keeps_request_around_hallucination(url, make):
+    respx.post(url).mock(return_value=httpx.Response(
+        200, json={"text": "Захар.  Продолжение следует...  Захар, расскажи анекдот про лося."}))
+    async with httpx.AsyncClient(verify=False) as client:
+        result = await make(client).transcribe(b"\x01\x02" * 100)
+    assert result == "Захар. Захар, расскажи анекдот про лося."
 
 
 def test_contains_stt_hallucination_uppercase_cyrillic():

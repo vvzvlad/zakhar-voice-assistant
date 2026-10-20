@@ -15,6 +15,7 @@ from src.stt import (  # noqa: F401
     SttBackend,
     contains_stt_hallucination,
     pcm_to_wav,
+    strip_stt_hallucination,
 )
 
 GROQ_STT_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
@@ -57,9 +58,10 @@ class GroqSttBackend(SttBackend):
     async def transcribe(self, pcm: bytes) -> str:
         """Transcribe raw 16 kHz/16-bit mono PCM via Groq Whisper.
 
-        Returns the recognized text on success; "" on empty input (nothing to
-        transcribe), a 200 with empty text (no speech recognized), or a known
-        Whisper hallucination (discarded as if nothing was said). Raises
+        Returns the recognized text on success, with the sentences carrying a known
+        Whisper hallucination cut; "" on empty input (nothing to transcribe), a 200
+        with empty text (no speech recognized), or a transcript that is nothing but
+        a hallucination. Raises
         StageError("stt", ...) on a non-200 response or any httpx error.
         """
         if not pcm:
@@ -94,13 +96,13 @@ class GroqSttBackend(SttBackend):
             if resp.status_code == 200:
                 text = resp.json().get("text", "").strip()
                 # Whisper emits leftover subtitle-credit artifacts (e.g.
-                # "DimaTorzok") on silence/noise. Discard such hallucinated text
-                # and return "" — the SttBackend contract for "no speech
-                # recognized" — so the pipeline ends the run like an empty result.
-                if contains_stt_hallucination(text):
-                    logger.info(f"Groq STT: discarding hallucination: {text!r}")
-                    return ""
-                return text
+                # "DimaTorzok") on silence/noise and in pauses of a request.
+                # Their sentences are cut; when nothing else is left the result is
+                # "" — the SttBackend contract for "no speech recognized".
+                cleaned = strip_stt_hallucination(text)
+                if cleaned != text:
+                    logger.info(f"Groq STT: cut hallucination: {text!r} -> {cleaned!r}")
+                return cleaned
             logger.error(f"Groq STT error: {resp.status_code} - {resp.text}")
             raise StageError("stt", f"Groq STT error: {resp.status_code} - {resp.text}")
         except httpx.HTTPError as e:

@@ -5,6 +5,7 @@ per brick); the orchestrator imports only this contract module.
 """
 
 import io
+import re
 import wave
 from abc import ABC, abstractmethod
 
@@ -25,9 +26,10 @@ def pcm_to_wav(
 # Known Whisper STT hallucination markers (lowercase). Whisper tends to emit
 # leftover subtitle-credit / stock phrases (training-data artifacts) on
 # silence/noise: "DimaTorzok" is one such credit string and "Продолжение
-# следует..." ("to be continued") is a recurring stock caption. When a
-# transcription contains one of these (substring, case-insensitive), we treat
-# the run as if nothing was said and drop it.
+# следует..." ("to be continued") is a recurring stock caption. Matching is by
+# substring, case-insensitive. The Whisper backends cut the sentences that carry
+# a marker (strip_stt_hallucination); the chains drop any other transcript that
+# contains one as if nothing was said.
 STT_HALLUCINATION_MARKERS = ("dimatorzok", "продолжение следует")
 
 
@@ -40,6 +42,29 @@ def contains_stt_hallucination(text: str) -> bool:
     """
     folded = text.casefold()
     return any(marker in folded for marker in STT_HALLUCINATION_MARKERS)
+
+
+# Whisper ends a stock caption with sentence punctuation, except the credit line
+# ("Субтитры сделал DimaTorzok"), which ends with the marker itself — so the text
+# also breaks right after a marker, and the caption comes out as one piece.
+_SENTENCE_BREAK = re.compile(
+    "|".join([r"(?<=[.!?…])\s+"]
+             + [rf"(?<={re.escape(m)})\s+" for m in STT_HALLUCINATION_MARKERS]),
+    re.IGNORECASE)
+
+
+def strip_stt_hallucination(text: str) -> str:
+    """Drop the sentences of a Whisper transcript that carry a hallucination marker.
+
+    Whisper inserts the stock caption as a sentence of its own: alone on silence, or
+    in a pause inside a real request ("Захар. Продолжение следует... Захар, расскажи
+    анекдот."). Only those sentences go, the request stays; "" when nothing is left.
+    A transcript without a marker is returned unchanged.
+    """
+    if not contains_stt_hallucination(text):
+        return text
+    kept = [s for s in _SENTENCE_BREAK.split(text.strip()) if not contains_stt_hallucination(s)]
+    return " ".join(kept)
 
 
 class StreamingSttSession(ABC):
