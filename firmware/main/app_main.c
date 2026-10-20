@@ -197,14 +197,6 @@ static void on_state(zl_state_t state, const char *text)
     }
 }
 
-// Asked on a wake word that starts a session; from then until the server's verdict the ring shows
-// nothing.
-static bool can_start(void)
-{
-    leds_set_phase(LED_PHASE_WAITING);
-    return true;
-}
-
 static void on_detect(void)
 {
     zl_wake(WAKE_WORD_NAME);
@@ -341,7 +333,6 @@ void app_main(void)
         .on_config = wake_word_set_cutoffs,
         .on_set_volume = controls_request_volume,
         .on_capture = leds_set_capture,
-        .can_start = can_start,
         .on_model = on_model,
         .on_echo_cancel = audio_set_echo_cancel,
         .on_auto_volume = audio_set_auto_volume,

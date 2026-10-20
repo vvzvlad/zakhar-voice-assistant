@@ -255,7 +255,7 @@ static void mic_task(void *arg)
             made_filter = filter;
             applied = level;
         }
-        // Quiet is auto volume on, nothing playing, no session open and no capture held; its end
+        // Quiet is auto volume on, nothing playing, no session open, no wake proposed and no capture held; its end
         // ends a measurement.
         const bool measuring = ambient_sched_want(
             &amb, atomic_load_explicit(&s_auto_volume, memory_order_relaxed) && !zl_playing() && !zl_mic_busy());

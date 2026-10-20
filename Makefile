@@ -163,6 +163,8 @@ fw-host-test: $(CJSON_D)/cJSON.c $(CJSON_D)/cJSON.h ## Host-test the firmware za
 # fw-build-seed is the one-time image for the switch from ESPHome: only it takes
 # firmware/sdkconfig.secrets (gitignored: a Wi-Fi network) and stores that network on a speaker
 # that has none. fw-build leaves the file on the laptop; its image joins over BLE provisioning.
+# The container gets 24 of cirunner's 72 CPUs: ninja starts a job per CPU it sees, and 72 parallel
+# cc1plus of esp-tflite-micro run cirunner's ~19 GB without swap out of memory.
 FW_DOCKER := docker -c cirunner
 FW_IDF    := espressif/idf:v5.5.4
 FW_OUT    := build/voicepe.bin build/bootloader/bootloader.bin build/partition_table/partition-table.bin \
@@ -177,7 +179,7 @@ fw-build fw-build-seed:
 		--exclude firmware/managed_components --exclude firmware/sdkconfig --exclude firmware/sdkconfig.old \
 		$(if $(filter 1,$(FW_SEED)),,--exclude firmware/sdkconfig.secrets) \
 		firmware \
-	| $(FW_DOCKER) run --rm -i --entrypoint bash $(FW_IDF) -c 'set -e; mkdir /w; cd /w; tar -xf -; \
+	| $(FW_DOCKER) run --rm -i --cpuset-cpus 0-23 --entrypoint bash $(FW_IDF) -c 'set -e; mkdir /w; cd /w; tar -xf -; \
 		cd firmware; . $$IDF_PATH/export.sh >&2; \
 		idf.py -DZAKHAR_GIT_VERSION=$(shell git describe --always --dirty) -DZAKHAR_WIFI_SEED=$(FW_SEED) \
 			build size >&2; tar -cf - $(FW_OUT)' \
