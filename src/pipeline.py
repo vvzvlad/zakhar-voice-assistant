@@ -27,7 +27,7 @@ import time
 import numpy as np
 from loguru import logger
 
-from src import chains, config_store, context, llm
+from src import chains, config_store, context, llm, telemetry
 from src.audio_prep import (
     highpass,
     normalize_peak,
@@ -1199,17 +1199,21 @@ class Pipeline:
 
     async def _store_run(self, record: dict, t0: float, pcm: bytes = b"", pcm2: bytes = b"",
                          tts_audio=None, tts_mime=None) -> dict | None:
-        """Insert the run record and store its audio; returns the summary row to
-        broadcast (_broadcast_run), or None. A recording failure must never break the
-        run or swallow RUN_END, so it is fully wrapped."""
-        if self.runs_store is None:
-            return None
+        """Insert the run record, publish it to the telemetry (whether or not the run
+        log is on, with its run log id when it has one) and store its audio; returns the
+        summary row to broadcast (_broadcast_run), or None. A recording failure must never
+        break the run or swallow RUN_END, so it is fully wrapped."""
         record["t_total"] = int((time.perf_counter() - t0) * 1000)
+        if self.runs_store is None:
+            telemetry.publish_run(self.rt, record)
+            return None
         try:
             run_id = await asyncio.to_thread(self.runs_store.insert, record)
         except Exception as e:
             logger.error(f"{self.name}: run record failed: {e}")
+            telemetry.publish_run(self.rt, record)
             return None
+        telemetry.publish_run(self.rt, record, run_id)
         # Store the finalized utterance audio in a rolling window of
         # the last runs.audio_keep, so it can be downloaded/played from
         # the log to diagnose mis-triggers (e.g. a wake-word tail

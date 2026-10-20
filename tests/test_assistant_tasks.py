@@ -44,7 +44,7 @@ def _tasks(tmp_path, devices=()):
     tasks.rt = types.SimpleNamespace(
         core=types.SimpleNamespace(assistant_tasks=cfg),
         manager=types.SimpleNamespace(clients=list(devices)),
-        runs_store=RunsStore(str(tmp_path / "runs.db")), run_events=None)
+        runs_store=RunsStore(str(tmp_path / "runs.db")), run_events=None, telemetry=None)
     return tasks
 
 

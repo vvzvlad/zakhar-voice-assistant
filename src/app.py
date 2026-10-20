@@ -24,6 +24,7 @@ from src.reconfig import Reconfigurator
 from src.run_events import RunEventsHub
 from src.runs_store import RunsStore
 from src.runtime import Runtime
+from src.telemetry import Telemetry
 from src.tool_factory import build_sources
 from src.tool_hub import ToolHub
 from src.version import __version__
@@ -165,6 +166,10 @@ async def main() -> None:
     manager = DeviceManager(rt)
     # Back-ref so the Reconfigurator can reach it on hot-reload.
     rt.manager = manager
+    # MQTT telemetry (core.telemetry): its 30 s state reads the devices through rt.manager,
+    # the runs and the device events publish through rt.telemetry.
+    telemetry = Telemetry(rt, started_at)
+    rt.telemetry = telemetry
 
     # Hot-reload coordinator: classifies each config change and applies what can be
     # applied live. Registered as a ConfigService change callback. Heavy
@@ -225,6 +230,9 @@ async def main() -> None:
         # Back-ref so the Reconfigurator can re-point the panel's runs-store at a
         # hot-swapped store. Set before the reconfig loop can run.
         rt.panel = panel
+        # Before the device server: the devices' first `connected` events are published.
+        await telemetry.start()
+        telemetry.publish("server/event/started", {"version": __version__})
         await manager.start()
         # Devices find the device server by mDNS; a rebind restarts the advert (Reconfigurator).
         advert = MdnsAdvert()
@@ -263,6 +271,8 @@ async def main() -> None:
         if rt.advert is not None:
             await rt.advert.stop()
         await manager.stop()
+        # After the device server, whose closing publishes the devices' `disconnected` events.
+        await telemetry.stop()
         await hub.stop()
         # Close the CURRENT clients from deps: _rebuild_http may have swapped (and
         # already closed) the boot-time client_ext local, so deps holds the live ones.

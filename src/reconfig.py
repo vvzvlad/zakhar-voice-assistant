@@ -51,9 +51,9 @@ def action_for(path: str) -> str:
     """Map one changed dotted path to a reconfiguration action.
     Actions: 'live', 'logging', 'rebuild_backends', 'rebuild_http',
     'rebuild_tools', 'rebuild_audio', 'rebuild_devices', 'rebuild_runs',
-    'rebuild_reminders'. A path no rule covers is 'unknown': nothing applies it, so
-    on_config_change logs it, and test_every_config_field_has_an_apply_rule fails on
-    a config field without a rule."""
+    'rebuild_reminders', 'rebuild_telemetry'. A path no rule covers is 'unknown':
+    nothing applies it, so on_config_change logs it, and
+    test_every_config_field_has_an_apply_rule fails on a config field without a rule."""
     # Display-only "<field>_label" companion fields (the persisted human label of a
     # dynamic-select choice) are panel metadata that no backend reads, so an isolated
     # change needs no rebuild — apply it live. (In the normal flow the label changes
@@ -84,6 +84,8 @@ def action_for(path: str) -> str:
         return "rebuild_reminders"
     if path.startswith("core.runs"):
         return "rebuild_runs"
+    if path.startswith("core.telemetry"):
+        return "rebuild_telemetry"   # the MQTT client is built for one broker: restart it
     if path.startswith("core.devices"):
         return "rebuild_devices"
     if path == "core.device_log_days":
@@ -106,10 +108,10 @@ def action_for(path: str) -> str:
 # Actions whose work is performed off the panel request task, in the queue-draining
 # task (run_loop -> apply_job), because they may block (model loads, socket re-bind,
 # SQLite open/prune, tool-source start network I/O, http-client rebuild, device
-# connection updates, reminders store open/close).
+# connection updates, reminders store open/close, the MQTT network thread's join).
 ASYNC_ACTIONS = {"rebuild_backends", "rebuild_audio", "rebuild_runs",
                  "rebuild_tools", "rebuild_http",
-                 "rebuild_devices", "rebuild_reminders"}
+                 "rebuild_devices", "rebuild_reminders", "rebuild_telemetry"}
 
 
 def backend_categories(paths) -> set[str]:
@@ -237,6 +239,8 @@ class Reconfigurator:
             await self._rebuild_devices()
         if "rebuild_reminders" in actions:
             await self._rebuild_reminders()
+        if "rebuild_telemetry" in actions:
+            await self._rebuild_telemetry()
         if do_http:
             await self._rebuild_http(paths)
         # A job may have built a new handler backend or changed the tool catalog.
@@ -460,6 +464,16 @@ class Reconfigurator:
             # else: no enable<->disable transition -> nothing to do.
         except Exception as e:
             logger.error(f"reminders reconfigure failed: {e}")
+
+    async def _rebuild_telemetry(self) -> None:
+        """Restart the telemetry publisher on the current core.telemetry (hot): the old
+        broker connection is closed, a new one opens when telemetry is on with a broker."""
+        try:
+            await self.rt.telemetry.stop()
+            await self.rt.telemetry.start()
+            logger.info("telemetry restarted (hot)")
+        except Exception as e:
+            logger.error(f"telemetry reconfigure failed: {e}")
 
     async def _rebuild_tools(self) -> None:
         """Rebuild the tool source set from current config and hot-swap it into the hub."""

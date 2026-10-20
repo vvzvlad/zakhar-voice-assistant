@@ -281,6 +281,19 @@ class RunsConfig(BaseModel):
     )  # rolling ring-buffer cap; applied per-utterance via RunsStore.put_audio()
 
 
+class TelemetryConfig(BaseModel):
+    # The server publishes its own and its devices' telemetry to the smart home's MQTT broker
+    # (topics and payloads: src/telemetry.py); the broker takes anonymous clients.
+    enabled: bool = Field(
+        False,
+        title="Enabled",
+        description="Publish the server's and the speakers' state every 30 s and every event "
+        "as it happens to the MQTT broker. Off: nothing is published.",
+    )
+    host: str = Field("", title="Broker address", description="Empty: nothing is published.")
+    port: int = Field(1883, ge=1, le=65535, title="Port")
+
+
 class RemindersConfig(BaseModel):
     # One-shot voice reminders (data/reminders.db). Disable to drop the subsystem.
     enabled: bool = Field(True, title="Enabled", description="Off removes the reminder tools and pauses announcing reminders.")
@@ -413,6 +426,7 @@ class CoreConfig(BaseModel):
     agent_mcp: AgentMcpConfig = AgentMcpConfig()
     prompt: PromptConfig = PromptConfig()
     runs: RunsConfig = RunsConfig()
+    telemetry: TelemetryConfig = TelemetryConfig()
     reminders: RemindersConfig = RemindersConfig()
     ack: AckConfig = AckConfig()
     commands: CommandsConfig = CommandsConfig()
