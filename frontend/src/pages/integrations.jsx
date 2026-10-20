@@ -18,7 +18,7 @@ import {
   getTools, getOptions, startCapture, getCaptureStatus, downloadCaptureResult, getDeviceControls, setDeviceControl,
   sayOnDevice, getWakeProbability, setWakeProbabilityStream, getConfig, getWakeModels, uploadWakeModel,
 } from "../api.js";
-import { deviceLabel, deviceVersion, fmtUptime } from "../format.js";
+import { deviceLabel, deviceVersion, fmtUptime, fwVersion } from "../format.js";
 
 function Card({ title, sub, children, foot, right }) {
   return <div className="z-card">
@@ -160,21 +160,24 @@ function McpServerCard({ server, live, onToggle, onEdit, onDelete }) {
   if (!enabled) pill = <Pill tone="muted">disabled</Pill>;
   else if (live) pill = <StatusPill status={live.online ? "online" : "offline"} />;
   else pill = <StatusPill status="offline" />;
+  // On a narrow card the header wraps: the status and buttons drop under the name and url, a
+  // long url breaks anywhere. The name block's 240px basis keeps a long url from wrapping them
+  // on a wide card.
   return <div className="z-card" style={{ marginBottom: 14 }}>
-    <div className="z-card-h">
-      <div className={dim} style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
-        <Ic n="mcp" w={17} />
+    <div className="z-card-h" style={{ flexWrap: "wrap" }}>
+      <div className={dim} style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0, flex: "1 1 240px" }}>
+        <span style={{ display: "flex", flex: "none" }}><Ic n="mcp" w={17} /></span>
         <div style={{ minWidth: 0 }}>
           <b style={{ display: "block" }}>{server.name}</b>
-          <span className="mono" style={{ fontSize: 11, color: "var(--mut)" }}>{server.url}</span>
+          <span className="mono" style={{ fontSize: 11, color: "var(--mut)", overflowWrap: "anywhere" }}>{server.url}</span>
         </div>
       </div>
-      <div style={{ display: "flex", alignItems: "center", gap: 12, marginLeft: "auto" }}>
+      <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 12, marginLeft: "auto" }}>
         <div className={dim} style={{ display: "flex" }}>{pill}</div>
         <div style={{ display: "flex", gap: 6 }}>
-          <button className="z-mini" onClick={onToggle}>{enabled ? "Disable" : "Enable"}</button>
-          <button className="z-mini" onClick={onEdit}>Edit</button>
-          <button className="z-mini" onClick={onDelete}>Delete</button>
+          <button className="z-btn g sm" onClick={onToggle}>{enabled ? "Disable" : "Enable"}</button>
+          <button className="z-btn g sm" onClick={onEdit}>Edit</button>
+          <button className="z-btn d sm" onClick={onDelete}>Delete</button>
         </div>
       </div>
     </div>
@@ -500,7 +503,7 @@ export function Prompt() {
   const voiceDiffers = differsFromVoice(voice, current, ttsProv(current)?.values);
 
   return <FormPage form={form} errors={[...errorLines(saveErr), ...errorLines(ctxErr)]}>
-    <PageHeader title="System prompt"
+    <PageHeader title="System Prompt"
       desc="Zahar's character, rules and answer format. Keep several named profiles and activate the one the assistant should use. The placeholder is replaced with live date/time at request time."
       actions={<button className="z-btn g" onClick={() => { if (confirmDiscard(dirty)) load(selected?.id); }}>Reload</button>} />
     {/* Profile bar: pick a profile to edit; Activate switches what the pipeline uses. */}
@@ -569,20 +572,22 @@ const DEVICE_TABS = ["General", "Wake word", "Sound", "Stop word", "Log"];
 
 // Add mode (`onSave({name, enabled})`) asks for a device id. Edit mode (`device`, the saved id)
 // shows the device's status, its id — what the firmware sends in hello — and its versions above
-// five tabs: General (the display label and any live control no other tab places), Wake word
-// (the wake word model, the live wake probability, the cutoffs, sample capture), Sound (the
-// speaker volume, a test phrase, the auto volume switch and, while it is on, its settings and
-// readings, the playback reserve), Stop word (the echo cancellation) and Log (the device log
-// switch and the log the server keeps). `onSave` gets only the changed ones of {label,
-// wake_model, log, auto_volume} (wake_model "" = the release default; an uploaded .tflite becomes
-// the selected model), whichever tabs they were edited on; a tab holding such a change carries a
-// dot. The live controls are written at once, polled for the whole life of the dialog. All tabs
-// stay mounted and only the open one shows, so a running capture or a typed phrase outlives a tab
-// switch; the log alone mounts with its tab, so it is polled only while shown. `online` says
-// whether the device is reachable, `logDays` how many days of device log the server keeps.
-function DeviceModal({ onSave, onClose, title, device, label: savedLabel = "", wakeModel: savedWakeModel = "", log: savedLog = false, autoVolume: savedAutoVolume = false, logDays, online }) {
+// five tabs: General (the display label, the enabled switch and any live control no other tab
+// places), Wake word (the wake word model, the live wake probability, the cutoffs, sample
+// capture), Sound (the speaker volume, a test phrase, the auto volume switch and, while it is on,
+// its settings and readings, the playback reserve), Stop word (the echo cancellation) and Log (the
+// device log switch and the log the server keeps). `onSave` gets only the changed ones of {label,
+// enabled, wake_model, log, auto_volume} (wake_model "" = the release default; an uploaded .tflite
+// becomes the selected model), whichever tabs they were edited on; a tab holding such a change
+// carries a dot. The live controls are written at once, each marked "live", polled for the whole
+// life of the dialog. All tabs stay mounted and only the open one shows, so a running capture or a
+// typed phrase outlives a tab switch; the log alone mounts with its tab, so it is polled only while
+// shown. `online` says whether the device is reachable, `logDays` how many days of device log the
+// server keeps, `onDelete` deletes the device (the footer's Delete speaker).
+function DeviceModal({ onSave, onClose, onDelete, title, device, label: savedLabel = "", enabled: savedEnabled = true, wakeModel: savedWakeModel = "", log: savedLog = false, autoVolume: savedAutoVolume = false, logDays, online }) {
   const [name, setName] = useState("");
   const [label, setLabel] = useState(savedLabel);
+  const [enabled, setEnabled] = useState(savedEnabled);
   const [wakeModel, setWakeModel] = useState(savedWakeModel);
   const [log, setLog] = useState(savedLog);
   const [autoVolume, setAutoVolume] = useState(savedAutoVolume);
@@ -624,7 +629,7 @@ function DeviceModal({ onSave, onClose, title, device, label: savedLabel = "", w
   if (device) {
     // The tabs holding a field Save would send.
     const marked = DEVICE_TABS.filter((t) => ({
-      General: label.trim() !== savedLabel,
+      General: label.trim() !== savedLabel || enabled !== savedEnabled,
       "Wake word": wakeModel !== savedWakeModel,
       Sound: autoVolume !== savedAutoVolume,
       Log: log !== savedLog,
@@ -637,10 +642,12 @@ function DeviceModal({ onSave, onClose, title, device, label: savedLabel = "", w
       .map(controlField);
     const loading = !ctl.snap && !ctl.err && <div className="z-f"><div className="z-fh">Loading…</div></div>;
     return <Modal top wide title={title} onClose={onClose}
-      footer={<><button className="z-btn g" onClick={onClose}>Close</button>
+      footer={<><button className="z-btn d" style={{ marginRight: "auto" }} onClick={onDelete}>Delete speaker</button>
+        <button className="z-btn g" onClick={onClose}>Close</button>
         <button className="z-btn p" disabled={marked.length === 0} onClick={() => onSave({
           // Only the edited fields: the rest stays as in the server's fresh list (saveList).
           ...(label.trim() !== savedLabel && { label: label.trim() }),
+          ...(enabled !== savedEnabled && { enabled }),
           ...(wakeModel !== savedWakeModel && { wake_model: wakeModel }),
           ...(log !== savedLog && { log }),
           ...(autoVolume !== savedAutoVolume && { auto_volume: autoVolume }),
@@ -648,31 +655,37 @@ function DeviceModal({ onSave, onClose, title, device, label: savedLabel = "", w
       <div className="z-dev-stats">
         <Stat label="Status"><StatusPill status={online ? "online" : "offline"} /></Stat>
         <Stat label="Device id" title="Sent by the firmware when it connects — keys the device's settings and dialog context.">{device}</Stat>
-        <Stat label="Firmware" title={deviceVersion(ctl.snap, "config_version")}>{deviceVersion(ctl.snap, "config_version") ?? "—"}</Stat>
+        <Stat label="Firmware" title={deviceVersion(ctl.snap, "config_version")}>{fwVersion(deviceVersion(ctl.snap, "config_version")) ?? "—"}</Stat>
         <Stat label="Wake word model" title={deviceVersion(ctl.snap, "model_version")}>{deviceVersion(ctl.snap, "model_version") ?? "—"}</Stat>
       </div>
       <div className="z-tabs" ref={tabsRef}><Seg full options={DEVICE_TABS} value={tab} onChange={pickTab} marked={marked} /></div>
       {ctl.err && <div className="z-fh" style={{ color: "#b91c1c", marginTop: 8 }}>{ctl.err.message || String(ctl.err)}</div>}
       <div hidden={tab !== "General"}>
         <Field row label="Name" hint="Shown in the panel instead of the device id; empty shows the id."><div className="z-rowctl"><div className="z-inp"><input value={label} placeholder={device} onChange={(e) => setLabel(e.target.value)} /></div></div></Field>
+        {/* Off closes the device's connection and refuses it from then on, on admits it again;
+            a missing flag (old configs) is on. */}
+        <Field row label="Enabled"><Toggle on={enabled} onChange={setEnabled} /></Field>
         {snapControls.filter((c) => !PLACED_CONTROLS.has(c.id)).map(controlField)}
       </div>
       <div hidden={tab !== "Wake word"}>
-        {wakeModels && <Field row label="Wake word model" hint="Sent to the device on save and at every connection. An uploaded .tflite is kept in the server's data volume; a new file of the same name replaces it and goes at once to every device using it.">
-          <div className="z-rowctl">
-            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <Select value={wakeModel} onChange={setWakeModel} options={[
-                  { value: "", label: `Release default (${wakeModels.release})` },
-                  ...wakeModels.options.map((n) => ({ value: n, label: n })),
-                ]} />
-              </div>
-              <button className="z-btn g" title="Upload a .tflite model" onClick={() => fileRef.current.click()}>Upload</button>
-              <input ref={fileRef} type="file" accept=".tflite" hidden aria-label="Wake word model file" onChange={upload} />
+        {wakeModels && <>
+          <Field row label="Wake word model" hint="Sent to the device on save and at every connection.">
+            <div className="z-rowctl">
+              <Select value={wakeModel} onChange={setWakeModel} options={[
+                { value: "", label: `Release default (${wakeModels.release})` },
+                ...wakeModels.options.map((n) => ({ value: n, label: n })),
+              ]} />
             </div>
-            {uploadErr && <div className="z-fh" style={{ color: "#b91c1c" }}>{uploadErr}</div>}
-          </div>
-        </Field>}
+          </Field>
+          {/* A row of its own, so the button does not read as a step after picking a model. */}
+          <Field row label="Upload model" hint="Adds a .tflite to the list above and picks it. It is kept in the server's data volume; a new file of the same name replaces it and goes at once to every device using it.">
+            <div className="z-rowctl" style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6 }}>
+              <button className="z-btn g" onClick={() => fileRef.current.click()}>Upload</button>
+              <input ref={fileRef} type="file" accept=".tflite" hidden aria-label="Wake word model file" onChange={upload} />
+              {uploadErr && <div className="z-fh" style={{ color: "#b91c1c" }}>{uploadErr}</div>}
+            </div>
+          </Field>
+        </>}
         <WakeProbabilityMeter device={device} online={online} />
         {loading}
         {controls("wake_probability_cutoff", "vad_cutoff")}
@@ -843,10 +856,11 @@ function Stat({ label, title, children }) {
 }
 
 // One live control: a ScaleSeg for the ids in CONTROL_SCALES, else a Slider over the range and
-// step the server gives it.
+// step the server gives it; its label carries a "live" mark: it is written at once, not by Save.
 function ControlField({ control: c, value, onChange }) {
   const scale = CONTROL_SCALES[c.id];
-  return <Field row label={CONTROL_LABELS[c.id] || c.name} hint={CONTROL_HINTS[c.id]}>
+  const caption = <>{CONTROL_LABELS[c.id] || c.name}<span className="z-live" title="Applies at once, without Save">live</span></>;
+  return <Field row label={caption} hint={CONTROL_HINTS[c.id]}>
     <div className="z-rowctl">
       {scale
         ? <ScaleSeg options={scale.map((label, i) => ({ value: i, label }))} value={value} onChange={onChange} />
@@ -1017,7 +1031,6 @@ function WakeProbabilityMeter({ device, online: onlineProp }) {
 export function Devices() {
   const { catalog, patch, system, refreshConfig } = useAppData();
   const devices = catalog.core.values.devices || [];
-  const devicePort = catalog.core.values.audio?.port ?? 8200;
 
   // Statuses arrive live over the panel WS heartbeat (system.devices is refreshed
   // every second), so no one-shot fetch / polling is needed here.
@@ -1057,51 +1070,49 @@ export function Devices() {
     if (!window.confirm(`Delete speaker "${deviceLabel(devices, name)}"?`)) return;
     saveList((list) => list.filter((x) => x.name !== name));
   };
-  // Flip the persisted enabled flag (missing = true on old configs). Disabling closes
-  // the device's connection and refuses it from then on; re-enabling admits it — both hot.
-  const onToggle = (name) => saveList((list) => list.map((x) => (
-    x.name === name ? { ...x, enabled: !(x.enabled ?? true) } : x
-  )));
 
   return <div className="z-page">
-    <PageHeader title="Devices" desc={`Devices connect to ws://<server>:${devicePort}/device; an unknown device is added on its first connection. Each device id also keys its own dialog context.`}
-      actions={<button className="z-btn p" onClick={() => setModal({ mode: "add" })}><Ic n="add" w={14} />Add speaker</button>} />
+    <PageHeader title="Devices" desc="An unknown device is added on its first connection. Each device id also keys its own dialog context."
+      actions={<button className="z-btn g" onClick={() => setModal({ mode: "add" })}><Ic n="add" w={14} />Add speaker</button>} />
     {busyErr && <div className="z-banner warn" style={{ margin: "0 0 12px" }}><Ic n="restart" w={15} /><span>{errorLines(busyErr).join(" · ")}</span></div>}
     <Card>
-      <table className="z-tbl">
-        <thead><tr><th>Name</th><th>Firmware</th><th>Wake word model</th><th>Uptime</th><th>Status</th><th></th></tr></thead>
+      {/* On a narrow screen Firmware and Uptime hide (the dialog header has them) and what is
+          still too wide scrolls inside the card, not the page. */}
+      <div style={{ overflowX: "auto" }}>
+      <table className="z-tbl z-devtbl">
+        <thead><tr><th>Name</th><th>Firmware</th><th>Wake word model</th><th>Uptime</th><th>Status</th></tr></thead>
         <tbody>
           {devices.length === 0
-            ? <tr><td colSpan={6} style={{ color: "var(--mut)", padding: "14px 0" }}>No speakers configured.</td></tr>
+            ? <tr><td colSpan={5} style={{ color: "var(--mut)", padding: "14px 0" }}>No speakers configured.</td></tr>
             : devices.map((d, i) => {
               const enabled = d.enabled ?? true;
               const dim = enabled ? "" : "z-dim";
-              return <tr key={i} style={{ cursor: "default" }}>
+              const fw = deviceVersion(liveOf(d.name), "config_version");
+              // Re-read the config first: the dialog starts from the device's saved label and
+              // model, which may have changed elsewhere since this page loaded.
+              return <tr key={i} data-testid="device-row" onClick={() => refreshConfig().catch(() => {})
+                .finally(() => setModal({ mode: "edit", name: d.name }))}>
                 <td className={dim} style={{ fontWeight: 600 }}>{d.label || d.name}</td>
-                {/* Firmware/model versions come from the live WS snapshot; "—" while offline/disabled. */}
-                <td className={`mono ${dim}`} style={{ fontSize: 11.5 }}>{deviceVersion(liveOf(d.name), "config_version") ?? "—"}</td>
+                {/* Firmware/model versions come from the live WS snapshot; "—" while offline/disabled.
+                    The firmware's build hash is in its tooltip. */}
+                <td className={`mono ${dim}`} style={{ fontSize: 11.5 }} title={fw ?? undefined}>{fwVersion(fw) ?? "—"}</td>
                 <td className={`mono ${dim}`} style={{ fontSize: 11.5 }}>{deviceVersion(liveOf(d.name), "model_version") ?? "—"}</td>
                 <td className={`mono ${dim}`} style={{ fontSize: 11.5 }}>{fmtUptime(liveOf(d.name)?.uptime_seconds)}</td>
                 <td className={dim}>{enabled ? <StatusPill status={statusOf(d.name)} /> : <Pill tone="muted">disabled</Pill>}</td>
-                <td style={{ textAlign: "right" }}><div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
-                  <button className="z-mini" onClick={() => onToggle(d.name)}>{enabled ? "Disable" : "Enable"}</button>
-                  {/* Re-read the config first: the dialog starts from the device's saved label and
-                      model, which may have changed elsewhere since this page loaded. */}
-                  <button className="z-mini" onClick={() => refreshConfig().catch(() => {})
-                    .finally(() => setModal({ mode: "edit", name: d.name }))}>Edit</button>
-                  <button className="z-mini" onClick={() => onDelete(d.name)}>Delete</button>
-                </div></td>
               </tr>;
             })}
         </tbody>
       </table>
+      </div>
     </Card>
     {modal?.mode === "add" && <DeviceModal title="Add speaker" onSave={onAdd} onClose={() => setModal(null)} />}
     {modal?.mode === "edit" && <DeviceModal key={modal.name} title="Edit speaker" onClose={() => setModal(null)}
       device={modal.name} label={devices.find((d) => d.name === modal.name)?.label || ""}
+      enabled={devices.find((d) => d.name === modal.name)?.enabled ?? true}
       wakeModel={devices.find((d) => d.name === modal.name)?.wake_model || ""}
       log={!!devices.find((d) => d.name === modal.name)?.log} logDays={catalog.core.values.device_log_days}
       autoVolume={!!devices.find((d) => d.name === modal.name)?.auto_volume}
-      onSave={(edit) => onEdit(modal.name, edit)} online={statusOf(modal.name) === "online"} />}
+      onSave={(edit) => onEdit(modal.name, edit)} onDelete={() => onDelete(modal.name)}
+      online={statusOf(modal.name) === "online"} />}
   </div>;
 }

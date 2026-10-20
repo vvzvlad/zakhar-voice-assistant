@@ -1,13 +1,14 @@
 // @vitest-environment jsdom
 // Render-level tests for the Dashboard: the Capture → Logic → Speech service map
 // (what each tile shows, grey dots for what is off, where a click leads, an old
-// backend without categories), the KPI tiles and the devices card with its switches.
+// backend without categories), the KPI tiles, the devices card with its switches and the
+// recent requests in the Request Log's column order, dated when not from today.
 import React from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, cleanup, fireEvent, within, waitFor } from "@testing-library/react";
 import Dashboard from "../pages/dashboard.jsx";
 import { useAppData } from "../appData.jsx";
-import { getMetrics, getConfig } from "../api.js";
+import { getMetrics, getConfig, getRuns } from "../api.js";
 import { nav } from "../navStore.js";
 import { faded } from "./faded.js";
 
@@ -119,7 +120,7 @@ describe("Dashboard service map", () => {
   it('shows "—" and still renders the page when the catalog has no categories (old backend)', async () => {
     useAppData.mockReturnValue({ catalog: { categories: [] }, config: { core: {} } });
     await renderDashboard();
-    expect(screen.getByText("Pipeline overview")).toBeInTheDocument();
+    expect(screen.getByText("Dashboard")).toBeInTheDocument();
     expect(tile("capture").querySelector(".prov").textContent).toBe("—");
     expect(tile("speech").querySelector(".prov").textContent).toBe("—");
   });
@@ -135,6 +136,16 @@ describe("Dashboard service map", () => {
       (el) => el.querySelector(".k")?.textContent === "Rejected · 24h",
     );
     expect(tileEl.querySelector(".v").textContent).toBe("3");
+  });
+
+  it("lists recent requests in the Request Log's column order, an older run with its date", async () => {
+    getRuns.mockResolvedValueOnce({ runs: [{ id: 1, ts: 0, device: "kitchen", result: "ok", stt_text: "hi", llm_text: "yo" }] });
+    useAppData.mockReturnValue({ catalog: catalog(), config });
+    render(<Dashboard />);
+    await screen.findByText("hi");
+    expect(screen.getAllByRole("columnheader").map((th) => th.textContent))
+      .toEqual(["Time", "Device", "Recognized", "Response", "Stage waterfall", "Σ", "Status"]);
+    expect(screen.getByText("Jan 1 1970 00:00:00")).toBeInTheDocument();
   });
 });
 

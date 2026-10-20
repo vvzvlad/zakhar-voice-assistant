@@ -28,6 +28,12 @@ export function deviceVersion(liveEntry, id) {
   return v?.value ?? null;
 }
 
+// A firmware version without its build hash: "voicepe 0.1.0 (dc1868d-dirty)" -> "voicepe 0.1.0";
+// null passes through.
+export function fwVersion(v) {
+  return v == null ? v : v.replace(/\s*\([^)]*\)$/, "");
+}
+
 // The name a device is shown under in the panel: the label set on the Devices page,
 // else its id. `devices` is core.devices; `id` is a hello id (null passes through).
 export function deviceLabel(devices, id) {

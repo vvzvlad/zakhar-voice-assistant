@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 // Render-level tests for the Prompt, Tools and Devices pages: the profile's
 // preferred voice is shown by name and flagged when it is not the voice speaking
-// now, each page saves with one Save, deleting an MCP server or a speaker
-// asks first, and a switched-off one keeps its buttons unfaded.
+// now, each page saves with one Save, deleting an MCP server asks first, a
+// switched-off server keeps its buttons unfaded and a switched-off speaker fades.
 import React from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, cleanup, fireEvent, waitFor, within } from "@testing-library/react";
@@ -113,26 +113,13 @@ describe("delete asks first", () => {
     fireEvent.click(screen.getAllByText("Delete")[0]);
     await waitFor(() => expect(data.patch).toHaveBeenCalledWith({ core: { mcp_servers: [{ name: "lab", url: "http://l/mcp" }] } }));
   });
-
-  it("deletes a speaker only after confirmation", async () => {
-    const data = appData({ devices: [{ name: "kitchen" }] });
-    useAppData.mockReturnValue(data);
-    const confirm = vi.spyOn(window, "confirm").mockReturnValueOnce(false).mockReturnValueOnce(true);
-    render(<Devices />);
-    fireEvent.click(screen.getByText("Delete"));
-    expect(confirm).toHaveBeenLastCalledWith('Delete speaker "kitchen"?');
-    expect(data.patch).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByText("Delete"));
-    await waitFor(() => expect(data.patch).toHaveBeenCalledWith({ core: { devices: [] } }));
-  });
 });
 
 describe("a switched-off item fades its content, not its buttons", () => {
-  it("speaker", () => {
+  it("speaker (its row has no buttons: a click opens its dialog)", () => {
     useAppData.mockReturnValue(appData({ devices: [{ name: "kitchen", enabled: false }] }));
     render(<Devices />);
     expect(faded(screen.getByText("kitchen"))).toBe(true);
-    for (const b of ["Enable", "Edit", "Delete"]) expect(faded(screen.getByRole("button", { name: b }))).toBe(false);
   });
 
   it("MCP server", async () => {
