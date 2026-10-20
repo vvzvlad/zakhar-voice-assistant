@@ -9,9 +9,10 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-# Marks a genuine credential field: the panel renders it as a masked reveal input.
+# SECRET_FIELD_EXTRA marks a genuine credential field (the panel renders it as a masked
+# reveal input), ADVANCED_FIELD_EXTRA a rarely changed one (folded under "Advanced").
 # Imported from src.plugins.base (no circular import — base imports nothing from here).
-from src.plugins.base import SECRET_FIELD_EXTRA
+from src.plugins.base import ADVANCED_FIELD_EXTRA, SECRET_FIELD_EXTRA
 
 # Panel descriptions shared by the built-in tool sources.
 SOURCE_ENABLED_DESCRIPTION = "Off removes this source's tools and its prompt block."
@@ -48,9 +49,7 @@ class AgentMcpConfig(BaseModel):
     """Agent-facing MCP server (external agents drive the assistant over /mcp).
 
     Served by the admin panel on the panel port — there is no separate bind, so
-    `enabled` is the only knob (read live per /mcp request). Old docs may still
-    carry host/port keys: pydantic ignores extras on parse and the stale keys
-    drop on the next save — no migration needed."""
+    `enabled` is the only knob (read live per /mcp request)."""
     enabled: bool = Field(True, title="Enabled")
 
 
@@ -89,7 +88,7 @@ class VadConfig(BaseModel):
         200,
         ge=0,
         title="Trim from start",
-        json_schema_extra={"unit": "ms", "multipleOf": 100},
+        json_schema_extra={**ADVANCED_FIELD_EXTRA, "unit": "ms", "multipleOf": 100},
         description="Drop this many ms off the start of the captured sample before STT: the oldest part of the 2000 ms pre-roll, before the wake word. 0 disables.",
     )
     mic_channel: Literal[0, 1] = Field(
@@ -103,11 +102,13 @@ class VadConfig(BaseModel):
     mic_normalize: bool = Field(
         False,
         title="Volume normalization",
+        json_schema_extra=ADVANCED_FIELD_EXTRA,
         description="Peak-normalize each captured utterance before STT so its loudest sample reaches a target level (~-3 dBFS). Adapts the quieter less-processed channel to a consistent loudness without clipping; near-silent clips are left untouched. Off by default; applies on the next utterance.",
     )
     mic_highpass: bool = Field(
         False,
         title="Low-frequency filter",
+        json_schema_extra=ADVANCED_FIELD_EXTRA,
         description="Apply a ~80 Hz high-pass filter to the whole utterance before STT to strip DC offset and low-frequency rumble (table thumps, HVAC) that hurt recognition. Off by default; applies on the next utterance.",
     )
     mic_auto_gain: bool = Field(
@@ -273,14 +274,6 @@ class RemindersConfig(BaseModel):
     enabled: bool = Field(True, title="Enabled", description="Off removes the reminder tools and pauses announcing reminders.")
 
 
-class CaptureConfig(BaseModel):
-    # Raw audio capture: when enabled, every finalized utterance's post-frontend PCM
-    # (what the device streams) is saved as a 16 kHz / mono /
-    # 16-bit WAV under `dir`. Off by default; toggle it on for a capture session.
-    enabled: bool = False
-    dir: str = "data/captures"
-
-
 class AckConfig(BaseModel):
     # Server-side "end-of-phrase" confirmation chime ("блям"). The wake-word chime was
     # moved OFF the device (it overlapped the user's command now that the firmware
@@ -299,27 +292,6 @@ class AckConfig(BaseModel):
         title="Chime sound",
         json_schema_extra={"options": "dynamic"},
         description="Chime audio file (WAV) played on end-of-phrase. Pick a bundled clip to use that exact «блям»; the synthesized default (empty value) plays a short two-tone sine chime. Applies per run.",
-    )
-
-
-class ArbitrationConfig(BaseModel):
-    """Which device keeps a phrase several devices woke on: a device with a speaker
-    over one without, between equals the higher signal-to-noise ratio of the
-    pre-roll, then the earlier wake (src/wake_arbiter.py)."""
-
-    window_ms: int = Field(
-        500,
-        ge=0,
-        title="Wait for other devices",
-        json_schema_extra={"unit": "ms", "multipleOf": 100},
-        description="How long a wake waits for the wakes of the other online devices before one device keeps the phrase; shorter once every online device has woken, never for a lone online device. With several wakes the hold lasts until each one's pre-roll and wake-word verdict are in: the pre-roll at most this long after that wake, the verdict within the verifier's timeout.",
-    )
-    cooldown_ms: int = Field(
-        2000,
-        ge=0,
-        title="Duplicate cooldown",
-        json_schema_extra={"unit": "ms", "multipleOf": 100},
-        description="For this long after the first wake of a phrase, a wake from any device other than the one that kept the phrase is dropped as a duplicate.",
     )
 
 
@@ -351,9 +323,7 @@ class CoreConfig(BaseModel):
     prompt: PromptConfig = PromptConfig()
     runs: RunsConfig = RunsConfig()
     reminders: RemindersConfig = RemindersConfig()
-    capture: CaptureConfig = CaptureConfig()
     ack: AckConfig = AckConfig()
-    arbitration: ArbitrationConfig = ArbitrationConfig()
     devices: list[DeviceConfig] = []
     chains: list[ChainConfig] = []
     tts_timeout: int = 30

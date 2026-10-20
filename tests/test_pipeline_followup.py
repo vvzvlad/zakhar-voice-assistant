@@ -14,14 +14,17 @@ import pytest
 from src import context
 from src.followup import FollowupGate, FollowupVerdict, NoFollowup
 from src.pipeline_events import StageEvent
+from src.plugins.vad.webrtc import WebRtcVadBackend
 from tests.test_pipeline import (
     FRAME,
+    PHRASE,
+    PHRASE_VAD,
     FakePlayer,
     FakeRunsStore,
-    install_fake_vad,
+    FakeVad,
+    install_phrase_vad,
     make_pipeline,
     patch_llm,
-    set_small_vad_thresholds,
     settle,
     types_of,
 )
@@ -64,21 +67,22 @@ def _make(tmp_path, monkeypatch, *, gate=None, outcome="played", capable=True, *
     pipeline.rt.followup_backend = FakeGate() if gate is None else gate
     pipeline.play = OutcomePlayer(outcome)
     pipeline.has_follow_up = capable
+    install_phrase_vad(pipeline)
     return pipeline, events
 
 
 async def _answer(pipeline):
     """One wake run, answered and played."""
     await pipeline.on_start("cid", "Захар")
-    await pipeline.on_audio(b"\x01\x02" * 100)
-    await pipeline.on_stop(False)
+    await pipeline.on_audio(PHRASE)
+    await settle(pipeline)
 
 
 async def _say(pipeline, text):
-    """A phrase in the open follow-up window, finalized by a device stop."""
+    """A phrase in the open follow-up window, ended by the server's VAD."""
     pipeline.rt.stt_backends["fake"].text = text
-    await pipeline.on_audio(b"\x01\x02" * 100)
-    await pipeline.on_stop(False)
+    await pipeline.on_audio(PHRASE)
+    await settle(pipeline)
 
 
 def _context(tmp_path):
@@ -112,8 +116,9 @@ async def test_no_window_unless_played_capable_and_enabled(tmp_path, monkeypatch
 async def test_silence_in_the_window_ends_the_session_unrecorded(tmp_path, monkeypatch):
     store = FakeRunsStore()
     pipeline, events = _make(tmp_path, monkeypatch, runs_store=store)
-    set_small_vad_thresholds(pipeline)
-    install_fake_vad(pipeline, [False])
+    # The wake run hears its phrase; the window that opens after its answer, silence.
+    scripts = iter([PHRASE_VAD, [False]])
+    pipeline.rt.vad_backend = WebRtcVadBackend(vad_factory=lambda: FakeVad(next(scripts)))
     await _answer(pipeline)
     events.clear()
 
@@ -244,10 +249,9 @@ async def test_a_follow_up_phrase_keeps_its_start(tmp_path, monkeypatch):
     await _answer(pipeline)
     heard = []
     pipeline.rt.stt_backends["fake"].transcribe = lambda pcm: heard.append(pcm) or _text()
-    fed = b"\x01\x02" * 400
-    await pipeline.on_audio(fed)
-    await pipeline.on_stop(False)
-    assert heard == [fed]
+    await pipeline.on_audio(PHRASE)
+    await settle(pipeline)
+    assert heard == [PHRASE]
 
 
 async def _text():

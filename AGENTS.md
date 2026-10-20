@@ -91,8 +91,7 @@ only setting is `core.agent_mcp.enabled`, panel-editable and read live per reque
   provider's fields. Adding a provider = one new plugin file; zero changes to the core.
 - `core.*` holds non-provider settings (context, audio, vad — end-pointing thresholds +
   mic conditioning, network, openweathermap, mcp_servers,
-  calendar, assistant_tasks, agent_mcp, prompt, runs, reminders, capture, ack, devices,
-  arbitration — which device keeps a phrase several devices woke on, tts_timeout,
+  calendar, assistant_tasks, agent_mcp, prompt, runs, reminders, ack, devices, tts_timeout,
   log_level, device_log_days) as plain `CoreConfig` pydantic sections.
 - API keys are plain string fields in the JSON (trusted-LAN service, no masking). `data/`
   is gitignored so `config.json` never gets committed.

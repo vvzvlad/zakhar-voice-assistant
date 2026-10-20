@@ -74,8 +74,6 @@ def test_action_for_representative_paths():
     cases = {
         "core.log_level": "logging",
         "core.context.max_turns": "live",
-        "core.capture.enabled": "live",      # read per-run via the Runtime read-through
-        "core.capture.dir": "live",          # ditto; read per-run via the Runtime read-through
         "core.ack.enabled": "live",          # read per-run via the Runtime read-through
         "core.ack.sound_path": "live",       # ditto; read per-run via the Runtime read-through
         "core.vad.aggressiveness": "live",
@@ -223,14 +221,6 @@ def test_reconfigurator_logs_a_path_without_a_rule():
     finally:
         logger.remove(sink_id)
     assert len([r for r in records if "core.loglevel" in str(r)]) == 1
-    assert reconf.queue.qsize() == 0
-
-
-def test_reconfigurator_capture_is_live_no_job():
-    # core.capture.* is read per-run via the Runtime read-through, so it applies live:
-    # it must NOT enqueue an async rebuild job.
-    reconf = _make_reconf(_stub_runtime())
-    reconf.on_config_change({"core.capture.enabled"})
     assert reconf.queue.qsize() == 0
 
 

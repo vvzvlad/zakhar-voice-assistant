@@ -2,8 +2,8 @@
 
 Distinct from VAD (the speech/no-speech end-pointing stage): these helpers are
 applied ONCE by the pipeline to the finalized utterance — high-pass / peak
-normalization / lead-in trim before STT, and the WAV builders for the capture
-and diagnostic audio paths — never per chunk. The one PER-CHUNK exception is
+normalization / lead-in trim before STT, and the WAV builder for the diagnostic
+audio paths — never per chunk. The one PER-CHUNK exception is
 ``vad_boost``: a decision-only makeup gain the pipeline applies to each chunk
 on its VAD feed path (gated by core.vad.mic_auto_gain) — the boosted bytes go
 only to the VAD session, never to the buffer/STT/stored audio.
@@ -116,15 +116,6 @@ def trim_start_pcm(pcm: bytes, trim_ms: int) -> bytes:
     if trim_bytes <= 0 or trim_bytes >= len(pcm):
         return pcm
     return pcm[trim_bytes:]
-
-
-def write_wav(path: str, pcm: bytes) -> None:
-    """Write 16 kHz / mono / 16-bit PCM to a WAV file at `path`."""
-    with wave.open(path, "wb") as w:
-        w.setnchannels(1)
-        w.setsampwidth(2)
-        w.setframerate(SAMPLE_RATE)
-        w.writeframes(pcm)
 
 
 def pcm_to_wav_bytes(pcm: bytes, pcm2: bytes = b"", rate: int = SAMPLE_RATE) -> bytes:

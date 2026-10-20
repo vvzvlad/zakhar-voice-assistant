@@ -1,30 +1,11 @@
 """Tests for the composition-root helpers in src.app.
 
-These cover the small pure helpers extracted out of async main(): first-boot config
-creation and the legacy-mcp warning. They assert
-observable behaviour (returned doc, save calls, emitted log records), so each fails
+These cover the small pure helper extracted out of async main(): first-boot config
+creation. They assert observable behaviour (returned doc, save calls), so each fails
 if the targeted logic is broken.
 """
 
-import contextlib
-
-from loguru import logger
-
 from src import app, config_store
-
-
-@contextlib.contextmanager
-def capture_logs(level="INFO"):
-    """Yield a growing list of formatted loguru records emitted within the block.
-
-    Mirrors the suite's loguru-capture idiom (add a sink to a list, remove it after).
-    """
-    records = []
-    sink_id = logger.add(records.append, level=level, format="{level.name} {message}")
-    try:
-        yield records
-    finally:
-        logger.remove(sink_id)
 
 
 # --- load_or_create_config -------------------------------------------------
@@ -87,24 +68,3 @@ def test_load_or_create_config_existing_config(monkeypatch):
     result = app.load_or_create_config()
 
     assert result is existing
-
-
-# --- warn_legacy_mcp -------------------------------------------------------
-
-
-def test_warn_legacy_mcp_fires_on_legacy_key():
-    # Legacy 'core.mcp' present -> warning fires.
-    doc = {"core": {"mcp": {"url": "http://legacy:1234"}}}
-    with capture_logs() as records:
-        app.warn_legacy_mcp(doc)
-    legacy = [r for r in records if "legacy 'core.mcp'" in r]
-    assert len(legacy) == 1
-    assert "WARNING" in legacy[0]
-
-
-def test_warn_legacy_mcp_silent_on_new_key():
-    # Only the new 'core.mcp_servers' present -> no warning.
-    doc = {"core": {"mcp_servers": [{"name": "weather", "url": "http://new:1234"}]}}
-    with capture_logs() as records:
-        app.warn_legacy_mcp(doc)
-    assert not any("legacy 'core.mcp'" in r for r in records)

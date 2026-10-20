@@ -493,12 +493,9 @@ export function VAD() {
       </div>
       <div className="z-grid">
         {micSchema && <Card title="Microphone input & conditioning" sub="which device mic stream feeds the pipeline · pre-STT conditioning">
+          {/* The conditioning toggles are advanced: they fold full-width under the channel selector. */}
           <SchemaForm schema={{ ...micSchema, $defs: coreSchema.$defs }} root={{ ...micSchema, $defs: coreSchema.$defs }}
-            values={form.draftOf("mic")} onChange={form.onChangeOf("mic")} skip={["mic_normalize", "mic_highpass"]} />
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20, alignItems: "start" }}>
-            <SchemaForm schema={{ ...micSchema, $defs: coreSchema.$defs }} root={{ ...micSchema, $defs: coreSchema.$defs }}
-              values={form.draftOf("mic")} onChange={form.onChangeOf("mic")} skip={["mic_channel"]} />
-          </div>
+            values={form.draftOf("mic")} onChange={form.onChangeOf("mic")} />
         </Card>}
         {ackSchema && <Card title="End-of-phrase chime" sub="confirmation played when your phrase ends">
           <SchemaForm schema={{ ...ackSchema, $defs: coreSchema.$defs }} root={{ ...ackSchema, $defs: coreSchema.$defs }}

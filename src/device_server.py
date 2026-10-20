@@ -301,9 +301,6 @@ class Connection:
         # The last `state`, `transcript` and `reply` sent in the current session, by type.
         self.last_sent: dict[str, dict] = {}
         self.config_sent = None  # _config_fields() last sent in `config`
-        # The reserve the pacing allows for: a device still playing may lag by a larger reserve
-        # it primed with before a smaller one came, so that holds until its streams are done.
-        self._pace_prime_ms = 0
         self.log_on = None  # `on` last sent in `log_stream`
         self.models: dict[str, str] = {}  # kind -> the name last sent in `model`
         self.closed = False
@@ -348,8 +345,6 @@ class Connection:
 
     def send_config(self, cfg) -> None:
         self.config_sent = _config_fields(cfg)
-        prime = self.config_sent["play_prime_ms"]
-        self._pace_prime_ms = max(self._pace_prime_ms, prime) if self._streams else prime
         self.send({"type": "config", **self.config_sent})
 
     def send_boost(self, value: int) -> None:
@@ -429,8 +424,6 @@ class Connection:
                 if self.closed:
                     stream.end("closed")
                 else:
-                    if not self._streams:  # the device's buffer is empty: no older lag left
-                        self._pace_prime_ms = self.config_sent["play_prime_ms"]
                     self._streams[stream.id] = stream
                     self.send(self._stream_msg("play_start", stream), stream)
                 try:
@@ -466,10 +459,9 @@ class Connection:
         """Queue PCM frames, keeping at most buffer_ms - play_prime_ms - PACING_MARGIN_MS
         of audio ahead of the device, whose playback is taken to run at real time from the
         first frame sent. The device starts only once it holds play_prime_ms, so that much
-        more stays in its buffer (the largest reserve sent while its streams play, see
-        _pace_prime_ms)."""
+        more stays in its buffer (the last play_prime_ms sent in `config`)."""
         loop = asyncio.get_running_loop()
-        ahead = (self.buffer_ms - self._pace_prime_ms - PACING_MARGIN_MS) / 1000
+        ahead = (self.buffer_ms - self.config_sent["play_prime_ms"] - PACING_MARGIN_MS) / 1000
         for i in range(0, len(pcm), PLAY_FRAME_BYTES):
             frame = pcm[i:i + PLAY_FRAME_BYTES]
             seconds = len(frame) / 2 / self.play_rate
@@ -961,7 +953,7 @@ class DeviceManager:
         self._devices: dict[str, Device] = {}
         self._runner: web.AppRunner | None = None
         # One phrase heard by several devices keeps one session (docs/device-protocol.md).
-        self.arbiter = WakeArbiter(runtime, online_count=lambda: sum(1 for d in self.clients if d.online),
+        self.arbiter = WakeArbiter(online_count=lambda: sum(1 for d in self.clients if d.online),
                                    held_wakes=lambda: any(d.wake_held for d in self.clients if d.online),
                                    send_reply=self._send_reply)
 

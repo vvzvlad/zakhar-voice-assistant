@@ -40,27 +40,11 @@ def load_or_create_config() -> dict:
     return doc
 
 
-def warn_legacy_mcp(doc: dict) -> None:
-    """Warn when the deprecated 'core.mcp' key is present in the raw config doc.
-
-    The legacy single-server 'core.mcp' key was replaced by the 'core.mcp_servers'
-    list; it is silently dropped on parse. Surface that once so the drop is visible.
-    """
-    core = doc.get("core")
-    if isinstance(core, dict) and "mcp" in core:
-        logger.warning(
-            "config: legacy 'core.mcp' is ignored — add external servers under "
-            "'core.mcp_servers' (panel: Tool sources)."
-        )
-
-
 async def main() -> None:
     """Build shared dependencies, start all speakers, and run until cancelled."""
     started_at = time.time()
 
     doc = load_or_create_config()
-
-    warn_legacy_mcp(doc)
 
     core = ConfigDoc(**doc).core  # parse once to read proxy/timeout for Deps
 
