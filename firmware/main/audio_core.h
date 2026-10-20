@@ -122,6 +122,7 @@ typedef struct {
 typedef struct {
     uint32_t pos;     // the chunk's first frame on the wire
     bool raw;         // its channel 0 is the raw microphone
+    bool settling;    // a stage write is settling: channel 0 may carry either stage
     bool write;       // a stage write is due: channel 0 to NONE when write_raw, else to AGC
     bool write_raw;
     bool have_offset;

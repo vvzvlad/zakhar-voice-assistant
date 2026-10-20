@@ -4,10 +4,11 @@
 // open), and a slider write or a newly connected device refreshes the app's config snapshot.
 // A click on a row opens the Edit dialog from the re-read config; it shows the id as text and
 // the firmware without its build hash in its header, saves a display label, the enabled switch,
-// a wake-word model (a listed or an uploaded one), the device log and the auto volume switches —
-// edits on different tabs survive the switch, mark their tabs and go out in one save; only the
-// open tab shows — marks its live controls, deletes the speaker after a confirmation, closes on
-// Escape but not on a backdrop click, and shows on every tab why its controls cannot load. It
+// a wake-word model (a listed or an uploaded one), the device log, the auto volume and the reply
+// compression switches — edits on different tabs survive the switch, mark their tabs and go out
+// in one save; only the open tab shows — marks its live controls, deletes the speaker after a
+// confirmation, closes on Escape but not on a backdrop click, and shows on every tab why its
+// controls cannot load. It
 // also says a typed text on the speaker to check the volume — the phrase in flight and the text
 // outlive a tab switch — shows the auto volume's settings and readings only while auto volume is
 // on and writes the stop word's mode picked on a scale as its number.
@@ -234,20 +235,23 @@ describe("Devices page", () => {
     ] } });
   });
 
-  it("edit switches auto volume off and saves it onto the server's current list", async () => {
+  it("edit switches auto volume and reply compression off and saves them onto the server's current list", async () => {
     api.getDeviceControls.mockResolvedValue({ device: "kitchen", online: true, versions: [], controls: [] });
-    data.catalog.core.values.devices = [{ ...STALE[0], auto_volume: true }];
+    data.catalog.core.values.devices = [{ ...STALE[0], auto_volume: true, compress_replies: true }];
     render(<Devices />);
     openEdit();
     fireEvent.click(await screen.findByText("Sound"));
     const sw = await switchOf("Auto volume");
+    const compress = await switchOf("Compress replies");
     expect(sw).toHaveAttribute("aria-checked", "true");
+    expect(compress).toHaveAttribute("aria-checked", "true");
     expect(screen.getByText("Save")).toBeDisabled();
     fireEvent.click(sw);
+    fireEvent.click(compress);
     fireEvent.click(screen.getByText("Save"));
     await waitFor(() => expect(data.patch).toHaveBeenCalledTimes(1));
     expect(data.patch).toHaveBeenCalledWith({ core: { devices: [
-      { ...FRESH[0], auto_volume: false },
+      { ...FRESH[0], auto_volume: false, compress_replies: false },
       FRESH[1],
     ] } });
   });

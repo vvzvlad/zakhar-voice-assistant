@@ -6,10 +6,12 @@ tmp config file and drives a fresh PanelServer app.
 """
 
 import asyncio
+import functools
 import io
 import json
 import time
 import wave
+from types import SimpleNamespace
 
 import aiohttp
 import httpx
@@ -63,6 +65,25 @@ async def _client(tmp_path, **kw):
     client = TestClient(TestServer(srv.build_app()))
     await client.start_server()
     return client, svc
+
+
+class FakeDevices:
+    """DeviceManager double: statuses() returns `statuses`, `manager` are its other methods
+    (capture_status, capture_delete), and find(name) refuses "nope" with DeviceManager.find's
+    LookupError, else gives a device whose methods are `device`, called with the name first."""
+
+    def __init__(self, statuses=(), device=None, **manager):
+        self._statuses = list(statuses)
+        self._device = device or {}
+        self.__dict__.update(manager)
+
+    def statuses(self):
+        return self._statuses
+
+    def find(self, name):
+        if name == "nope":
+            raise LookupError(f"unknown device {name!r}")
+        return SimpleNamespace(**{k: functools.partial(f, name) for k, f in self._device.items()})
 
 
 def _prompt_store(tmp_path, text="seed prompt"):
@@ -255,7 +276,8 @@ async def test_post_wake_model_resends_a_replaced_model_to_the_devices_using_it(
     path.write_bytes(b"old")
     # The resend reads the file, so it must see the new bytes.
     reloaded = []
-    client, svc = await _client(tmp_path, device_model_reload=lambda d: reloaded.append((d, path.read_bytes())) or {})
+    devices = FakeDevices(device={"reload_model": lambda d: reloaded.append((d, path.read_bytes())) or {}})
+    client, svc = await _client(tmp_path, devices=devices)
     try:
         svc.apply({"core": {"devices": [{"name": "studio", "wake_model": "uploaded/zakhar"},
                                         {"name": "kitchen", "wake_model": "zakhar/zakhar_v33"}]}})
@@ -896,7 +918,7 @@ async def test_get_system(tmp_path):
         assert body["log_level"] == "DEBUG"
         assert "started" in body
         assert isinstance(body["uptime_seconds"], int)
-        # Without a wired device_status the snapshot carries an empty device list.
+        # Without a device manager the snapshot carries an empty device list.
         assert body["devices"] == []
     finally:
         await client.close()
@@ -904,12 +926,12 @@ async def test_get_system(tmp_path):
 
 async def test_get_system_includes_device_statuses(tmp_path):
     devices = [{"name": "x", "enabled": True, "online": True, "versions": []}]
-    client, _svc_ = await _client(tmp_path, device_status=lambda: devices)
+    client, _svc_ = await _client(tmp_path, devices=FakeDevices(statuses=devices))
     try:
         resp = await client.get("/api/system")
         assert resp.status == 200
         body = await resp.json()
-        # The snapshot embeds the live device_status() result verbatim.
+        # The snapshot embeds the live statuses() result verbatim.
         assert body["devices"] == devices
     finally:
         await client.close()
@@ -961,7 +983,7 @@ async def test_runs_stream_heartbeat_carries_reloading(tmp_path):
 
 async def test_get_devices(tmp_path):
     devices = [{"name": "x", "online": True}]
-    client, _svc_ = await _client(tmp_path, device_status=lambda: devices)
+    client, _svc_ = await _client(tmp_path, devices=FakeDevices(statuses=devices))
     try:
         resp = await client.get("/api/devices")
         assert resp.status == 200
@@ -1009,15 +1031,15 @@ async def test_capture_start_and_status(tmp_path):
 
     def start(device, seconds):
         calls.append((device, seconds))
-        refusal = {"nope": LookupError("unknown device 'nope'"),
-                   "off": DeviceOfflineError("off is offline"),
+        refusal = {"off": DeviceOfflineError("off is offline"),
                    "busy": CaptureBusyError("busy capture already in progress")}.get(device)
         if refusal is not None:
             raise refusal
-        return {"state": "starting", "device": device}
+        return SimpleNamespace(snapshot=lambda: {"state": "starting", "device": device})
 
-    client, _svc_ = await _client(tmp_path, device_capture_start=start,
-                                  device_capture_status=lambda d: {"state": "recording", "device": d})
+    devices = FakeDevices(device={"start_capture": start},
+                          capture_status=lambda d: {"state": "recording", "device": d})
+    client, _svc_ = await _client(tmp_path, devices=devices)
     try:
         resp = await client.post("/api/capture", json={"device": "hall", "seconds": 300})
         assert (resp.status, await resp.json()) == (202, {"state": "starting", "device": "hall"})
@@ -1055,7 +1077,7 @@ async def test_captures_are_kept_listed_downloaded_and_deleted(tmp_path, monkeyp
             cap.remove()
         return cap is not None
 
-    client, _svc_ = await _client(tmp_path, device_capture_delete=delete)
+    client, _svc_ = await _client(tmp_path, devices=FakeDevices(capture_delete=delete))
     try:
         listed = (await (await client.get("/api/captures")).json())["captures"]
         assert [(c["device"], c["name"], c["state"]) for c in listed] == [
@@ -1111,7 +1133,8 @@ async def test_device_logs_are_listed_and_read_from_an_offset(tmp_path, monkeypa
 
 async def test_capture_bad_seconds_returns_400(tmp_path):
     called = []
-    client, _svc_ = await _client(tmp_path, device_capture_start=lambda d, s: called.append((d, s)))
+    devices = FakeDevices(device={"start_capture": lambda d, s: called.append((d, s))})
+    client, _svc_ = await _client(tmp_path, devices=devices)
     try:
         # Out of range, wrong type, missing device — all 400, capture never called.
         # The accepted range is 1..300, so 301 (and 0/negative) are rejected.
@@ -1144,7 +1167,7 @@ async def test_capture_endpoints_without_manager_return_503(tmp_path):
 # --- live Wake Probability endpoints -----------------------------------------
 
 async def test_wake_probability_endpoints_without_manager_return_503(tmp_path):
-    # Neither callable wired -> both endpoints return 503.
+    # No device manager wired -> both endpoints return 503.
     client, _svc_ = await _client(tmp_path)
     try:
         assert (await client.get("/api/device/wake-probability", params={"device": "h"})).status == 503
@@ -1155,7 +1178,7 @@ async def test_wake_probability_endpoints_without_manager_return_503(tmp_path):
 
 async def test_get_wake_probability_happy_path(tmp_path):
     snap = {"device": "hall", "online": True, "available": True, "value": 73.0}
-    client, _svc_ = await _client(tmp_path, device_wake_prob_get=lambda d: snap)
+    client, _svc_ = await _client(tmp_path, devices=FakeDevices(device={"wake_prob": lambda d: snap}))
     try:
         resp = await client.get("/api/device/wake-probability", params={"device": "hall"})
         assert resp.status == 200
@@ -1165,7 +1188,7 @@ async def test_get_wake_probability_happy_path(tmp_path):
 
 
 async def test_get_wake_probability_missing_device_returns_400(tmp_path):
-    client, _svc_ = await _client(tmp_path, device_wake_prob_get=lambda d: {})
+    client, _svc_ = await _client(tmp_path, devices=FakeDevices(device={"wake_prob": lambda d: {}}))
     try:
         resp = await client.get("/api/device/wake-probability")
         assert resp.status == 400
@@ -1174,10 +1197,7 @@ async def test_get_wake_probability_missing_device_returns_400(tmp_path):
 
 
 async def test_get_wake_probability_unknown_device_returns_404(tmp_path):
-    def get(device):
-        raise LookupError(f"unknown device {device!r}")
-
-    client, _svc_ = await _client(tmp_path, device_wake_prob_get=get)
+    client, _svc_ = await _client(tmp_path, devices=FakeDevices())
     try:
         resp = await client.get("/api/device/wake-probability", params={"device": "nope"})
         assert resp.status == 404
@@ -1192,7 +1212,7 @@ async def test_post_wake_probability_happy_path(tmp_path):
         calls.append((device, enabled))
         return {"device": device, "online": True, "available": True, "value": None}
 
-    client, _svc_ = await _client(tmp_path, device_wake_prob_set=setit)
+    client, _svc_ = await _client(tmp_path, devices=FakeDevices(device={"set_wake_prob_stream": setit}))
     try:
         resp = await client.post("/api/device/wake-probability",
                                  json={"device": "hall", "enabled": True})
@@ -1214,7 +1234,7 @@ async def test_post_wake_probability_bad_fields_return_400(tmp_path):
         called.append((device, enabled))
         return {}
 
-    client, _svc_ = await _client(tmp_path, device_wake_prob_set=setit)
+    client, _svc_ = await _client(tmp_path, devices=FakeDevices(device={"set_wake_prob_stream": setit}))
     try:
         # Missing device, empty device, missing enabled, non-bool enabled (incl. 1/"x").
         for body in ({"enabled": True},
@@ -1231,10 +1251,7 @@ async def test_post_wake_probability_bad_fields_return_400(tmp_path):
 
 
 async def test_post_wake_probability_unknown_device_returns_404(tmp_path):
-    def setit(device, enabled):
-        raise LookupError(f"unknown device {device!r}")
-
-    client, _svc_ = await _client(tmp_path, device_wake_prob_set=setit)
+    client, _svc_ = await _client(tmp_path, devices=FakeDevices())
     try:
         resp = await client.post("/api/device/wake-probability",
                                  json={"device": "nope", "enabled": True})
@@ -1247,7 +1264,7 @@ async def test_post_wake_probability_offline_returns_409(tmp_path):
     def setit(device, enabled):
         raise RuntimeError(f"{device} is offline")
 
-    client, _svc_ = await _client(tmp_path, device_wake_prob_set=setit)
+    client, _svc_ = await _client(tmp_path, devices=FakeDevices(device={"set_wake_prob_stream": setit}))
     try:
         resp = await client.post("/api/device/wake-probability",
                                  json={"device": "hall", "enabled": True})
@@ -1263,7 +1280,7 @@ async def test_post_detect_switches_and_rejects_non_bool(tmp_path):
         calls.append((device, enabled))
         return {"device": device, "detect": enabled}
 
-    client, _svc_ = await _client(tmp_path, device_detect_set=setit)
+    client, _svc_ = await _client(tmp_path, devices=FakeDevices(device={"set_detect": setit}))
     try:
         resp = await client.post("/api/device/detect", json={"device": "hall", "enabled": False})
         assert resp.status == 200
@@ -1278,13 +1295,11 @@ async def test_post_detect_switches_and_rejects_non_bool(tmp_path):
 
 async def test_post_model_reloads_and_maps_errors(tmp_path):
     def reload(device):
-        if device == "nope":
-            raise LookupError(f"unknown device {device!r}")
         if device == "away":
             raise RuntimeError(f"{device} is offline")
         return {"device": device, "models": {"wake": "w.tflite", "vad": "v.tflite"}}
 
-    client, _svc_ = await _client(tmp_path, device_model_reload=reload)
+    client, _svc_ = await _client(tmp_path, devices=FakeDevices(device={"reload_model": reload}))
     try:
         resp = await client.post("/api/device/model", json={"device": "hall"})
         assert resp.status == 200
@@ -1302,19 +1317,94 @@ async def test_post_model_reloads_and_maps_errors(tmp_path):
         await client.close()
 
 
+async def test_device_controls_read_and_set_one_and_map_errors(tmp_path):
+    # The Edit speaker dialog's live controls (the volume slider among them): GET reads
+    # them, POST sets one and answers with the controls as they are after the write.
+    calls = []
+    values = {"speaker_volume": 40.0}
+
+    def snapshot(device):
+        calls.append("snapshot")
+        return {"device": device, "controls": [{"id": "speaker_volume", "value": values["speaker_volume"]}]}
+
+    def set_control(device, control, value):
+        if control == "bogus":
+            raise LookupError(f"unknown control {control!r}")
+        if device == "away":
+            raise RuntimeError(f"{device} is offline")
+        calls.append("set")
+        values[control] = value
+
+    client, _svc_ = await _client(tmp_path, devices=FakeDevices(
+        device={"controls_snapshot": snapshot, "set_control": set_control}))
+    try:
+        resp = await client.get("/api/device/controls", params={"device": "hall"})
+        assert (resp.status, await resp.json()) == (
+            200, {"device": "hall", "controls": [{"id": "speaker_volume", "value": 40.0}]})
+        for params, status in (({}, 400), ({"device": "nope"}, 404)):
+            assert (await client.get("/api/device/controls", params=params)).status == status, params
+        del calls[:]
+        resp = await client.post("/api/device/controls",
+                                 json={"device": "hall", "control": "speaker_volume", "value": 55})
+        assert resp.status == 200
+        assert (await resp.json())["controls"] == [{"id": "speaker_volume", "value": 55.0}]
+        assert calls == ["set", "snapshot"]
+        for body, status in (
+            ({"device": "hall", "control": "speaker_volume", "value": True}, 400),
+            ({"device": "hall", "control": "speaker_volume", "value": "x"}, 400),
+            ({"device": "nope", "control": "speaker_volume", "value": 1}, 404),
+            ({"device": "hall", "control": "bogus", "value": 1}, 404),
+            ({"device": "away", "control": "speaker_volume", "value": 1}, 409),
+        ):
+            assert (await client.post("/api/device/controls", json=body)).status == status, body
+    finally:
+        await client.close()
+    client, _svc_ = await _client(tmp_path)
+    try:
+        assert (await client.get("/api/device/controls", params={"device": "hall"})).status == 503
+        assert (await client.post("/api/device/controls",
+                                  json={"device": "hall", "control": "x", "value": 1})).status == 503
+    finally:
+        await client.close()
+
+
+async def test_post_chime_plays_and_maps_errors(tmp_path):
+    played = []
+
+    async def play_chime(sound_path, device):
+        if device == "nope":
+            raise LookupError(f"unknown device {device!r}")
+        played.append((sound_path, device))
+        return {"played": [device], "offline": []}
+
+    client, _svc_ = await _client(tmp_path, devices=FakeDevices(play_chime=play_chime))
+    try:
+        resp = await client.post("/api/chimes/play", json={"device": "hall"})
+        assert (resp.status, await resp.json()) == (200, {"played": ["hall"], "offline": []})
+        assert played == [("", "hall")]
+        for body, status in (({"device": "nope"}, 404), ({"device": ""}, 400),
+                             ({"sound_path": "/etc/passwd"}, 400)):
+            assert (await client.post("/api/chimes/play", json=body)).status == status, body
+    finally:
+        await client.close()
+    client, _svc_ = await _client(tmp_path)
+    try:
+        assert (await client.post("/api/chimes/play", json={})).status == 503
+    finally:
+        await client.close()
+
+
 async def test_post_say_speaks_and_maps_errors(tmp_path):
     said = []
 
     async def say(device, text):
-        if device == "nope":
-            raise LookupError(f"unknown device {device!r}")
         if device == "away":
             raise DeviceOfflineError(f"{device} is offline")
         if device == "mute":
             raise RuntimeError("tts down")
         said.append((device, text))
 
-    client, _svc_ = await _client(tmp_path, device_say=say)
+    client, _svc_ = await _client(tmp_path, devices=FakeDevices(device={"say": say}))
     try:
         resp = await client.post("/api/device/say", json={"device": "hall", "text": "проверка"})
         assert resp.status == 200
@@ -1779,7 +1869,7 @@ async def test_runs_stream_pushes_system_heartbeat(tmp_path):
         assert msg["running"] is True
         assert isinstance(msg["uptime_seconds"], int)
         assert "db_size_bytes" not in msg  # heartbeat stays lightweight
-        # No device_status wired -> the heartbeat still carries an (empty) device list.
+        # No device manager wired -> the heartbeat still carries an (empty) device list.
         assert msg["devices"] == []
         await ws.close()
     finally:
@@ -1788,12 +1878,12 @@ async def test_runs_stream_pushes_system_heartbeat(tmp_path):
 
 async def test_runs_stream_heartbeat_carries_device_statuses(tmp_path):
     # The 1 s heartbeat is the panel's live device-status feed: it must embed the
-    # device_status() snapshot so the Devices page updates without polling.
+    # statuses() snapshot so the Devices page updates without polling.
     hub = RunEventsHub()
     devices = [{"name": "x", "enabled": True, "online": False, "versions": []}]
     client, _svc_ = await _client(
         tmp_path, run_events=hub, heartbeat_interval=0.05,
-        device_status=lambda: devices,
+        devices=FakeDevices(statuses=devices),
     )
     try:
         ws = await client.ws_connect("/api/runs/stream")
@@ -1912,7 +2002,8 @@ async def test_capture_non_object_body_returns_400_without_calling_capture(tmp_p
     # A JSON array body (not an object) is rejected with 400 before the capture
     # callable is ever invoked.
     called = []
-    client, _svc_ = await _client(tmp_path, device_capture_start=lambda d, s: called.append((d, s)))
+    devices = FakeDevices(device={"start_capture": lambda d, s: called.append((d, s))})
+    client, _svc_ = await _client(tmp_path, devices=devices)
     try:
         resp = await client.post("/api/capture", json=[1, 2])
         assert resp.status == 400
