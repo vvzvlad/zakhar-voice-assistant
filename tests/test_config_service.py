@@ -148,7 +148,7 @@ def test_catalog_injects_apply_class_per_field(tmp_path):
     # catalog() injects a backend-computed `apply` class (reconfig.action_for) into EVERY
     # field's schema — provider fields (flat) and core fields (nested $defs) alike. This is
     # the single source of truth for the apply class and doubles as the consistency guard
-    # against action_for. The ONLY value meaning "restart required" is "restart".
+    # against action_for.
     from src.reconfig import action_for
 
     cat = _service(tmp_path).catalog()
@@ -157,7 +157,7 @@ def test_catalog_injects_apply_class_per_field(tmp_path):
     llm = next(c for c in cat["categories"] if c["id"] == "llm")
     openrouter = next(p for p in llm["providers"] if p["id"] == "openrouter")
     lp = openrouter["schema"]["properties"]
-    assert lp["api_key"]["apply"] == "rebuild_backends"     # NOT "restart"
+    assert lp["api_key"]["apply"] == "rebuild_backends"
     assert lp["max_tool_rounds"]["apply"] == "live"
     assert lp["reply_empty"]["apply"] == "live"
     assert lp["timeout"]["apply"] == "rebuild_backends"
@@ -184,8 +184,27 @@ def test_catalog_injects_apply_class_per_field(tmp_path):
     assert core_props["log_level"]["apply"] == "logging"
     assert core_props["mcp_servers"]["apply"] == "rebuild_tools"
     assert core_props["devices"]["apply"] == "rebuild_devices"
-    # "restart" is the ONLY value meaning a real restart is required.
-    assert core_props["log_level"]["apply"] != "restart"
+
+
+def test_every_config_field_has_an_apply_rule(tmp_path):
+    # Every field of every provider and of the core gets its apply class from
+    # reconfig.action_for; a field no rule covers comes out "unknown" and would only
+    # take effect after a container restart, so a new knob without a rule fails here.
+    cat = _service(tmp_path).catalog()
+    unruled = []
+
+    def walk(node, path):
+        if isinstance(node, dict):
+            if node.get("apply") == "unknown":
+                unruled.append(path)
+            for k, v in node.items():
+                walk(v, f"{path}.{k}")
+        elif isinstance(node, list):
+            for i, v in enumerate(node):
+                walk(v, f"{path}[{i}]")
+
+    walk(cat, "catalog")
+    assert unruled == []
 
 
 def test_options_forwards_search_query_to_provider(tmp_path, monkeypatch):
