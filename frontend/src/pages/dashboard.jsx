@@ -1,4 +1,4 @@
-// Pipeline overview. KPIs + per-stage and per-chain stats from /api/metrics, the
+// Dashboard. KPIs + per-stage and per-chain stats from /api/metrics, the
 // devices with an on/off switch each, the Capture → Logic → Speech service map from
 // the catalog/config, and a recent-requests table from /api/runs (rows deep-link
 // into the Log page).
@@ -9,13 +9,14 @@ import { PageHeader, Waterfall, Loading, Toggle, StatusPill, Pill } from "../com
 import { useAppData } from "../appData.jsx";
 import { getMetrics, getRuns, openRunsStream, getConfig } from "../api.js";
 import { errorLines } from "../useStageForm.js";
-import { STAGE_COLOR, fmtSec, mapRun, totalMs, statusMeta, isAnnouncement, applyStreamedRun } from "../runsModel.js";
+import { STAGE_COLOR, fmtSec, fmtTime, mapRun, totalMs, statusMeta, isAnnouncement, applyStreamedRun } from "../runsModel.js";
 import { chainsOf, chainRows, ttsVariantsOf, voiceOf } from "../chains.js";
 import { deviceLabel } from "../format.js";
 
 const SC = STAGE_COLOR;
 
 const categoryOf = (catalog, id) => catalog?.categories?.find((c) => c.id === id);
+const labelOf = (catalog, cat, id) => categoryOf(catalog, cat)?.providers?.find((p) => p.id === id)?.label || id;
 
 // The selected provider of a single-choice category (vad, wakeword, stress):
 // its id, its human label (the id when the catalog has no entry) and its values.
@@ -89,7 +90,7 @@ function ServiceMap({ catalog, config, stageAvg, perChain, reloading }) {
     {arrow}
     <Tile title="Logic" page="logic" on={rows.length > 0} loading={busy("stt", "llm")} prov={`${rows.length} enabled`} flex={2}>
       {rows.length === 0 && <div className="mdl">no enabled chain</div>}
-      {rows.map((r) => <div key={r.name} className="mdl" data-testid="chain-row" title={`${r.stt} → ${r.handler}`} style={{ display: "flex", gap: 8 }}>
+      {rows.map((r) => <div key={r.name} className="mdl" data-testid="chain-row" title={`${labelOf(catalog, "stt", r.stt)} → ${labelOf(catalog, "llm", r.handler)}`} style={{ display: "flex", gap: 8 }}>
         <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>{r.name}</span>
         <span style={{ color: "var(--mut)" }}>{fmtShare(r.share)}</span>
         <span style={{ color: SC.llm }}>{fmtSec(r.avg_ms)}</span>
@@ -185,7 +186,7 @@ function Dashboard() {
   const reloading = new Set(system?.reloading || []);
 
   return <div className="z-page">
-    <PageHeader title="Pipeline overview" desc="Live voice loop across all stages. Click a stage to configure it." />
+    <PageHeader title="Dashboard" desc="Live voice loop across all stages. Click a stage to configure it." />
 
     <div className="z-kpis">
       {kpis.map((c, i) => <div className="z-kpi" key={i}>
@@ -206,18 +207,18 @@ function Dashboard() {
         : recent.length === 0 ? <div className="z-empty"><div className="ic"><Ic n="log" w={20} /></div><b>No runs</b>Recent requests will appear here after the first one is processed.</div>
           : <>
             <div className="z-tblwrap">
-              <table className="z-tbl">
-                <thead><tr><th style={{ width: 80 }}>Time</th><th style={{ width: 150 }}>Device</th><th>Recognized</th><th>Response</th><th style={{ width: 80, textAlign: "right" }}>Σ</th><th style={{ width: "20%" }}>Stage waterfall</th><th style={{ width: 92 }}>Status</th></tr></thead>
+              <table className="z-tbl z-runs">
+                <thead><tr><th style={{ width: 128 }}>Time</th><th className="z-cmid" style={{ width: 150 }}>Device</th><th>Recognized</th><th>Response</th><th className="z-cwide" style={{ width: "20%" }}>Stage waterfall</th><th className="z-cmid" style={{ width: 80, textAlign: "right" }}>Σ</th><th style={{ width: 92 }}>Status</th></tr></thead>
                 <tbody>
                   {recent.map((r) => {
                     const rm = statusMeta(r);
                     return <tr key={r.key} onClick={() => { if (r.id == null) return; try { localStorage.setItem("z-openreq", String(r.id)); } catch { /* ignore */ } nav("log"); }}>
-                      <td className="tm">{r.time}</td>
-                      <td style={{ fontWeight: 600 }}>{deviceLabel(catalog?.core?.values?.devices, r.device)}</td>
+                      <td className="tm">{fmtTime(r.ts)}</td>
+                      <td className="z-cmid" style={{ fontWeight: 600 }}>{deviceLabel(catalog?.core?.values?.devices, r.device)}</td>
                       <td><div className={"z-tx" + (r.stt ? "" : " mut")}>{r.stt || (r.live ? "…" : isAnnouncement(r) ? "—" : r.reason === "duplicate" ? "(duplicate)" : "(silence)")}</div></td>
                       <td><div className={"z-tx wide" + (r.llm ? "" : " mut")}>{r.llm || (r.live ? "…" : "—")}</div></td>
-                      <td className="num" style={{ fontWeight: 600 }}>{fmtSec(totalMs(r))}</td>
-                      <td><Waterfall r={r} /></td>
+                      <td className="z-cwide"><Waterfall r={r} /></td>
+                      <td className="num z-cmid" style={{ fontWeight: 600 }}>{fmtSec(totalMs(r))}</td>
                       <td><span className={"z-st " + rm.tone}><span className={"z-dot " + (rm.tone === "good" ? "ok" : rm.tone === "bad" ? "error" : "off")} />{rm.label}</span></td>
                     </tr>;
                   })}

@@ -2,6 +2,7 @@
 // context, plus a `patch()` helper that PATCHes the backend and refreshes state.
 import React, { createContext, useContext, useEffect, useState, useCallback, useRef } from "react";
 import * as api from "./api.js";
+import { chainsOf } from "./chains.js";
 
 const Ctx = createContext(null);
 
@@ -111,6 +112,17 @@ export function AppDataProvider({ children }) {
 // The configured device list, or [] outside the provider (a page rendered on its own).
 export function useDeviceList() {
   return useContext(Ctx)?.catalog?.core?.values?.devices || [];
+}
+
+// The configured recognition chains (core.chains), or [] outside the provider.
+export function useChainList() {
+  return chainsOf(useContext(Ctx)?.config);
+}
+
+// (category, provider id) -> the catalog's label for that provider, the id when it has none.
+export function useProviderLabel() {
+  const cats = useContext(Ctx)?.catalog?.categories;
+  return (cat, id) => cats?.find((c) => c.id === cat)?.providers?.find((p) => p.id === id)?.label || id;
 }
 
 export function useAppData() {

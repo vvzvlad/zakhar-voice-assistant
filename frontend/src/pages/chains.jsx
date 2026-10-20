@@ -10,7 +10,7 @@ import { useAppData } from "../appData.jsx";
 import { useStageForm } from "../useStageForm.js";
 import { nav, navTab } from "../navStore.js";
 import {
-  chainsOf, providerIds, canNarrow, startsFirst, lastEnabledIndex, handlerHasVocabulary,
+  chainsOf, providerOptions, canNarrow, startsFirst, lastEnabledIndex, handlerHasVocabulary,
   moveItem, newChain, settingsPageFor,
 } from "../chains.js";
 
@@ -25,7 +25,7 @@ function ProviderPick({ label, cat, value, options, onChange }) {
   return <div className="z-f">
     <div className="z-fl">
       <b>{label}</b>
-      <button type="button" className="z-mini" onClick={() => configure(cat, value)}>configure →</button>
+      <button type="button" className="z-btn g sm" onClick={() => configure(cat, value)}>configure →</button>
     </div>
     <Select value={value} options={options} onChange={onChange} />
   </div>;
@@ -36,8 +36,9 @@ function ChainCard({ chain, index, count, catalog, chains, isLastEnabled, onUpda
   // A switched-off chain is not dimmed: everything on the card is a working control,
   // and the toggle shows the state.
   return <div className="z-card" data-testid="chain-card">
-    <div className="z-card-h">
-      <div style={{ display: "flex", alignItems: "center", gap: 10, flex: 1, minWidth: 0 }}>
+    {/* On a narrow screen the controls drop under the name. */}
+    <div className="z-card-h" style={{ flexWrap: "wrap" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, flex: "1 1 180px", minWidth: 0 }}>
         <span className="mono" style={{ color: "var(--mut2)", fontSize: 12 }}>#{index + 1}</span>
         <div className="z-inp sm" style={{ flex: 1, maxWidth: 280 }}>
           <input aria-label="Chain name" value={chain.name} onChange={(e) => onUpdate({ name: e.target.value })} />
@@ -45,25 +46,21 @@ function ChainCard({ chain, index, count, catalog, chains, isLastEnabled, onUpda
       </div>
       <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
         <Toggle sm on={!!chain.enabled} onChange={(on) => onUpdate({ enabled: on })} />
-        <button type="button" className="z-mini" aria-label="Move up" disabled={index === 0} onClick={() => onMove(-1)}>↑</button>
-        <button type="button" className="z-mini" aria-label="Move down" disabled={index === count - 1} onClick={() => onMove(1)}>↓</button>
-        <button type="button" className="z-mini" onClick={onDelete}>Delete</button>
+        <button type="button" className="z-btn g sm" aria-label="Move up" disabled={index === 0} onClick={() => onMove(-1)}>↑</button>
+        <button type="button" className="z-btn g sm" aria-label="Move down" disabled={index === count - 1} onClick={() => onMove(1)}>↓</button>
+        <button type="button" className="z-btn d sm" onClick={onDelete}>Delete</button>
       </div>
     </div>
     <div className="z-card-b">
       <div className="z-row2">
-        <ProviderPick label="STT" cat="stt" value={chain.stt} options={providerIds(catalog, "stt")}
+        <ProviderPick label="STT" cat="stt" value={chain.stt} options={providerOptions(catalog, "stt")}
           onChange={(v) => onUpdate({ stt: v })} />
-        <ProviderPick label="Handler" cat="llm" value={chain.handler} options={providerIds(catalog, "llm")}
+        <ProviderPick label="Handler" cat="llm" value={chain.handler} options={providerOptions(catalog, "llm")}
           onChange={(v) => onUpdate({ handler: v })} />
       </div>
-      {canNarrow(catalog, chain) && <div className="z-f">
-        <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, fontWeight: 600, cursor: "pointer" }}>
-          <input type="checkbox" checked={!!chain.narrow} onChange={(e) => onUpdate({ narrow: e.target.checked })} />
-          Narrow STT to handler vocabulary
-        </label>
-        <div className="z-fh" style={{ marginTop: 0 }}>Recognize only words the handler knows.</div>
-      </div>}
+      {canNarrow(catalog, chain) && <Field row label="Narrow STT to handler vocabulary" hint="Recognize only words the handler knows.">
+        <Toggle on={!!chain.narrow} onChange={(on) => onUpdate({ narrow: on })} />
+      </Field>}
       {/* The first enabled chain always starts at speech; later ones may start with it. */}
       {!startsFirst(chains, index) && <Field row label="Recognize in parallel"
         hint="Start this chain's STT together with the first chain. Handlers still run in order.">
@@ -84,7 +81,7 @@ export default function Chains() {
   const list = form.draft.chains || [];
   const setList = (next) => form.onChange("chains", next);
   const last = lastEnabledIndex(list);
-  // `narrow` stays as it is while its checkbox is hidden: the backend ignores it
+  // `narrow` stays as it is while its switch is hidden: the backend ignores it
   // for a pair that cannot narrow.
   const update = (i, fields) => setList(list.map((c, j) => (j === i ? { ...c, ...fields } : c)));
 

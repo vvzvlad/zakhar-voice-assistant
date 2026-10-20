@@ -444,3 +444,17 @@ describe("SchemaForm advanced fields", () => {
     expect(c.querySelector("details")).toBeNull();
   });
 });
+
+describe("SchemaForm hiddenWhen", () => {
+  it("leaves out a `hiddenWhen` field while its boolean sibling is on", () => {
+    const schema = { properties: {
+      tiny_mode: { type: "boolean", title: "Low-memory mode" },
+      use_dictionary: { type: "boolean", title: "Stress dictionary", hiddenWhen: "tiny_mode" },
+    } };
+    const { rerender } = render(<SchemaForm schema={schema} values={{ tiny_mode: false, use_dictionary: true }} onChange={() => {}} />);
+    expect(screen.getByText("Stress dictionary")).toBeInTheDocument();
+    rerender(<SchemaForm schema={schema} values={{ tiny_mode: true, use_dictionary: true }} onChange={() => {}} />);
+    expect(screen.queryByText("Stress dictionary")).toBeNull();
+    expect(screen.getByText("Low-memory mode")).toBeInTheDocument();
+  });
+});

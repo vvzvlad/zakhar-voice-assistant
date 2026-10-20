@@ -14,6 +14,10 @@ const providersOf = (catalog, cat) =>
 
 export const providerIds = (catalog, cat) => providersOf(catalog, cat).map((p) => p.id);
 
+// Dropdown options for a category's providers: the id is stored, the catalog label shown.
+export const providerOptions = (catalog, cat) =>
+  providersOf(catalog, cat).map((p) => ({ value: p.id, label: p.label }));
+
 // Capability flags the catalog carries on each provider entry.
 const sttSupportsVocabulary = (catalog, id) =>
   !!providersOf(catalog, "stt").find((p) => p.id === id)?.supports_vocabulary;
@@ -38,6 +42,9 @@ export function lastEnabledIndex(chains) {
 // a disabled chain is marked "(off)".
 export const chainsUsing = (chains, field, id) =>
   chains.filter((c) => c[field] === id).map((c) => (c.enabled ? c.name : `${c.name} (off)`));
+
+// Provider ids the enabled chains run in `field` ("stt" | "handler").
+export const usedByChains = (chains, field) => chains.filter((c) => c.enabled).map((c) => c[field]);
 
 // Swap item i with its neighbour i+delta; out-of-range moves return the list as is.
 export function moveItem(list, i, delta) {
@@ -73,6 +80,13 @@ export const settingsPageFor = (cat, id) =>
 
 export const ttsVariantsOf = (catalog) =>
   catalog?.categories?.find((c) => c.id === "tts")?.variants || [];
+
+// TTS providers in the order of the variants (the fallback order), then the
+// providers no variant names, in catalog order.
+export function byVariantOrder(providers, variants) {
+  const listed = variants.map((v) => providers.find((p) => p.id === v.provider)).filter(Boolean);
+  return [...listed, ...providers.filter((p) => !listed.includes(p))];
+}
 
 // The voice a TTS provider speaks with, by name, read from its settings the way
 // a prompt voice marker names it; "" when the settings name no voice.

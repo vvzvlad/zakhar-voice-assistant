@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
 import { TITLES } from "./nav.js";
-import { setNavigate, nav, confirmLeave } from "./navStore.js";
+import { setNavigate, nav, confirmLeave, takeCard } from "./navStore.js";
 import { Sidebar } from "./components/Sidebar.jsx";
 import { Topbar } from "./components/Topbar.jsx";
 import { PAGES } from "./pages/index.js";
@@ -54,6 +54,13 @@ export default function App() {
   // Register the navigate fn so pages can call nav(id) from the module-level store.
   useEffect(() => { setNavigate(navigate); });
 
+  // A "configure" link asked for one card of the page just opened (navCard):
+  // the page has rendered by now, so scroll that card to the top.
+  useEffect(() => {
+    const card = takeCard();
+    if (card) document.getElementById(card)?.scrollIntoView({ block: "start" });
+  }, [active]);
+
   // On mount: sync the address bar with the actually selected section (no history entry),
   // and handle browser Back/Forward via popstate.
   useEffect(() => {
@@ -73,15 +80,26 @@ export default function App() {
     return () => window.removeEventListener("popstate", onPop);
   }, []);
 
+  // On a narrow screen the sidebar is hidden and opens over the page from the top bar's menu
+  // button (styles.css, max-width 820px); picking an item, the scrim or Escape closes it.
+  const [menu, setMenu] = useState(false);
+  useEffect(() => {
+    if (!menu) return undefined;
+    const onKey = (e) => { if (e.key === "Escape") setMenu(false); };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [menu]);
+
   const Page = PAGES[active] || (() => (
     <div className="z-page"><div className="z-empty"><b>{TITLES[active]}</b>Section coming up.</div></div>
   ));
 
   return (
     <div className="z-app">
-      <Sidebar active={active} onNav={(id) => { if (id !== active) nav(id); }} />
+      <Sidebar active={active} open={menu} onNav={(id) => { setMenu(false); if (id !== active) nav(id); }} />
+      {menu && <div className="z-side-scrim" data-testid="menu-scrim" onClick={() => setMenu(false)} />}
       <div className="z-main">
-        <Topbar active={active} />
+        <Topbar active={active} onMenu={() => setMenu(true)} />
         <div className="z-scroll">
           {loading
             ? <div className="z-page"><div className="z-card"><Loading /></div></div>

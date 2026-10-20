@@ -1,8 +1,10 @@
 // @vitest-environment jsdom
-// Integration tests (jsdom) for the Providers → TTS page: provider tabs (opened
-// on the first enabled variant or the tab a configure link asked for), and the
-// Stress placement section without its `enabled` switch (the Speech page holds
-// it). The page's one Save sends the dirty tabs and the stress settings as ONE patch.
+// Integration tests (jsdom) for the Providers → TTS page: provider tabs (named by
+// label, in the Speech variants' order, the enabled variants marked "in use",
+// opened on the first enabled variant or the tab a configure link asked for), the
+// cards a configure link scrolls to, and the Stress placement section without its
+// `enabled` switch (the Speech page holds it). The page's one Save sends the dirty
+// tabs and the stress settings as ONE patch.
 import React from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, cleanup, waitFor, within } from "@testing-library/react";
@@ -60,6 +62,7 @@ beforeEach(() => {
 afterEach(cleanup);
 
 const tabs = () => document.querySelector(".z-seg");
+const tabLabels = () => Array.from(tabs().querySelectorAll("button")).map((b) => b.firstChild.textContent);
 const stressCard = () => screen.getByText("Stress placement").closest(".z-card");
 const followupCard = () => screen.getByText("Follow-up").closest(".z-card");
 
@@ -72,16 +75,38 @@ async function saved() {
 describe("TTS page — provider tabs", () => {
   it("opens on the first enabled variant", () => {
     render(<TTS />);
-    expect(within(tabs()).getByText("yandex")).toHaveClass("on");
+    expect(within(tabs()).getByText("Yandex SpeechKit")).toHaveClass("on");
     expect(screen.getByDisplayValue("yandex-voice")).toBeInTheDocument();
+  });
+
+  it("orders the tabs like the variants, the rest after, and marks the enabled variants in use", () => {
+    render(<TTS />);
+    expect(tabLabels()).toEqual(["Yandex SpeechKit", "Piper", "Fish Audio"]);
+    expect(screen.getAllByTestId("in-use").map((m) => m.parentElement.firstChild.textContent)).toEqual(["Yandex SpeechKit"]);
+  });
+
+  it("gives the provider, stress and follow-up sections the ids configure links scroll to", () => {
+    render(<TTS />);
+    expect(document.getElementById("card-tts")).toContainElement(tabs());
+    expect(document.getElementById("card-stress")).toBe(stressCard());
+    expect(document.getElementById("card-followup")).toBe(followupCard());
+  });
+
+  it("says what the voice test and the voice marker do once, in the card header", () => {
+    render(<TTS />);
+    for (const title of ["Test voice", "Prompt voice marker"]) {
+      const card = screen.getByText(title, { selector: ".z-card-h b" }).closest(".z-card");
+      expect(card.querySelector(".z-card-h .sub")).toBeTruthy();
+      expect(card.querySelector(".z-foot .z-fh")).toBeNull();
+    }
   });
 
   it("says where each provider is used on the Speech page", () => {
     render(<TTS />);
     expect(screen.getByText("Variant 1 on Speech")).toBeInTheDocument();
-    fireEvent.click(within(tabs()).getByText("piper"));
+    fireEvent.click(within(tabs()).getByText("Piper"));
     expect(screen.getByText("Variant 2 on Speech (off)")).toBeInTheDocument();
-    fireEvent.click(within(tabs()).getByText("fish"));
+    fireEvent.click(within(tabs()).getByText("Fish Audio"));
     expect(screen.getByText("Not in variants")).toBeInTheDocument();
   });
 
@@ -89,7 +114,7 @@ describe("TTS page — provider tabs", () => {
     setNavigate(() => {});
     navTab("tts", "piper");
     render(<TTS />);
-    expect(within(tabs()).getByText("piper")).toHaveClass("on");
+    expect(within(tabs()).getByText("Piper")).toHaveClass("on");
     expect(screen.getByDisplayValue("piper-voice")).toBeInTheDocument();
   });
 

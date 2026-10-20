@@ -1,6 +1,6 @@
 // Unit tests for the backend-row -> UI-run adapter (src/runsModel.js).
-import { describe, it, expect } from "vitest";
-import { mapRun, totalMs, fmtSec, statusMeta, applyStreamedRun, pageWindow } from "../runsModel.js";
+import { describe, it, expect, vi, afterEach } from "vitest";
+import { fmtTime, mapRun, totalMs, fmtSec, statusMeta, applyStreamedRun, pageWindow } from "../runsModel.js";
 
 describe("mapRun", () => {
   it("returns null for a null row (pass-through)", () => {
@@ -57,6 +57,23 @@ describe("mapRun", () => {
     expect(out.key).toBe("live:kitchen");
     expect(out.live).toBe(true);
     expect(out.id == null).toBe(true);
+  });
+});
+
+describe("run time", () => {
+  afterEach(() => vi.useRealTimers());
+
+  it("shows a run from today by its time alone, an older one with the month and day, another year's with the year; stamp always dated", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-10-20T12:00:00Z"));
+    const ts = Date.parse("2026-10-20T06:21:05Z") / 1000;
+    expect(fmtTime(ts)).toBe("06:21:05");
+    expect(mapRun({ id: 1, ts }).stamp).toBe("Oct 20 06:21:05");
+    expect(fmtTime(Date.parse("2026-10-19T06:21:05Z") / 1000)).toBe("Oct 19 06:21:05");
+    expect(fmtTime(Date.parse("2025-10-19T06:21:05Z") / 1000)).toBe("Oct 19 2025 06:21:05");
+    // The same row re-rendered after midnight gets its date.
+    vi.setSystemTime(new Date("2026-10-21T00:00:01Z"));
+    expect(fmtTime(ts)).toBe("Oct 20 06:21:05");
   });
 });
 

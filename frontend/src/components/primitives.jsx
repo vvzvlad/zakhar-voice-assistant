@@ -40,13 +40,18 @@ export function KeyInput({ value, onChange, placeholder }) {
     </div>
   );
 }
-// `marked` (optional) lists options that get a dot after their label, e.g.
-// provider tabs holding unsaved edits.
-export function Seg({ options, value, onChange, full, marked = [] }) {
-  return <div className={"z-seg" + (full ? " full" : "")}>
-    {options.map((o) => <button key={o} className={o === value ? "on" : ""} onClick={() => onChange && onChange(o)}>
-      {o}
-      {marked.includes(o) && <span data-testid="unsaved-dot" style={{ display: "inline-block", width: 6, height: 6, borderRadius: "50%", background: "var(--warn)", marginLeft: 6, verticalAlign: "middle" }} />}
+// Options may be plain values or {value, label} objects (label shown, value
+// emitted). `marked` (optional) lists option values that get a dot after their
+// label, e.g. provider tabs holding unsaved edits; `inUse` lists values that get
+// an "in use" marker, e.g. the providers the pipeline runs. `wrap` keeps every
+// option on one line and lets the options wrap into rows when they do not fit.
+export function Seg({ options, value, onChange, full, wrap, marked = [], inUse = [] }) {
+  const opts = options.map((o) => (o && typeof o === "object" ? o : { value: o, label: String(o) }));
+  return <div className={"z-seg" + (full ? " full" : "") + (wrap ? " wrap" : "")}>
+    {opts.map((o) => <button key={String(o.value)} className={o.value === value ? "on" : ""} onClick={() => onChange && onChange(o.value)}>
+      {o.label}
+      {inUse.includes(o.value) && <span data-testid="in-use" style={{ marginLeft: 6, fontSize: 9.5, fontWeight: 600, color: "var(--good)", verticalAlign: "middle" }}>in use</span>}
+      {marked.includes(o.value) && <span data-testid="unsaved-dot" style={{ display: "inline-block", width: 6, height: 6, borderRadius: "50%", background: "var(--warn)", marginLeft: 6, verticalAlign: "middle" }} />}
     </button>)}
   </div>;
 }
@@ -67,13 +72,13 @@ export function ScaleSeg({ options, value, onChange, poles, readout }) {
     {readout && cur && <div style={{ marginTop: 5, fontSize: 11, color: "var(--mut)", fontFamily: "var(--mono)" }}>{cur.label} · {String(value)}</div>}
   </div>;
 }
-export function Selector({ label, caption, options, value, onChange, marked }) {
+export function Selector({ label, caption, options, value, onChange, marked, inUse }) {
   return <div style={{ marginBottom: 18 }}>
     <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 8, gap: 12 }}>
       <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: ".05em", textTransform: "uppercase", color: "var(--ink2)" }}>{label}</span>
       {caption && <span style={{ fontSize: 11.5, color: "var(--mut2)", textAlign: "right" }}>{caption}</span>}
     </div>
-    <Seg full options={options} value={value} onChange={onChange} marked={marked} />
+    <Seg full wrap options={options} value={value} onChange={onChange} marked={marked} inUse={inUse} />
   </div>;
 }
 export function Toggle({ on, onChange, sm }) {
@@ -177,7 +182,10 @@ export function Select({ value, options, onChange, w, itemAction, itemActionBusy
     return spaceBelow < est + 8 && spaceAbove > spaceBelow;
   };
   const toggle = () => setOpen((o) => { const next = !o; if (next) setUp(wantUp()); return next; });
-  return <div ref={ref} style={{ position: "relative", width: w || "100%" }}>
+  // Escape anywhere in an open Select (trigger, search, option) closes only the dropdown:
+  // preventDefault tells an enclosing Modal the key is taken.
+  return <div ref={ref} style={{ position: "relative", width: w || "100%" }}
+    onKeyDown={(e) => { if (open && e.key === "Escape") { e.preventDefault(); setOpen(false); } }}>
     <div className="z-select" role="button" tabIndex={0} aria-haspopup="listbox" aria-expanded={open}
       onClick={toggle}
       onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); } }}>
@@ -198,7 +206,7 @@ export function Select({ value, options, onChange, w, itemAction, itemActionBusy
               // picks the first one; the custom "Use ..." row stays reachable by click.
               if (shown.length > 0) pick(shown[0].value);
               else if (customRow) pick(query.trim());
-            } else if (e.key === "Escape") { e.preventDefault(); setOpen(false); }
+            }
           }}
           style={{ width: "100%", boxSizing: "border-box", padding: "7px 10px", border: "none", outline: "none", fontSize: 12, fontFamily: "inherit", color: "var(--ink)", background: "transparent" }}
         />
@@ -293,8 +301,9 @@ export function SaveBar({ noTest }) {
   </div>;
 }
 
-export function Card({ title, sub, children, foot }) {
-  return <div className="z-card">
+// `id` makes the card the scroll target of a cross-page "configure" link (navCard).
+export function Card({ id, title, sub, children, foot }) {
+  return <div className="z-card" id={id}>
     {title && <div className="z-card-h"><b>{title}</b>{sub && <span className="sub">{sub}</span>}</div>}
     <div className="z-card-b">{children}</div>
     {foot}
@@ -348,10 +357,19 @@ export function ErrorBox({ error, onRetry }) {
 // `top` pins the dialog near the top of the window instead of centring it, so a dialog whose
 // height changes (tabs) does not jump; `wide` makes it wide enough for label-left, control-right
 // rows (.z-rowctl) and caps it at the window height, so its body scrolls between a fixed header
-// and footer.
+// and footer. Escape closes it like its Close button, unless a control inside took the key (an
+// open Select closes only its dropdown); a click on the backdrop does not, so a stray click
+// never drops unsaved edits.
 export function Modal({ title, children, footer, onClose, top, wide }) {
-  return <div className="z-modal" onClick={onClose}>
-    <div className={"z-modal-c" + (top ? " top" : "") + (wide ? " wide" : "")} onClick={(e) => e.stopPropagation()}>
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
+  useEffect(() => {
+    const h = (e) => { if (e.key === "Escape" && !e.defaultPrevented) closeRef.current(); };
+    document.addEventListener("keydown", h);
+    return () => document.removeEventListener("keydown", h);
+  }, []);
+  return <div className="z-modal">
+    <div className={"z-modal-c" + (top ? " top" : "") + (wide ? " wide" : "")}>
       <div className="z-modal-h"><b>{title}</b><button className="z-x" aria-label="Close" style={{ marginLeft: "auto" }} onClick={onClose}><svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" /></svg></button></div>
       <div className="z-modal-b">{children}</div>
       {footer && <div className="z-modal-f">{footer}</div>}

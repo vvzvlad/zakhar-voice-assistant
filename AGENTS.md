@@ -63,6 +63,12 @@ make fw-host-test fw-voicepe-host-test # host tests of the pure C cores
 make fw-ota HOST=<address>             # fw-flash PORT=… over USB, fw-logs HOST=… for the log
 ```
 
+Build the speaker firmware through `make fw-build`: it keeps ccache and the downloaded components in
+the cirunner volume `zakhar-fw-cache`, and a rebuild takes 1–1.5 min instead of 4+ from scratch.
+A hand-rolled `docker run` of `espressif/idf` (a detached container, the panel's firmware) mounts
+the same `-v zakhar-fw-cache:/root/.cache` and builds with `ninja -j 24`: a plain `idf.py build`
+starts a compiler per CPU, and on a cold cache 74 of them run cirunner out of memory.
+
 ## CI and deploy
 - `.gitea/workflows/tests.yml` (pull requests): pytest in `python:3.11-slim`, image build,
   `ci/smoke.py`; never pushes.

@@ -31,6 +31,7 @@ src/
                         Player, KV, Spark, total/segsFor helpers
     Sidebar.jsx         Left navigation rail
     Topbar.jsx          Top bar (uptime, version, restart)
+    DeviceModal.jsx     Add / Edit speaker dialog of the Devices page
   pages/
     index.js            id -> page component map
     dashboard.jsx       Pipeline overview (KPIs, service map, recent runs)
