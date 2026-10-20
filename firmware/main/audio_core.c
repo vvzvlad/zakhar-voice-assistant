@@ -3,6 +3,8 @@
 #include <math.h>
 #include <string.h>
 
+#include "music_ring.h"
+
 #define Q25_MAX ((1 << 25) - 1)
 #define Q25_MIN (-(1 << 25))
 
@@ -313,6 +315,36 @@ void mix_block(mix_t *m, const int16_t *voice, const int16_t *music, size_t musi
         mono[i] = (int16_t)((out[2 * i] + out[2 * i + 1]) / 2);
     }
     m->gain = (uint32_t)to;
+}
+
+#define RING_FRAME_BYTES (2 * sizeof(int16_t))
+
+size_t music_ring_write(music_ring_t *r, const void *in, size_t n)
+{
+    const uint8_t *src = in;
+    const size_t space = (r->tail + r->cap - r->head - 1) % r->cap;
+    if (n > space) n = space;
+    const size_t first = n < r->cap - r->head ? n : r->cap - r->head;
+    memcpy(&r->buf[r->head * 2], src, first * RING_FRAME_BYTES);
+    memcpy(r->buf, src + first * RING_FRAME_BYTES, (n - first) * RING_FRAME_BYTES);
+    r->head = (uint32_t)((r->head + n) % r->cap);
+    return n;
+}
+
+size_t music_ring_read(music_ring_t *r, int16_t *out, size_t max)
+{
+    const size_t held = (r->head + r->cap - r->tail) % r->cap;
+    const size_t n = max < held ? max : held;
+    const size_t first = n < r->cap - r->tail ? n : r->cap - r->tail;
+    memcpy(out, &r->buf[r->tail * 2], first * RING_FRAME_BYTES);
+    memcpy(out + first * 2, r->buf, (n - first) * RING_FRAME_BYTES);
+    r->tail = (uint32_t)((r->tail + n) % r->cap);
+    return n;
+}
+
+void music_ring_flush(music_ring_t *r, uint32_t to)
+{
+    if ((to + r->cap - r->tail) % r->cap <= (r->head + r->cap - r->tail) % r->cap) r->tail = to;
 }
 
 uint8_t volume_dac_byte(int percent)

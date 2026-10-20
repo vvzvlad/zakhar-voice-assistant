@@ -54,6 +54,8 @@ _Static_assert(TAP_FRAMES - TAP_MARGIN >= (2000 + 3000) * MIC_RATE / 1000,
 
 #define SPK_RATE 48000
 #define SPK_BLOCK 720  // frames per write: 15 ms, the stock DMA buffer
+// The TX DMA buffers, SPK_BLOCK frames each: a block just written plays out after all of them.
+#define SPK_DMA_BUFS 4
 #define LATE_CHECK_BLOCKS 67  // the speaker task reports late buffers about once a second
 
 // The mic task's unit: 512 frames = 32 ms, the AEC's frame in its SR and FD modes at 16 kHz and
@@ -368,7 +370,7 @@ static void speaker_task(void *arg)
         tap_write(&s_ref, ref, dec3_run(&s_dec, wire, SPK_BLOCK, ref));
         size_t written;
         i2s_channel_write(s_tx, stereo, sizeof stereo, &written, portMAX_DELAY);
-        if (m > 0) music_played(m);
+        if (m > 0) music_played(m, esp_timer_get_time() + (int64_t)SPK_DMA_BUFS * SPK_BLOCK * 1000000 / SPK_RATE);
     }
 }
 
@@ -376,7 +378,7 @@ esp_err_t audio_start(void)
 {
     // auto_clear: an empty DMA buffer goes out as silence.
     i2s_chan_config_t tx_cc = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_SLAVE);
-    tx_cc.dma_desc_num = 4;
+    tx_cc.dma_desc_num = SPK_DMA_BUFS;
     tx_cc.dma_frame_num = SPK_BLOCK;
     tx_cc.auto_clear = true;
     i2s_std_config_t tx_std = {

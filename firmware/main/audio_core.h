@@ -2,7 +2,8 @@
 // (make fw-voicepe-host-test). The microphone sample conversion, the microphone tap ring, the echo
 // reference (decimator, aligned reads, the skip decision), the echo delay estimator, the mic
 // task's per-chunk bookkeeping, the room's noise level, the speaker's mix of zakhar's playback and
-// the music, and the speaker volume -> DAC register mapping.
+// the music, and the speaker volume -> DAC register mapping. audio_core.c also implements the
+// music ring, declared in music_ring.h.
 #pragma once
 
 #include <stdatomic.h>

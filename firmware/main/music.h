@@ -27,8 +27,9 @@ bool music_active(void);
 // copied, 0 while no stream is on.
 size_t music_read(int16_t *out, size_t max_frames);
 
-// The speaker task wrote `frames` frames music_read() gave it into the I2S DMA queue.
-void music_played(size_t frames);
+// The speaker task wrote `frames` frames music_read() gave it into the I2S DMA queue; they finish
+// playing at finish_us on esp_timer_get_time()'s clock, the client's.
+void music_played(size_t frames, int64_t finish_us);
 
 // The music's gain, Q16 (65536 = 1.0): Music Assistant's volume, 0 while it mutes.
 uint32_t music_gain(void);

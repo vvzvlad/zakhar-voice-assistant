@@ -13,7 +13,6 @@
 #include <atomic>
 #include <cmath>
 #include <cstdio>
-#include <cstring>
 #include <optional>
 #include <string>
 #include <vector>
@@ -23,11 +22,11 @@
 #include "esp_log.h"
 #include "esp_mac.h"
 #include "esp_netif.h"
-#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "mdns.h"
+#include "music_ring.h"
 #include "nvs.h"
 #include "sendspin/client.h"
 #include "sendspin/player_role.h"
@@ -37,13 +36,11 @@ static const char *TAG = "music";
 #define RATE 48000
 #define FRAME_BYTES (2 * sizeof(int16_t))
 #define RING_FRAMES (RATE / 4)  // 250 ms
-// A block the speaker task has just written into the I2S DMA queue plays out after the queue's
-// 4 buffers of 720 frames.
-#define DMA_BACKLOG_US (4LL * 720 * 1000000 / RATE)
 #define GAIN_UNITY 65536u
 #define INITIAL_VOLUME 100
 #define LOOP_MS 10
 #define LOOP_STACK (8 * 1024)
+#define STACK_LOG_MS (30 * 1000)  // the loop task's stack use is logged this long after the start
 #define LOOP_PRIO 2
 #define HTTPD_PRIO 3
 #define PROTOCOL_PRIO 3
@@ -56,9 +53,10 @@ static std::atomic<uint32_t> s_gain{GAIN_UNITY};
 static sendspin::PlayerRole *s_player;
 
 // The stream from the sync task (on_audio_write, the one writer) to the speaker task (the one
-// reader). Head and tail index RING_FRAMES slots, one kept free so a full ring is not an empty one.
-// A stream's end flushes it through the reader: the writer is idle then, and the reader drops the
-// frames up to the head it had (s_flush_to), which keeps the frames a next stream writes after it.
+// reader) through a music ring (music_ring.h) of RING_FRAMES slots. Its head and tail live here as
+// atomics: each side copies them in and stores back its own. A stream's end flushes it through the
+// reader: the writer is idle then, and the reader drops the frames up to the head it had
+// (s_flush_to), which keeps the frames a next stream writes after it.
 static int16_t *s_ring;
 static std::atomic<uint32_t> s_head, s_tail;
 static std::atomic<uint32_t> s_flush_to;
@@ -68,14 +66,10 @@ static SemaphoreHandle_t s_space;
 
 static size_t ring_write(const uint8_t *in, size_t frames)
 {
-    const uint32_t head = s_head.load(std::memory_order_relaxed);
-    const uint32_t tail = s_tail.load(std::memory_order_acquire);
-    const size_t space = (tail + RING_FRAMES - head - 1) % RING_FRAMES;
-    const size_t n = std::min(frames, space);
-    const size_t first = std::min(n, (size_t)(RING_FRAMES - head));
-    memcpy(&s_ring[head * 2], in, first * FRAME_BYTES);
-    memcpy(s_ring, in + first * FRAME_BYTES, (n - first) * FRAME_BYTES);
-    s_head.store((uint32_t)((head + n) % RING_FRAMES), std::memory_order_release);
+    music_ring_t r = {s_ring, RING_FRAMES, s_head.load(std::memory_order_relaxed),
+                      s_tail.load(std::memory_order_acquire)};
+    const size_t n = music_ring_write(&r, in, frames);
+    s_head.store(r.head, std::memory_order_release);
     return n;
 }
 
@@ -156,6 +150,13 @@ public:
     }
 };
 
+static void log_internal(const char *when)
+{
+    ESP_LOGI(TAG, "%s: %u B of internal RAM free, largest block %u B", when,
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
+}
+
 // Starts the client, then advertises it: the mDNS host is the DHCP host name app_main gave the
 // station, the instance and the TXT name `Zakhar <MAC tail>`. Then the client's loop, for good.
 static void music_task(void *arg)
@@ -183,6 +184,8 @@ static void music_task(void *arg)
     cfg.httpd_priority = HTTPD_PRIO;
     cfg.protocol_task_psram_stack = true;
     cfg.protocol_task_priority = PROTOCOL_PRIO;
+    // The protocol's JSON documents go to PSRAM: the arena would be internal RAM.
+    cfg.json_arena_size = 0;
     auto *client = new sendspin::SendspinClient(std::move(cfg));
     sendspin::PlayerRoleConfig pc;
     pc.audio_formats = {
@@ -202,11 +205,13 @@ static void music_task(void *arg)
     // Music Assistant plays without pairing, as on the stock ESPHome firmware; the library starts
     // with this off and never stores it.
     client->set_unpaired_access_enabled(true);
+    log_internal("before the client starts");
     if (!client->start()) {
         ESP_LOGE(TAG, "no player: the client did not start");
         vTaskDelete(NULL);
         return;
     }
+    const TickType_t started = xTaskGetTickCount();
 
     const uint16_t port = sendspin::SendspinClientConfig::DEFAULT_SERVER_PORT;
     const char *host = NULL;
@@ -217,11 +222,16 @@ static void music_task(void *arg)
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "not advertised by mDNS: %s", esp_err_to_name(err));
     } else {
-        ESP_LOGI(TAG, "Sendspin player \"%s\" on %s.local:%u, %u B of internal RAM free", name, host,
-                 (unsigned)port, (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+        ESP_LOGI(TAG, "Sendspin player \"%s\" on %s.local:%u", name, host, (unsigned)port);
     }
+    log_internal("player up");
+    bool stack_logged = false;
     for (;;) {
         client->loop();
+        if (!stack_logged && xTaskGetTickCount() - started >= pdMS_TO_TICKS(STACK_LOG_MS)) {
+            ESP_LOGI(TAG, "music task: %u B of its stack never used", (unsigned)uxTaskGetStackHighWaterMark(NULL));
+            stack_logged = true;
+        }
         vTaskDelay(pdMS_TO_TICKS(LOOP_MS));
     }
 }
@@ -255,25 +265,20 @@ bool music_active(void)
 size_t music_read(int16_t *out, size_t max_frames)
 {
     if (!s_active.load(std::memory_order_acquire)) return 0;
+    // The head is loaded after the flush is taken, so it is at least the head the flush recorded.
     const bool flush = s_flush.exchange(false, std::memory_order_acq_rel);
-    uint32_t tail = s_tail.load(std::memory_order_relaxed);
     const uint32_t head = s_head.load(std::memory_order_acquire);
-    if (flush) {
-        const uint32_t to = s_flush_to.load(std::memory_order_relaxed);
-        if ((to + RING_FRAMES - tail) % RING_FRAMES <= (head + RING_FRAMES - tail) % RING_FRAMES) tail = to;
-    }
-    const size_t n = std::min(max_frames, (size_t)((head + RING_FRAMES - tail) % RING_FRAMES));
-    const size_t first = std::min(n, (size_t)(RING_FRAMES - tail));
-    memcpy(out, &s_ring[tail * 2], first * FRAME_BYTES);
-    memcpy(out + first * 2, s_ring, (n - first) * FRAME_BYTES);
-    s_tail.store((uint32_t)((tail + n) % RING_FRAMES), std::memory_order_release);
+    music_ring_t r = {s_ring, RING_FRAMES, head, s_tail.load(std::memory_order_relaxed)};
+    if (flush) music_ring_flush(&r, s_flush_to.load(std::memory_order_relaxed));
+    const size_t n = music_ring_read(&r, out, max_frames);
+    s_tail.store(r.tail, std::memory_order_release);
     if (n > 0 || flush) xSemaphoreGive(s_space);
     return n;
 }
 
-void music_played(size_t frames)
+void music_played(size_t frames, int64_t finish_us)
 {
-    s_player->notify_audio_played((uint32_t)frames, esp_timer_get_time() + DMA_BACKLOG_US);
+    s_player->notify_audio_played((uint32_t)frames, finish_us);
 }
 
 uint32_t music_gain(void)

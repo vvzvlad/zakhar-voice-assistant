@@ -1,7 +1,7 @@
 // Host test of the Voice PE firmware's pure audio core (audio_core.c): the microphone sample
 // conversion against ESPHome's MicrophoneSource, the tap ring, the echo reference and delay
-// estimator, the mic task's chunk bookkeeping, the room's noise level, the speaker's mix, and the
-// stock volume -> DAC byte table.
+// estimator, the mic task's chunk bookkeeping, the room's noise level, the speaker's mix, the music
+// ring, and the stock volume -> DAC byte table.
 // `make fw-voicepe-host-test` builds it.
 #include <assert.h>
 #include <math.h>
@@ -11,6 +11,7 @@
 #include <string.h>
 
 #include "audio_core.h"
+#include "music_ring.h"
 
 static void test_samples(void)
 {
@@ -474,6 +475,66 @@ static void test_mix(void)
     assert(out[0] == INT16_MIN && out[1] == INT16_MIN && mono[0] == INT16_MIN);
 }
 
+// The music ring holds the test stream's frames (frames_from: channel 0 = f, channel 1 = -f).
+static void ring_read_is(music_ring_t *r, size_t max, uint32_t want_from, size_t want_n)
+{
+    int16_t got[2 * 16], want[2 * 16];
+    assert(max <= 16);
+    assert(music_ring_read(r, got, max) == want_n);
+    frames_from(want_from, want, want_n);
+    assert(memcmp(got, want, want_n * 2 * sizeof(int16_t)) == 0);
+}
+
+static void test_music_ring(void)
+{
+    int16_t buf[8 * 2], in[2 * 16];
+    music_ring_t r = {buf, 8, 0, 0};
+    // Across the end of the buffer: frames 0..4 in and out, then 5..10 land in slots 5..7 and 0..2.
+    frames_from(0, in, 5);
+    assert(music_ring_write(&r, in, 5) == 5);
+    ring_read_is(&r, 16, 0, 5);
+    frames_from(5, in, 6);
+    assert(music_ring_write(&r, in, 6) == 6 && r.head == 3);
+    ring_read_is(&r, 4, 5, 4);  // 5..8: slots 5, 6, 7, 0
+    ring_read_is(&r, 16, 9, 2);
+    assert(r.tail == 3);
+    ring_read_is(&r, 16, 0, 0);  // empty
+
+    // Full at cap - 1 frames: the rest is refused until the reader makes room, one for one.
+    frames_from(100, in, 10);
+    assert(music_ring_write(&r, in, 10) == 7);
+    assert(music_ring_write(&r, &in[2 * 7], 3) == 0);
+    ring_read_is(&r, 1, 100, 1);
+    assert(music_ring_write(&r, &in[2 * 7], 3) == 1);
+    ring_read_is(&r, 16, 101, 7);
+
+    // A stream ends with frames still held; the next stream writes before the reader's first read
+    // after the end: the flush drops the old frames and keeps the new ones.
+    frames_from(200, in, 4);
+    music_ring_write(&r, in, 4);
+    ring_read_is(&r, 1, 200, 1);
+    const uint32_t end = r.head;  // the ended stream's head
+    frames_from(300, in, 3);
+    music_ring_write(&r, in, 3);
+    music_ring_flush(&r, end);
+    ring_read_is(&r, 16, 300, 3);
+    // A flush with nothing held after `end` empties the ring.
+    frames_from(400, in, 2);
+    music_ring_write(&r, in, 2);
+    music_ring_flush(&r, r.head);
+    ring_read_is(&r, 16, 0, 0);
+
+    // A flush on a full ring: everything goes, and the ring takes cap - 1 frames again.
+    frames_from(500, in, 7);
+    assert(music_ring_write(&r, in, 7) == 7);
+    music_ring_flush(&r, r.head);
+    assert(r.tail == r.head);
+    ring_read_is(&r, 16, 0, 0);
+    frames_from(600, in, 7);
+    assert(music_ring_write(&r, in, 8) == 7);
+    ring_read_is(&r, 16, 600, 7);
+}
+
 static void test_volume(void)
 {
     // The stock table: UI volume -> register byte (0.5 dB steps from 0 dB = 0x00).
@@ -515,6 +576,7 @@ int main(void)
     test_ambient();
     test_ambient_sched();
     test_mix();
+    test_music_ring();
     test_volume();
     printf("audio_core: all tests passed\n");
     return 0;
