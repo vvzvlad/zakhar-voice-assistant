@@ -125,6 +125,18 @@ def test_probabilities_are_shown_in_percent(category, provider_id, fields):
     assert {k for k, v in props.items() if v.get("percent")} == fields
 
 
+def test_enum_switches_name_every_value_in_words():
+    # The panel shows enumLabels on the switch; the stored value stays the bare id.
+    from src.core_config import VadConfig
+    schemas = [
+        (VadConfig.model_json_schema()["properties"]["mic_channel"]),
+        (get_provider("wakeword", "vosk").ConfigModel.model_json_schema()["properties"]["on_error"]),
+        (get_provider("stress", "ruaccent").ConfigModel.model_json_schema()["properties"]["stress_format"]),
+    ]
+    for prop in schemas:
+        assert {str(k) for k in prop["enumLabels"]} == {str(v) for v in prop["enum"]}
+
+
 # --- options() ----------------------------------------------------------------
 
 def test_yandex_options_voice_returns_list():

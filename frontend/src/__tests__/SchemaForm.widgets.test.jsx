@@ -29,16 +29,16 @@ describe("SchemaField widget selection", () => {
     expect(input).toBeTruthy();
     // KeyInput identity: a password-type input (masked) rather than a plaintext one.
     expect(input.getAttribute("type")).toBe("password");
-    // Toggling SHOW/HIDE is unique to KeyInput.
-    expect(screen.getByText("SHOW")).toBeInTheDocument();
+    // Toggling Show/Hide is unique to KeyInput.
+    expect(screen.getByText("Show")).toBeInTheDocument();
   });
 
   it("renders a plaintext input (NOT masked) for a string WITHOUT the secret flag", () => {
     const c = renderField("endpoint", { type: "string" }, "http://x");
     const input = c.querySelector("input");
-    // No password masking, and no SHOW/HIDE button -> not a KeyInput.
+    // No password masking, and no Show/Hide button -> not a KeyInput.
     expect(input.getAttribute("type")).not.toBe("password");
-    expect(screen.queryByText("SHOW")).toBeNull();
+    expect(screen.queryByText("Show")).toBeNull();
   });
 
   it("does NOT mask a 'key'-ish field name without the secret flag (e.g. keywords)", () => {
@@ -47,7 +47,7 @@ describe("SchemaField widget selection", () => {
     const c = renderField("keywords", { type: "string" }, "computer, alexa");
     const input = c.querySelector("input");
     expect(input.getAttribute("type")).not.toBe("password");
-    expect(screen.queryByText("SHOW")).toBeNull();
+    expect(screen.queryByText("Show")).toBeNull();
   });
 
   it("renders a Seg for an enum of length <= 3", () => {
@@ -440,22 +440,15 @@ describe("SchemaField ScaleSeg (segment scale) selection", () => {
     expect(onChange).toHaveBeenCalledWith("aggressiveness", 0);
   });
 
-  it("renders a numeric ScaleSeg with pole captions for an enum decorated with poles", () => {
+  it("names a numeric enum by its string-keyed enumLabels and stores the number", () => {
+    // The schema as the API sends it: JSON turns the labels' int keys into strings.
     const onChange = vi.fn();
-    const c = renderField(
-      "mic_channel",
-      { type: "integer", enum: [0, 1], poles: ["more processed / louder", "raw / cleaner"] },
-      0, onChange
-    );
+    const c = renderField("mic_channel", { type: "integer", enum: [0, 1], enumLabels: { "0": "Processed", "1": "Raw" } }, 1, onChange);
     const btns = c.querySelectorAll(".z-seg.full button");
-    expect(btns).toHaveLength(2);
-    // Numeric segment labels (the enum values), pole captions present.
-    expect([...btns].map((b) => b.textContent)).toEqual(["0", "1"]);
-    expect(screen.getByText("more processed / louder")).toBeInTheDocument();
-    expect(screen.getByText("raw / cleaner")).toBeInTheDocument();
-    // Emits the numeric enum value on click.
-    fireEvent.click(btns[1]);
-    expect(onChange).toHaveBeenCalledWith("mic_channel", 1);
+    expect([...btns].map((b) => b.textContent)).toEqual(["Processed", "Raw"]);
+    expect(btns[1]).toHaveClass("on");
+    fireEvent.click(btns[0]);
+    expect(onChange).toHaveBeenCalledWith("mic_channel", 0);
   });
 
   it("ScaleSeg with an undefined value renders the buttons but no readout and does not crash", () => {
@@ -500,6 +493,16 @@ describe("SchemaForm advanced fields", () => {
     const { container } = render(<SchemaForm schema={schema} values={{}} onChange={() => {}} />);
     const order = [...container.querySelectorAll("details .z-fl b, details .z-sl")].map((e) => e.textContent);
     expect(order).toEqual(["Timeout", "Fallback replies", "Reply A", "Reply B"]);
+  });
+});
+
+describe("SchemaForm enum labels", () => {
+  it("names a short enum's options by enumLabels and stores the bare value", () => {
+    const onChange = vi.fn();
+    renderField("on_error", { type: "string", enum: ["open", "closed"], enumLabels: { open: "Accept the wake", closed: "Reject the wake" } }, "open", onChange);
+    expect(screen.queryByText("open")).toBeNull();
+    fireEvent.click(screen.getByText("Reject the wake"));
+    expect(onChange).toHaveBeenCalledWith("on_error", "closed");
   });
 });
 

@@ -111,6 +111,13 @@ describe("Request log — chains", () => {
     expect(screen.getByText("id 7 · end of phrase")).toBeInTheDocument();
   });
 
+  it("names the failed stage with a capital letter", async () => {
+    getRun.mockResolvedValue({ ...ROW, result: "error", error_stage: "pipeline", error_text: "boom" });
+    render(<Log />);
+    fireEvent.click((await screen.findAllByText("Солнечно"))[0]);
+    expect(await screen.findByText("Pipeline error.")).toBeInTheDocument();
+  });
+
   it("shows an LLM's upstream model id as it is", async () => {
     getRun.mockResolvedValue({ ...ROW, model: "anthropic/claude-haiku-4.5", tokens: 120, rounds: [{ round: 1, note: "", tokens: 120, calls: [], content: "Солнечно" }] });
     render(<Log />);
@@ -125,6 +132,7 @@ describe("Request log — chains", () => {
       attempts: [
         { kind: "chain", chain: "fast", stt: "vosk", handler: "simple-nlu", text: "какая погода", outcome: "declined", error: null, detail: "no alias phrase matched", t_stt: 310, t_handler: 12 },
         { kind: "chain", chain: "smart", stt: "groq", handler: "openrouter", text: "какая погода", outcome: "answered", error: null, detail: null, t_stt: 800, t_handler: 4100 },
+        { kind: "chain", chain: "smart", stt: "groq", handler: "openrouter", text: null, outcome: "stt_error", error: "429", detail: null, t_stt: 200, t_handler: 0 },
         { kind: "tts", provider: "yandex", outcome: "error", error: "timeout", t: 6000 },
         { kind: "tts", provider: "piper", outcome: "spoke", error: null, t: 900 },
       ],
@@ -134,7 +142,7 @@ describe("Request log — chains", () => {
     await screen.findByText("Attempts");
 
     const items = screen.getAllByTestId("attempt");
-    expect(items).toHaveLength(4);
+    expect(items).toHaveLength(5);
     expect(items[0].textContent).toContain("fast · Vosk (offline) → Simple NLU (no LLM)");
     expect(items[0].textContent).toContain("STT 0.31s · handler 0.01s");
     expect(items[0].textContent).toContain("declined");
@@ -142,10 +150,13 @@ describe("Request log — chains", () => {
     // Why the handler declined shows under its attempt; an answer has no detail.
     expect(screen.getAllByTestId("attempt-detail").map((d) => d.textContent)).toEqual(["no alias phrase matched"]);
     expect(items[1].textContent).toContain("answered");
-    expect(items[2].textContent).toContain("TTS · yandex");
-    expect(items[2].textContent).toContain("timeout");
-    expect(items[2].textContent).toContain("6.00s");
-    expect(items[3].textContent).toContain("spoke");
+    // An outcome id that is not a word shows in words.
+    expect(items[2].textContent).toContain("STT error");
+    expect(items[2].textContent).not.toContain("stt_error");
+    expect(items[3].textContent).toContain("TTS · yandex");
+    expect(items[3].textContent).toContain("timeout");
+    expect(items[3].textContent).toContain("6.00s");
+    expect(items[4].textContent).toContain("spoke");
   });
 
   it("reads a dropped follow-up phrase as not a continuation, with the check's probability", async () => {

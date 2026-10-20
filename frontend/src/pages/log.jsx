@@ -72,7 +72,7 @@ function Gantt({ r }) {
       </div>;
     })}
     {r.error && <div className="z-grow">
-      <div className="lbl"><s style={{ background: "#dc2626" }} />{r.error.stage}</div>
+      <div className="lbl"><s style={{ background: "#dc2626" }} />{capitalize(r.error.stage)}</div>
       <div className="z-gtrack"><div className="z-gseg" style={{ left: off + "%", width: (100 - off) + "%", background: "repeating-linear-gradient(45deg,#dc2626,#dc2626 4px,#fecaca 4px,#fecaca 8px)" }} /></div>
       <div className="ms" style={{ color: "var(--bad)" }}>fail</div>
     </div>}
@@ -94,6 +94,10 @@ const ATTEMPT_TONE = {
   answered: "good", spoke: "good", accepted: "good",
   stt_error: "bad", handler_error: "bad", error: "bad",
 };
+// An error stage as the server writes it ("STT", "pipeline", "device") with a capital first letter.
+const capitalize = (s) => (s ? s[0].toUpperCase() + s.slice(1) : s);
+// The outcomes whose id is not a word; every other outcome shows as it is.
+const OUTCOME_LABELS = { stt_error: "STT error", handler_error: "handler error" };
 
 // The run's chain and TTS attempts in the order they ran. A chain attempt is
 // {kind:"chain", chain, stt, handler, text, outcome, error, detail, t_stt, t_handler}
@@ -123,7 +127,7 @@ function Attempts({ attempts }) {
                 : a.stt ? `STT ${fmtSec(a.t_stt)} · handler ${fmtSec(a.t_handler)}`
                 : `handler ${fmtSec(a.t_handler)}`}
             </span>
-            <span className={"z-pill " + (ATTEMPT_TONE[a.outcome] || "muted")}>{a.outcome}</span>
+            <span className={"z-pill " + (ATTEMPT_TONE[a.outcome] || "muted")}>{OUTCOME_LABELS[a.outcome] || a.outcome}</span>
           </span>
         </div>
         {!tts && a.text && <div style={{ fontSize: 13, color: "var(--ink)" }}>{a.text}</div>}
@@ -211,7 +215,7 @@ function Drawer({ r, loading, error, onClose }) {
         {error && <ErrorBox error={error} />}
         {r && !loading && !error && <>
           {r.error && <div className="z-banner" style={{ background: "var(--bad-bg)", border: "1px solid #f3c8c8", color: "#b91c1c", marginBottom: 16 }}>
-            <Ic n="restart" w={15} /><span><b>{r.error.stage} error.</b> {r.error.text}</span>
+            <Ic n="restart" w={15} /><span><b>{capitalize(r.error.stage)} error.</b> {r.error.text}</span>
           </div>}
 
           {/* A run ended before STT. Mirrors the error banner, but muted — it is an

@@ -98,7 +98,9 @@ function SourceCard({ name, sub, schema, root, draft, onChange, configured, live
 // Fields mirror McpServerConfig: name (unique source id), url, token (masked),
 // transport (Literal), prompt (describes the server's tools to the model). Its
 // button puts the server into the page's draft; the page's Save writes it.
-const TRANSPORTS = ["auto", "streamable_http", "sse"];
+const TRANSPORTS = [
+  { value: "auto", label: "Auto" }, { value: "streamable_http", label: "Streamable HTTP" }, { value: "sse", label: "SSE" },
+];
 // Built-in ToolHub source ids — an external server may not shadow them, or it
 // would hide the openweathermap/calendar/reminders/assistant_tasks/volume status in /api/tools.
 const RESERVED_NAMES = ["openweathermap", "calendar", "reminders", "assistant_tasks", "volume"];
@@ -137,7 +139,7 @@ function McpServerModal({ initial, onSave, onClose, title, takenNames }) {
     <Field label="Token" hint="Optional Bearer token.">
       <KeyInput value={token} placeholder="optional…" onChange={setToken} />
     </Field>
-    <Field label="Transport" hint="auto detects sse from a URL ending in /sse.">
+    <Field label="Transport" hint="Auto picks SSE for a URL ending in /sse, otherwise Streamable HTTP.">
       <Select value={transport} options={TRANSPORTS} onChange={setTransport} />
     </Field>
     <Field label="Prompt" hint="Describes this server's tools to the model (appended to the system prompt).">

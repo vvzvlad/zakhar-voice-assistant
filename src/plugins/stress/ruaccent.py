@@ -126,7 +126,8 @@ class RuAccentConfig(BaseModel):
     stress_format: Literal["plus", "acute", "uppercase"] = Field(
         "plus",
         title="Stress output",
-        description="How stress is marked; pick acute or uppercase for a TTS that drops «+», like Fish Audio.",
+        json_schema_extra={"enumLabels": {"plus": "Plus sign (+)", "acute": "Acute accent", "uppercase": "Uppercase vowel"}},
+        description="How stress is marked; for a TTS that drops «+», like Fish Audio, pick another.",
     )
     # Placed before `use_dictionary`, which the panel hides while this is on. It also
     # disables the rule pipeline.
