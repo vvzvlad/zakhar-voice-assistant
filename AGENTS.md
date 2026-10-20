@@ -30,8 +30,9 @@ configured under `core.mcp_servers` in `data/config.json`.
 - `docs/device-protocol.md` — the normative server↔device contract; a change to the protocol
   changes this file, `src/device_server.py` and `firmware/components/zakhar_link` together.
 - `firmware/` — Voice PE speaker firmware, plain ESP-IDF C. `components/zakhar_link` is the
-  device side of the protocol and is vendored into the espanel repo (esp-svgpanel); this copy
-  is the source of truth.
+  device side of the protocol; the espanel wall panel takes it as an ESP-IDF component manager
+  git dependency pinned to a commit of this repo, so a protocol change reaches the panel by
+  moving that pin.
 - `microWakeWord/` — wake-word model training research and the deployed models.
 - `data/` — runtime state: `config.json`, per-device context files, `prompts.db` (SQLite store of named system-prompt profiles), `captures/` and `datasets/` (device recordings, `src/captures.py`), `device_logs/` (the speakers' own logs, `src/device_logs.py`) (gitignored, docker volume)
 - `templates/` — committed reference assets seeded into `data/` on first boot (`default_prompt.md`, `default_config.json`)

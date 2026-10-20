@@ -188,6 +188,6 @@ direct_dependencies:
 - espressif/mdns
 - espressif/network_provisioning
 - idf
-manifest_hash: a76c93406db945dc75903b7388b7bb0a0fafde81401bc82bd3924891accb7307
+manifest_hash: 7cab83509642bd383033d2a8d27ec1b07cda297fe6f17101db1b120caf0ab518
 target: esp32s3
 version: 2.0.0
