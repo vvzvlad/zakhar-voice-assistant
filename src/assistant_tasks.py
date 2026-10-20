@@ -25,6 +25,7 @@ import httpx
 from loguru import logger
 
 from src.run_events import record_run
+from src.runs_store import new_record
 
 _CREATE_TABLE = """
 CREATE TABLE IF NOT EXISTS tasks (
@@ -207,11 +208,9 @@ class AssistantTasks:
             if client is None:
                 logger.warning(f"assistant task №{task_id}: speaker {device!r} unavailable; "
                                f"reply stored, not spoken")
-                await record_run(self.rt, {
-                    "ts": time.time(), "device": device, "reason": "assistant",
-                    "result": "error", "stt_text": task["text"], "llm_text": content,
-                    "error_stage": "device", "error_text": "speaker unavailable", "t_total": 0,
-                })
+                await record_run(self.rt, new_record(
+                    device, "assistant", result="error", stt_text=task["text"], llm_text=content,
+                    error_stage="device", error_text="speaker unavailable", t_total=0))
                 return
             try:
                 await client.announce(content, "assistant", task["text"])

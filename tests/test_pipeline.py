@@ -1661,8 +1661,8 @@ async def test_filler_fires_when_any_tool_in_round_is_slow(tmp_path, monkeypatch
 # --- pipeline.speak() (public proactive-speech entry) -------------------------
 
 async def test_speak_synthesizes_and_plays(tmp_path, monkeypatch):
-    # speak() is the single text->device path: synthesize via the current tts
-    # stage and hand the clip to the device's play hook.
+    # speak() (the filler, external callers): synthesize via the current tts stage
+    # and hand the clip to the device's play hook.
     tts = EchoTts()
     pipeline, _ = make_pipeline(tmp_path, monkeypatch, tts_backend=tts)
 
@@ -1686,7 +1686,7 @@ async def test_speak_without_speaker_synthesizes_nothing(tmp_path, monkeypatch):
 
 async def test_speak_propagates_synthesis_errors(tmp_path, monkeypatch):
     # speak() raises on failure — isolation is the CALLER's job (the filler wraps
-    # it in try/except; Device.announce lets it surface to the API caller).
+    # it in try/except).
     class _BoomTts:
         async def synthesize(self, text, lang="ru"):
             raise RuntimeError("tts down")
@@ -2750,6 +2750,65 @@ async def test_tts_failure_after_first_chunk_played_does_not_switch(tmp_path, mo
     assert _tts_attempts(rec) == [("a", "spoke", None)]
 
 
+@pytest.mark.parametrize("path", ["voice", "text"])
+async def test_time_to_speech_when_the_speech_breaks_off(tmp_path, monkeypatch, path):
+    # The speech started (after a first variant that failed for 50 ms) and broke off
+    # mid-stream: a voice answer keeps its time to speech, a text request's reply,
+    # which never finished playing, keeps none.
+    patch_llm(monkeypatch, reply="готово")
+    store = FakeRunsStore()
+    pipeline, _ = make_pipeline(
+        tmp_path, monkeypatch, runs_store=store,
+        tts_backends={"a": _FailingTts("a down", delay=0.05),
+                      "b": _IterTts(_ChunkIter([b"b1"], RuntimeError("mid boom")))},
+    )
+
+    async def _player(mime, audio):
+        async for _ in audio:
+            pass
+
+    pipeline.play = _player
+    if path == "voice":
+        await say(pipeline)
+    else:
+        await pipeline.run_text("включи свет")
+
+    rec = store.records[0]
+    assert (rec["error_stage"], rec["error_text"]) == ("TTS", "mid boom")
+    assert _tts_attempts(rec) == [("a", "error", "a down"), ("b", "spoke", None)]
+    assert rec["t_tts"] >= 50 if path == "voice" else rec["t_tts"] == 0
+
+
+async def test_an_answer_cut_off_mid_speech_keeps_its_time_to_speech(tmp_path, monkeypatch):
+    # A stop word or a newer wake cancels the run while its answer plays: the record
+    # still says how long the speech took to start.
+    patch_llm(monkeypatch, reply="готово")
+    store = FakeRunsStore()
+    pipeline, _ = make_pipeline(
+        tmp_path, monkeypatch, runs_store=store,
+        tts_backends={"a": _FailingTts("a down", delay=0.05), "b": FakeTtsBackend(audio=b"B")},
+    )
+    playing = asyncio.Event()
+
+    async def _endless(mime, audio):
+        playing.set()
+        await asyncio.Event().wait()
+
+    pipeline.play = _endless
+    install_phrase_vad(pipeline)
+    pipeline.on_wake("cid", None)
+    await pipeline.on_audio(PHRASE)
+    task = pipeline._run_task
+    await playing.wait()
+    pipeline.cancel_run()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    rec = store.records[0]
+    assert _tts_attempts(rec) == [("a", "error", "a down"), ("b", "spoke", None)]
+    assert rec["t_tts"] >= 50
+
+
 async def test_tts_all_variants_fail_reports_last_error(tmp_path, monkeypatch):
     patch_llm(monkeypatch, reply="готово")
     store = FakeRunsStore()
@@ -2790,7 +2849,7 @@ async def test_tts_walks_only_the_enabled_variants_in_config_order(tmp_path, mon
 
 
 async def test_speak_falls_back_to_the_next_variant(tmp_path, monkeypatch):
-    # Filler, announcements and reminders go through speak(): same variant list.
+    # The filler goes through speak(): the same variant list as a reply.
     pipeline, _ = make_pipeline(
         tmp_path, monkeypatch,
         tts_backends={"a": _FailingTts("a down"), "b": FakeTtsBackend(audio=b"B")},
