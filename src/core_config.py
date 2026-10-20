@@ -288,7 +288,7 @@ class RunsConfig(BaseModel):
     audio_keep: int = Field(
         100, ge=1,
         title="Stored recordings",
-        description="How many recent phrase recordings the Request Log keeps; more uses more disk.",
+        description="Phrase recordings the Request Log keeps; more uses more disk.",
     )  # rolling ring-buffer cap; applied per-utterance via RunsStore.put_audio()
 
 
