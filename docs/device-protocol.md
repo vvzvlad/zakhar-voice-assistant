@@ -445,7 +445,7 @@ the answer, so the next phrase needs no wake word:
 | `set_volume {value}` | server → device | speaker volume, percent; the device stores it itself |
 | `volume {value}` | device → server | the volume changed on the device (the dial) or after `set_volume` |
 | `ambient {value}` | device → server | the room's noise after an auto volume measurement, dBFS of the 32-bit microphone slot, one decimal: see [Auto volume](#auto-volume) |
-| `volume_boost {value}` | server → device | percent points, −100..100, the speaker adds to its volume on the DAC: see [Auto volume](#auto-volume) |
+| `volume_boost {value}` | server → device | percent points, −100..100, the speaker adds to its volume for the replies: see [Auto volume](#auto-volume) |
 | `wake_peak_stream {on}` | server → device | start or stop the wake probability stream |
 | `wake_peak {value}` | device → server | once a second while the stream is on: the highest wake-word probability of that second, percent |
 | `detect {on}` | server → device | wake-word detection on or off; off: the models keep running (`wake_peak` too) but a detection starts no session. Every new connection starts with detection on |
@@ -470,8 +470,8 @@ the answer, so the next phrase needs no wake word:
   changes: after an `ambient`, and when `core.devices[].auto_volume`, `auto_volume_threshold`
   (dBFS, default −60) or `auto_volume_gain` (percent per dB, default 2.0) changes; 0 while
   `auto_volume` is off. The threshold and the gain stay on the server.
-- The device adds the boost to its own volume on the DAC, within 1..100 % (0 would mute the
-  reply); a volume of 0 stays muted.
+- The device plays the replies at its own volume plus the boost, within 1..100 % (0 would mute
+  the reply), and the speaker's music player at its volume alone; a volume of 0 mutes both.
   It does not store the boost, does not report it as `volume`, and shows its volume without it.
   It is 0 from boot until the server sends one.
 

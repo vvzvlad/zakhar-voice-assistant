@@ -207,7 +207,16 @@ void mix_block(mix_t *m, const int16_t *voice, const int16_t *music, size_t musi
 uint8_t volume_dac_byte(int percent);
 // Below 1 % the DAC is muted (page 0 register 64 = 0x0C).
 bool volume_dac_muted(int percent);
-// The music's gain, Q16 (65536 = unity), with the DAC at `applied` % for a dial at `base` %: it
-// takes back the DAC steps the server's boost added, so the music plays as at the dial and the
-// boost lifts zakhar's replies alone. Unity at most: a boost below zero lowers the music too.
-uint32_t volume_music_scale(int base, int applied);
+// The speaker's levels for the dial at `base` % and the server's boost in points. Zakhar's replies
+// play at base + boost within 1..100 % (1, not 0: 0 mutes the DAC, so a quiet room would silence
+// the reply instead of lowering it), the music at base; a base of 0 mutes both. The DAC takes the
+// louder of the two, and each stream is brought down to its own level digitally by a Q16 gain
+// (65536 = unity) that takes back the DAC steps it has over that level.
+typedef struct {
+    int dac;         // percent, for aic3204_set_volume
+    uint32_t music;  // Q16
+    uint32_t voice;  // Q16
+} volume_levels_t;
+volume_levels_t volume_levels(int base, int boost);
+// Scales `n` samples in place by a Q16 gain of unity at most, rounding to nearest.
+void gain_block(int16_t *s, size_t n, uint32_t gain);

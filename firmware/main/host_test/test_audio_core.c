@@ -585,18 +585,36 @@ static void test_volume(void)
     assert(volume_dac_muted(0));
     assert(!volume_dac_muted(1) && !volume_dac_muted(100));
 
-    // The music under a boost plays as at the dial: the dial at 50 %, the DAC boosted to 100 %,
-    // 38 register steps (19 dB) taken back; no boost or a negative one leaves it at unity.
-    assert(volume_music_scale(50, 50) == 65536u);
-    assert(volume_music_scale(50, 30) == 65536u);
-    const uint32_t s = volume_music_scale(50, 100);
-    assert(s > 7340 && s < 7370);  // 65536 x 10^(-19 / 20) = 7353
-    // Any dial under the full boost: the music at the dial's level within one register step.
+    // The dial at 50 %, the boost lifting the replies to 100 %: the DAC at 100 %, the music taken
+    // back 38 register steps (19 dB) to the dial, the replies at unity.
+    volume_levels_t l = volume_levels(50, 50);
+    assert(l.dac == 100 && l.voice == 65536u);
+    assert(l.music > 7340 && l.music < 7370);  // 65536 x 10^(-19 / 20) = 7353
+    // A boost lowering the replies to 30 %: the DAC stays at the dial, the replies come down.
+    l = volume_levels(50, -20);
+    assert(l.dac == 50 && l.music == 65536u && l.voice < 65536u);
+    l = volume_levels(0, 40);
+    assert(l.dac == 0 && l.music == 65536u && l.voice == 65536u);
+    // Any dial under any boost: the music at the dial, the replies at the dial plus the boost
+    // within 1..100 %, each within 0.01 dB of the DAC playing that level by itself.
     for (int base = 1; base <= 100; base++) {
-        const double at_dial = (int8_t)volume_dac_byte(base) * 0.5;
-        const double played = (int8_t)volume_dac_byte(100) * 0.5 + 20.0 * log10(volume_music_scale(base, 100) / 65536.0);
-        assert(fabs(played - at_dial) < 0.01);
+        for (int boost = -100; boost <= 100; boost++) {
+            l = volume_levels(base, boost);
+            const int v = base + boost, reply = v < 1 ? 1 : v > 100 ? 100 : v;
+            const double dac_db = (int8_t)volume_dac_byte(l.dac) * 0.5;
+            assert(l.dac >= base && l.dac >= reply);
+            assert(fabs(dac_db + 20.0 * log10(l.music / 65536.0) - (int8_t)volume_dac_byte(base) * 0.5) < 0.01);
+            assert(fabs(dac_db + 20.0 * log10(l.voice / 65536.0) - (int8_t)volume_dac_byte(reply) * 0.5) < 0.01);
+        }
     }
+
+    int16_t s[] = {32767, -32768, 1000, -1000, 1};
+    gain_block(s, 5, 65536u);
+    assert(s[0] == 32767 && s[1] == -32768 && s[2] == 1000 && s[4] == 1);
+    gain_block(s, 5, 32768u);
+    assert(s[0] == 16384 && s[1] == -16384 && s[2] == 500 && s[3] == -500 && s[4] == 1);
+    gain_block(s, 5, 0);
+    assert(s[0] == 0 && s[1] == 0 && s[2] == 0 && s[3] == 0 && s[4] == 0);
 }
 
 int main(void)

@@ -356,12 +356,26 @@ uint8_t volume_dac_byte(int percent)
     return (uint8_t)b;
 }
 
-uint32_t volume_music_scale(int base, int applied)
+static uint32_t level_gain(int level, int dac)
 {
     // 0.5 dB per register step.
-    const int steps = (int8_t)volume_dac_byte(applied) - (int8_t)volume_dac_byte(base);
+    const int steps = (int8_t)volume_dac_byte(dac) - (int8_t)volume_dac_byte(level);
     if (steps <= 0) return 65536u;
     return (uint32_t)lroundf(65536.0f * powf(10.0f, -(float)steps / 40.0f));
+}
+
+volume_levels_t volume_levels(int base, int boost)
+{
+    const int v = base + boost;
+    const int reply = base == 0 ? 0 : v < 1 ? 1 : v > 100 ? 100 : v;
+    const int dac = reply > base ? reply : base;
+    return (volume_levels_t){.dac = dac, .music = level_gain(base, dac), .voice = level_gain(reply, dac)};
+}
+
+void gain_block(int16_t *s, size_t n, uint32_t gain)
+{
+    if (gain >= 65536u) return;
+    for (size_t i = 0; i < n; i++) s[i] = (int16_t)(((int32_t)s[i] * (int64_t)gain + (1 << 15)) >> 16);
 }
 
 bool volume_dac_muted(int percent)

@@ -372,8 +372,11 @@ static void speaker_task(void *arg)
         const size_t n = zl_play_read(mono, SPK_BLOCK);
         leds_set_playing(n > 0);
         memset(mono + n, 0, (SPK_BLOCK - n) * sizeof mono[0]);
+        // The DAC plays the louder of the dial and the dial plus the boost; each stream is brought
+        // down to its own level here.
+        gain_block(mono, n, volume_voice_gain());
         const size_t m = music_read(stereo, SPK_BLOCK);
-        // Music Assistant's volume times what keeps the music at the dial under the server's boost.
+        // Music Assistant's volume times what keeps the music at the dial.
         const uint32_t gain = (uint32_t)(((uint64_t)music_gain() * volume_music_gain()) >> 16);
         mix_block(&mix, mono, stereo, m, gain, zl_mic_busy() || zl_playing(), SPK_BLOCK, stereo, mono);
         // The echo reference: this block, silence included, as it goes to the wire.
