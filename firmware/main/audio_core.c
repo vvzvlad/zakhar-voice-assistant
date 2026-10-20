@@ -252,6 +252,22 @@ mic_chunk_t mic_chunks_step(mic_chunks_t *c, uint32_t dropped, bool want_raw, bo
     return out;
 }
 
+bool aec_remake(int made_mode, int made_filter, int mode, int filter, int level, bool playing)
+{
+    return (made_mode >= 0 || (level > 0 && playing)) && (mode != made_mode || filter != made_filter);
+}
+
+void aec_stats_add(aec_stats_t *st, const int16_t *in, const int16_t *out, size_t frames, uint32_t us)
+{
+    for (size_t i = 0; i < frames; i++) {
+        st->e_in += (uint64_t)((int32_t)in[i] * in[i]);
+        st->e_out += (uint64_t)((int32_t)out[i] * out[i]);
+    }
+    st->chunks++;
+    st->us += us;
+    if (us > st->us_max) st->us_max = us;
+}
+
 void ambient_init(ambient_t *a)
 {
     memset(a, 0, sizeof *a);

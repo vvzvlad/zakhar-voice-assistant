@@ -124,16 +124,6 @@ static bool IRAM_ATTR on_late(i2s_chan_handle_t handle, i2s_event_data_t *event,
     return false;
 }
 
-// One playback's echo cancellation on channel 0, logged when channel 0 is back to AGC.
-typedef struct {
-    uint32_t chunks;
-    uint64_t e_in, e_out;  // channel 0's energy into and out of the AEC
-    uint64_t us;           // aec_process time in all
-    uint32_t us_max;
-    uint32_t dropped;      // microphone frames the RX driver dropped
-    float corr;            // the latest estimate's correlation at the lag in use; NAN before one
-} aec_stats_t;
-
 // The RX driver's queue of filled DMA buffers was full when one more filled: it dropped the
 // oldest, event->size bytes of 2 x 32-bit frames.
 static bool IRAM_ATTR on_mic_overflow(i2s_chan_handle_t handle, i2s_event_data_t *event, void *user_ctx)
@@ -190,6 +180,154 @@ static void log_playback(const aec_handle_t *aec, int filter, const aec_stats_t 
              (unsigned long)st->dropped);
 }
 
+// The mic task's state. The buffers hold one chunk: the raw slots, the tap's interleaved frames,
+// the wake-word and stop-word inputs, and the AEC's input (channel 0), output and reference.
+typedef struct {
+    int32_t raw[CHUNK * 2];
+    int16_t both[CHUNK * 2], wake[CHUNK], stop[CHUNK];
+    _Alignas(16) int16_t in[CHUNK], out[CHUNK], ref[CHUNK];
+    lag_track_t lag;
+    float corr[LAG_MAX + 1];
+    mic_chunks_t chunks;
+    ambient_sched_t amb;
+    aec_handle_t *aec;
+    int made_mode, made_filter;  // the settings aec was made with, or failed to be
+    int applied;                 // the level aec suppresses at
+    int32_t lag_in_use;
+    bool lag_set;  // the lag in use is decided, until a reboot (lag_next)
+    unsigned since_estimate;
+    bool wrote;  // the stage write the previous chunk asked for went through
+    bool stack_logged;
+    aec_stats_t st;
+    // The chunk in hand: the frames dropped before it, the server's echo_cancel, echo_cancel_mode
+    // and echo_cancel_filter, and whether anything plays.
+    uint32_t dropped;
+    int level, mode, filter;
+    bool playing;
+} mic_state_t;
+
+static mic_state_t s_mic;
+
+// Reads until the chunk is whole, then takes the frames the driver dropped before it.
+static void read_chunk(mic_state_t *s)
+{
+    size_t fill = 0;
+    while (fill < CHUNK) {
+        size_t got = 0;
+        if (i2s_channel_read(s_rx, &s->raw[fill * 2], (CHUNK - fill) * 2 * sizeof(int32_t), &got, portMAX_DELAY) ==
+            ESP_OK) {
+            fill += got / (2 * sizeof(int32_t));
+        }
+    }
+    // Frames dropped before this chunk count toward its position, so the reference stays aligned.
+    s->dropped = atomic_exchange_explicit(&s_mic_dropped, 0, memory_order_relaxed);
+}
+
+// Logs the playback the AEC ran in and starts its statistics and the lag estimate's count anew.
+static void log_stats(mic_state_t *s)
+{
+    log_playback(s->aec, s->made_filter, &s->st, s->lag_in_use);
+    s->st = (aec_stats_t){.corr = NAN};
+    s->since_estimate = 0;
+}
+
+// Takes the server's echo settings and the playback for the chunk, and makes the AEC, or makes it
+// anew, when they ask for it.
+static void follow_echo_settings(mic_state_t *s)
+{
+    s->level = atomic_load_explicit(&s_echo_cancel, memory_order_relaxed);
+    s->mode = atomic_load_explicit(&s_echo_mode, memory_order_relaxed);
+    s->filter = atomic_load_explicit(&s_echo_filter, memory_order_relaxed);
+    // Playing is zakhar's playback or a music stream.
+    s->playing = zl_playing() || music_active();
+    // The AEC is made at the first playback with echo_cancel on, not at boot: its internal RAM
+    // then comes after the link task's stack, which at boot found no block left. Once made, a
+    // new echo_cancel_mode or echo_cancel_filter re-creates it at once.
+    if (!aec_remake(s->made_mode, s->made_filter, s->mode, s->filter, s->level, s->playing)) return;
+    if (s->st.chunks > 0) log_stats(s);
+    if (s->aec != NULL) aec_destroy(s->aec);
+    s->aec = aec_make(s->mode, s->filter, s->level);
+    s->made_mode = s->mode;
+    s->made_filter = s->filter;
+    s->applied = s->level;
+}
+
+// Channel 0's stage for the chunk: raw while the AEC is to run or a measurement wants it, else AGC.
+static mic_chunk_t follow_stage(mic_state_t *s, bool measuring)
+{
+    const bool want_raw = (s->level > 0 && s->aec != NULL && s->playing) || measuring;
+    const mic_chunk_t c = mic_chunks_step(&s->chunks, s->dropped, want_raw, s->wrote, tap_position(&s_ref));
+    // Written as soon as the chunk is in, so the chunk's processing does not delay the switch.
+    s->wrote = c.write && xmos_ch0_raw(c.write_raw) == ESP_OK;
+    return c;
+}
+
+// A raw chunk of an auto volume measurement.
+static void measure_noise(mic_state_t *s)
+{
+    // No AEC: channel 0 goes to the tap as read, at gain 1. The estimator still gets it, at
+    // AEC_GAIN as the AEC branch gives it: its window is the raw chunks in a row
+    // (mic_chunks_step), which a playback that takes the raw channel over from here continues.
+    for (size_t i = 0; i < CHUNK; i++) s->in[i] = pcm_s32_to_s16(s->raw[2 * i], AEC_GAIN);
+    if (ambient_sched_take(&s->amb, true, s->raw, CHUNK)) zl_report_ambient(ambient_dbfs(&s->amb.level));
+}
+
+// A raw chunk outside a measurement: channel 0 through the AEC or past it, into the tap and the
+// stop word's input. True when the AEC ran on it.
+static bool cancel_echo(mic_state_t *s, const mic_chunk_t *c)
+{
+    // While an AGC write settles, the chunk still counted raw may carry the AGC output,
+    // which AEC_GAIN would clip and the AEC would adapt to: it passes the AEC by, at gain 1.
+    const int gain = c->settling ? 1 : AEC_GAIN;
+    for (size_t i = 0; i < CHUNK; i++) s->in[i] = pcm_s32_to_s16(s->raw[2 * i], gain);
+    const uint32_t aligned = c->pos + c->offset - (uint32_t)s->lag_in_use;
+    const bool cancel = !c->settling && s->aec != NULL && c->have_offset &&
+                        !aec_skip(&s_ref, aligned, CHUNK, (size_t)s->filter * CHUNK);
+    if (cancel) {
+        if (s->level > 0 && s->level != s->applied) {
+            if (s->mode >= FD_MODES) aec_set_nlp_level(s->aec, nlp_level(s->level));
+            s->applied = s->level;
+        }
+        tap_read_at(&s_ref, aligned, s->ref, CHUNK);
+        const int64_t t0 = esp_timer_get_time();
+        aec_process(s->aec, s->in, s->ref, s->out);
+        aec_stats_add(&s->st, s->in, s->out, CHUNK, (uint32_t)(esp_timer_get_time() - t0));
+    } else {
+        memcpy(s->out, s->in, sizeof s->out);
+    }
+    for (size_t i = 0; i < CHUNK; i++) {
+        s->both[2 * i] = s->out[i];
+        s->stop[i] = s->out[i];
+    }
+    s->st.dropped += s->dropped;
+    return cancel;
+}
+
+// A raw chunk's channel 0 (s->in) into the lag estimator's window; while the AEC runs, an estimate
+// every LAG_EVERY chunks once the window holds raw chunks only.
+static void estimate_lag(mic_state_t *s, const mic_chunk_t *c, bool cancel)
+{
+    lag_track_push(&s->lag, s->in, CHUNK, 1);
+    if (cancel && c->lag_ok && ++s->since_estimate == LAG_EVERY) {
+        s->since_estimate = 0;
+        const int est = lag_track_run(&s->lag, &s_ref, c->pos + CHUNK, c->offset, s->corr);
+        s->lag_in_use = lag_next(s->lag_in_use, est, &s->lag_set);
+        s->st.corr = s->corr[(s->lag_in_use + LAG_GUARD) / LAG_BIN];
+    }
+}
+
+// An AGC chunk: a playback the AEC ran in is logged, the first one with the task's stack.
+static void end_playback(mic_state_t *s)
+{
+    if (s->st.chunks > 0) {
+        log_stats(s);
+        if (!s->stack_logged) {
+            ESP_LOGI(TAG, "mic task: %u B of its stack never used", (unsigned)uxTaskGetStackHighWaterMark(NULL));
+            s->stack_logged = true;
+        }
+    }
+}
+
 // Per chunk: channel 0's stage follows the playback (raw while it plays, with echo_cancel on and
 // an AEC made); while channel 0 is raw, the AEC runs on it while the reference it could be using
 // is not all silence, else it passes through; then the tap, the wake-word engine (channel 1 at
@@ -201,131 +339,34 @@ static void log_playback(const aec_handle_t *aec, int filter, const aec_stats_t 
 static void mic_task(void *arg)
 {
     (void)arg;
-    // A chunk: the raw slots, the tap's interleaved frames, the wake-word and stop-word inputs, and
-    // the AEC's input (channel 0), output and reference.
-    static int32_t raw[CHUNK * 2];
-    static int16_t both[CHUNK * 2], wake[CHUNK], stop[CHUNK];
-    static _Alignas(16) int16_t in[CHUNK], out[CHUNK], ref[CHUNK];
-    static lag_track_t lag;
-    static float corr[LAG_MAX + 1];
-    static mic_chunks_t chunks;
-    static ambient_sched_t amb;
-    aec_handle_t *aec = NULL;
-    int made_mode = -1, made_filter = -1;  // the settings aec was made with, or failed to be
-    int applied = 0;                       // the level aec suppresses at
-    int32_t lag_in_use = LAG_INIT;
-    bool lag_set = false;  // the lag in use is decided, until a reboot (lag_next)
-    unsigned since_estimate = 0;
-    bool wrote = false;  // the stage write the previous chunk asked for went through
-    bool stack_logged = false;
-    aec_stats_t st = {.corr = NAN};
-    size_t fill = 0;
-    lag_track_init(&lag);
-    mic_chunks_init(&chunks, CHUNK, REF_SETTLE);
-    ambient_sched_init(&amb, AMBIENT_EVERY, AMBIENT_CHUNKS);
+    mic_state_t *s = &s_mic;
+    s->made_mode = s->made_filter = -1;
+    s->lag_in_use = LAG_INIT;
+    s->st = (aec_stats_t){.corr = NAN};
+    lag_track_init(&s->lag);
+    mic_chunks_init(&s->chunks, CHUNK, REF_SETTLE);
+    ambient_sched_init(&s->amb, AMBIENT_EVERY, AMBIENT_CHUNKS);
     for (;;) {
-        size_t got = 0;
-        if (i2s_channel_read(s_rx, &raw[fill * 2], (CHUNK - fill) * 2 * sizeof(int32_t), &got, portMAX_DELAY) !=
-            ESP_OK) {
-            continue;
-        }
-        fill += got / (2 * sizeof(int32_t));
-        if (fill < CHUNK) continue;
-        fill = 0;
-        // Frames dropped before this chunk count toward its position, so the reference stays aligned.
-        const uint32_t dropped = atomic_exchange_explicit(&s_mic_dropped, 0, memory_order_relaxed);
-
-        const int level = atomic_load_explicit(&s_echo_cancel, memory_order_relaxed);
-        const int mode = atomic_load_explicit(&s_echo_mode, memory_order_relaxed);
-        const int filter = atomic_load_explicit(&s_echo_filter, memory_order_relaxed);
-        // Playing is zakhar's playback or a music stream.
-        const bool playing = zl_playing() || music_active();
-        // The AEC is made at the first playback with echo_cancel on, not at boot: its internal RAM
-        // then comes after the link task's stack, which at boot found no block left. Once made, a
-        // new echo_cancel_mode or echo_cancel_filter re-creates it at once.
-        if ((made_mode >= 0 || (level > 0 && playing)) && (mode != made_mode || filter != made_filter)) {
-            if (st.chunks > 0) {
-                log_playback(aec, made_filter, &st, lag_in_use);
-                st = (aec_stats_t){.corr = NAN};
-                since_estimate = 0;
-            }
-            if (aec != NULL) aec_destroy(aec);
-            aec = aec_make(mode, filter, level);
-            made_mode = mode;
-            made_filter = filter;
-            applied = level;
-        }
+        read_chunk(s);
+        follow_echo_settings(s);
         // Quiet is auto volume on, nothing playing, no session open, no wake proposed and no capture
         // held; its end ends a measurement.
         const bool measuring = ambient_sched_want(
-            &amb, atomic_load_explicit(&s_auto_volume, memory_order_relaxed) && !playing && !zl_mic_busy());
-        const bool want_raw = (level > 0 && aec != NULL && playing) || measuring;
-        const mic_chunk_t c = mic_chunks_step(&chunks, dropped, want_raw, wrote, tap_position(&s_ref));
-        // Written as soon as the chunk is in, so the chunk's processing does not delay the switch.
-        wrote = c.write && xmos_ch0_raw(c.write_raw) == ESP_OK;
-
-        pcm_split(raw, CHUNK, both, wake, WAKE_GAIN);
+            &s->amb, atomic_load_explicit(&s_auto_volume, memory_order_relaxed) && !s->playing && !zl_mic_busy());
+        const mic_chunk_t c = follow_stage(s, measuring);
+        pcm_split(s->raw, CHUNK, s->both, s->wake, WAKE_GAIN);
         const int16_t *stop_in = NULL;
         if (c.raw && measuring) {
-            // No AEC: channel 0 goes to the tap as read, at gain 1. The estimator still gets it, at
-            // AEC_GAIN as the AEC branch gives it: its window is the raw chunks in a row
-            // (mic_chunks_step), which a playback that takes the raw channel over from here continues.
-            for (size_t i = 0; i < CHUNK; i++) in[i] = pcm_s32_to_s16(raw[2 * i], AEC_GAIN);
-            lag_track_push(&lag, in, CHUNK, 1);
-            if (ambient_sched_take(&amb, true, raw, CHUNK)) zl_report_ambient(ambient_dbfs(&amb.level));
+            measure_noise(s);
+            estimate_lag(s, &c, false);
         } else if (c.raw) {
-            // While an AGC write settles, the chunk still counted raw may carry the AGC output,
-            // which AEC_GAIN would clip and the AEC would adapt to: it passes the AEC by, at gain 1.
-            const int gain = c.settling ? 1 : AEC_GAIN;
-            for (size_t i = 0; i < CHUNK; i++) in[i] = pcm_s32_to_s16(raw[2 * i], gain);
-            const uint32_t aligned = c.pos + c.offset - (uint32_t)lag_in_use;
-            const bool cancel = !c.settling && aec != NULL && c.have_offset &&
-                                !aec_skip(&s_ref, aligned, CHUNK, (size_t)filter * CHUNK);
-            if (cancel) {
-                if (level > 0 && level != applied) {
-                    if (mode >= FD_MODES) aec_set_nlp_level(aec, nlp_level(level));
-                    applied = level;
-                }
-                tap_read_at(&s_ref, aligned, ref, CHUNK);
-                const int64_t t0 = esp_timer_get_time();
-                aec_process(aec, in, ref, out);
-                const uint32_t us = (uint32_t)(esp_timer_get_time() - t0);
-                for (size_t i = 0; i < CHUNK; i++) {
-                    st.e_in += (uint64_t)((int32_t)in[i] * in[i]);
-                    st.e_out += (uint64_t)((int32_t)out[i] * out[i]);
-                }
-                st.chunks++;
-                st.us += us;
-                if (us > st.us_max) st.us_max = us;
-            } else {
-                memcpy(out, in, sizeof out);
-            }
-            for (size_t i = 0; i < CHUNK; i++) {
-                both[2 * i] = out[i];
-                stop[i] = out[i];
-            }
-            stop_in = stop;
-            st.dropped += dropped;
-            lag_track_push(&lag, in, CHUNK, 1);
-            if (cancel && c.lag_ok && ++since_estimate == LAG_EVERY) {
-                since_estimate = 0;
-                const int est = lag_track_run(&lag, &s_ref, c.pos + CHUNK, c.offset, corr);
-                lag_in_use = lag_next(lag_in_use, est, &lag_set);
-                st.corr = corr[(lag_in_use + LAG_GUARD) / LAG_BIN];
-            }
+            estimate_lag(s, &c, cancel_echo(s, &c));
+            stop_in = s->stop;
         } else {
-            if (st.chunks > 0) {
-                log_playback(aec, made_filter, &st, lag_in_use);
-                st = (aec_stats_t){.corr = NAN};
-                since_estimate = 0;
-                if (!stack_logged) {
-                    ESP_LOGI(TAG, "mic task: %u B of its stack never used", (unsigned)uxTaskGetStackHighWaterMark(NULL));
-                    stack_logged = true;
-                }
-            }
+            end_playback(s);
         }
-        tap_write(&s_tap, both, CHUNK);
-        wake_word_feed(wake, stop_in, CHUNK);
+        tap_write(&s_tap, s->both, CHUNK);
+        wake_word_feed(s->wake, stop_in, CHUNK);
     }
 }
 

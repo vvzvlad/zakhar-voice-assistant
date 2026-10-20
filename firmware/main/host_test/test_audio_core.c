@@ -344,6 +344,29 @@ static void test_chunk_offset(void)
     assert(k.have_offset && k.offset == 16100u - (768 + 512));
 }
 
+static void test_aec_remake(void)
+{
+    // Not made yet: only a playback with echo_cancel on makes it.
+    assert(!aec_remake(-1, -1, 0, 4, 0, true));
+    assert(!aec_remake(-1, -1, 0, 4, 2, false));
+    assert(aec_remake(-1, -1, 0, 4, 2, true));
+    // Made, or failed to be: the same settings keep it, a new mode or filter re-makes it at once.
+    assert(!aec_remake(0, 4, 0, 4, 2, true));
+    assert(aec_remake(0, 4, 1, 4, 0, false));
+    assert(aec_remake(0, 4, 0, 2, 0, false));
+}
+
+static void test_aec_stats(void)
+{
+    aec_stats_t st = {.corr = NAN};
+    const int16_t in[] = {-32768, 3}, out[] = {4, -5};
+    aec_stats_add(&st, in, out, 2, 120);
+    aec_stats_add(&st, in, out, 2, 80);
+    // Full scale squares to 2^30 without overflow; the time adds up and keeps its maximum.
+    assert(st.chunks == 2 && st.e_in == 2 * ((1ull << 30) + 9) && st.e_out == 2 * 41);
+    assert(st.us == 200 && st.us_max == 120 && st.dropped == 0 && isnan(st.corr));
+}
+
 static void test_ambient(void)
 {
     enum { N = 512 };
@@ -644,6 +667,8 @@ int main(void)
     test_chunk_loss();
     test_chunk_lag_span();
     test_chunk_offset();
+    test_aec_remake();
+    test_aec_stats();
     test_ambient();
     test_ambient_sched();
     test_mix();
