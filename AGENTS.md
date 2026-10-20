@@ -73,8 +73,9 @@ make fw-ota HOST=<address>             # fw-flash PORT=… over USB, fw-logs HOS
 Build the speaker firmware through `make fw-build`: it keeps ccache and the downloaded components in
 the cirunner volume `zakhar-fw-cache`, and a rebuild takes 1–1.5 min instead of 4+ from scratch.
 A hand-rolled `docker run` of `espressif/idf` (a detached container, the panel's firmware) mounts
-the same `-v zakhar-fw-cache:/root/.cache` and builds with `ninja -j 24`: a plain `idf.py build`
-starts a compiler per CPU, and on a cold cache 74 of them run cirunner out of memory.
+the same `-v zakhar-fw-cache:/root/.cache` and is not pinned to CPUs (all 72 are allowed):
+`firmware/CMakeLists.txt` caps a build at 24 compiles, which a cold cache needs to fit in
+cirunner's 19 GB.
 
 ## CI and deploy
 - `.gitea/workflows/tests.yml` (pull requests): pytest in `python:3.11-slim`, image build,
