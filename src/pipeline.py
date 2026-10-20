@@ -373,7 +373,6 @@ class Pipeline:
             max_utterance_ms=vad_cfg.max_utterance_ms,
             no_speech_timeout_ms=no_speech_timeout_ms,
             preroll_ms=preroll_ms,
-            wake_pause_ms=vad_cfg.wake_pause_ms,
         ))
 
     async def _arm_followup(self, conversation_id, request: str, reply: str) -> None:
@@ -962,11 +961,13 @@ class Pipeline:
                 # mid-playback. The ack, a filler and the reply are separate play()
                 # streams, queued in call order on the device.
                 #
-                # A rejected wake (verifier, duplicate) aborts the run silently — no
-                # ack chime — so a mis-trigger or a second device never beeps. A
+                # A rejected wake (verifier, duplicate) and a wake word with no command
+                # after it (no_speech) end the run silently — no ack chime — so a
+                # mis-trigger, a second device or a bare wake word never beeps. A
                 # follow-up phrase gets its chime only once the follow-up check accepts
                 # it (_followup_gate).
-                if reason not in REJECT_REASONS and followup is None:
+                if (reason not in REJECT_REASONS and reason != "no_speech"
+                        and followup is None):
                     self._schedule_ack()
 
                 # A follow-up phrase has no lead-in: its audio starts at the

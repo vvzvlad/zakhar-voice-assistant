@@ -24,12 +24,12 @@ class EndpointPolicy:
     max_utterance_ms: int
     no_speech_timeout_ms: int
     # A wake-word run opens with this much pre-roll, which ends where the wake word
-    # was detected; 0 = no pre-roll. Until speech follows it, the phrase ends only
-    # after max(silence_ms, wake_pause_ms) of silence, so a pause between the wake
-    # word and the command does not end the phrase. Any speech window counts, not
-    # min_speech_ms of it: a one-word command («ночь») can be shorter than that.
+    # was detected; 0 = no pre-roll. The pre-roll holds the wake word itself, so its
+    # speech is not the command and counts for nothing: a bare wake word ends as
+    # no_speech, no_speech_timeout_ms after the pre-roll, and never reaches STT.
+    # After the pre-roll any speech window is the command, not min_speech_ms of it:
+    # a one-word command («ночь») can be shorter than that.
     preroll_ms: int = 0
-    wake_pause_ms: int = 0
 
 
 class EndpointTracker:
@@ -47,34 +47,33 @@ class EndpointTracker:
         self._silence_ms = 0
         self._speech_detected = False
         self._elapsed_ms = 0
-        self._command = False  # speech heard after the pre-roll, i.e. after the wake word
 
     def update(self, speech: bool, window_ms: int) -> str | None:
         """Consume one classified window; return the finalize reason
         ("endpoint" | "maxlen" | "no_speech") or None to keep listening."""
+        policy = self._policy
         self._elapsed_ms += window_ms
-        if speech:
+        if self._elapsed_ms - window_ms < policy.preroll_ms:
+            # A window that starts in the wake word's pre-roll (Silero's 32 ms windows
+            # straddle its end): neither speech nor silence counts.
+            pass
+        elif speech:
             self._speech_ms += window_ms
-            if self._elapsed_ms > self._policy.preroll_ms:
-                self._command = True
             self._silence_ms = 0
-            if self._speech_ms >= self._policy.min_speech_ms:
+            if policy.preroll_ms or self._speech_ms >= policy.min_speech_ms:
                 self._speech_detected = True
-        else:
+        elif self._speech_detected:
             # Trailing silence only counts once real speech has been observed.
-            if self._speech_detected:
-                self._silence_ms += window_ms
+            self._silence_ms += window_ms
 
         # Decide end-of-utterance (reason or None) after the window,
-        # in the same precedence order as before: endpoint, max length, no-speech.
-        pause_ms = self._policy.silence_ms
-        if not self._command:
-            pause_ms = max(pause_ms, self._policy.wake_pause_ms)
-        if self._speech_detected and self._silence_ms >= pause_ms:
+        # in this precedence order: endpoint, max length, no-speech.
+        if self._speech_detected and self._silence_ms >= policy.silence_ms:
             return "endpoint"
-        if self._elapsed_ms >= self._policy.max_utterance_ms:
+        if self._elapsed_ms >= policy.max_utterance_ms:
             return "maxlen"
-        if not self._speech_detected and self._elapsed_ms >= self._policy.no_speech_timeout_ms:
+        if (not self._speech_detected
+                and self._elapsed_ms - policy.preroll_ms >= policy.no_speech_timeout_ms):
             return "no_speech"
         return None
 

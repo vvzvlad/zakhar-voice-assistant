@@ -67,12 +67,6 @@ class VadConfig(BaseModel):
         json_schema_extra={"unit": "ms", "multipleOf": 100},
         description="Trailing silence after speech before the utterance is considered finished. Higher tolerates longer mid-phrase pauses but adds the same delay before the reply starts.",
     )
-    wake_pause_ms: int = Field(
-        2000,
-        title="Pause after the wake word",
-        json_schema_extra={"unit": "ms", "multipleOf": 100},
-        description="Silence allowed between the wake word and the start of the command. Until the command starts, the phrase ends only after this pause, not after the end-of-phrase pause; a command said in one breath with the wake word is not delayed. At or below the end-of-phrase pause it has no effect.",
-    )
     min_speech_ms: int = Field(
         200,
         title="Minimum utterance length",
@@ -86,10 +80,10 @@ class VadConfig(BaseModel):
         description="Hard cap on a single utterance — it is force-finalized once it reaches this length even if no trailing silence was seen.",
     )
     no_speech_timeout_ms: int = Field(
-        8000,
-        title="Give up after silence",
+        4000,
+        title="Wait for the command",
         json_schema_extra={"unit": "ms", "multipleOf": 100},
-        description="If no speech at all is detected after capture starts, give up and end the run after this long.",
+        description="How long to wait for the command to start after the wake word (the wake word itself does not count as speech). If nothing is said by then, the run ends silently and nothing is sent to STT.",
     )
     trim_start_ms: int = Field(
         200,

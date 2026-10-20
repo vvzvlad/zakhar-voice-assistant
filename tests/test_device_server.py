@@ -202,7 +202,7 @@ class Server:
                 "audio": {"host": "127.0.0.1", "port": 0},
                 "ack": {"enabled": False},
                 "vad": {"min_speech_ms": 40, "silence_ms": 100, "max_utterance_ms": 400,
-                        "no_speech_timeout_ms": 200, "trim_start_ms": 0, "wake_pause_ms": 0},
+                        "no_speech_timeout_ms": 200, "trim_start_ms": 0},
                 "devices": [{"name": "kitchen"}],
                 "chains": [{"name": "main", "stt": "groq", "handler": "openrouter"}],
             },
@@ -247,6 +247,8 @@ class Server:
 @pytest.fixture
 async def srv(tmp_path, monkeypatch):
     monkeypatch.setattr("src.config_store.DATA_DIR", str(tmp_path))
+    # A test phrase starts right at the wake, without the 2 s pre-roll (see make_pipeline).
+    monkeypatch.setattr("src.pipeline.PREROLL_MS", 0)
     patch_llm(monkeypatch, reply="готово")
     # The release's models; the wake one spans three 0x03 frames.
     for const, name, size in (("RELEASE_WAKE_MODEL", "zakhar.tflite", 10000),

@@ -159,6 +159,10 @@ def make_pipeline(tmp_path, monkeypatch, name="dev", stt_text="распозна�
     # attribute, so isolate per-test context files by monkeypatching DATA_DIR to
     # tmp_path BEFORE the pipeline (and its _context_path) is built.
     monkeypatch.setattr("src.config_store.DATA_DIR", str(tmp_path))
+    # Test phrases start right at the wake: with the real 2 s pre-roll, whose speech
+    # is the wake word and does not count, every wake-word test would have to stream
+    # 2 s of audio before its phrase. test_bare_wake_word_ends_without_stt restores it.
+    monkeypatch.setattr("src.pipeline.PREROLL_MS", 0)
     # The end-of-phrase ack chime is ON by default in CoreConfig, but it is one more
     # play() call; default it OFF here so tests see only the plays they assert on,
     # and let ack tests opt in (ack=True).
@@ -239,7 +243,6 @@ def set_small_vad_thresholds(pipeline):
     vad.silence_ms = 100           # 5 frames of trailing silence to end
     vad.max_utterance_ms = 400     # 20 frames hard cap
     vad.no_speech_timeout_ms = 200  # 10 frames with no speech -> finalize
-    vad.wake_pause_ms = 0          # a wake-word run ends after silence_ms too
 
 
 def make_llm_result(reply="ответ", **overrides):
@@ -544,17 +547,36 @@ async def test_vad_endpoint_finalize(tmp_path, monkeypatch):
     assert_all_str(events)
 
 
-async def test_vad_waits_out_pause_after_wake_word(tmp_path, monkeypatch):
-    # A wake-word run: the speech is the wake word in the pre-roll, and 180 ms of
-    # silence after it (over silence_ms, under wake_pause_ms) does not end the phrase.
-    pipeline, events = make_pipeline(tmp_path, monkeypatch)
+async def test_bare_wake_word_ends_without_stt(tmp_path, monkeypatch):
+    # A wake-word run whose only speech is the wake word in the 2 s pre-roll, then
+    # silence: it ends as no_speech no_speech_timeout_ms after the pre-roll and the
+    # wake word alone never reaches STT (Whisper would make up a phrase from it), and
+    # no end-of-phrase chime plays.
+    patch_llm(monkeypatch)
+    pipeline, events = make_pipeline(tmp_path, monkeypatch, ack=True)
+    monkeypatch.setattr("src.pipeline.PREROLL_MS", 2000)  # the real pre-roll
     set_small_vad_thresholds(pipeline)
-    pipeline.rt.core.vad.wake_pause_ms = 300
-    install_fake_vad(pipeline, [True] * 3 + [False] * 9)
+    pipeline.rt.core.vad.max_utterance_ms = 15000
+    install_fake_vad(pipeline, [True] * 5 + [False] * 200)
+    stt_calls = []
+    orig_transcribe = pipeline.rt.stt_backends["fake"].transcribe
+
+    async def spy_transcribe(pcm):
+        stt_calls.append(pcm)
+        return await orig_transcribe(pcm)
+
+    pipeline.rt.stt_backends["fake"].transcribe = spy_transcribe
 
     await pipeline.on_start("cid", "Захар")
-    await pipeline.on_audio(FRAME * 12)
-    assert pipeline._finalized is False
+    await pipeline.on_audio(FRAME * 109)  # 2000 ms pre-roll + 180 ms
+    await settle(pipeline)
+    assert StageEvent.RUN_END not in types_of(events)
+    await pipeline.on_audio(FRAME * 1)    # 200 ms after the pre-roll
+    await settle(pipeline)
+    await _drain_ack_tasks(pipeline)
+    assert StageEvent.RUN_END in types_of(events)
+    assert stt_calls == []
+    assert wav_plays(pipeline) == []
 
 
 async def test_vad_maxlen_finalize(tmp_path, monkeypatch):
