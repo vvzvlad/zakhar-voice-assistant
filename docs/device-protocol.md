@@ -299,8 +299,9 @@ device                                   server
   channel 0 is the XMOS AGC output and channel 1 the XMOS noise-suppressed output at the wake-word
   gain ×4 (applied before the cut to 16 bits, saturating): exactly the samples the wake-word model
   gets. While the Voice PE plays with `echo_cancel` on, channel 0 is instead the raw microphone 0
-  with the speaker's own playback cancelled, at gain 1, the stop word's input before its ×4; the
-  switch each way takes the device two 32 ms frames. During an auto volume measurement channel 0
+  with the speaker's own playback cancelled: the raw microphone at gain ×16 (applied before the
+  cut to 16 bits, saturating) through the AEC, exactly the stop word's input; the switch each way
+  takes the device two 32 ms frames. During an auto volume measurement channel 0
   is the raw microphone 0 as read, at gain 1, switched the same way; a wake ends the measurement
   and switches it back (see [Auto volume](#auto-volume)).
 - The device keeps streaming until the server refuses the wake or, once it takes it, until a

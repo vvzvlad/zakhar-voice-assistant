@@ -3,15 +3,15 @@
 // 48 kHz, 16-bit samples in 32-bit slots, stereo, Philips, running all the time so the XMOS echo
 // reference on the same wire never stops.
 // The stop word hears the speaker's own playback cancelled out of a raw microphone: an AEC after
-// the XMOS's processing takes about 1 dB of the echo off its channels and 28 dB off a raw
-// microphone (docs/echo-cancellation.md). While the speaker plays, the XMOS puts the raw
-// microphone 0 (stage NONE) on channel 0, and ESP-SR's AEC runs on it against what went to the
+// the XMOS's processing takes about 1 dB of the echo off its channels, a raw microphone loud
+// enough for it 8-28 dB (docs/echo-cancellation.md). While the speaker plays, the XMOS puts the
+// raw microphone 0 (stage NONE) on channel 0, and ESP-SR's AEC runs on it against what went to the
 // wire (what the speaker task wrote and the DMA buffers the driver sent as silence when it was
 // late), decimated to 16 kHz and delayed by the echo's lag, which is measured on that raw
-// channel while playback runs. Its output is channel 0 of the tap and, at the wake-word gain, the
-// stop word's input. Channel 1 and the wake word's input never change. While the speaker is
-// silent, echo_cancel is 0 or no AEC could be made for the settings, channel 0 is the XMOS AGC
-// output and the stop word hears channel 1 as the wake word does.
+// channel while playback runs. The raw microphone comes x16 into the AEC (AEC_GAIN); its output
+// is channel 0 of the tap and the stop word's input. Channel 1 and the wake word's input never
+// change. While the speaker is silent, echo_cancel is 0 or no AEC could be made for the settings,
+// channel 0 is the XMOS AGC output and the stop word hears channel 1 as the wake word does.
 // With the server's auto_volume on, every 15 s of quiet (nothing playing, no session open, no
 // capture held) channel 0 is the raw microphone 0 for about a second: the room's noise is measured
 // on its 32-bit slots, before the XMOS's noise suppression and AGC, and goes to the server as
@@ -42,6 +42,11 @@ static const char *TAG = "audio";
 
 #define MIC_RATE 16000
 #define WAKE_GAIN 4     // the stock micro_wake_word gain_factor on channel 1
+// The raw microphone's gain into the AEC, taken from its 32-bit slot. At volume 79 % the speaker's
+// echo on it is about -55 dBFS at gain 1, under the AEC's own output floor of -41..-46 dBFS, and
+// the AEC makes channel 0 louder; x16 puts the echo near -31 dBFS there, its peaks about -4 dBFS
+// at volume 100 % (docs/echo-cancellation.md).
+#define AEC_GAIN 16
 // The tap: 131072 frames = 8.192 s, a power of two; readers keep 1 s away from the end being
 // overwritten. What is left holds the 2000 ms pre-roll plus a send that zakhar_link waits for up to
 // its 3000 ms SEND_TIMEOUT_MS: with less, a stall while the pre-roll goes out makes the reader skip
@@ -149,12 +154,6 @@ static aec_nlp_level_t nlp_level(int echo_cancel)
     return (aec_nlp_level_t)(AEC_NLP_LEVEL_NORMAL + echo_cancel - 1);
 }
 
-static int16_t gain_sat(int16_t v, int gain)
-{
-    const int32_t g = (int32_t)v * gain;
-    return g > INT16_MAX ? INT16_MAX : g < INT16_MIN ? INT16_MIN : (int16_t)g;
-}
-
 // A new AEC in AEC_MODES[mode] with the filter length `filter`, its suppression at `level` (the
 // default one when off); NULL, logged, when ESP-SR cannot make it or makes it with another frame
 // than CHUNK.
@@ -199,7 +198,7 @@ static void log_playback(const aec_handle_t *aec, int filter, const aec_stats_t 
 // Per chunk: channel 0's stage follows the playback (raw while it plays, with echo_cancel on and
 // an AEC made); while channel 0 is raw, the AEC runs on it while the reference it could be using
 // is not all silence, else it passes through; then the tap, the wake-word engine (channel 1 at
-// WAKE_GAIN) and the stop word (channel 0 at WAKE_GAIN while it is raw). While the AEC runs, the
+// WAKE_GAIN) and the stop word (the AEC's output while channel 0 is raw). While the AEC runs, the
 // lag is estimated every LAG_EVERY chunks once the raw chunks in a row span the estimator's
 // window (mic_chunks_step). A new echo_cancel_mode or echo_cancel_filter re-creates the AEC
 // between chunks. An auto volume measurement asks for the raw channel 0 through the same
@@ -267,15 +266,20 @@ static void mic_task(void *arg)
         pcm_split(raw, CHUNK, both, wake, WAKE_GAIN);
         const int16_t *stop_in = NULL;
         if (c.raw && measuring) {
-            // No AEC: channel 0 goes to the tap as read, at gain 1. The estimator still gets it: its
-            // window is the raw chunks in a row (mic_chunks_step), which a playback that takes the
-            // raw channel over from here continues.
-            lag_track_push(&lag, both, CHUNK, 2);
+            // No AEC: channel 0 goes to the tap as read, at gain 1. The estimator still gets it, at
+            // AEC_GAIN as the AEC branch gives it: its window is the raw chunks in a row
+            // (mic_chunks_step), which a playback that takes the raw channel over from here continues.
+            for (size_t i = 0; i < CHUNK; i++) in[i] = pcm_s32_to_s16(raw[2 * i], AEC_GAIN);
+            lag_track_push(&lag, in, CHUNK, 1);
             if (ambient_sched_take(&amb, true, raw, CHUNK)) zl_report_ambient(ambient_dbfs(&amb.level));
         } else if (c.raw) {
-            for (size_t i = 0; i < CHUNK; i++) in[i] = both[2 * i];
+            // While an AGC write settles, the chunk still counted raw may carry the AGC output,
+            // which AEC_GAIN would clip and the AEC would adapt to: it passes the AEC by, at gain 1.
+            const int gain = c.settling ? 1 : AEC_GAIN;
+            for (size_t i = 0; i < CHUNK; i++) in[i] = pcm_s32_to_s16(raw[2 * i], gain);
             const uint32_t aligned = c.pos + c.offset - (uint32_t)lag_in_use;
-            const bool cancel = aec != NULL && c.have_offset && !aec_skip(&s_ref, aligned, CHUNK, (size_t)filter * CHUNK);
+            const bool cancel = !c.settling && aec != NULL && c.have_offset &&
+                                !aec_skip(&s_ref, aligned, CHUNK, (size_t)filter * CHUNK);
             if (cancel) {
                 if (level > 0 && level != applied) {
                     if (mode >= FD_MODES) aec_set_nlp_level(aec, nlp_level(level));
@@ -297,8 +301,7 @@ static void mic_task(void *arg)
             }
             for (size_t i = 0; i < CHUNK; i++) {
                 both[2 * i] = out[i];
-                // x4 after the AEC: before it, the loud echo would clip and could not be cancelled.
-                stop[i] = gain_sat(out[i], WAKE_GAIN);
+                stop[i] = out[i];
             }
             stop_in = stop;
             st.dropped += dropped;
