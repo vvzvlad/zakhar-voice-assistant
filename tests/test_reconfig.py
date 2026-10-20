@@ -99,6 +99,8 @@ def test_action_for_representative_paths():
         "core.devices.0.log": "rebuild_devices",
         "core.device_log_days": "live",
         "core.chains": "rebuild_backends",
+        "core.commands.aliases": "rebuild_backends",
+        "core.commands.filler_words": "rebuild_backends",
         "llm.instances.openrouter.temperature": "rebuild_backends",
         "llm.instances.openrouter.reply_empty": "live",
         "llm.instances.openrouter.max_tool_rounds": "live",
@@ -119,12 +121,6 @@ def test_action_for_llm_reply_error_is_live():
     # into the backend), so changing it must NOT trigger a backend rebuild.
     assert action_for("llm.instances.openrouter.reply_error") == "live"
     assert action_for("llm.instances.simple-nlu.reply_error_after_tools") == "live"
-
-
-def test_action_for_llm_hidden_sources_is_live():
-    # hidden_sources is panel-only UI state (simple-nlu catalog editor's Sources bar)
-    # that no backend reads, so toggling it must apply live — never rebuild the NLU.
-    assert action_for("llm.instances.simple-nlu.hidden_sources") == "live"
 
 
 def test_action_for_label_companion_fields_are_live():
@@ -151,7 +147,7 @@ def test_backend_categories_maps_each_stage_path():
 def test_pool_instances_names_each_rebuilt_provider():
     assert pool_instances({
         "stt.instances.groq.api_key",
-        "llm.instances.simple-nlu.aliases",
+        "llm.instances.simple-nlu.classifier_threshold",
         "llm.instances.openrouter.reply_error",   # live leaf: no rebuild
         "core.chains",
         "tts.instances.yandex.voice",
@@ -424,6 +420,22 @@ async def test_apply_job_chains_change_builds_new_and_drops_unreferenced():
     assert rt.stt_backends == {"groq": "old-stt", "vosk": ("backend", "stt", "vosk", 30)}
     assert rt.llm_backends == {"simple-nlu": ("backend", "llm", "simple-nlu", 30)}
     assert svc.calls == {("stt", "vosk"): 1, ("llm", "simple-nlu"): 1}
+
+
+@pytest.mark.asyncio
+async def test_apply_job_commands_change_rebuilds_every_handler_in_use():
+    # simple-nlu builds its model from the command catalog when it is created: a
+    # core.commands change rebuilds each handler an enabled chain uses, and nothing else.
+    svc = _StubSvc()
+    reconf, rt, _deps = _make_job_reconf(svc, deps_timeout=30)
+    rt.core.chains = [_chain(name="nlu", stt="groq", handler="simple-nlu"), _chain(),
+                      _chain(name="off", handler="jev", enabled=False)]
+    rt.llm_backends["simple-nlu"] = "old-nlu"
+    await reconf.apply_job({"core.commands.aliases"})
+    assert svc.calls == {("llm", "simple-nlu"): 1, ("llm", "openrouter"): 1}
+    assert rt.llm_backends == {"simple-nlu": ("backend", "llm", "simple-nlu", 30),
+                               "openrouter": ("backend", "llm", "openrouter", 30)}
+    assert rt.stt_backends == {"groq": "old-stt"}
 
 
 class _WarmableBackend:

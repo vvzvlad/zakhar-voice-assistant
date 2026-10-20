@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 // Integration tests (jsdom) for the Providers → Commands page: the vocabulary
 // editor comes first, the engine settings card below it starts collapsed, and
-// the page's one Save sends the editor's and the engine card's edits together.
+// the page's one Save sends the editor's and the engine card's edits together:
+// the catalog into core.commands, the engine's settings into its llm instance.
 // The editor itself is stubbed (it has its own tests); only its wiring is pinned.
 import React from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
@@ -21,13 +22,17 @@ const catalog = {
     id: "llm",
     providers: [{
       id: "simple-nlu", label: "Commands",
-      schema: { type: "object", properties: {
-        aliases: { type: "string" }, actions: { type: "string" }, fuzzy: { type: "boolean" },
-      } },
-      values: { aliases: "лампа", actions: "", fuzzy: true },
+      schema: { type: "object", properties: { fuzzy: { type: "boolean" } } },
+      values: { fuzzy: true },
     }],
   }],
-  core: { schema: {}, values: {} },
+  core: {
+    schema: { $defs: { CommandsConfig: { type: "object", properties: {
+      aliases: { type: "string" }, actions: { type: "string" },
+      filler_words: { type: "string", title: "Filler words" },
+    } } } },
+    values: { commands: { aliases: "лампа", actions: "", filler_words: "захар" } },
+  },
 };
 
 let patch;
@@ -53,11 +58,15 @@ describe("Commands page", () => {
     render(<Commands />);
     fireEvent.change(screen.getByLabelText("Vocabulary"), { target: { value: "люстра" } });
     fireEvent.click(engineHeader());
+    // The catalog's filler words sit in the engine card, the textareas the editor covers do not.
+    expect(screen.getByText("Filler words")).toBeInTheDocument();
+    expect(screen.queryByText(/^aliases$/i)).toBeNull();
     fireEvent.click(screen.getByRole("switch"));
     fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
     await waitFor(() => expect(patch).toHaveBeenCalledTimes(1));
     expect(patch.mock.calls[0][0]).toEqual({
-      llm: { instances: { "simple-nlu": { aliases: "люстра", actions: "", fuzzy: false } } },
+      core: { commands: { aliases: "люстра", actions: "", filler_words: "захар" } },
+      llm: { instances: { "simple-nlu": { fuzzy: false } } },
     });
   });
 });

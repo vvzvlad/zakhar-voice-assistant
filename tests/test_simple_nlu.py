@@ -17,25 +17,21 @@ import httpx
 import pytest
 
 import src.plugins  # noqa: F401  triggers @register on all providers
+from src.commands import extract_number, nlu_vocabulary, parse_actions, parse_aliases
+from src.core_config import CommandsConfig
 from src.llm import LlmRequest, LlmStage
 from src.plugins.base import Deps, get_provider
-from src.plugins.llm.simple_nlu import (
-    SimpleNluBackend,
-    SimpleNluConfig,
-    SimpleNluProvider,
-    extract_number,
-    nlu_vocabulary,
-    parse_actions,
-    parse_aliases,
-)
+from src.plugins.llm.simple_nlu import SimpleNluBackend, SimpleNluConfig, SimpleNluProvider
 from src.stage_errors import Declined
 
 
-def _deps():
+def _deps(commands=CommandsConfig()):
+    """Deps whose command catalog is `commands`."""
     return Deps(
         http_cloud=httpx.AsyncClient(),
         http_local=httpx.AsyncClient(),
         tts_timeout=30,
+        commands=lambda: commands,
     )
 
 
@@ -118,11 +114,11 @@ def _new_backend(filler_text=None, aliases=_ALIASES):
     """A fresh, untrained backend over the `aliases` names."""
     return SimpleNluBackend(
         aliases_text=aliases,
-        actions_text=SimpleNluConfig().actions,
-        filler_text=SimpleNluConfig().filler_words if filler_text is None else filler_text,
+        actions_text=CommandsConfig().actions,
+        filler_text=CommandsConfig().filler_words if filler_text is None else filler_text,
         classifier_threshold=SimpleNluConfig().classifier_threshold,
-        level_on=SimpleNluConfig().level_on,
-        off_token=SimpleNluConfig().off_token,
+        level_on=CommandsConfig().level_on,
+        off_token=CommandsConfig().off_token,
         reply_unmatched=SimpleNluConfig().reply_unmatched,
         reply_done=SimpleNluConfig().reply_done,
         reply_error=SimpleNluConfig().reply_error,
@@ -355,7 +351,7 @@ async def test_training_is_cached(monkeypatch):
 def test_nlu_vocabulary_collects_phrase_and_verb_words_and_numbers():
     aliases = "свет в зале, люстра = bright_room_light\nночь = night"
     actions = "on = включи, вруби\noff = выключи"
-    vocab = nlu_vocabulary(aliases, actions)
+    vocab = nlu_vocabulary(aliases, actions, "")
 
     # Every word of every alias phrase is present (phrases are split into tokens).
     for w in ("свет", "в", "зале", "люстра", "ночь"):
@@ -380,7 +376,7 @@ def test_nlu_vocabulary_collects_phrase_and_verb_words_and_numbers():
 
 def test_nlu_vocabulary_empty_inputs_still_have_number_words():
     # Empty / comment-only inputs still yield a non-empty, sorted list (the numbers).
-    vocab = nlu_vocabulary("", "# nothing here\n  ")
+    vocab = nlu_vocabulary("", "# nothing here\n  ", "")
     assert vocab  # non-empty
     assert vocab == sorted(set(vocab))
     assert "один" in vocab and "сто" in vocab
@@ -390,8 +386,8 @@ def test_simple_nlu_provider_vocabulary_matches_pure_function():
     aliases = "свет в зале, люстра = bright_room_light"
     actions = "on = включи\noff = выключи"
     fillers = "захар, ну-ка"
-    cfg = SimpleNluConfig(aliases=aliases, actions=actions, filler_words=fillers)
-    vocab = SimpleNluProvider().vocabulary(cfg)
+    commands = CommandsConfig(aliases=aliases, actions=actions, filler_words=fillers)
+    vocab = SimpleNluProvider().vocabulary(SimpleNluConfig(), commands)
     assert vocab == nlu_vocabulary(aliases, actions, fillers)
     # Filler words are in the grammar, split into words like phrases are, so a
     # narrowed STT emits them rather than "[unk]".
@@ -487,8 +483,8 @@ async def test_strict_round2_still_confirms():
 
 # --- production catalog regression ------------------------------------------- #
 
-# The production tool catalog (every MCP source, as the panel's /api/tools lists it)
-# and the Simple NLU settings it runs with.
+# The production tool catalog (every MCP source, as the panel's /api/tools lists it),
+# the command catalog and the Simple NLU settings it runs with.
 _PROD = json.loads(
     (Path(__file__).parent / "fixtures" / "simple_nlu_prod_catalog.json").read_text(encoding="utf-8")
 )
@@ -496,7 +492,8 @@ _PROD = json.loads(
 
 @pytest.fixture(scope="module")
 def prod_backend():
-    return get_provider("llm", "simple-nlu").create(SimpleNluConfig(**_PROD["nlu"]), _deps())
+    return get_provider("llm", "simple-nlu").create(
+        SimpleNluConfig(**_PROD["nlu"]), _deps(CommandsConfig(**_PROD["commands"])))
 
 
 @pytest.mark.parametrize("text", [

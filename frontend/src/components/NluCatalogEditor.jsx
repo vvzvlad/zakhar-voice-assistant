@@ -1,4 +1,5 @@
-// Catalog editor for the offline-NLU (simple-nlu) provider.
+// Editor of the command catalog (core.commands), which the command handlers
+// (the offline simple-nlu engine, the jev decision model) match phrases against.
 //
 // The smart home advertises its devices and actions by technical names over MCP.
 // Instead of asking the operator to hand-edit the raw `aliases`/`actions`
@@ -11,9 +12,9 @@
 // is DERIVED from those two fields each render, and every edit re-serializes the
 // whole field through onChange — so this editor and the SchemaForm textareas stay
 // in sync. Only transient view state (slot-type overrides, per-group collapse,
-// search, filter) lives in local React state. The active-source set is likewise
-// DERIVED from a persisted field (`draft.hidden_sources`), exactly like
-// aliases/actions, so the operator's source selection survives a reload.
+// search, filter) lives in local React state. Which sources are hidden in the
+// Sources bar is a view preference of this browser, kept in localStorage, so it
+// survives a reload without touching the config.
 //
 // Renders as a section inside the Commands page (no page chrome of its own).
 import React, { useState, useRef, useEffect, useMemo } from "react";
@@ -31,6 +32,19 @@ import {
   splitWords,
   joinWords,
 } from "../nluAliases.js";
+
+// The ids of the sources hidden in the Sources bar. localStorage can throw in
+// privacy modes, so every access is guarded — the selection then lives in memory,
+// starting with nothing hidden.
+const HIDDEN_SOURCES_KEY = "zakhar.commands.hidden_sources";
+
+function loadHiddenSources() {
+  try {
+    return JSON.parse(localStorage.getItem(HIDDEN_SOURCES_KEY)) || [];
+  } catch {
+    return [];
+  }
+}
 
 // ── chip input ─────────────────────────────────────────────
 // ×-removable tags + a trailing text input. Comma or Enter commits the typed
@@ -409,6 +423,7 @@ export default function NluCatalogEditor({ draft, onChange }) {
   const [collapsed, setCollapsed] = useState({});
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState("all"); // "all" | "empty"
+  const [hidden, setHidden] = useState(loadHiddenSources); // source ids hidden in the Sources bar
 
   useEffect(() => {
     let alive = true;
@@ -453,22 +468,21 @@ export default function NluCatalogEditor({ draft, onChange }) {
     return out;
   }, [allEnumSlots]);
 
-  // Persisted UI state: the ids of sources the operator HID in the Sources bar live
-  // in `draft.hidden_sources` (saved with the rest of the form via "Save changes").
-  // The active set is DERIVED — every online slot-owning source MINUS the hidden
-  // ones — so a newly advertised source is visible by default and only explicit
-  // opt-outs persist across reloads.
-  const hiddenSet = useMemo(() => new Set(draft.hidden_sources || []), [draft.hidden_sources]);
+  // The active set is DERIVED — every online slot-owning source MINUS the ones the
+  // operator HID in the Sources bar — so a newly advertised source is visible by
+  // default and only explicit opt-outs persist across reloads.
+  const hiddenSet = useMemo(() => new Set(hidden), [hidden]);
   const effectiveActive = useMemo(
     () => new Set(slotServers.filter((id) => onlineIds.has(id) && !hiddenSet.has(id))),
     [slotServers, onlineIds, hiddenSet]
   );
   const toggleSource = (id) => {
-    // Flip membership in the HIDDEN set and persist via onChange: an active source
-    // becomes hidden, a hidden one becomes active again.
+    // Flip membership in the HIDDEN set and remember it in this browser: an active
+    // source becomes hidden, a hidden one becomes active again.
     const next = new Set(hiddenSet);
     next.has(id) ? next.delete(id) : next.add(id);
-    onChange("hidden_sources", [...next]);
+    setHidden([...next]);
+    try { localStorage.setItem(HIDDEN_SOURCES_KEY, JSON.stringify([...next])); } catch { /* privacy mode: keep in memory */ }
   };
   const srvOn = (server) => effectiveActive.has(server);
 

@@ -175,10 +175,10 @@ Shape (see `templates/default_config.json` for the full default):
   - `stt`: `groq` (cloud Whisper) | `vosk` (offline) | `gigaam` (offline GigaAM v3, model
     directory `models/gigaam-v3-onnx`) | `yandex` (SpeechKit v3 streaming, gRPC).
   - `llm` (handlers): `openrouter` | `groq` — model, api_key, temperature, max_tokens,
-    max_tool_rounds; `simple-nlu` — the offline command engine (aliases, action verbs);
-    `jev` — the decision model `typesafe/jev-1.14` on OpenRouter: picks one device and
-    one action for a phrase without a number, from the names and verbs of the Commands
-    page (the `simple-nlu` aliases and actions), and declines anything else.
+    max_tool_rounds; `simple-nlu` — the offline command engine over the command catalog
+    `core.commands`; `jev` — the decision model `typesafe/jev-1.14` on OpenRouter: picks
+    one device and one action for a phrase without a number, from the names and verbs of
+    the Commands page (`core.commands`), and declines anything else.
   - Which STT feeds which handler is set by `core.chains`: an ordered list of
     `{name, enabled, stt, handler, narrow, parallel}`. One utterance goes through the
     enabled chains in order on the same audio until one answers; the next chain is tried
@@ -220,7 +220,9 @@ Shape (see `templates/default_config.json` for the full default):
   `agent_mcp` (enabled — the agent-facing MCP endpoint served by the panel at `/mcp`),
   `runs` (enabled / retention_days),
   `reminders` (enabled), `capture` (enabled / dir — save every utterance as WAV),
-  `ack` (enabled / sound_path — the end-of-phrase chime), `devices` (list of
+  `ack` (enabled / sound_path — the end-of-phrase chime), `commands` (aliases / actions /
+  filler_words / level_on / off_token — the command catalog the command handlers read,
+  edited on the Commands page), `devices` (list of
   `{name, label, enabled, wake_cutoff, vad_cutoff, wake_model, vad_model}`, see [Devices](#devices-and-firmware)),
   `tts_timeout`, `log_level`.
 

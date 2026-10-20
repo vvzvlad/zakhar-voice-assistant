@@ -18,6 +18,7 @@ from src import config_store
 from src.chains import referenced_instances
 from src.logging_setup import setup_logging
 from src.plugins.base import get_provider
+from src.plugins.llm.base import ReplyConfig
 from src.runs_store import RunsStore
 from src.tool_factory import build_sources
 
@@ -41,12 +42,9 @@ def changed_paths(old, new, prefix: str = "") -> set[str]:
     return {prefix} if (old != new and prefix) else set()
 
 
-# Live LLM provider fields read per request (not baked into the backend).
-# `hidden_sources` is panel-only UI state (simple-nlu catalog editor) that no
-# backend reads, so a change applies "live" — it must never rebuild the NLU model.
-_LLM_LIVE_LEAVES = {"reply_rate_limit", "reply_empty", "reply_empty_after_tools",
-                    "reply_error", "reply_error_after_tools", "max_tool_rounds",
-                    "hidden_sources"}
+# Live LLM provider fields read per request (not baked into the backend): the
+# ReplyConfig fields every llm provider inherits (src/plugins/llm/base.py).
+_LLM_LIVE_LEAVES = frozenset(ReplyConfig.model_fields)
 
 
 def action_for(path: str) -> str:
@@ -94,6 +92,8 @@ def action_for(path: str) -> str:
         return "live"          # read at every prune (src/device_logs.py)
     if path == "core.chains":
         return "rebuild_backends"   # builds newly referenced STT/handler backends, drops unreferenced
+    if path.startswith("core.commands"):
+        return "rebuild_backends"   # rebuilds the handlers in use: simple-nlu builds its model from the catalog
     # stage providers
     if (path.startswith("vad") or path.startswith("wakeword") or path.startswith("stt")
             or path.startswith("tts") or path.startswith("stress")
@@ -275,10 +275,14 @@ class Reconfigurator:
     def _pool_keys(self, paths) -> set[tuple[str, str]]:
         """Pool instances to rebuild for `paths`: those whose own settings changed,
         plus every enabled TTS variant on a core.tts_timeout change (the timeout is
-        baked into each TTS backend)."""
+        baked into each TTS backend) and every handler an enabled chain uses on a
+        core.commands change (a handler may build its model from the catalog when it
+        is created)."""
         keys = pool_instances(paths)
         if "core.tts_timeout" in paths:
             keys |= {("tts", pid) for pid in self.rt.svc.tts_variants()}
+        if any(p.startswith("core.commands") for p in paths):
+            keys |= {(cat, pid) for cat, pid in self._in_use() if cat == "llm"}
         return keys
 
     async def _rebuild_backend_cats(self, cats) -> None:
