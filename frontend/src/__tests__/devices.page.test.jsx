@@ -3,9 +3,10 @@
 // list (a cutoff set from a slider, a device that connected while the page was
 // open), and a slider write or a newly connected device refreshes the app's config snapshot.
 // The Edit dialog opens from the re-read config, shows the id as text in its header, saves a
-// display label, a wake-word model (a listed or an uploaded one), the device log and the auto
-// volume switches — edits on different tabs survive the switch, mark their tabs and go out in
-// one save; only the open tab shows — and shows on every tab why its controls cannot load. It
+// display label, a wake-word model (a listed or an uploaded one), the device log, the auto
+// volume and the reply compression switches — edits on different tabs survive the switch, mark
+// their tabs and go out in one save; only the open tab shows — and shows on every tab why its
+// controls cannot load. It
 // also says a typed text on the speaker to check the volume — the phrase in flight and the text
 // outlive a tab switch — shows the auto volume's settings and readings only while auto volume is
 // on and writes the stop word's mode picked on a scale as its number.
@@ -29,6 +30,8 @@ vi.mock("../api.js", () => ({
     release: "zakhar/zakhar_v31",
   })),
   uploadWakeModel: vi.fn(),
+  getDeviceLogs: vi.fn(async () => ({ devices: {} })),
+  getDeviceLog: vi.fn(),
 }));
 
 afterEach(cleanup);
@@ -146,7 +149,7 @@ describe("Devices page", () => {
     render(<Devices />);
     fireEvent.click(screen.getByText("Edit"));
     fireEvent.click(await screen.findByText("Wake word"));
-    const input = await screen.findByLabelText("Wake-word model file");
+    const input = await screen.findByLabelText("Wake word model file");
     api.getWakeModels.mockResolvedValueOnce({
       options: ["uploaded/zakhar_v34", "zakhar/zakhar_v8", "zakhar/zakhar_v31"], release: "zakhar/zakhar_v31",
     });
@@ -167,12 +170,14 @@ describe("Devices page", () => {
     data.catalog.core.values.device_log_days = 7;
     render(<Devices />);
     fireEvent.click(screen.getByText("Edit"));
+    fireEvent.click(await screen.findByText("Log"));
     const sw = await switchOf("Device log");
     expect(sw).toHaveAttribute("aria-checked", "false");
     expect(screen.getByText(/keeps the last 7 days in data\/device_logs\/kitchen\//)).toBeInTheDocument();
     expect(screen.getByText("Save")).toBeDisabled();
     fireEvent.click(sw);
     expect(sw).toHaveAttribute("aria-checked", "true");
+    expect(screen.getAllByTestId("unsaved-dot").map((d) => d.parentElement.textContent)).toEqual(["Log"]);
     fireEvent.click(screen.getByText("Save"));
     await waitFor(() => expect(data.patch).toHaveBeenCalledTimes(1));
     expect(data.patch).toHaveBeenCalledWith({ core: { devices: [
@@ -181,20 +186,23 @@ describe("Devices page", () => {
     ] } });
   });
 
-  it("edit switches auto volume off and saves it onto the server's current list", async () => {
+  it("edit switches auto volume and reply compression off and saves them onto the server's current list", async () => {
     api.getDeviceControls.mockResolvedValue({ device: "kitchen", online: true, versions: [], controls: [] });
-    data.catalog.core.values.devices = [{ ...STALE[0], auto_volume: true }];
+    data.catalog.core.values.devices = [{ ...STALE[0], auto_volume: true, compress_replies: true }];
     render(<Devices />);
     fireEvent.click(screen.getByText("Edit"));
     fireEvent.click(await screen.findByText("Sound"));
     const sw = await switchOf("Auto volume");
+    const compress = await switchOf("Compress replies");
     expect(sw).toHaveAttribute("aria-checked", "true");
+    expect(compress).toHaveAttribute("aria-checked", "true");
     expect(screen.getByText("Save")).toBeDisabled();
     fireEvent.click(sw);
+    fireEvent.click(compress);
     fireEvent.click(screen.getByText("Save"));
     await waitFor(() => expect(data.patch).toHaveBeenCalledTimes(1));
     expect(data.patch).toHaveBeenCalledWith({ core: { devices: [
-      { ...FRESH[0], auto_volume: false },
+      { ...FRESH[0], auto_volume: false, compress_replies: false },
       FRESH[1],
     ] } });
   });
@@ -211,6 +219,21 @@ describe("Devices page", () => {
     bar.previousElementSibling.getBoundingClientRect = () => ({ bottom: -212 });
     fireEvent.click(screen.getByText("Wake word"));
     expect(body.scrollTop).toBe(88);
+  });
+
+  it("the Log tab reads the device's log only while it is open", async () => {
+    api.getDeviceControls.mockResolvedValue({ device: "kitchen", online: true, versions: [], controls: [] });
+    api.getDeviceLogs.mockResolvedValue({ devices: { kitchen: ["2026-10-19"] } });
+    api.getDeviceLog.mockResolvedValue({ text: "10:00:00.000 I (1) wifi: up\n", offset: 28 });
+    render(<Devices />);
+    fireEvent.click(screen.getByText("Edit"));
+    await screen.findByText("Wake word");
+    expect(api.getDeviceLogs).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByText("Log"));
+    expect((await screen.findByTestId("device-log-text")).textContent).toBe("10:00:00.000 I (1) wifi: up");
+    expect(api.getDeviceLog).toHaveBeenCalledWith("kitchen", "2026-10-19", 0);
+    fireEvent.click(screen.getByText("General"));
+    expect(screen.queryByTestId("device-log-text")).toBeNull();
   });
 
   it("edits on two tabs survive the switch, mark both tabs and go out in one save", async () => {
@@ -325,7 +348,7 @@ describe("Devices page", () => {
     render(<Devices />);
     fireEvent.click(screen.getByText("Edit"));
     fireEvent.click(await screen.findByText("Sound"));
-    const input = await screen.findByDisplayValue("Проверка громкости");
+    const input = await screen.findByDisplayValue("Проверка громкости.");
     fireEvent.change(input, { target: { value: "" } });
     expect(screen.getByText("Say")).toBeDisabled();
     fireEvent.change(input, { target: { value: "раз два" } });
@@ -347,7 +370,7 @@ describe("Devices page", () => {
     const { unmount } = render(<Devices />);
     fireEvent.click(screen.getByText("Edit"));
     fireEvent.click(await screen.findByText("Sound"));
-    await screen.findByDisplayValue("Проверка громкости");
+    await screen.findByDisplayValue("Проверка громкости.");
     fireEvent.click(screen.getByText("Say"));
     expect(await screen.findByText("tts down")).toBeInTheDocument();
     unmount();
@@ -356,7 +379,7 @@ describe("Devices page", () => {
     render(<Devices />);
     fireEvent.click(screen.getByText("Edit"));
     fireEvent.click(await screen.findByText("Sound"));
-    await screen.findByDisplayValue("Проверка громкости");
+    await screen.findByDisplayValue("Проверка громкости.");
     expect(screen.getByText("Say")).toBeDisabled();
     expect(screen.getByText("Say")).toHaveAttribute("title", "Speaker offline");
   });

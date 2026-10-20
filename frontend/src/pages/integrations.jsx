@@ -6,6 +6,7 @@ import {
 } from "../components/primitives.jsx";
 import { parseVoiceMarker, voiceField, voiceName, differsFromVoice } from "../voiceMarker.js";
 import SchemaForm from "../components/SchemaForm.jsx";
+import DeviceLog from "../components/DeviceLog.jsx";
 import { useAppData } from "../appData.jsx";
 import { useStageForm, errorLines } from "../useStageForm.js";
 import { usePageForm } from "../usePageForm.js";
@@ -564,26 +565,29 @@ export function Prompt() {
 }
 
 // ── Devices ───────────────────────────────────────────────────────────────
-const DEVICE_TABS = ["General", "Wake word", "Sound", "Stop word"];
+const DEVICE_TABS = ["General", "Wake word", "Sound", "Stop word", "Log"];
 
 // Add mode (`onSave({name, enabled})`) asks for a device id. Edit mode (`device`, the saved id)
 // shows the device's status, its id — what the firmware sends in hello — and its versions above
-// four tabs: General (the display label, the device log switch and any live control no other tab
-// places), Wake word (the wake-word model, the live wake probability, the cutoffs, sample capture),
-// Sound (the speaker volume, a test phrase, the auto volume switch and, while it is on, its
-// settings and readings, the playback reserve) and Stop word (the echo cancellation). `onSave`
-// gets only the changed ones of {label, wake_model, log, auto_volume} (wake_model "" = the release
-// default; an uploaded .tflite becomes the selected model), whichever tabs they were edited on; a
-// tab holding such a change carries a dot. The live controls are written at once, polled for the
-// whole life of the dialog. All four tabs stay mounted and only the open one shows, so a running
-// capture or a typed phrase outlives a tab switch. `online` says whether
-// the device is reachable, `logDays` how many days of device log the server keeps.
-function DeviceModal({ onSave, onClose, title, device, label: savedLabel = "", wakeModel: savedWakeModel = "", log: savedLog = false, autoVolume: savedAutoVolume = false, logDays, online }) {
+// five tabs: General (the display label and any live control no other tab places), Wake word
+// (the wake word model, the live wake probability, the cutoffs, sample capture), Sound (the
+// speaker volume, a test phrase, the auto volume switch and, while it is on, its settings and
+// readings, the reply compression switch, the playback reserve), Stop word (the echo
+// cancellation) and Log (the device log switch and the log the server keeps). `onSave` gets only
+// the changed ones of {label, wake_model, log, auto_volume, compress_replies} (wake_model "" =
+// the release default; an uploaded .tflite becomes the selected model), whichever tabs they were
+// edited on; a tab holding such a change carries a dot. The live controls are written at once,
+// polled for the whole life of the dialog. All tabs stay mounted and only the open one shows, so
+// a running capture or a typed phrase outlives a tab switch; the log alone mounts with its tab,
+// so it is polled only while shown. `online` says whether the device is reachable, `logDays` how
+// many days of device log the server keeps.
+function DeviceModal({ onSave, onClose, title, device, label: savedLabel = "", wakeModel: savedWakeModel = "", log: savedLog = false, autoVolume: savedAutoVolume = false, compressReplies: savedCompressReplies = false, logDays, online }) {
   const [name, setName] = useState("");
   const [label, setLabel] = useState(savedLabel);
   const [wakeModel, setWakeModel] = useState(savedWakeModel);
   const [log, setLog] = useState(savedLog);
   const [autoVolume, setAutoVolume] = useState(savedAutoVolume);
+  const [compressReplies, setCompressReplies] = useState(savedCompressReplies);
   const [wakeModels, setWakeModels] = useState(null); // {options, release} from GET /api/wake-models
   const [uploadErr, setUploadErr] = useState(null);
   const [tab, setTab] = useState("General");
@@ -622,9 +626,10 @@ function DeviceModal({ onSave, onClose, title, device, label: savedLabel = "", w
   if (device) {
     // The tabs holding a field Save would send.
     const marked = DEVICE_TABS.filter((t) => ({
-      General: label.trim() !== savedLabel || log !== savedLog,
+      General: label.trim() !== savedLabel,
       "Wake word": wakeModel !== savedWakeModel,
-      Sound: autoVolume !== savedAutoVolume,
+      Sound: autoVolume !== savedAutoVolume || compressReplies !== savedCompressReplies,
+      Log: log !== savedLog,
     })[t]);
     const snapControls = ctl.snap?.controls || [];
     const controlField = (c) => <ControlField key={c.id} control={c} value={ctl.valueOf(c)}
@@ -641,24 +646,22 @@ function DeviceModal({ onSave, onClose, title, device, label: savedLabel = "", w
           ...(wakeModel !== savedWakeModel && { wake_model: wakeModel }),
           ...(log !== savedLog && { log }),
           ...(autoVolume !== savedAutoVolume && { auto_volume: autoVolume }),
+          ...(compressReplies !== savedCompressReplies && { compress_replies: compressReplies }),
         })}>Save</button></>}>
       <div className="z-dev-stats">
         <Stat label="Status"><StatusPill status={online ? "online" : "offline"} /></Stat>
         <Stat label="Device id" title="Sent by the firmware when it connects — keys the device's settings and dialog context.">{device}</Stat>
         <Stat label="Firmware" title={deviceVersion(ctl.snap, "config_version")}>{deviceVersion(ctl.snap, "config_version") ?? "—"}</Stat>
-        <Stat label="Model" title={deviceVersion(ctl.snap, "model_version")}>{deviceVersion(ctl.snap, "model_version") ?? "—"}</Stat>
+        <Stat label="Wake word model" title={deviceVersion(ctl.snap, "model_version")}>{deviceVersion(ctl.snap, "model_version") ?? "—"}</Stat>
       </div>
       <div className="z-tabs" ref={tabsRef}><Seg full options={DEVICE_TABS} value={tab} onChange={pickTab} marked={marked} /></div>
       {ctl.err && <div className="z-fh" style={{ color: "#b91c1c", marginTop: 8 }}>{ctl.err.message || String(ctl.err)}</div>}
       <div hidden={tab !== "General"}>
         <Field row label="Name" hint="Shown in the panel instead of the device id; empty shows the id."><div className="z-rowctl"><div className="z-inp"><input value={label} placeholder={device} onChange={(e) => setLabel(e.target.value)} /></div></div></Field>
-        <Field row label="Device log" hint={`On: the speaker streams its whole log to the server, which keeps the last ${logDays} days in data/device_logs/${device}/. Off: the speaker sends nothing. Applies on save, no reflash.`}>
-          <Toggle on={log} onChange={setLog} />
-        </Field>
         {snapControls.filter((c) => !PLACED_CONTROLS.has(c.id)).map(controlField)}
       </div>
       <div hidden={tab !== "Wake word"}>
-        {wakeModels && <Field row label="Wake-word model" hint="Sent to the device on save and at every connection. An uploaded .tflite is kept in the server's data volume; a new file of the same name replaces it and goes at once to every device using it.">
+        {wakeModels && <Field row label="Wake word model" hint="Sent to the device on save and at every connection. An uploaded .tflite is kept in the server's data volume; a new file of the same name replaces it and goes at once to every device using it.">
           <div className="z-rowctl">
             <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
               <div style={{ flex: 1, minWidth: 0 }}>
@@ -668,7 +671,7 @@ function DeviceModal({ onSave, onClose, title, device, label: savedLabel = "", w
                 ]} />
               </div>
               <button className="z-btn g" title="Upload a .tflite model" onClick={() => fileRef.current.click()}>Upload</button>
-              <input ref={fileRef} type="file" accept=".tflite" hidden aria-label="Wake-word model file" onChange={upload} />
+              <input ref={fileRef} type="file" accept=".tflite" hidden aria-label="Wake word model file" onChange={upload} />
             </div>
             {uploadErr && <div className="z-fh" style={{ color: "#b91c1c" }}>{uploadErr}</div>}
           </div>
@@ -695,11 +698,20 @@ function DeviceModal({ onSave, onClose, title, device, label: savedLabel = "", w
             </div>
           </Field>}
         </>}
+        <Field row label="Compress replies" hint="On: the server compresses everything it plays on this speaker — quiet parts up to 20 dB louder, peaks held at −11.5 dBFS. Louder for a TTS whose peaks sit below full scale (about +2–3 dB with Fish Audio); one that already peaks at full scale, as Piper does, plays up to ~3 dB quieter. Applies on save, no reflash.">
+          <Toggle on={compressReplies} onChange={setCompressReplies} />
+        </Field>
         {controls("play_prime_ms")}
       </div>
       <div hidden={tab !== "Stop word"}>
         {loading}
         {controls("echo_cancel", "echo_cancel_mode", "echo_cancel_filter")}
+      </div>
+      <div hidden={tab !== "Log"} className="z-logpane">
+        <Field row label="Device log" hint={`On: the speaker streams its whole log to the server, which keeps the last ${logDays} days in data/device_logs/${device}/. Off: the speaker sends nothing. Applies on save, no reflash.`}>
+          <Toggle on={log} onChange={setLog} />
+        </Field>
+        {tab === "Log" && <DeviceLog device={device} />}
       </div>
     </Modal>;
   }
@@ -918,7 +930,7 @@ function useDeviceControls(device) {
 // volume: speaks the typed text on the speaker through the TTS, so the volume can be checked by
 // ear. The request resolves once the speech has played. Disabled (tooltip) while offline.
 function SayControl({ device, online }) {
-  const [text, setText] = useState("Проверка громкости");
+  const [text, setText] = useState("Проверка громкости.");
   const [saying, setSaying] = useState(false);
   const [err, setErr] = useState(null);
 
@@ -1063,7 +1075,7 @@ export function Devices() {
     {busyErr && <div className="z-banner warn" style={{ margin: "0 0 12px" }}><Ic n="restart" w={15} /><span>{errorLines(busyErr).join(" · ")}</span></div>}
     <Card>
       <table className="z-tbl">
-        <thead><tr><th>Name</th><th>Firmware</th><th>Model</th><th>Uptime</th><th>Status</th><th></th></tr></thead>
+        <thead><tr><th>Name</th><th>Firmware</th><th>Wake word model</th><th>Uptime</th><th>Status</th><th></th></tr></thead>
         <tbody>
           {devices.length === 0
             ? <tr><td colSpan={6} style={{ color: "var(--mut)", padding: "14px 0" }}>No speakers configured.</td></tr>
@@ -1096,6 +1108,7 @@ export function Devices() {
       wakeModel={devices.find((d) => d.name === modal.name)?.wake_model || ""}
       log={!!devices.find((d) => d.name === modal.name)?.log} logDays={catalog.core.values.device_log_days}
       autoVolume={!!devices.find((d) => d.name === modal.name)?.auto_volume}
+      compressReplies={!!devices.find((d) => d.name === modal.name)?.compress_replies}
       onSave={(edit) => onEdit(modal.name, edit)} online={statusOf(modal.name) === "online"} />}
   </div>;
 }

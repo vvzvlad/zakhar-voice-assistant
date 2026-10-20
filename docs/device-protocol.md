@@ -146,6 +146,11 @@ The owner's words:
   and does not change. Then, against the dial being the floor: «зачем ты сделал так, что оно не
   опускается само?» — below the threshold the boost is negative and the reply is quieter than the
   dial. See [Auto volume](#auto-volume).
+- Replies too quiet over music even at 99 % of the dial: of «Сжать речь на сервере», «Поднять
+  аналоговое усиление», «Всё вместе», «Поднять аналоговое усиление»; told the amplifier has only
+  ~3 dB left, «+3 dB и сжатие», then «тоже за фичетогглом сделай»; told the compression measures
+  +2–3 dB, «Да, +3 dB и сжатие» — the Voice PE drives its line outputs at +3 dB, and the server
+  compresses the audio it plays on a device whose `core.devices[].compress_replies` is on.
 - «я хочу аудио-выход на нее иметь, чтобы например музыку транслировать» (as the stock firmware
   had it: Music Assistant with its Spotify Connect plugin, over Music Assistant's Sendspin
   protocol), option chosen: «В прошивке колонки» — the speaker is itself a Sendspin player that
@@ -304,8 +309,9 @@ device                                   server
   channel 0 is the XMOS AGC output and channel 1 the XMOS noise-suppressed output at the wake-word
   gain ×4 (applied before the cut to 16 bits, saturating): exactly the samples the wake-word model
   gets. While the Voice PE plays with `echo_cancel` on, channel 0 is instead the raw microphone 0
-  with the speaker's own playback cancelled, at gain 1, the stop word's input before its ×4; the
-  switch each way takes the device two 32 ms frames. During an auto volume measurement channel 0
+  with the speaker's own playback cancelled: the raw microphone at gain ×16 (applied before the
+  cut to 16 bits, saturating) through the AEC, exactly the stop word's input; the switch each way
+  takes the device two 32 ms frames. During an auto volume measurement channel 0
   is the raw microphone 0 as read, at gain 1, switched the same way; a wake ends the measurement
   and switches it back (see [Auto volume](#auto-volume)).
 - The device keeps streaming until the server refuses the wake or, once it takes it, until a

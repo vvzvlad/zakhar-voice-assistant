@@ -30,7 +30,7 @@ def build_volume_server(get_manager) -> FastMCP:
         if device is None:
             return "Не знаю, с какой колонки пришла фраза."
         try:
-            volume = get_manager().get_volume(device)
+            volume = get_manager().find(device).get_volume()
         except Exception as e:
             return f"Не удалось узнать громкость: {e}"
         return f"Громкость колонки: {volume}%."
@@ -52,7 +52,7 @@ def build_volume_server(get_manager) -> FastMCP:
         if device is None:
             return "Не знаю, с какой колонки пришла фраза, — громкость не изменена."
         try:
-            volume = get_manager().set_volume(device, level=level, change=change)
+            volume = get_manager().find(device).set_volume(level=level, change=change)
         except Exception as e:
             return f"Не удалось изменить громкость: {e}"
         return f"Громкость колонки: {volume}%."

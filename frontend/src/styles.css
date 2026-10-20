@@ -289,9 +289,15 @@ button{font-family:inherit;}
 .z-modal-c{margin:auto;width:520px;max-width:92vw;background:var(--bg);border-radius:12px;box-shadow:0 24px 70px rgba(16,24,40,.3);overflow:hidden;}
 .z-modal-c.top{margin:0 auto auto;}
 /* A wide dialog fits the window: its body scrolls between a fixed header and footer. */
-.z-modal-c.wide{width:760px;max-height:calc(100vh - 32px);display:flex;flex-direction:column;}
+.z-modal-c.wide{width:800px;max-height:calc(100vh - 32px);display:flex;flex-direction:column;}
 .z-modal-c.wide .z-modal-h,.z-modal-c.wide .z-modal-f{flex:none;}
 .z-modal-c.wide .z-modal-b{overflow-y:auto;}
+/* A dialog showing a device log takes the whole window height and leaves the log the rest. */
+.z-modal-c:has(.z-logbox){height:calc(100vh - 32px);}
+.z-modal-c:has(.z-logbox) .z-modal-b{flex:1;display:flex;flex-direction:column;}
+.z-logpane:not([hidden]),.z-logview{flex:1;min-height:0;display:flex;flex-direction:column;}
+.z-logbox{flex:1;min-height:150px;margin:0 0 4px;overflow:auto;}
+.z-logline{padding-left:4ch;text-indent:-4ch;}
 /* Rows of a wide dialog: label and hint in a fixed-width column on the left, the control column
    (.z-rowctl) on the right, both top-aligned; next to a 36px control the label drops to its centre. */
 .z-rowctl{width:360px;}
@@ -308,7 +314,7 @@ button{font-family:inherit;}
 .z-tabs .z-seg{background:none;padding:0;gap:0;border-radius:0;border-bottom:1px solid var(--line);}
 .z-tabs .z-seg button{font-family:inherit;font-size:13px;border-radius:0;padding:10px 14px;border-bottom:2px solid transparent;margin-bottom:-1px;}
 .z-tabs .z-seg button.on{background:none;box-shadow:none;border-bottom-color:var(--acc);}
-@media (max-width:820px){
+@media (max-width:820px){ .z-tabs .z-seg button{white-space:nowrap;padding-left:4px;padding-right:4px;}
   .z-modal-c.wide .z-f.row:has(.z-rowctl){flex-direction:column;align-items:stretch;}
   .z-modal-c.wide .z-rowctl{width:100%;}
   .z-modal-c.wide .z-f.row .z-fmeta{max-width:none;}

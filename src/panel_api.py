@@ -190,27 +190,17 @@ async def _aclose_quietly(aiter) -> None:
 
 class PanelServer:
     def __init__(self, svc, host, port, *, version, started_at,
-                 device_status=None, device_capture=None, device_capture_start=None,
-                 device_capture_status=None, device_capture_delete=None, device_play=None,
-                 device_controls_get=None, device_controls_set=None,
-                 device_wake_prob_get=None, device_wake_prob_set=None,
-                 device_detect_set=None, device_model_reload=None, device_say=None,
+                 devices=None,
                  static_dir=None, runs_store=None, tool_sources=None,
                  run_events=None, prompt_store=None, agent_mcp=None,
                  assistant_task_reply=None,
                  heartbeat_interval: float = 1.0, reload_status=None):
         # svc: ConfigService; started_at: float (time.time())
-        # device_status: optional callable -> list[dict]; static_dir: optional path to built frontend
-        # device_capture: optional async callable (device_name, seconds) -> Capture that records
-        #   a capture and returns it finished (DeviceManager.capture); dataset takes use it.
-        # device_capture_start: optional SYNC callable (device_name, seconds) -> snapshot that
-        #   starts a capture the device records on its own (DeviceManager.capture_start).
-        # device_capture_status: optional SYNC callable (device_name) -> snapshot of the
-        #   device's running or newest capture (DeviceManager.capture_status).
-        # device_capture_delete: optional SYNC callable (device_name, name) -> bool that deletes
-        #   a capture that is not running (DeviceManager.capture_delete).
-        #   None -> the endpoint that needs it returns 503. The captures on disk are listed and
-        #   downloaded without any of them.
+        # devices: optional DeviceManager behind the device endpoints (status, controls, wake
+        #   probability, detect, model reload, say, chime preview, captures, dataset sessions).
+        #   None -> the device lists are empty and every endpoint that needs a device returns
+        #   503; the captures on disk are still listed and downloaded.
+        # static_dir: optional path to built frontend
         # runs_store: optional RunsStore for the observability endpoints (None -> empty/zeros)
         # tool_sources: optional zero-arg callable -> list[dict] (ToolHub.describe()), None -> []
         # run_events: optional RunEventsHub for the live WS run stream (None -> WS closes)
@@ -225,49 +215,11 @@ class PanelServer:
         self.port = port
         self.version = version
         self.started_at = started_at
-        self.device_status = device_status
-        self.device_capture = device_capture
-        self.device_capture_start = device_capture_start
-        self.device_capture_status = device_capture_status
-        self.device_capture_delete = device_capture_delete
-        # device_play: optional async callable (sound_path, device_name=None) -> dict that
-        #   plays the preview chime on the speaker(s) (DeviceManager.play_chime). None ->
-        #   the /api/chimes/play endpoint returns 503.
-        self.device_play = device_play
-        # device_controls_get: optional SYNC callable (device_name) -> dict snapshot of the
-        #   live device controls (cutoff %, volume %) (DeviceManager.device_controls).
-        # device_controls_set: optional SYNC callable (device_name, control_id, value) -> dict
-        #   that sets one control and returns the refreshed snapshot
-        #   (DeviceManager.set_device_control). For both: None -> the /api/device/controls
-        #   endpoints return 503.
-        self.device_controls_get = device_controls_get
-        self.device_controls_set = device_controls_set
-        # device_wake_prob_get: optional SYNC callable (device_name) -> dict snapshot of
-        #   the live Wake Probability {device, online, available, value} (DeviceManager.wake_prob).
-        # device_wake_prob_set: optional SYNC callable (device_name, enabled: bool) -> dict
-        #   that toggles the on-device peak stream (the panel enables it while the device
-        #   modal is open, disables it on close) and returns the refreshed snapshot
-        #   (DeviceManager.set_wake_prob_stream). For both: None -> the
-        #   /api/device/wake-probability endpoints return 503.
-        self.device_wake_prob_get = device_wake_prob_get
-        self.device_wake_prob_set = device_wake_prob_set
-        # device_detect_set: optional SYNC callable (device_name, enabled: bool) -> dict that
-        #   turns the device's wake-word detection off/on for debugging and returns
-        #   {device, detect} (DeviceManager.set_detect). None -> POST /api/device/detect
-        #   returns 503.
-        self.device_detect_set = device_detect_set
-        # device_model_reload: optional SYNC callable (device_name) -> dict that sends the
-        #   device its wake-word and VAD models again and returns {device, models}
-        #   (DeviceManager.reload_model). None -> POST /api/device/model returns 503.
-        self.device_model_reload = device_model_reload
-        # device_say: optional async callable (device_name, text) that speaks the text on
-        #   the device (DeviceManager.say). None -> POST /api/device/say returns 503.
-        self.device_say = device_say
+        self.devices = devices
         # Wake-word dataset sessions (a beep, then a capture, per take) run server-side too;
-        # they need both device callables, else every /api/datasets* endpoint returns 503.
+        # without a device manager every /api/datasets* endpoint returns 503.
         self._dataset_jobs = (
-            dataset_jobs.DatasetJobManager(device_capture, device_play)
-            if device_capture is not None and device_play is not None else None
+            dataset_jobs.DatasetJobManager(devices) if devices is not None else None
         )
         self.static_dir = static_dir
         self.runs_store = runs_store
@@ -375,11 +327,11 @@ class PanelServer:
         # A device already set to this name would keep the replaced file: its wake_model does
         # not change, so nothing re-sends it. Send it now to the online ones; an offline one
         # gets the new file at its next connection.
-        if self.device_model_reload is not None:
+        if self.devices is not None:
             for dev in self.svc.core.devices:
                 if dev.wake_model == name:
                     try:
-                        self.device_model_reload(dev.name)
+                        self.devices.find(dev.name).reload_model()
                     except (LookupError, RuntimeError):
                         pass
         return web.json_response({"name": name})
@@ -396,7 +348,7 @@ class PanelServer:
         Status codes: 200 ok, 400 bad input / unknown sound_path, 404 unknown device,
         503 device playback not wired (API-only boot).
         """
-        if self.device_play is None:
+        if self.devices is None:
             return web.json_response({"error": "device playback not available"}, status=503)
         body = await _read_json(request)
         if not isinstance(body, dict):
@@ -413,7 +365,7 @@ class PanelServer:
         if device is not None and (not isinstance(device, str) or not device):
             return web.json_response({"error": 'field "device" must be a non-empty string'}, status=400)
         try:
-            result = await self.device_play(sound_path, device)
+            result = await self.devices.play_chime(sound_path, device)
         except LookupError as e:
             return web.json_response({"error": str(e)}, status=404)
         return web.json_response(result)
@@ -742,7 +694,7 @@ class PanelServer:
             "log_level": self.svc.core.log_level,
             # Live device statuses for the panel: flows through the 1 s WS heartbeat
             # so the Devices page / Sidebar update without polling. Cheap in-memory read.
-            "devices": self.device_status() if self.device_status else [],
+            "devices": self.devices.statuses() if self.devices is not None else [],
             # Backend categories whose hot-reload (model load) is in flight, so the panel
             # can show a 'loading' indicator. Cheap in-memory read; flows through both
             # GET /api/system and the 1 s WS heartbeat.
@@ -772,23 +724,23 @@ class PanelServer:
                 logger.debug(f"panel heartbeat broadcast failed: {e}")
 
     async def _get_devices(self, request: web.Request) -> web.Response:
-        return web.json_response(self.device_status() if self.device_status else [])
+        return web.json_response(self.devices.statuses() if self.devices is not None else [])
 
     async def _get_device_controls(self, request: web.Request) -> web.Response:
         """Current control values (cutoff %, volume %) for one speaker."""
-        if self.device_controls_get is None:
+        if self.devices is None:
             return web.json_response({"error": "device controls not available"}, status=503)
         device = request.query.get("device")
         if not device:
             return web.json_response({"error": 'query param "device" is required'}, status=400)
         try:
-            return web.json_response(self.device_controls_get(device))
+            return web.json_response(self.devices.find(device).controls_snapshot())
         except LookupError as e:
             return web.json_response({"error": str(e)}, status=404)
 
     async def _post_device_controls(self, request: web.Request) -> web.Response:
         """Set one control on a speaker. Body: {device, control, value(number)}."""
-        if self.device_controls_set is None:
+        if self.devices is None:
             return web.json_response({"error": "device controls not available"}, status=503)
         body = await _read_json(request)
         if not isinstance(body, dict):
@@ -804,7 +756,9 @@ class PanelServer:
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             return web.json_response({"error": 'field "value" (number) is required'}, status=400)
         try:
-            return web.json_response(self.device_controls_set(device, control, float(value)))
+            target = self.devices.find(device)
+            target.set_control(control, float(value))
+            return web.json_response(target.controls_snapshot())
         except LookupError as e:
             return web.json_response({"error": str(e)}, status=404)
         except RuntimeError as e:  # offline
@@ -812,13 +766,13 @@ class PanelServer:
 
     async def _get_wake_probability(self, request: web.Request) -> web.Response:
         """Current live Wake Probability snapshot for one speaker (drives the panel meter)."""
-        if self.device_wake_prob_get is None:
+        if self.devices is None:
             return web.json_response({"error": "wake probability not available"}, status=503)
         device = request.query.get("device")
         if not device:
             return web.json_response({"error": 'query param "device" is required'}, status=400)
         try:
-            return web.json_response(self.device_wake_prob_get(device))
+            return web.json_response(self.devices.find(device).wake_prob())
         except LookupError as e:
             return web.json_response({"error": str(e)}, status=404)
 
@@ -827,7 +781,7 @@ class PanelServer:
 
         The panel POSTs enabled=true when the device modal opens and enabled=false when it
         closes, so the firmware only streams the probability while someone is watching."""
-        if self.device_wake_prob_set is None:
+        if self.devices is None:
             return web.json_response({"error": "wake probability not available"}, status=503)
         body = await _read_json(request)
         if not isinstance(body, dict):
@@ -840,7 +794,7 @@ class PanelServer:
         if not isinstance(enabled, bool):
             return web.json_response({"error": 'field "enabled" (bool) is required'}, status=400)
         try:
-            return web.json_response(self.device_wake_prob_set(device, bool(enabled)))
+            return web.json_response(self.devices.find(device).set_wake_prob_stream(bool(enabled)))
         except LookupError as e:
             return web.json_response({"error": str(e)}, status=404)
         except RuntimeError as e:  # offline
@@ -852,7 +806,7 @@ class PanelServer:
         Returns {device, detect}. The server keeps no state: the device turns detection back
         on at every new connection. Status codes: 200 ok, 400 bad input, 404 unknown device,
         409 offline, 503 not wired."""
-        if self.device_detect_set is None:
+        if self.devices is None:
             return web.json_response({"error": "detect switch not available"}, status=503)
         body = await _read_json(request)
         if not isinstance(body, dict):
@@ -865,7 +819,7 @@ class PanelServer:
         if not isinstance(enabled, bool):
             return web.json_response({"error": 'field "enabled" (bool) is required'}, status=400)
         try:
-            return web.json_response(self.device_detect_set(device, enabled))
+            return web.json_response(self.devices.find(device).set_detect(enabled))
         except LookupError as e:
             return web.json_response({"error": str(e)}, status=404)
         except RuntimeError as e:  # offline
@@ -876,7 +830,7 @@ class PanelServer:
         sends them, the device swaps them without a restart. Body: {device}. Returns {device,
         models}. Status codes: 200 ok, 400 bad input, 404 unknown device, 409 offline, 503 not
         wired."""
-        if self.device_model_reload is None:
+        if self.devices is None:
             return web.json_response({"error": "model reload not available"}, status=503)
         body = await _read_json(request)
         if not isinstance(body, dict):
@@ -885,7 +839,7 @@ class PanelServer:
         if not isinstance(device, str) or not device:
             return web.json_response({"error": 'field "device" (string) is required'}, status=400)
         try:
-            return web.json_response(self.device_model_reload(device))
+            return web.json_response(self.devices.find(device).reload_model())
         except LookupError as e:
             return web.json_response({"error": str(e)}, status=404)
         except RuntimeError as e:  # offline
@@ -896,7 +850,7 @@ class PanelServer:
         Body: {device, text}. Answers once the speech has played. Status codes: 200 ok,
         400 bad input, 404 unknown device, 409 offline, 502 the speech failed, 503 not
         wired."""
-        if self.device_say is None:
+        if self.devices is None:
             return web.json_response({"error": "say not available"}, status=503)
         body = await _read_json(request)
         if not isinstance(body, dict):
@@ -908,7 +862,7 @@ class PanelServer:
         if not isinstance(text, str) or not text.strip():
             return web.json_response({"error": 'field "text" (non-empty string) is required'}, status=400)
         try:
-            await self.device_say(device, text)
+            await self.devices.find(device).say(text)
         except LookupError as e:
             return web.json_response({"error": str(e)}, status=404)
         except DeviceOfflineError as e:
@@ -937,7 +891,7 @@ class PanelServer:
         A capture that fails later (the device is busy with a voice session, no audio came)
         surfaces on the status endpoint as state "error" with the message.
         """
-        if self.device_capture_start is None:
+        if self.devices is None:
             return web.json_response({"error": "capture not available"}, status=503)
         body = await _read_json(request)
         if not isinstance(body, dict):
@@ -960,7 +914,7 @@ class PanelServer:
                 status=400,
             )
         try:
-            snap = self.device_capture_start(device, seconds)
+            snap = self.devices.find(device).start_capture(seconds).snapshot()
         except LookupError as e:
             return web.json_response({"error": str(e)}, status=404)
         except (DeviceOfflineError, CaptureBusyError) as e:
@@ -973,14 +927,14 @@ class PanelServer:
         | done | error | idle), device, name, seconds, remaining, duration (seconds of audio
         written), gaps ([{at, seconds}]: audio lost to a dropped link or a device restart,
         zeros in the file), error}."""
-        if self.device_capture_status is None:
+        if self.devices is None:
             return web.json_response({"error": "capture not available"}, status=503)
         device = request.query.get("device")
         if not device:
             return web.json_response(
                 {"error": 'query param "device" is required'}, status=400
             )
-        return web.json_response(self.device_capture_status(device))
+        return web.json_response(self.devices.capture_status(device))
 
     @staticmethod
     async def _capture_download(cap: captures.Capture) -> web.Response:
@@ -1030,13 +984,13 @@ class PanelServer:
     async def _delete_capture(self, request: web.Request) -> web.Response:
         """Delete one capture (its WAV and sidecar). 400 for an invalid device or name, 404
         when there is no such capture, 409 while it runs, 503 not wired."""
-        if self.device_capture_delete is None:
+        if self.devices is None:
             return web.json_response({"error": "capture not available"}, status=503)
         device, name = request.match_info["device"], request.match_info["name"]
         if not captures.valid(device, name):
             return web.json_response({"error": "invalid device or capture name"}, status=400)
         try:
-            deleted = self.device_capture_delete(device, name)
+            deleted = self.devices.capture_delete(device, name)
         except CaptureBusyError as e:
             return web.json_response({"error": str(e)}, status=409)
         if not deleted:

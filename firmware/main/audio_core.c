@@ -233,6 +233,7 @@ mic_chunk_t mic_chunks_step(mic_chunks_t *c, uint32_t dropped, bool want_raw, bo
     const mic_chunk_t out = {
         .pos = c->pos,
         .raw = c->raw,
+        .settling = c->settle > 0,
         .write = c->asked,
         .write_raw = want_raw,
         .have_offset = c->have_offset,

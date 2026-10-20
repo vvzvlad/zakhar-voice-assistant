@@ -17,7 +17,6 @@ export const ICONS = {
   context: "M3 12a9 9 0 109-9 9 9 0 00-7 3.4M3 3v3.4h3.4M12 7v5l3 2",
   devices: "M5 4h14v12H5zM9 20h6M12 16v4M9 8h6M9 11h3",
   log: "M4 5h16M4 10h16M4 15h10M4 20h13",
-  devlog: "M3 9v6h3l4 3V6L6 9zM14 9h7M14 12h7M14 15h4",
   network: "M12 2a10 10 0 100 20 10 10 0 000-20zM2 12h20M12 2c3.5 3 3.5 17 0 20M12 2c-3.5 3-3.5 17 0 20",
   system: "M4 7h10M18 7h2M4 17h6M14 17h6M14 5v4M10 15v4",
   restart: "M4 12a8 8 0 112.3 5.6M4 20v-5h5",

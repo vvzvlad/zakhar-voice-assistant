@@ -115,15 +115,13 @@ class DatasetJob:
 class DatasetJobManager:
     """Runs recording sessions, at most one per device.
 
-    Construct with the async callables `capture_fn(device, seconds) -> Capture` (a finished
-    one, DeviceManager.capture) and `play_fn(sound_path, device) -> dict`
-    (DeviceManager.play_chime). Keeps the latest session of every set (running or finished)
+    Construct with the DeviceManager: a take beeps with its play_chime and records with
+    Device.record_capture. Keeps the latest session of every set (running or finished)
     until the next session of that set starts.
     """
 
-    def __init__(self, capture_fn, play_fn):
-        self._capture_fn = capture_fn
-        self._play_fn = play_fn
+    def __init__(self, devices):
+        self._devices = devices
         self._latest: dict[str, DatasetJob] = {}  # set name -> its latest session
         self._running: dict[str, DatasetJob] = {}  # device -> its in-flight session
 
@@ -138,8 +136,8 @@ class DatasetJobManager:
             try:
                 # The beep's result is ignored: a device without a speaker lands in
                 # "offline" there and just records without the cue.
-                await self._play_fn("", job.device)
-                cap = await self._capture_fn(job.device, job.seconds)
+                await self._devices.play_chime("", job.device)
+                cap = await self._devices.find(job.device).record_capture(job.seconds)
             except DeviceOfflineError:
                 job.state = "waiting"
                 await asyncio.sleep(OFFLINE_RETRY_S)

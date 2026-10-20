@@ -19,8 +19,9 @@ esp_err_t audio_start_playback(void);
 // zakhar_link's microphone tap: 16 kHz, 2 channels interleaved (ch0 the XMOS AGC output, ch1 its
 // noise-suppressed output at the wake-word gain, exactly the wake-word engine's input), positions
 // in frames. While the speaker plays and echo_cancel is on, ch0 is the raw microphone 0 with the
-// speaker's own playback cancelled, at gain 1; during an auto volume measurement it is the raw
-// microphone 0 as read, at gain 1.
+// speaker's own playback cancelled, the raw microphone taken x16 from its 32-bit slot into the AEC,
+// exactly the stop word's input; during an auto volume measurement it is the raw microphone 0 as
+// read, at gain 1.
 uint32_t audio_mic_position(void);
 size_t audio_mic_read(uint32_t *pos, int16_t *out, size_t max_frames);
 

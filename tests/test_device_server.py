@@ -24,6 +24,7 @@ from src.device_server import (
 from src.plugins.base import Deps
 from src.plugins.vad.webrtc import WebRtcVadBackend
 from src.prompt_store import PromptStore
+from src.reply_compressor import CEILING_DBFS
 from src.runs_store import RunsStore
 from src.runtime import Runtime
 from src.tts import TtsBackend, pcm_mime
@@ -324,9 +325,9 @@ async def test_status_counts_the_uptime_on_from_the_hello(srv, monkeypatch):
 
 async def test_models_follow_the_config_and_the_reload_command(srv, tmp_path):
     with pytest.raises(LookupError):
-        srv.manager.reload_model("nope")
+        srv.manager.find("nope")
     with pytest.raises(RuntimeError, match="offline"):
-        srv.manager.reload_model("kitchen")
+        srv.device().reload_model()
     dev = await srv.connect()
     await dev.recv()  # config
     for _ in range(3):
@@ -344,7 +345,7 @@ async def test_models_follow_the_config_and_the_reload_command(srv, tmp_path):
     # The reload command re-reads and sends them all; a file that cannot be read sends nothing.
     missing = str(tmp_path / "missing.tflite")
     srv.svc.apply({"core": {"devices": [{"name": "kitchen", "wake_model": missing, "vad_model": str(other)}]}})
-    assert srv.manager.reload_model("kitchen") == {
+    assert srv.device().reload_model() == {
         "device": "kitchen", "models": {"vad": str(other), "stop": device_server.RELEASE_STOP_MODEL}}
     assert (await dev.model())[0] == {"type": "model", "kind": "vad", "name": str(other), "size": 100}
 
@@ -368,7 +369,7 @@ async def test_a_wake_model_name_sends_its_file(srv, tmp_path, monkeypatch):
     await srv.manager.reconfigure()
     with pytest.raises(asyncio.TimeoutError):
         await dev.model(timeout=0.2)
-    assert srv.manager.reload_model("kitchen")["models"]["wake"] == "zakhar/zakhar_v28"
+    assert srv.device().reload_model()["models"]["wake"] == "zakhar/zakhar_v28"
 
 
 def test_wake_models_are_named_and_listed_in_version_order_without_vad_or_stop(tmp_path, monkeypatch):
@@ -885,7 +886,7 @@ async def test_playback_is_paced_to_the_device_buffer(srv, prime):
     dev = await srv.connect(buffer_ms=(prime or 700) + 700)
     await dev.recv()  # config
     if prime is not None:
-        srv.manager.set_device_control("kitchen", "play_prime_ms", prime)
+        srv.device().set_control("play_prime_ms", prime)
         await srv.manager.reconfigure()
         assert (await dev.recv())["play_prime_ms"] == prime
     pcm = b"\x03\x00" * 12800  # 0.8 s at 16 kHz
@@ -970,6 +971,35 @@ async def test_pcm_split_mid_sample_resamples_like_one_shot(srv):
     assert np.abs(out - ref).max() <= 4
 
 
+async def test_compress_replies_holds_the_peaks_at_the_ceiling(srv):
+    # Read per stream, raw PCM and WAV alike: off the clip goes out as it came, on its peaks
+    # are held at the ceiling.
+    dev = await srv.connect()
+    await dev.recv()  # config
+    pcm = np.round(32767 * np.sin(2 * np.pi * 1000 * np.arange(8000) / 16000)).astype("<i2").tobytes()
+    wav = io.BytesIO()
+    with wave.open(wav, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(16000)
+        w.writeframes(pcm)
+    ceiling = 10 ** (CEILING_DBFS / 20) * 32768
+    for on in (False, True):
+        srv.svc.apply({"core": {"devices": [{"name": "kitchen", "compress_replies": on}]}})
+        for mime, clip in ((pcm_mime(16000), pcm), ("audio/wav", wav.getvalue())):
+            play = asyncio.create_task(srv.device().play(mime, clip))
+            start = await dev.recv()
+            await dev.recv()  # play_end
+            await dev.send(type="played", id=start["id"])
+            await play
+            out = dev.plays[start["id"]]
+            if not on:
+                assert out == pcm
+            else:
+                assert len(out) == len(pcm)
+                assert np.abs(np.frombuffer(out, dtype="<i2").astype(int)).max() <= ceiling + 1
+
+
 def capture_status(srv):
     return srv.manager.capture_status("kitchen")
 
@@ -988,7 +1018,7 @@ async def test_capture_is_written_as_its_audio_arrives(srv):
     srv.svc.apply({"core": {"vad": {"mic_channel": 1}}})
     dev = await srv.connect()
     await dev.recv()  # config
-    name = srv.manager.capture_start("kitchen", 1)["name"]
+    name = srv.device().start_capture(1).name
     msg = await dev.recv()
     assert msg == {"type": "capture", "id": srv.device().capture.id, "seconds": 1}
     # "recording" only from the first frame on.
@@ -1009,16 +1039,16 @@ async def test_capture_is_written_as_its_audio_arrives(srv):
 
 async def test_capture_refusals(srv):
     with pytest.raises(LookupError):
-        srv.manager.capture_start("nope", 1)
+        srv.manager.find("nope")
     with pytest.raises(DeviceOfflineError):
-        srv.manager.capture_start("kitchen", 1)
+        srv.device().start_capture(1)
     assert capture_status(srv)["state"] == "idle"
     dev = await srv.connect()
     await dev.recv()  # config
-    name = srv.manager.capture_start("kitchen", 1)["name"]
+    name = srv.device().start_capture(1).name
     cid = (await dev.recv())["id"]
     with pytest.raises(CaptureBusyError):
-        srv.manager.capture_start("kitchen", 1)
+        srv.device().start_capture(1)
     with pytest.raises(CaptureBusyError):
         srv.manager.capture_delete("kitchen", name)
     # A device in a voice session refuses with `busy`.
@@ -1032,7 +1062,7 @@ async def test_capture_refusals(srv):
 async def test_capture_goes_on_after_a_lost_link(srv):
     dev = await srv.connect()
     await dev.recv()  # config
-    name = srv.manager.capture_start("kitchen", 1)["name"]
+    name = srv.device().start_capture(1).name
     cid = (await dev.recv())["id"]
     await dev.capture_audio(0, stereo(100, 0, 300))
     await until(lambda: capture_status(srv)["duration"] == 0.3)
@@ -1053,7 +1083,7 @@ async def test_capture_goes_on_after_a_lost_link(srv):
 async def test_a_device_restarted_mid_capture_records_the_time_left(srv):
     dev = await srv.connect()
     await dev.recv()  # config
-    name = srv.manager.capture_start("kitchen", 3)["name"]
+    name = srv.device().start_capture(3).name
     first = (await dev.recv())["id"]
     await dev.capture_audio(0, stereo(100, 0, 200))
     await until(lambda: capture_status(srv)["duration"] == 0.2)
@@ -1079,7 +1109,7 @@ async def test_a_capture_the_device_never_finishes_keeps_what_came(srv, monkeypa
     monkeypatch.setattr(device_server, "CAPTURE_WAIT_MARGIN", 0.2)
     dev = await srv.connect()
     await dev.recv()  # config
-    srv.manager.capture_start("kitchen", 1)
+    srv.device().start_capture(1)
     await dev.recv()  # capture
     await dev.capture_audio(0, stereo(100, 0, 400))
     await until(lambda: capture_status(srv)["duration"] == 0.4)
@@ -1090,7 +1120,7 @@ async def test_a_capture_the_device_never_finishes_keeps_what_came(srv, monkeypa
     # No audio at all ends as an error.
     dev = await srv.connect()
     await dev.recv()  # config
-    srv.manager.capture_start("kitchen", 1)
+    srv.device().start_capture(1)
     await dev.recv()  # capture
     await until(lambda: capture_status(srv)["state"] == "error", timeout=3.0)
     assert capture_status(srv)["error"] == "no audio"
@@ -1099,7 +1129,7 @@ async def test_a_capture_the_device_never_finishes_keeps_what_came(srv, monkeypa
 async def test_a_device_back_without_the_capture_after_its_end_gets_no_new_one(srv):
     dev = await srv.connect()
     await dev.recv()  # config
-    srv.manager.capture_start("kitchen", 1)
+    srv.device().start_capture(1)
     await dev.recv()  # capture
     await dev.capture_audio(0, stereo(100, 0, 1000))
     await lose_link(srv, dev)  # its audio_end went down with the link
@@ -1115,7 +1145,7 @@ async def test_a_device_back_without_the_capture_after_its_end_gets_no_new_one(s
 async def test_a_restarted_server_resumes_the_capture_from_disk(srv, tmp_path):
     dev = await srv.connect()
     await dev.recv()  # config
-    name = srv.manager.capture_start("kitchen", 1)["name"]
+    name = srv.device().start_capture(1).name
     cid = (await dev.recv())["id"]
     await dev.capture_audio(0, stereo(100, 0, 400))
     await until(lambda: capture_status(srv)["duration"] == 0.4)
@@ -1143,7 +1173,7 @@ async def test_a_restarted_server_resumes_the_capture_from_disk(srv, tmp_path):
 async def test_controls(srv):
     dev = await srv.connect()
     await dev.recv()  # config
-    controls = srv.manager.device_controls("kitchen")["controls"]
+    controls = srv.device().controls_snapshot()["controls"]
     assert [(c["id"], c["value"], c["min"], c["max"], c["step"]) for c in controls] == [
         ("wake_probability_cutoff", 80, 0, 100, 1), ("vad_cutoff", 30, 0, 100, 1), ("echo_cancel", 1, 0, 3, 1),
         ("echo_cancel_mode", 2, 0, 3, 1), ("echo_cancel_filter", 4, 1, 8, 1), ("play_prime_ms", 700, 0, 2000, 50),
@@ -1152,7 +1182,7 @@ async def test_controls(srv):
     ]
 
     # A cutoff is written to the config; the reconfigure that follows sends `config`.
-    srv.manager.set_device_control("kitchen", "wake_probability_cutoff", 55)
+    srv.device().set_control("wake_probability_cutoff", 55)
     assert srv.svc.core.devices[0].wake_cutoff == 55
     await srv.manager.reconfigure()
     rest = {"echo_cancel": 1, "echo_cancel_mode": 2, "echo_cancel_filter": 4, "play_prime_ms": 700,
@@ -1162,21 +1192,21 @@ async def test_controls(srv):
     for control, value, stored in (("echo_cancel", 7, 3), ("echo_cancel_mode", -2, 0), ("echo_cancel_filter", 0, 1),
                                    ("echo_cancel_filter", 9, 8), ("play_prime_ms", 450, 450),
                                    ("play_prime_ms", 2500, 2000)):
-        srv.manager.set_device_control("kitchen", control, value)
+        srv.device().set_control(control, value)
         assert getattr(srv.svc.core.devices[0], control) == stored
         await srv.manager.reconfigure()
         rest[control] = stored
         assert await dev.recv() == {"type": "config", "wake_cutoff": 55, "vad_cutoff": 30, **rest}
 
-    srv.manager.set_device_control("kitchen", "speaker_volume", 40)
+    srv.device().set_control("speaker_volume", 40)
     assert await dev.recv() == {"type": "set_volume", "value": 40}
     await dev.send(type="volume", value=70)
-    await until(lambda: srv.manager.device_controls("kitchen")["controls"][8]["value"] == 70)
+    await until(lambda: srv.device().controls_snapshot()["controls"][8]["value"] == 70)
 
-    srv.manager.set_wake_prob_stream("kitchen", True)
+    srv.device().set_wake_prob_stream(True)
     assert await dev.recv() == {"type": "wake_peak_stream", "on": True}
     await dev.send(type="wake_peak", value=42)
-    await until(lambda: srv.manager.wake_prob("kitchen")["value"] == 42)
+    await until(lambda: srv.device().wake_prob()["value"] == 42)
 
 
 async def test_auto_volume_moves_the_volume_by_the_median_noise_against_the_threshold(srv):
@@ -1185,7 +1215,7 @@ async def test_auto_volume_moves_the_volume_by_the_median_noise_against_the_thre
     assert await dev.boost() == 0
 
     def readings():
-        return [r["value"] for r in srv.manager.device_controls("kitchen")["readings"]]
+        return [r["value"] for r in srv.device().controls_snapshot()["readings"]]
 
     assert readings() == [None, 0]
     # Off: the noise is kept and shown, the boost stays 0.
@@ -1208,14 +1238,14 @@ async def test_auto_volume_moves_the_volume_by_the_median_noise_against_the_thre
     await until(lambda: srv.device().conn.volume == 41)
     assert readings() == [-35.0, 50]
     # The threshold and the gain stay on the server: a change sends the new boost, no `config`.
-    srv.manager.set_device_control("kitchen", "auto_volume_threshold", -40)
+    srv.device().set_control("auto_volume_threshold", -40)
     await srv.manager.reconfigure()
     assert await dev.boost() == 10
-    srv.manager.set_device_control("kitchen", "auto_volume_gain", 3.04)
+    srv.device().set_control("auto_volume_gain", 3.04)
     assert srv.svc.core.devices[0].auto_volume_gain == 3.0
     await srv.manager.reconfigure()
     assert await dev.boost() == 15
-    srv.manager.set_device_control("kitchen", "auto_volume_gain", 12)
+    srv.device().set_control("auto_volume_gain", 12)
     await srv.manager.reconfigure()
     assert await dev.boost() == 50
     # A boost past 100 is 100, and a boost that stays as it is is not sent again.
@@ -1229,7 +1259,7 @@ async def test_auto_volume_moves_the_volume_by_the_median_noise_against_the_thre
     for _ in range(3):
         await dev.send(type="ambient", value=-60.0)  # the third: the median -60, (-60 - -40) x 10
     assert await dev.boost() == -100
-    srv.manager.set_device_control("kitchen", "auto_volume_gain", 0.5)
+    srv.device().set_control("auto_volume_gain", 0.5)
     await srv.manager.reconfigure()
     assert await dev.boost() == -10
     assert readings() == [-60.0, -10]
@@ -1251,49 +1281,47 @@ async def test_set_volume_to_a_level_or_by_a_change(srv):
     # A change counts from the volume the device reported last (e.g. turned on the dial).
     await dev.send(type="volume", value=50)
     await until(lambda: device.conn.volume == 50)
-    assert srv.manager.set_volume("kitchen", change=-10) == 40
+    assert device.set_volume(change=-10) == 40
     assert await dev.recv() == {"type": "set_volume", "value": 40}
     assert device.set_volume(change=100) == 100  # clamped
     assert await dev.recv() == {"type": "set_volume", "value": 100}
     for args in ({}, {"level": 10, "change": 5}):
         with pytest.raises(ValueError):
             device.set_volume(**args)
-    assert srv.manager.get_volume("kitchen") == 100
+    assert device.get_volume() == 100
     device.conn.volume = None
     with pytest.raises(RuntimeError, match="has not reported its volume"):
         device.set_volume(change=10)
     with pytest.raises(RuntimeError, match="has not reported its volume"):
-        srv.manager.get_volume("kitchen")
+        device.get_volume()
 
 
 async def test_set_volume_refuses_offline_unknown_and_speakerless_devices(srv):
     for args in ({"level": 30}, {"change": 10}):
         with pytest.raises(RuntimeError, match="offline"):
-            srv.manager.set_volume("kitchen", **args)
+            srv.device().set_volume(**args)
     with pytest.raises(RuntimeError, match="offline"):
-        srv.manager.get_volume("kitchen")
+        srv.device().get_volume()
     with pytest.raises(LookupError, match="unknown device"):
-        srv.manager.set_volume("nope", level=30)
-    with pytest.raises(LookupError, match="unknown device"):
-        srv.manager.get_volume("nope")
+        srv.manager.find("nope")
     dev = await srv.connect("panel", speaker=False)
     await dev.recv()  # config
     for args in ({"level": 30}, {"change": 10}):
         with pytest.raises(LookupError, match="no speaker"):
-            srv.manager.set_volume("panel", **args)
+            srv.device("panel").set_volume(**args)
     with pytest.raises(LookupError, match="no speaker"):
-        srv.manager.get_volume("panel")
+        srv.device("panel").get_volume()
 
 
 async def test_say_speaks_on_an_online_device_only(srv, tmp_path):
     srv.rt.runs_store = RunsStore(str(tmp_path / "runs.db"))
     with pytest.raises(DeviceOfflineError):
-        await srv.manager.say("kitchen", "проверка громкости")
+        await srv.device().say("проверка громкости")
     assert srv.rt.runs_store.list() == []
 
     dev = await srv.connect()
     await dev.recv()  # config
-    say = asyncio.create_task(srv.manager.say("kitchen", "проверка громкости"))
+    say = asyncio.create_task(srv.device().say("проверка громкости"))
     assert await dev.recv() == {"type": "reply", "text": "проверка громкости"}
     start = await dev.recv()
     assert (await dev.recv())["type"] == "play_end"
@@ -1305,12 +1333,12 @@ async def test_say_speaks_on_an_online_device_only(srv, tmp_path):
 
 async def test_set_detect_sends_switch_and_refuses_offline(srv):
     with pytest.raises(RuntimeError, match="offline"):
-        srv.manager.set_detect("kitchen", False)
+        srv.device().set_detect(False)
     dev = await srv.connect()
     await dev.recv()  # config
-    assert srv.manager.set_detect("kitchen", False) == {"device": "kitchen", "detect": False}
+    assert srv.device().set_detect(False) == {"device": "kitchen", "detect": False}
     assert await dev.recv() == {"type": "detect", "on": False}
-    srv.manager.set_detect("kitchen", True)
+    srv.device().set_detect(True)
     assert await dev.recv() == {"type": "detect", "on": True}
 
 
@@ -1419,7 +1447,7 @@ async def test_text_only_device_gets_no_tts(srv):
     await dev.recv()  # config
     # No stop model: it listens only while the device plays.
     assert [(await dev.model())[0]["kind"] for _ in range(2)] == ["wake", "vad"]
-    assert srv.manager.reload_model("panel")["models"].keys() == {"wake", "vad"}
+    assert srv.device("panel").reload_model()["models"].keys() == {"wake", "vad"}
     # A stop model sent on connect would be read here first.
     assert [(await dev.model())[0]["kind"] for _ in range(2)] == ["wake", "vad"]
     await dev.wake(5)
