@@ -10,22 +10,31 @@ from src.tool_hub import BuiltinMcpSource
 
 
 class FakeManager:
-    """DeviceManager double: records get/set_volume calls, answers 40 or raises `error`."""
+    """DeviceManager double: find() gives a device that records its get/set_volume calls
+    here and answers 40 or raises `error`."""
 
     def __init__(self, error=None):
         self.calls = []
         self.error = error
 
-    def get_volume(self, device_name):
-        self.calls.append((device_name,))
-        if self.error is not None:
-            raise self.error
+    def find(self, device_name):
+        return FakeDevice(device_name, self)
+
+
+class FakeDevice:
+    def __init__(self, name, manager):
+        self.name, self.manager = name, manager
+
+    def get_volume(self):
+        self.manager.calls.append((self.name,))
+        if self.manager.error is not None:
+            raise self.manager.error
         return 40
 
-    def set_volume(self, device_name, level=None, change=None):
-        self.calls.append((device_name, level, change))
-        if self.error is not None:
-            raise self.error
+    def set_volume(self, level=None, change=None):
+        self.manager.calls.append((self.name, level, change))
+        if self.manager.error is not None:
+            raise self.manager.error
         return 40
 
 
