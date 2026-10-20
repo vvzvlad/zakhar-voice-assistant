@@ -84,6 +84,13 @@ button{font-family:inherit;}
 .z-card-h .sub{font-size:11.5px;color:var(--mut);font-weight:400;}
 .z-card-b{padding:5px 17px;}
 .z-grid{display:grid;gap:16px;}
+/* A card folded to its header until opened: the header is the <summary>, its chevron
+   points right while folded. */
+details.z-card>summary{cursor:pointer;list-style:none;}
+details.z-card>summary::-webkit-details-marker{display:none;}
+details.z-card:not([open])>summary{border-bottom:none;}
+details.z-card>summary .z-chev{flex:none;color:var(--mut);transform:rotate(-90deg);transition:transform .12s;}
+details.z-card[open]>summary .z-chev{transform:none;}
 .z-sl{display:flex;align-items:center;gap:10px;font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--ink2);margin:22px 0 11px;}
 .z-sl .ln{flex:1;height:1px;background:var(--line);}
 .z-sl a{font-size:11px;color:var(--acc);text-transform:none;letter-spacing:0;font-weight:600;cursor:pointer;}
@@ -134,6 +141,8 @@ button{font-family:inherit;}
 .z-f{padding:13px 0;border-bottom:1px solid var(--line2);display:flex;flex-direction:column;gap:7px;}
 .z-f:last-child{border-bottom:none;}
 .z-f:has(+ .z-banner){border-bottom:none;}
+/* A form's field group: its subheading draws the divider above its fields. */
+.z-f:has(+ .z-sl){border-bottom:none;}
 .z-f.row{flex-direction:row;align-items:center;justify-content:space-between;gap:18px;}
 .z-fl{display:flex;align-items:center;justify-content:space-between;gap:10px;}
 .z-fl b{font-size:12.5px;font-weight:600;}
@@ -380,10 +389,8 @@ button{font-family:inherit;}
 
 /* ── Two-column layout ──────────────────────────────────── */
 .z-cols{display:grid;grid-template-columns:1fr 320px;gap:18px;align-items:start;}
-.z-cols.wide{grid-template-columns:1fr 360px;}
 .z-cols.even{grid-template-columns:1fr 1fr;}
-@media (max-width:1180px){.z-cols,.z-cols.wide,.z-cols.even{grid-template-columns:1fr;}}
-.z-aside{display:flex;flex-direction:column;gap:14px;}
+@media (max-width:1180px){.z-cols,.z-cols.even{grid-template-columns:1fr;}}
 .z-info{font-size:12px;color:var(--ink2);line-height:1.6;}
 .z-info b{font-weight:600;}
 .z-diagram{background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:13px;}

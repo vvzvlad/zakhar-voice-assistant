@@ -131,7 +131,7 @@ class SileroTtsConfig(BaseModel):
     put_accent: bool = Field(True, title="Place stress", description="Stress words that carry no manual '+' mark.")
     # Restore е->ё where appropriate.
     put_yo: bool = Field(True, title="Restore ё", description="Turn е into ё where the word needs it.")
-    sentence_silence: float = Field(0.4, title="Pause between sentences (s)")
+    sentence_silence: float = Field(0.4, title="Pause between sentences", json_schema_extra={"unit": "s"})
 
 
 def _list_silero_models(base_dir: str) -> list[dict]:

@@ -6,7 +6,9 @@
 //     core.vad cards staying disjoint,
 //   - an engine tab switch sends no patch and keeps the other tab's unsaved edits,
 //   - engine tabs named by label, the Capture page's engine marked "in use",
-//   - the engine, wake-word and chime sections carry the ids configure links scroll to.
+//   - the engine, wake-word and chime sections carry the ids configure links scroll to,
+//   - the VAD auto gain sits in the microphone card, not with the thresholds,
+//   - the chime field names its sound by file name, listed or not.
 import React from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, cleanup, waitFor, within } from "@testing-library/react";
@@ -59,6 +61,7 @@ function makeCatalog({ withVadCategory = true } = {}) {
             properties: {
               silence_ms: { type: "integer", minimum: 100, maximum: 5000 },
               mic_channel: { type: "integer", enum: [0, 1] },
+              mic_auto_gain: { type: "boolean", title: "VAD auto gain" },
               mic_normalize: { type: "boolean" },
               mic_highpass: { type: "boolean" },
             },
@@ -73,8 +76,8 @@ function makeCatalog({ withVadCategory = true } = {}) {
         },
       },
       values: {
-        vad: { silence_ms: 800, mic_channel: 0, mic_normalize: true, mic_highpass: false },
-        ack: { enabled: true, sound_path: "" },
+        vad: { silence_ms: 800, mic_channel: 0, mic_auto_gain: false, mic_normalize: true, mic_highpass: false },
+        ack: { enabled: true, sound_path: "assets/chimes/Chime_SFX_001.wav" },
       },
     },
   };
@@ -150,6 +153,19 @@ describe("VAD page — layout", () => {
     await settle();
   });
 
+  it("puts the VAD auto gain into the microphone card", async () => {
+    renderPage();
+    expect(within(cardByTitle("Microphone input & conditioning")).getByText("VAD auto gain")).toBeInTheDocument();
+    expect(within(cardByTitle("End-pointing thresholds")).queryByText("VAD auto gain")).toBeNull();
+    await settle();
+  });
+
+  it("names the chime sound by its file name although the list lacks it", async () => {
+    renderPage();
+    await settle();
+    expect(within(cardByTitle("End-of-phrase chime")).getByRole("button", { name: "Chime_SFX_001.wav" })).toBeInTheDocument();
+  });
+
   it("leaves `enabled` out of the wake-word and chime cards", async () => {
     renderPage();
     expect(within(cardByTitle("Wake-word verify")).queryByRole("switch")).toBeNull();
@@ -178,7 +194,7 @@ describe("VAD page — one Save", () => {
     expect(patch).not.toHaveBeenCalled();
 
     expect(await saved()).toEqual({
-      core: { vad: { silence_ms: 900, mic_channel: 0, mic_normalize: false, mic_highpass: false } },
+      core: { vad: { silence_ms: 900, mic_channel: 0, mic_auto_gain: true, mic_normalize: true, mic_highpass: false } },
       vad: { instances: { webrtc: { aggressiveness: 3 }, silero: { threshold: 0.7 } } },
       wakeword: { instances: { vosk: { keywords: ["алиса"] } } },
     });

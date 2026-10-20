@@ -16,7 +16,7 @@ from loguru import logger
 from pydantic import BaseModel, Field, field_validator
 
 from src.logging_setup import capture_native_stderr
-from src.plugins.base import Deps, Provider, register
+from src.plugins.base import PHRASE_FIELD_EXTRA, Deps, Provider, register
 from src.wakeword import PassthroughVerifier, WakewordVerdict, WakewordVerifier
 
 # Window-start shifts of 0 / 10 / 20 ms in 16 kHz 16-bit mono PCM: one per 10 ms
@@ -191,15 +191,17 @@ class VoskWakewordConfig(BaseModel):
         "A multi-word entry is treated as a phrase — all of its words must be "
         "recognised contiguously for it to match. Leave empty to accept every wake "
         "(the gate is disabled).",
+        json_schema_extra=PHRASE_FIELD_EXTRA,
     )
 
     answer_sound_alikes: list[str] = Field(
         default_factory=lambda: ["завтра", "сахар", "захват", "заход", "захочет"],
-        title="Sound-alikes over an answer",
+        title="Sound-alikes rejected during a reply",
         description="Words that sound like a keyword, added to the grammar for a wake "
         "heard while the device answers: the speaker's own voice then reaches the "
         "check, and a grammar of only the keywords turns e.g. its 'завтра' into "
         "'захар'. A wake decoded as one of these words is rejected.",
+        json_schema_extra=PHRASE_FIELD_EXTRA,
     )
 
     @field_validator("keywords", "answer_sound_alikes")
@@ -214,7 +216,8 @@ class VoskWakewordConfig(BaseModel):
 
     window_ms: int = Field(
         2500,
-        title="Window (ms)",
+        title="Window",
+        json_schema_extra={"unit": "ms"},
         description="Length of the pre-roll audio window decoded for verification. "
         "MUST be >= the device firmware's preroll_duration (currently 2000 ms): the "
         "wake word sits at the TAIL of the pre-roll, so a window shorter than the "
@@ -224,7 +227,8 @@ class VoskWakewordConfig(BaseModel):
     )
     timeout_ms: int = Field(
         300,
-        title="Timeout (ms)",
+        title="Timeout",
+        json_schema_extra={"unit": "ms"},
         description="Per-verification time budget the pipeline applies before "
         "falling back to the on-error policy.",
     )

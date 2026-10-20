@@ -137,6 +137,28 @@ describe("LLM page — provider tabs", () => {
       openrouter: { model: "anthropic/claude" }, groq: { model: "mixtral-8x7b" },
     } } });
   });
+
+  it("holds the dialog context, saved with the provider's edit in one patch", async () => {
+    const catalog = makeCatalog();
+    catalog.core = {
+      schema: { $defs: { ContextConfig: { type: "object", properties: { max_turns: { type: "integer", title: "Context depth" } } } } },
+      values: { context: { max_turns: 5 } },
+    };
+    useAppData.mockReturnValue({ catalog, config, patch });
+    render(<LLM />);
+    const ctx = screen.getByText("Dialog context", { selector: "b" }).closest(".z-card");
+    const input = ctx.querySelector(".z-stepper input");
+    fireEvent.change(input, { target: { value: "8" } });
+    fireEvent.blur(input);
+    fireEvent.click(screen.getByRole("button", { name: /openrouter\/auto/ }));
+    fireEvent.click(await screen.findByText("anthropic/claude"));
+    fireEvent.click(screen.getByText("Save changes"));
+    await waitFor(() => expect(patch).toHaveBeenCalledTimes(1));
+    expect(patch.mock.calls[0][0]).toEqual({
+      llm: { instances: { openrouter: { model: "anthropic/claude" } } },
+      core: { context: { max_turns: 8 } },
+    });
+  });
 });
 
 describe("STT page — provider tabs", () => {

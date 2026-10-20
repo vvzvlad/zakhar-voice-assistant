@@ -55,6 +55,10 @@ SECRET_FIELD_EXTRA: dict = {"secret": True}
 # it under the form's "Advanced" section. Merge it with any other extra of the field.
 ADVANCED_FIELD_EXTRA: dict = {"advanced": True}
 
+# Marks a field holding words spoken to the user (a reply phrase): the panel shows it
+# in the text font, not the monospace one of ids, paths and URLs.
+PHRASE_FIELD_EXTRA: dict = {"phrase": True}
+
 # Shared annotation for a local-filesystem path field (Piper voice file, Vosk
 # model directory): rendered as a dynamic select whose options the provider
 # scans from disk, while still accepting an arbitrary typed path (freeform) for

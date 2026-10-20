@@ -1,8 +1,10 @@
 // @vitest-environment jsdom
 // Render-level tests for the Prompt, Tools and Devices pages: the profile's
 // preferred voice is shown by name and flagged when it is not the voice speaking
-// now, each page saves with one Save, deleting an MCP server asks first, a
-// switched-off server keeps its buttons unfaded and a switched-off speaker fades.
+// now, the prompt syntax reference is one collapsed disclosure, each page saves
+// with one Save (the Tools page's server edits included), deleting an MCP server
+// asks first, the built-in sources start folded and say "built-in" once, a
+// switched-off server keeps its controls unfaded and a switched-off speaker fades.
 import React from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, cleanup, fireEvent, waitFor, within } from "@testing-library/react";
@@ -31,13 +33,19 @@ const fish = {
   values: { reference_id: "aaaa", reference_id_label: "Anna", model: "s2-pro" },
 };
 
+// The core schema's external MCP server entry, as the backend emits it.
+const serverSchema = () => ({
+  $defs: { McpServerConfig: { type: "object", properties: { enabled: { type: "boolean", title: "Enabled" } } } },
+  properties: { mcp_servers: { type: "array", items: { $ref: "#/$defs/McpServerConfig" } } },
+});
+
 function appData(core = {}) {
   const patch = vi.fn(async () => {});
   return {
     patch,
     reload: vi.fn(),
     catalog: {
-      core: { schema: { $defs: {}, properties: {} }, values: core },
+      core: { schema: serverSchema(), values: core },
       categories: [{ id: "tts", variants: [{ provider: "fishaudio", enabled: true }], providers: [fish] }],
     },
   };
@@ -50,7 +58,7 @@ describe("Prompt — preferred voice", () => {
     useAppData.mockReturnValue(appData());
     withMarker("<<<<<VOICE provider=fishaudio reference_id=bbbb model=s2-pro>>>>>");
     render(<Prompt />);
-    await waitFor(() => expect(screen.getByTestId("marker-voice").textContent).toBe("Apply voice: Fish Audio · Boris"));
+    await waitFor(() => expect(screen.getByTestId("marker-voice").textContent).toBe("Apply voice on activate: Fish Audio · Boris"));
     expect(getOptions).toHaveBeenCalledWith("tts", "fishaudio", "reference_id");
     expect(screen.getByText("differs from current TTS voice")).toBeInTheDocument();
   });
@@ -59,9 +67,23 @@ describe("Prompt — preferred voice", () => {
     useAppData.mockReturnValue(appData());
     withMarker("<<<<<VOICE provider=fishaudio reference_id=aaaa model=s2-pro>>>>>");
     render(<Prompt />);
-    expect((await screen.findByTestId("marker-voice")).textContent).toBe("Apply voice: Fish Audio · Anna");
+    expect((await screen.findByTestId("marker-voice")).textContent).toBe("Apply voice on activate: Fish Audio · Anna");
     expect(getOptions).not.toHaveBeenCalled();
     expect(screen.queryByText("differs from current TTS voice")).not.toBeInTheDocument();
+  });
+});
+
+describe("Prompt — syntax reference", () => {
+  it("is one collapsed Syntax disclosure holding the three references", async () => {
+    useAppData.mockReturnValue(appData());
+    getPromptProfile.mockResolvedValue({ id: 1, name: "default", text: "hi" });
+    render(<Prompt />);
+    const summary = await screen.findByText("Syntax");
+    expect(summary.tagName).toBe("SUMMARY");
+    const details = summary.closest("details");
+    expect(details.open).toBe(false);
+    for (const t of ["The date/time variable", "Preferred voice", "Notation"]) expect(within(details).getByText(t)).toBeInTheDocument();
+    expect(screen.queryByText("Dialog context")).toBeNull();
   });
 });
 
@@ -69,7 +91,7 @@ describe("one Save per page", () => {
   it("Tools: edits in several source cards go out in one patch", async () => {
     const data = appData();
     const field = (name) => ({ type: "object", properties: { [name]: { type: "string", title: name } } });
-    data.catalog.core.schema.properties = { openweathermap: field("city"), calendar: field("url") };
+    Object.assign(data.catalog.core.schema.properties, { openweathermap: field("city"), calendar: field("url") });
     useAppData.mockReturnValue(data);
     render(<MCP />);
     fireEvent.change(await screen.findByDisplayValue("Moscow"), { target: { value: "Kazan" } });
@@ -80,6 +102,45 @@ describe("one Save per page", () => {
       openweathermap: { enabled: true, api_key: "", city: "Kazan" },
       calendar: { enabled: true, url: "https://dav", username: "", password: "", calendar: "" },
     } });
+  });
+
+  it("Tools: adding and switching off external servers waits for the page's Save, with the built-ins' edits", async () => {
+    const data = appData({ mcp_servers: [{ name: "home", url: "http://h/mcp" }] });
+    data.catalog.core.schema.properties.openweathermap = { type: "object", properties: { city: { type: "string", title: "city" } } };
+    useAppData.mockReturnValue(data);
+    render(<MCP />);
+    const home = (await screen.findByText("http://h/mcp")).closest(".z-card");
+    fireEvent.click(within(home).getByRole("switch"));
+    fireEvent.click(screen.getByRole("button", { name: "Add server" }));
+    fireEvent.change(screen.getByPlaceholderText("e.g. home"), { target: { value: "lab" } });
+    fireEvent.change(screen.getByPlaceholderText("http://10.0.0.5:8123/mcp_server/sse"), { target: { value: "http://l/mcp" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    fireEvent.change(screen.getByDisplayValue("Moscow"), { target: { value: "Kazan" } });
+    expect(within(screen.getByText("lab").closest(".z-card")).getByText("not saved")).toBeInTheDocument();
+    expect(data.patch).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(data.patch).toHaveBeenCalledTimes(1));
+    expect(data.patch.mock.calls[0][0]).toEqual({ core: {
+      mcp_servers: [
+        { name: "home", url: "http://h/mcp", enabled: false },
+        { name: "lab", url: "http://l/mcp", token: "", transport: "auto", prompt: "", enabled: true, slow: false },
+      ],
+      openweathermap: { enabled: true, api_key: "", city: "Kazan" },
+    } });
+  });
+
+  it("Tools: Edit → Done leaves the page clean, and a changed URL goes out on Save", async () => {
+    const data = appData({ mcp_servers: [{ name: "home", url: "http://h/mcp", slow: true }] });
+    useAppData.mockReturnValue(data);
+    render(<MCP />);
+    fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+    fireEvent.click(screen.getByRole("button", { name: "Done" }));
+    expect(screen.queryByTestId("save-bar")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    fireEvent.change(screen.getByDisplayValue("http://h/mcp"), { target: { value: "http://h2/mcp" } });
+    fireEvent.click(screen.getByRole("button", { name: "Done" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(data.patch).toHaveBeenCalledWith({ core: { mcp_servers: [{ name: "home", url: "http://h2/mcp", slow: true }] } }));
   });
 
   it("Prompt: the save bar saves the text, and Reload asks before dropping it", async () => {
@@ -109,9 +170,25 @@ describe("delete asks first", () => {
     expect(screen.getByText("Tools")).toBeInTheDocument();
     expect(screen.queryByText("external")).not.toBeInTheDocument();
     expect(confirm).toHaveBeenLastCalledWith('Delete MCP server "home"?');
-    expect(data.patch).not.toHaveBeenCalled();
+    expect(screen.getByText("home")).toBeInTheDocument();
     fireEvent.click(screen.getAllByText("Delete")[0]);
+    expect(screen.queryByText("home")).toBeNull();
+    expect(data.patch).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
     await waitFor(() => expect(data.patch).toHaveBeenCalledWith({ core: { mcp_servers: [{ name: "lab", url: "http://l/mcp" }] } }));
+  });
+});
+
+describe("Tools — built-in sources", () => {
+  it("start folded and say built-in once, without a config path", async () => {
+    useAppData.mockReturnValue(appData());
+    render(<MCP />);
+    const head = await screen.findByText("Calendar");
+    const card = head.closest("details");
+    expect(card.open).toBe(false);
+    expect(head.closest("summary")).toBeTruthy();
+    expect(within(card).getAllByText(/built-in/i)).toHaveLength(1);
+    expect(screen.queryByText(/core\./)).toBeNull();
   });
 });
 
@@ -127,6 +204,7 @@ describe("a switched-off item fades its content, not its buttons", () => {
     render(<MCP />);
     const card = (await screen.findByText("http://h/mcp")).closest(".z-card");
     expect(faded(within(card).getByText("home"))).toBe(true);
-    for (const b of ["Enable", "Edit", "Delete"]) expect(faded(within(card).getByRole("button", { name: b }))).toBe(false);
+    for (const b of ["Edit", "Delete"]) expect(faded(within(card).getByRole("button", { name: b }))).toBe(false);
+    expect(faded(within(card).getByRole("switch"))).toBe(false);
   });
 });

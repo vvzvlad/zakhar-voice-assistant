@@ -111,7 +111,7 @@ class OpenRouterSttConfig(BaseModel):
     language: str = Field("ru", title="Language", description="Language code of the speech, e.g. ru.")
     temperature: float = Field(0.0, ge=0.0, le=1.0, title="Temperature",
                                description="Whisper sampling temperature; 0 = most deterministic.")
-    timeout: int = Field(60, title="Request timeout (s)")
+    timeout: int = Field(60, title="Request timeout", json_schema_extra={"unit": "s"})
 
 
 @register

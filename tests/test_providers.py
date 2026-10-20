@@ -99,6 +99,19 @@ def test_llm_temperature_and_tokens_ranges():
         LlmConfig(max_tool_rounds=0)
 
 
+def test_llm_panel_schema_groups_the_fallback_replies_and_names_units():
+    # The panel folds the five spoken fallbacks under Advanced in one group, in the
+    # text font, each with a hint; temperature names its range, the token limit its unit.
+    props = LlmConfig.model_json_schema()["properties"]
+    for name in ("reply_rate_limit", "reply_empty_after_tools", "reply_empty",
+                 "reply_error", "reply_error_after_tools"):
+        assert props[name]["group"] == "Fallback replies", name
+        assert props[name]["advanced"] and props[name]["phrase"] and props[name]["description"], name
+    assert (props["temperature"]["minimum"], props["temperature"]["maximum"]) == (0.0, 2.0)
+    assert "from 0 to 2" in props["temperature"]["description"]
+    assert props["max_tokens"]["unit"] == "tokens"
+
+
 # --- options() ----------------------------------------------------------------
 
 def test_yandex_options_voice_returns_list():

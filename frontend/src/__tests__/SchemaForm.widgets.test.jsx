@@ -443,6 +443,27 @@ describe("SchemaForm advanced fields", () => {
     const c = renderField("model", { type: "string" }, "m");
     expect(c.querySelector("details")).toBeNull();
   });
+
+  it("puts the fields of a `group` after the ungrouped ones, under the group's name", () => {
+    const schema = { properties: {
+      reply_a: { type: "string", title: "Reply A", advanced: true, group: "Fallback replies" },
+      timeout: { type: "integer", title: "Timeout", advanced: true },
+      reply_b: { type: "string", title: "Reply B", advanced: true, group: "Fallback replies" },
+    } };
+    const { container } = render(<SchemaForm schema={schema} values={{}} onChange={() => {}} />);
+    const order = [...container.querySelectorAll("details .z-fl b, details .z-sl")].map((e) => e.textContent);
+    expect(order).toEqual(["Timeout", "Fallback replies", "Reply A", "Reply B"]);
+  });
+});
+
+describe("SchemaForm text fonts", () => {
+  it("shows a `phrase` field in the text font and an id field in monospace", () => {
+    expect(renderField("reply", { type: "string", phrase: true }, "Готово.").querySelector(".z-inp")).not.toHaveClass("mono");
+    cleanup();
+    expect(renderField("model", { type: "string" }, "m").querySelector(".z-inp")).toHaveClass("mono");
+    cleanup();
+    expect(renderField("keywords", { type: "array", items: { type: "string" }, phrase: true }, ["захар"]).querySelector(".z-inp")).not.toHaveClass("mono");
+  });
 });
 
 describe("SchemaForm hiddenWhen", () => {
