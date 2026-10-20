@@ -1,10 +1,14 @@
 // @vitest-environment jsdom
 // Devices page: every write of the device list starts from the server's current
 // list (a cutoff set from a slider, a device that connected while the page was
-// open), the Edit dialog opens from the re-read config, shows the id read-only, saves a
-// display label, a wake-word model (a listed or an uploaded one), the device log and the auto volume switches, and shows why its controls cannot load, and a slider write or a
-// newly connected device refreshes the app's config snapshot. The dialog also says a
-// typed text on the speaker to check the volume and shows the auto volume's readings.
+// open), and a slider write or a newly connected device refreshes the app's config snapshot.
+// The Edit dialog opens from the re-read config, shows the id as text in its header, saves a
+// display label, a wake-word model (a listed or an uploaded one), the device log and the auto
+// volume switches — edits on different tabs survive the switch, mark their tabs and go out in
+// one save; only the open tab shows — and shows on every tab why its controls cannot load. It
+// also says a typed text on the speaker to check the volume — the phrase in flight and the text
+// outlive a tab switch — shows the auto volume's settings and readings only while auto volume is
+// on and writes the stop word's mode picked on a scale as its number.
 import React from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
@@ -68,7 +72,7 @@ describe("Devices page", () => {
     render(<Devices />);
     fireEvent.click(screen.getByText("Add speaker"));
     fireEvent.change(screen.getByPlaceholderText("e.g. fc012cd1e5ec"), { target: { value: "porch" } });
-    fireEvent.click(screen.getByText("Save"));
+    fireEvent.click(screen.getByText("Add"));
     await waitFor(() => expect(data.patch).toHaveBeenCalledTimes(1));
     expect(data.patch).toHaveBeenCalledWith({ core: { devices: [
       ...FRESH, { name: "porch", enabled: true },
@@ -80,6 +84,8 @@ describe("Devices page", () => {
     render(<Devices />);
     fireEvent.click(screen.getByText("Edit"));
     expect(await screen.findByText("unknown device 'kitchen'")).toBeInTheDocument();
+    fireEvent.click(screen.getByText("Wake word"));
+    expect(screen.getByText("unknown device 'kitchen'")).toBeVisible();
     expect(screen.queryByText("Loading…")).toBeNull();
   });
 
@@ -99,8 +105,7 @@ describe("Devices page", () => {
     api.getConfig.mockResolvedValue({ core: { devices: fresh } });
     const { rerender } = render(<Devices />);
     fireEvent.click(screen.getByText("Edit"));
-    expect(await screen.findByDisplayValue("kitchen")).toHaveAttribute("readonly");
-    fireEvent.change(screen.getByPlaceholderText("kitchen"), { target: { value: " Кухня " } });
+    fireEvent.change(await screen.findByPlaceholderText("kitchen"), { target: { value: " Кухня " } });
     fireEvent.click(screen.getByText("Save"));
     await waitFor(() => expect(data.patch).toHaveBeenCalledTimes(1));
     expect(data.patch).toHaveBeenCalledWith({ core: { devices: [
@@ -121,6 +126,7 @@ describe("Devices page", () => {
     api.getConfig.mockResolvedValue({ core: { devices: fresh } });
     render(<Devices />);
     fireEvent.click(screen.getByText("Edit"));
+    fireEvent.click(await screen.findByText("Wake word"));
     fireEvent.click(await screen.findByText("zakhar/zakhar_v31"));
     expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual([
       "Release default (zakhar/zakhar_v31)", "zakhar/zakhar_v8", "zakhar/zakhar_v31",
@@ -139,6 +145,7 @@ describe("Devices page", () => {
     api.uploadWakeModel.mockResolvedValueOnce({ name: "uploaded/zakhar_v34" });
     render(<Devices />);
     fireEvent.click(screen.getByText("Edit"));
+    fireEvent.click(await screen.findByText("Wake word"));
     const input = await screen.findByLabelText("Wake-word model file");
     api.getWakeModels.mockResolvedValueOnce({
       options: ["uploaded/zakhar_v34", "zakhar/zakhar_v8", "zakhar/zakhar_v31"], release: "zakhar/zakhar_v31",
@@ -179,6 +186,7 @@ describe("Devices page", () => {
     data.catalog.core.values.devices = [{ ...STALE[0], auto_volume: true }];
     render(<Devices />);
     fireEvent.click(screen.getByText("Edit"));
+    fireEvent.click(await screen.findByText("Sound"));
     const sw = await switchOf("Auto volume");
     expect(sw).toHaveAttribute("aria-checked", "true");
     expect(screen.getByText("Save")).toBeDisabled();
@@ -191,7 +199,43 @@ describe("Devices page", () => {
     ] } });
   });
 
-  it("edit shows the auto volume readings, — before the first value, and a fractional gain", async () => {
+  it("a tab switched to while scrolled opens at its first row, the header keeps its scroll", async () => {
+    api.getDeviceControls.mockResolvedValue({ device: "kitchen", online: true, versions: [], controls: [] });
+    render(<Devices />);
+    fireEvent.click(screen.getByText("Edit"));
+    const bar = (await screen.findByText("Sound")).closest(".z-tabs");
+    const body = bar.parentElement;
+    // Scrolled 300 px, the header ends 212 px above the stuck bar: the bar caught on at 88.
+    Object.defineProperty(body, "scrollTop", { value: 300, writable: true });
+    bar.getBoundingClientRect = () => ({ top: 0 });
+    bar.previousElementSibling.getBoundingClientRect = () => ({ bottom: -212 });
+    fireEvent.click(screen.getByText("Wake word"));
+    expect(body.scrollTop).toBe(88);
+  });
+
+  it("edits on two tabs survive the switch, mark both tabs and go out in one save", async () => {
+    api.getDeviceControls.mockResolvedValue({ device: "kitchen", online: true, versions: [], controls: [] });
+    render(<Devices />);
+    fireEvent.click(screen.getByText("Edit"));
+    fireEvent.change(await screen.findByPlaceholderText("kitchen"), { target: { value: "Кухня" } });
+    fireEvent.click(screen.getByText("Sound"));
+    // Only the open tab shows.
+    expect(screen.getByText("Say on speaker")).toBeVisible();
+    expect(screen.getByPlaceholderText("kitchen")).not.toBeVisible();
+    fireEvent.click(await switchOf("Auto volume"));
+    fireEvent.click(screen.getByText("General"));
+    expect(screen.getByText("Say on speaker")).not.toBeVisible();
+    expect(screen.getByDisplayValue("Кухня")).toBeInTheDocument();
+    expect(screen.getAllByTestId("unsaved-dot").map((d) => d.parentElement.textContent)).toEqual(["General", "Sound"]);
+    fireEvent.click(screen.getByText("Save"));
+    await waitFor(() => expect(data.patch).toHaveBeenCalledTimes(1));
+    expect(data.patch).toHaveBeenCalledWith({ core: { devices: [
+      { ...FRESH[0], label: "Кухня", auto_volume: true },
+      FRESH[1],
+    ] } });
+  });
+
+  it("edit shows the auto volume settings and readings only while it is on, — before the first value, and a fractional gain", async () => {
     const snap = (noise, boost) => ({
       device: "kitchen", online: true, versions: [],
       controls: [{ id: "auto_volume_gain", name: "Auto volume gain", value: 2, min: 0, max: 10, step: 0.1, unit: "%/dB" }],
@@ -203,14 +247,22 @@ describe("Devices page", () => {
     api.getDeviceControls.mockResolvedValue(snap(null, null));
     const { unmount } = render(<Devices />);
     fireEvent.click(screen.getByText("Edit"));
-    expect((await screen.findByText("Ambient noise")).nextSibling).toHaveTextContent(/^—$/);
+    fireEvent.click(await screen.findByText("Sound"));
+    // Auto volume off: once the snapshot is in, neither its settings nor its readings show.
+    await waitFor(() => expect(screen.queryAllByText("Loading…")).toHaveLength(0));
+    expect(screen.queryByText("Auto volume gain")).toBeNull();
+    expect(screen.queryByText("Ambient noise")).toBeNull();
+    fireEvent.click(await switchOf("Auto volume"));
+    expect(screen.getByText("Ambient noise").nextSibling).toHaveTextContent(/^—$/);
     expect(screen.getByText("Volume boost").nextSibling).toHaveTextContent(/^—$/);
     expect(screen.getByText("2.0 %/dB")).toBeInTheDocument();
     unmount();
 
     api.getDeviceControls.mockResolvedValue(snap(-47.26, 26));
+    data.catalog.core.values.devices = [{ ...STALE[0], auto_volume: true }];
     render(<Devices />);
     fireEvent.click(screen.getByText("Edit"));
+    fireEvent.click(await screen.findByText("Sound"));
     expect(await screen.findByText("-47.3 dBFS")).toBeInTheDocument();
     expect(screen.getByText("26%")).toBeInTheDocument();
   });
@@ -224,10 +276,11 @@ describe("Devices page", () => {
     render(<Devices />);
     fireEvent.click(screen.getByText("Edit"));
     expect(await screen.findByDisplayValue("Кухня")).toBeInTheDocument();
+    fireEvent.click(screen.getByText("Wake word"));
     expect(await screen.findByText("zakhar/zakhar_v8")).toBeInTheDocument();
   });
 
-  it("edit shows the id read-only and a slider write refreshes the config", async () => {
+  it("edit shows the id as text in the header and a slider write refreshes the config", async () => {
     const snap = {
       device: "kitchen", online: true, versions: [],
       controls: [{ id: "wake_probability_cutoff", name: "Wake word cutoff", value: 80, min: 0, max: 100, step: 1, unit: "%" }],
@@ -237,15 +290,32 @@ describe("Devices page", () => {
     render(<Devices />);
     fireEvent.click(screen.getByText("Edit"));
 
-    expect(await screen.findByDisplayValue("kitchen")).toHaveAttribute("readonly");
+    expect(await screen.findByTitle(/^Sent by the firmware when it connects/)).toHaveTextContent(/^kitchen$/);
+    expect(screen.queryByDisplayValue("kitchen")).toBeNull();
     data.refreshConfig.mockClear(); // the re-read on opening the dialog
 
-    await screen.findByText("Wake word cutoff");
-    const track = document.querySelector(".z-trk");
+    fireEvent.click(screen.getByText("Wake word"));
+    const track = (await screen.findByText("Wake word cutoff")).closest(".z-f").querySelector(".z-trk");
     track.getBoundingClientRect = () => ({ left: 0, width: 100, top: 0, height: 10, right: 100, bottom: 10 });
     fireEvent(track, new MouseEvent("pointerdown", { bubbles: true, clientX: 55 }));
     await waitFor(() => expect(api.setDeviceControl).toHaveBeenCalledWith("kitchen", "wake_probability_cutoff", 55));
     await waitFor(() => expect(data.refreshConfig).toHaveBeenCalledTimes(1));
+  });
+
+  it("edit picks the stop word's mode on a scale and writes its number", async () => {
+    const snap = {
+      device: "kitchen", online: true, versions: [],
+      controls: [{ id: "echo_cancel_mode", name: "Stop word echo cancellation mode (0 SR low, 1 SR high, 2 FD low, 3 FD high)",
+        value: 0, min: 0, max: 3, step: 1, unit: "" }],
+    };
+    api.getDeviceControls.mockResolvedValue(snap);
+    api.setDeviceControl.mockResolvedValue(snap);
+    render(<Devices />);
+    fireEvent.click(screen.getByText("Edit"));
+    fireEvent.click(await screen.findByText("Stop word"));
+    expect(await screen.findByText("Mode")).toBeInTheDocument();
+    fireEvent.click(screen.getByText("FD high"));
+    await waitFor(() => expect(api.setDeviceControl).toHaveBeenCalledWith("kitchen", "echo_cancel_mode", 3));
   });
 
   it("edit says the typed text on the speaker to check the volume", async () => {
@@ -254,6 +324,7 @@ describe("Devices page", () => {
     api.sayOnDevice.mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
     render(<Devices />);
     fireEvent.click(screen.getByText("Edit"));
+    fireEvent.click(await screen.findByText("Sound"));
     const input = await screen.findByDisplayValue("Проверка громкости");
     fireEvent.change(input, { target: { value: "" } });
     expect(screen.getByText("Say")).toBeDisabled();
@@ -261,6 +332,11 @@ describe("Devices page", () => {
     fireEvent.click(screen.getByText("Say"));
     expect(api.sayOnDevice).toHaveBeenCalledWith("kitchen", "раз два");
     expect(await screen.findByText("Saying…")).toBeDisabled();
+    // A tab switch keeps the phrase in flight and the typed text.
+    fireEvent.click(screen.getByText("General"));
+    fireEvent.click(screen.getByText("Sound"));
+    expect(screen.getByText("Saying…")).toBeDisabled();
+    expect(screen.getByDisplayValue("раз два")).toBeInTheDocument();
     finish({ ok: true });
     expect(await screen.findByText("Say")).toBeEnabled();
   });
@@ -270,6 +346,7 @@ describe("Devices page", () => {
     api.sayOnDevice.mockRejectedValue(new Error("tts down"));
     const { unmount } = render(<Devices />);
     fireEvent.click(screen.getByText("Edit"));
+    fireEvent.click(await screen.findByText("Sound"));
     await screen.findByDisplayValue("Проверка громкости");
     fireEvent.click(screen.getByText("Say"));
     expect(await screen.findByText("tts down")).toBeInTheDocument();
@@ -278,6 +355,7 @@ describe("Devices page", () => {
     data.system = { devices: [{ name: "kitchen", online: false, versions: [] }] };
     render(<Devices />);
     fireEvent.click(screen.getByText("Edit"));
+    fireEvent.click(await screen.findByText("Sound"));
     await screen.findByDisplayValue("Проверка громкости");
     expect(screen.getByText("Say")).toBeDisabled();
     expect(screen.getByText("Say")).toHaveAttribute("title", "Speaker offline");

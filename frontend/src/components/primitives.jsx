@@ -98,7 +98,8 @@ export function Slider({ min = 0, max = 100, step = 1, value, onChange, fmt }) {
     <span className="z-sval">{fmt ? fmt(value) : value}</span>
   </div>;
 }
-export function Stepper({ value, onChange, min = -Infinity, max = Infinity, step = 1, unit }) {
+// `sm` narrows the number field for a row that holds several steppers.
+export function Stepper({ value, onChange, min = -Infinity, max = Infinity, step = 1, unit, sm }) {
   const clamp = (v) => Math.max(min, Math.min(max, v));
   // Integer steppers (capture seconds, ports, TTLs, default step=1) must never emit a
   // fractional value: a typed "1.5" would propagate a float that pydantic int fields reject
@@ -117,7 +118,7 @@ export function Stepper({ value, onChange, min = -Infinity, max = Infinity, step
     if (c !== value) onChange(c);  // onChange always gets a clamped, step-normalised number
   };
   return <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
-    <div className="z-stepper">
+    <div className={"z-stepper" + (sm ? " sm" : "")}>
       <button onClick={() => onChange(clamp(norm(value - step)))}>−</button>
       <input value={text} inputMode="numeric"
         onChange={(e) => setText(e.target.value.replace(/[^\d.-]/g, ""))}
@@ -180,7 +181,7 @@ export function Select({ value, options, onChange, w, itemAction, itemActionBusy
     <div className="z-select" role="button" tabIndex={0} aria-haspopup="listbox" aria-expanded={open}
       onClick={toggle}
       onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); } }}>
-      {selected ? selected.label : value}<svg width="11" height="11" viewBox="0 0 11 11" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><path d="M2 4l3.5 3.5L9 4" /></svg></div>
+      <span title={selected ? selected.label : value} style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{selected ? selected.label : value}</span><svg width="11" height="11" viewBox="0 0 11 11" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><path d="M2 4l3.5 3.5L9 4" /></svg></div>
     {open && <div role="listbox" style={{ position: "absolute", left: 0, right: 0, ...(up ? { bottom: "100%", marginBottom: 4 } : { top: "100%", marginTop: 4 }), background: "#fff", border: "1px solid var(--line)", borderRadius: 7, boxShadow: "0 8px 28px rgba(16,24,40,.16)", padding: 4, zIndex: 20, maxHeight: 240, overflowY: "auto" }}>
       {hasSearch && <div style={{ position: "sticky", top: -4, margin: "-4px -4px 4px", padding: 0, background: "#fff", borderBottom: "1px solid var(--line)", zIndex: 1 }}
         onPointerDown={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()}>
@@ -344,9 +345,13 @@ export function ErrorBox({ error, onRetry }) {
     {onRetry && <button className="z-btn g sm" style={{ marginTop: 12 }} onClick={onRetry}>Retry</button>}
   </div>;
 }
-export function Modal({ title, children, footer, onClose }) {
+// `top` pins the dialog near the top of the window instead of centring it, so a dialog whose
+// height changes (tabs) does not jump; `wide` makes it wide enough for label-left, control-right
+// rows (.z-rowctl) and caps it at the window height, so its body scrolls between a fixed header
+// and footer.
+export function Modal({ title, children, footer, onClose, top, wide }) {
   return <div className="z-modal" onClick={onClose}>
-    <div className="z-modal-c" onClick={(e) => e.stopPropagation()}>
+    <div className={"z-modal-c" + (top ? " top" : "") + (wide ? " wide" : "")} onClick={(e) => e.stopPropagation()}>
       <div className="z-modal-h"><b>{title}</b><button className="z-x" aria-label="Close" style={{ marginLeft: "auto" }} onClick={onClose}><svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" /></svg></button></div>
       <div className="z-modal-b">{children}</div>
       {footer && <div className="z-modal-f">{footer}</div>}
