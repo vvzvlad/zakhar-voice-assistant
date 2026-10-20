@@ -3,6 +3,7 @@
 #include <stdatomic.h>
 
 #include "aic3204.h"
+#include "audio_core.h"
 #include "esp_log.h"
 #include "leds.h"
 #include "nvs.h"
@@ -17,6 +18,7 @@ static const char *TAG = "volume";
 static nvs_handle_t s_nvs;
 static _Atomic int s_volume = INITIAL;
 static int s_boost;  // the controls task only: the server's volume_boost, 0 from boot
+static _Atomic uint32_t s_music_scale = 65536;  // volume_music_gain()
 
 // The DAC plays the volume plus the boost, within 1..100 %; a volume of 0 stays muted. The floor
 // is 1, not 0: 0 mutes the DAC, so a quiet room would silence the reply instead of lowering it.
@@ -24,7 +26,14 @@ static void dac_apply(void)
 {
     const int base = atomic_load(&s_volume);
     const int v = base + s_boost;
-    aic3204_set_volume(base == 0 ? 0 : v < 1 ? 1 : v > 100 ? 100 : v);
+    const int applied = base == 0 ? 0 : v < 1 ? 1 : v > 100 ? 100 : v;
+    aic3204_set_volume(applied);
+    atomic_store(&s_music_scale, volume_music_scale(base, applied));
+}
+
+uint32_t volume_music_gain(void)
+{
+    return atomic_load(&s_music_scale);
 }
 
 void volume_init(void)

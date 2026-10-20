@@ -584,6 +584,19 @@ static void test_volume(void)
     }
     assert(volume_dac_muted(0));
     assert(!volume_dac_muted(1) && !volume_dac_muted(100));
+
+    // The music under a boost plays as at the dial: the dial at 50 %, the DAC boosted to 100 %,
+    // 38 register steps (19 dB) taken back; no boost or a negative one leaves it at unity.
+    assert(volume_music_scale(50, 50) == 65536u);
+    assert(volume_music_scale(50, 30) == 65536u);
+    const uint32_t s = volume_music_scale(50, 100);
+    assert(s > 7340 && s < 7370);  // 65536 x 10^(-19 / 20) = 7353
+    // Any dial under the full boost: the music at the dial's level within one register step.
+    for (int base = 1; base <= 100; base++) {
+        const double at_dial = (int8_t)volume_dac_byte(base) * 0.5;
+        const double played = (int8_t)volume_dac_byte(100) * 0.5 + 20.0 * log10(volume_music_scale(base, 100) / 65536.0);
+        assert(fabs(played - at_dial) < 0.01);
+    }
 }
 
 int main(void)

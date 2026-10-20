@@ -356,6 +356,14 @@ uint8_t volume_dac_byte(int percent)
     return (uint8_t)b;
 }
 
+uint32_t volume_music_scale(int base, int applied)
+{
+    // 0.5 dB per register step.
+    const int steps = (int8_t)volume_dac_byte(applied) - (int8_t)volume_dac_byte(base);
+    if (steps <= 0) return 65536u;
+    return (uint32_t)lroundf(65536.0f * powf(10.0f, -(float)steps / 40.0f));
+}
+
 bool volume_dac_muted(int percent)
 {
     return percent < 1;

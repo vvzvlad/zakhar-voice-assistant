@@ -207,3 +207,7 @@ void mix_block(mix_t *m, const int16_t *voice, const int16_t *music, size_t musi
 uint8_t volume_dac_byte(int percent);
 // Below 1 % the DAC is muted (page 0 register 64 = 0x0C).
 bool volume_dac_muted(int percent);
+// The music's gain, Q16 (65536 = unity), with the DAC at `applied` % for a dial at `base` %: it
+// takes back the DAC steps the server's boost added, so the music plays as at the dial and the
+// boost lifts zakhar's replies alone. Unity at most: a boost below zero lowers the music too.
+uint32_t volume_music_scale(int base, int applied);

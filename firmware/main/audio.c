@@ -35,6 +35,7 @@
 #include "freertos/task.h"
 #include "leds.h"
 #include "music.h"
+#include "volume.h"
 #include "wake_word.h"
 #include "xmos.h"
 #include "zakhar_link.h"
@@ -372,7 +373,9 @@ static void speaker_task(void *arg)
         leds_set_playing(n > 0);
         memset(mono + n, 0, (SPK_BLOCK - n) * sizeof mono[0]);
         const size_t m = music_read(stereo, SPK_BLOCK);
-        mix_block(&mix, mono, stereo, m, music_gain(), zl_mic_busy() || zl_playing(), SPK_BLOCK, stereo, mono);
+        // Music Assistant's volume times what keeps the music at the dial under the server's boost.
+        const uint32_t gain = (uint32_t)(((uint64_t)music_gain() * volume_music_gain()) >> 16);
+        mix_block(&mix, mono, stereo, m, gain, zl_mic_busy() || zl_playing(), SPK_BLOCK, stereo, mono);
         // The echo reference: this block, silence included, as it goes to the wire.
         tap_write(&s_ref, ref, dec3_run(&s_dec, mono, SPK_BLOCK, ref));
         size_t written;
