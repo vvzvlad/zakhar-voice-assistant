@@ -146,6 +146,11 @@ The owner's words:
   and does not change. Then, against the dial being the floor: «зачем ты сделал так, что оно не
   опускается само?» — below the threshold the boost is negative and the reply is quieter than the
   dial. See [Auto volume](#auto-volume).
+- «я хочу аудио-выход на нее иметь, чтобы например музыку транслировать» (as the stock firmware
+  had it: Music Assistant with its Spotify Connect plugin, over Music Assistant's Sendspin
+  protocol), option chosen: «В прошивке колонки» — the speaker is itself a Sendspin player that
+  Music Assistant finds by mDNS, outside this protocol; the music and this protocol's playback
+  share the speaker on the device.
 
 ## Transport
 
