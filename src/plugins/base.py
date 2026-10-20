@@ -26,6 +26,10 @@ class Deps:
     # provider that reads another one's settings per request. Bound to
     # ConfigService.instance_config once the service exists (src/app.py).
     instance_config: Callable[[str, str], BaseModel] | None = None
+    # () -> the live, validated command catalog (core.commands: device aliases, action
+    # verbs, filler words) the command handlers read. Bound to the ConfigService's core
+    # config once the service exists (src/app.py).
+    commands: Callable[[], BaseModel] | None = None
 
 
 # Shared schema annotation for the `model` field: rendered as a dynamic select
@@ -102,11 +106,12 @@ class Provider:
         full list is filtered client-side)."""
         return None
 
-    def vocabulary(self, cfg: BaseModel) -> list[str]:
+    def vocabulary(self, cfg: BaseModel, commands: BaseModel) -> list[str]:
         """Optional closed command vocabulary this provider understands (Russian
-        words), which a recognition chain narrows its STT to. Default: none. A
-        provider that maps utterances to a fixed command set (e.g. the offline Simple
-        NLU intent engine) overrides this; free-form LLM providers leave it empty."""
+        words), which a recognition chain narrows its STT to. `commands` is the command
+        catalog (core.commands). Default: none. A provider that maps utterances to a
+        fixed command set (e.g. the offline Simple NLU intent engine) overrides this;
+        free-form LLM providers leave it empty."""
         return []
 
 

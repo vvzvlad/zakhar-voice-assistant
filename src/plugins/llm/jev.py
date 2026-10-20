@@ -10,22 +10,19 @@ The only local phrase matching: a phrase that names two devices or scenes by the
 aliases declines without a request (a dropped «и» reads as one place to the model).
 
 The device options and the action verbs are not its own settings: every request
-reads the aliases and action verbs of the simple-nlu instance (the Commands page)
-through Deps.instance_config, so an edit there reaches the next request without a
-rebuild. Round 2 (a tool ran) speaks this handler's reply_done, or reply_error when
-the tool failed, the way simple-nlu does.
+reads the aliases, the action verbs and the levels an on- or off-verb sets from the
+command catalog (core.commands, the Commands page) through Deps.commands, so an edit
+there reaches the next request without a rebuild. Round 2 (a tool ran) speaks this
+handler's reply_done, or reply_error when the tool failed, the way simple-nlu does.
 """
 
 import json
 
 import httpx
 from loguru import logger
-from pydantic import BaseModel, Field
+from pydantic import Field
 
-from src.plugins.base import ADVANCED_FIELD_EXTRA, SECRET_FIELD_EXTRA, Deps, Provider, register
-from src.plugins.llm.base import LlmBackend
-from src.plugins.llm.simple_nlu import (
-    SimpleNluProvider,
+from src.commands import (
     build_lemmatizer,
     envelope,
     extract_number,
@@ -40,14 +37,13 @@ from src.plugins.llm.simple_nlu import (
     resolve_alias,
     round2_reply,
 )
+from src.plugins.base import ADVANCED_FIELD_EXTRA, SECRET_FIELD_EXTRA, Deps, Provider, register
+from src.plugins.llm._decisions import DECISIONS_API_URL, noul_answer
+from src.plugins.llm.base import LlmBackend, ReplyConfig
 from src.stage_errors import Declined
 
-# OpenRouter Decisions API: typed answers (choice / noul) with probabilities, shared by
-# every decision model OpenRouter serves.
-DECISIONS_API_URL = "https://openrouter.ai/api/alpha/decisions"
 
-
-class JevConfig(BaseModel):
+class JevConfig(ReplyConfig):
     # --- Decision request (baked into the backend at create()) ---
     model: str = Field(
         "typesafe/jev-1.14",
@@ -80,37 +76,13 @@ class JevConfig(BaseModel):
         "Готово.",
         title="Reply after a tool ran",
     )
-
-    # --- Fields the LLM stage / orchestrator read live (mirror LlmConfig; see
-    # reconfig._LLM_LIVE_LEAVES). max_tool_rounds minimum is 2: the tool round + the
-    # final reply round both run. ---
+    # The ReplyConfig field with this handler's own default and minimum: the tool round
+    # and the final reply round both run.
     max_tool_rounds: int = Field(
         2, ge=2,
         title="Max rounds",
         description="Rounds per request: the tool call and the confirmation.",
         json_schema_extra=ADVANCED_FIELD_EXTRA,
-    )
-    reply_empty: str = Field(
-        "Я тебя не расслышал, повтори.",
-        title="Reply when empty", json_schema_extra=ADVANCED_FIELD_EXTRA,
-    )
-    reply_empty_after_tools: str = Field(
-        "Готово.",
-        title="Reply when empty after a tool", json_schema_extra=ADVANCED_FIELD_EXTRA,
-    )
-    reply_rate_limit: str = Field(
-        "Лимит запросов исчерпан. Попробуй ещё раз чуть позже.",
-        title="Reply on rate limit", json_schema_extra=ADVANCED_FIELD_EXTRA,
-    )
-    reply_error: str = Field(
-        "Что-то сломалось, попробуй ещё раз попозже.",
-        title="Reply on error",
-        description="Spoken after a tool returned an error, and when the handler fails.",
-        json_schema_extra=ADVANCED_FIELD_EXTRA,
-    )
-    reply_error_after_tools: str = Field(
-        "Сделал, но ответить не смог.",
-        title="Reply on error after a tool", json_schema_extra=ADVANCED_FIELD_EXTRA,
     )
 
 
@@ -181,14 +153,6 @@ def _choice_answer(answers: dict, key: str) -> tuple[str, float, str]:
     confidence = float(answer["confidence"])
     shown = ", ".join(f"{k} {v}%" for k, v in _percents(probabilities).items() if v)
     return choice, confidence, f"{choice} ({shown}; confidence {confidence:.0%})"
-
-
-def _noul_answer(answers: dict, key: str) -> float:
-    """The probability of the noul answer `key`; raises like _choice_answer."""
-    answer = answers[key]
-    if answer["type"] != "noul":
-        raise ValueError(f"{key}: not a noul answer: {answer!r}")
-    return float(answer["noul"])
 
 
 def _targets(aliases: list[dict], tools_index: dict) -> dict[str, dict]:
@@ -275,7 +239,7 @@ class JevBackend(LlmBackend):
         reply_done: str,
         reply_error: str,
         client: httpx.AsyncClient,
-        instance_config,
+        commands,
     ):
         self._model = model
         self._api_key = api_key
@@ -285,8 +249,8 @@ class JevBackend(LlmBackend):
         self._reply_done = reply_done
         self._reply_error = reply_error
         self._client = client
-        # (category, provider id) -> that instance's live config (Deps.instance_config).
-        self._instance_config = instance_config
+        # () -> the live command catalog, core.commands (Deps.commands).
+        self._commands = commands
         self._lemmatize = build_lemmatizer()
 
     async def complete(self, messages: list, tools: list | None, *, has_next: bool = False) -> dict:
@@ -324,10 +288,10 @@ class JevBackend(LlmBackend):
         if extract_number(user_text) is not None:
             return None, "decision model: a number is left to the next chain"
         # The names and verbs of the Commands page, read on every request.
-        names = self._instance_config("llm", SimpleNluProvider.id)
-        actions = parse_actions(names.actions)
+        catalog = self._commands()
+        actions = parse_actions(catalog.actions)
         tools_index = index_tools(tools, set(actions))
-        targets = _targets(parse_aliases(names.aliases), tools_index)
+        targets = _targets(parse_aliases(catalog.aliases), tools_index)
         if not targets:
             return None, "decision model: no device options"
         named = _named_targets(targets, user_text, self._lemmatize)
@@ -350,8 +314,8 @@ class JevBackend(LlmBackend):
             kind, kind_conf, kind_said = _choice_answer(answers, "kind")
             target, target_conf, target_said = _choice_answer(answers, "target")
             action, action_conf, action_said = _choice_answer(answers, "action")
-            compound = _noul_answer(answers, "compound")
-            delayed = _noul_answer(answers, "delayed")
+            compound = noul_answer(answers, "compound")
+            delayed = noul_answer(answers, "delayed")
             entry = None if target == "none" else targets[target]
         except (httpx.HTTPError, ValueError, KeyError, TypeError) as e:
             logger.warning(f"jev: decision model call failed: {type(e).__name__}: {e}")
@@ -380,7 +344,7 @@ class JevBackend(LlmBackend):
                 return None, f"decision model: action {action} does not fit {tool}"
             args[state_slot] = action
         _, level_action = fill_numbers(
-            tinfo, user_text, {action}, args, level_on=names.level_on, off_token=names.off_token,
+            tinfo, user_text, {action}, args, level_on=catalog.level_on, off_token=catalog.off_token,
         )
         # The action decides on vs off, lock vs unlock: when it set a slot it must be
         # as confident as the kind and the device.
@@ -413,5 +377,5 @@ class JevProvider(Provider):
             reply_done=cfg.reply_done,
             reply_error=cfg.reply_error,
             client=deps.http_cloud,
-            instance_config=deps.instance_config,
+            commands=deps.commands,
         )

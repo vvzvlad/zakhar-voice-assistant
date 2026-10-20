@@ -323,6 +323,85 @@ class ArbitrationConfig(BaseModel):
     )
 
 
+# Default verbs are real (not commented) so the command handlers work out of the box.
+_DEFAULT_ACTIONS = (
+    "on = включи, включай, зажги, зажги свет, вруби, врубай, запусти\n"
+    "off = выключи, выключай, погаси, выруби, отключи, останови"
+)
+
+_DEFAULT_FILLER_WORDS = "захар, пожалуйста, ну, а, давай, ка, мне, спасибо"
+
+# A self-documenting, all-commented example so the aliases field matches nothing
+# until the operator configures it for their actual entity/scene ids.
+_DEFAULT_ALIASES = (
+    "# One mapping per line. LHS: comma-separated Russian synonyms; RHS: the exact\n"
+    "# ARG VALUE the tool expects (an entity/scene id), auto-routed to the tool+param\n"
+    "# whose enum contains it. Use 'tool.slot:value' to target explicitly when the\n"
+    "# MCP schema does not enumerate the value. Lines starting with # are ignored.\n"
+    "# свет в зале, люстра = bright_room_light\n"
+    "# ночь, спать = night\n"
+    "# яркость, свет.brightness:80 = set_light.brightness:80"
+)
+
+
+class CommandsConfig(BaseModel):
+    """The command catalog: the household's spoken names of the devices and scenes,
+    the action verbs, the filler words and the values an on/off verb sets on a level
+    slot. Read by the command handlers (simple-nlu builds its model from it, jev reads
+    it per request; src/commands.py); edited on the panel's Commands page."""
+
+    aliases: str = Field(
+        _DEFAULT_ALIASES,
+        title="Aliases (Russian phrase = value)",
+        description=(
+            "Map Russian phrases to the exact tool arg value. One per line: "
+            "'phrase1, phrase2 = value' (auto-route by enum) or "
+            "'phrase = tool.slot:value' (explicit target). '#' lines are ignored."
+        ),
+        json_schema_extra={"widget": "textarea"},
+    )
+    actions: str = Field(
+        _DEFAULT_ACTIONS,
+        title="Action verbs",
+        description=(
+            "Map a canonical action name to its Russian trigger verbs, one per "
+            "line: 'action = verb1, verb2, ...'. When the action name equals an "
+            "enum value of a tool's state-like param, it fills that slot. A verb "
+            "counts in any imperative or infinitive form («включи», «включить»)."
+        ),
+        json_schema_extra={"widget": "textarea"},
+    )
+    filler_words: str = Field(
+        _DEFAULT_FILLER_WORDS,
+        title="Filler words (strict mode)",
+        description=(
+            "Comma-separated words an utterance may carry besides the command. In "
+            "strict mode, when a later recognition chain takes what this one "
+            "declines, a direct match runs only if every word is an action verb, a "
+            "word of the matched alias phrase, a number that set a value, or one of "
+            "these; the first word may also be one letter off one of these of four "
+            "letters or more (a misheard «захар»)."
+        ),
+    )
+    level_on: int = Field(
+        100,
+        ge=0,
+        title="On level",
+        description=(
+            "Value an on-verb assigns to a numeric level slot with no on/off enum "
+            "(e.g. dimmer brightness). An off-verb assigns 0."
+        ),
+    )
+    off_token: str = Field(
+        "off",
+        title="Off token (string level slot)",
+        description=(
+            "Value an off-verb assigns to a required string level slot with no enum "
+            "(e.g. climate temperature)."
+        ),
+    )
+
+
 class ChainConfig(BaseModel):
     """One recognition chain: an STT provider and the handler (llm provider) that
     takes its text. Each utterance goes through the enabled chains in list order
@@ -354,6 +433,7 @@ class CoreConfig(BaseModel):
     capture: CaptureConfig = CaptureConfig()
     ack: AckConfig = AckConfig()
     arbitration: ArbitrationConfig = ArbitrationConfig()
+    commands: CommandsConfig = CommandsConfig()
     devices: list[DeviceConfig] = []
     chains: list[ChainConfig] = []
     tts_timeout: int = 30

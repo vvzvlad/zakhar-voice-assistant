@@ -861,11 +861,13 @@
    }
   }
  ],
- "nlu": {
-  "aliases": "свет в зале, большой свет, верхний свет, люстра = bright_room_light\nтусклый свет, приглушённый свет, нижний свет = low_room_light\nнастольная лампа, лампа на столе, настольный свет = table_light\nсвет на кухне, кухня, кухонный свет = kitchen_light\nсвет в туалете, туалет = toilet_light\nсвет в ванной, ванная = bathroom_light\nсвет в коридоре, коридор, прихожая = corridor_light\nночник = night_light\nкондиционер, кондей, климат = room_ac\nмониторы, монитор, экраны = monitors\nзамок, дверь = main_lock\nночь, спокойной ночи, ночной режим = night\nутро, доброе утро, утренний режим = morning\n# свет (set_light)\n# ночник (set_dimmer)\n# кондиционер (set_climate)\n# мониторы (set_switch)\n# замок (set_lock)\n# сцены (set_scene)",
+ "commands": {
+  "aliases":"свет в зале, большой свет, верхний свет, люстра = bright_room_light\nтусклый свет, приглушённый свет, нижний свет = low_room_light\nнастольная лампа, лампа на столе, настольный свет = table_light\nсвет на кухне, кухня, кухонный свет = kitchen_light\nсвет в туалете, туалет = toilet_light\nсвет в ванной, ванная = bathroom_light\nсвет в коридоре, коридор, прихожая = corridor_light\nночник = night_light\nкондиционер, кондей, климат = room_ac\nмониторы, монитор, экраны = monitors\nзамок, дверь = main_lock\nночь, спокойной ночи, ночной режим = night\nутро, доброе утро, утренний режим = morning\n# свет (set_light)\n# ночник (set_dimmer)\n# кондиционер (set_climate)\n# мониторы (set_switch)\n# замок (set_lock)\n# сцены (set_scene)",
   "actions": "on = включи, включай, зажги, зажги свет, вруби, врубай, запусти\noff = выключи, выключай, погаси, выруби, отключи, останови\nlock = закрой, заблокируй\nunlock = открой, разблокируй",
-  "classifier_threshold": 0.7,
   "level_on": 100,
   "off_token": "off"
+ },
+ "nlu": {
+  "classifier_threshold": 0.7
  }
 }

@@ -177,10 +177,10 @@ docker compose pull && docker compose up -d
   - `stt`: `groq` (облачный Whisper) | `vosk` (офлайн) | `gigaam` (офлайн GigaAM v3, каталог
     модели `models/gigaam-v3-onnx`) | `yandex` (SpeechKit v3, стриминг по gRPC).
   - `llm` (обработчики): `openrouter` | `groq` — model, api_key, temperature, max_tokens,
-    max_tool_rounds; `simple-nlu` — офлайн-движок команд (синонимы, глаголы действий);
-    `jev` — модель решений `typesafe/jev-1.14` на OpenRouter: для фразы без числа выбирает
-    одно устройство и одно действие из названий и глаголов страницы Commands (синонимы и
-    глаголы `simple-nlu`), всё остальное отклоняет.
+    max_tool_rounds; `simple-nlu` — офлайн-движок команд по каталогу команд
+    `core.commands`; `jev` — модель решений `typesafe/jev-1.14` на OpenRouter: для фразы
+    без числа выбирает одно устройство и одно действие из названий и глаголов страницы
+    Commands (`core.commands`), всё остальное отклоняет.
   - Какой STT кормит какой обработчик, задаёт `core.chains` — упорядоченный список
     `{name, enabled, stt, handler, narrow, parallel}`. Одна фраза проходит включённые
     цепочки по порядку на том же звуке, пока одна не ответит; следующая цепочка берётся,
@@ -224,7 +224,9 @@ docker compose pull && docker compose up -d
   именованные профили в `data/prompts.db`), `agent_mcp` (enabled — обращённый к
   агенту MCP-эндпоинт, отдаваемый панелью на `/mcp`), `runs` (enabled /
   retention_days), `reminders` (enabled), `capture` (enabled / dir — сохранять
-  каждую реплику в WAV), `ack` (enabled / sound_path — звук конца фразы), `devices`
+  каждую реплику в WAV), `ack` (enabled / sound_path — звук конца фразы), `commands`
+  (aliases / actions / filler_words / level_on / off_token — каталог команд, который
+  читают обработчики команд; правится на странице Commands), `devices`
   (список `{name, label, enabled, wake_cutoff, vad_cutoff, wake_model, vad_model}`, см.
   [Устройства](#устройства-и-прошивка)), `tts_timeout`, `log_level`.
 

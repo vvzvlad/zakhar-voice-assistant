@@ -22,6 +22,11 @@ as for the cloud LLM providers, so the backend emits `tool_calls` to drive the
 tools and, on the next round (tool results present), speaks a short confirmation.
 
 Design notes:
+- The names, verbs, filler words and the levels an on/off verb sets are the command
+  catalog (core.commands), read through Deps.commands when the backend is built; a
+  catalog change rebuilds it.
+  Its parsing, morphology and number helpers are shared with the jev handler in
+  src/commands.py.
 - Heavy deps (pymorphy3, scikit-learn, rapidfuzz) are imported LAZILY, never at
   module top level: importing this module for the registry stays light and must
   not fail if those libs are absent. pymorphy3 is needed to build the model (without
@@ -39,73 +44,39 @@ import functools
 import hashlib
 import json
 import random
-import re
 from pathlib import Path
 
 from loguru import logger
-from pydantic import BaseModel, Field
+from pydantic import Field
 
+from src.commands import (
+    build_lemmatizer,
+    envelope,
+    extract_number,
+    fill_numbers,
+    fill_singletons,
+    has_tool_result,
+    index_tools,
+    is_number_word,
+    last_user_text,
+    lemmas,
+    morphology,
+    nlu_vocabulary,
+    parse_actions,
+    parse_aliases,
+    resolve_alias,
+    round2_reply,
+    tokenize,
+    warn_missing,
+)
 from src.plugins.base import ADVANCED_FIELD_EXTRA, Deps, Provider, register
-from src.plugins.llm.base import LlmBackend
+from src.plugins.llm.base import LlmBackend, ReplyConfig
 from src.stage_errors import Declined
 
-# Default verbs are real (not commented) so the provider works out of the box.
-_DEFAULT_ACTIONS = (
-    "on = включи, включай, зажги, зажги свет, вруби, врубай, запусти\n"
-    "off = выключи, выключай, погаси, выруби, отключи, останови"
-)
 
-_DEFAULT_FILLER_WORDS = "захар, пожалуйста, ну, а, давай, ка, мне, спасибо"
-
-# A self-documenting, all-commented example so the aliases field matches nothing
-# until the operator configures it for their actual entity/scene ids.
-_DEFAULT_ALIASES = (
-    "# One mapping per line. LHS: comma-separated Russian synonyms; RHS: the exact\n"
-    "# ARG VALUE the tool expects (an entity/scene id), auto-routed to the tool+param\n"
-    "# whose enum contains it. Use 'tool.slot:value' to target explicitly when the\n"
-    "# MCP schema does not enumerate the value. Lines starting with # are ignored.\n"
-    "# свет в зале, люстра = bright_room_light\n"
-    "# ночь, спать = night\n"
-    "# яркость, свет.brightness:80 = set_light.brightness:80"
-)
-
-
-class SimpleNluConfig(BaseModel):
+class SimpleNluConfig(ReplyConfig):
     # --- NLU configuration (baked into the backend at create(); changing any of
     # these triggers a backend rebuild via reconfig, which is correct) ---
-    aliases: str = Field(
-        _DEFAULT_ALIASES,
-        title="Aliases (Russian phrase = value)",
-        description=(
-            "Map Russian phrases to the exact tool arg value. One per line: "
-            "'phrase1, phrase2 = value' (auto-route by enum) or "
-            "'phrase = tool.slot:value' (explicit target). '#' lines are ignored."
-        ),
-        json_schema_extra={"widget": "textarea"},
-    )
-    actions: str = Field(
-        _DEFAULT_ACTIONS,
-        title="Action verbs",
-        description=(
-            "Map a canonical action name to its Russian trigger verbs, one per "
-            "line: 'action = verb1, verb2, ...'. When the action name equals an "
-            "enum value of a tool's state-like param, it fills that slot. A verb "
-            "counts in any imperative or infinitive form («включи», «включить»)."
-        ),
-        json_schema_extra={"widget": "textarea"},
-    )
-    filler_words: str = Field(
-        _DEFAULT_FILLER_WORDS,
-        title="Filler words (strict mode)",
-        description=(
-            "Comma-separated words an utterance may carry besides the command. In "
-            "strict mode, when a later recognition chain takes what this one "
-            "declines, a direct match runs only if every word is an action verb, a "
-            "word of the matched alias phrase, a number that set a value, or one of "
-            "these; the first word may also be one letter off one of these of four "
-            "letters or more (a misheard «захар»)."
-        ),
-    )
     classifier_threshold: float = Field(
         0.7,
         ge=0.0,
@@ -116,23 +87,6 @@ class SimpleNluConfig(BaseModel):
             "only at or above this probability."
         ),
     )
-    level_on: int = Field(
-        100,
-        ge=0,
-        title="On level",
-        description=(
-            "Value an on-verb assigns to a numeric level slot with no on/off enum "
-            "(e.g. dimmer brightness). An off-verb assigns 0."
-        ),
-    )
-    off_token: str = Field(
-        "off",
-        title="Off token (string level slot)",
-        description=(
-            "Value an off-verb assigns to a required string level slot with no enum "
-            "(e.g. climate temperature)."
-        ),
-    )
     reply_unmatched: str = Field(
         "Не понял команду, повтори.",
         title="Reply when nothing matched",
@@ -141,446 +95,26 @@ class SimpleNluConfig(BaseModel):
         "Готово.",
         title="Reply after a tool ran",
     )
-
-    # --- Fields the LLM stage / orchestrator read live (mirror LlmConfig; see
-    # reconfig._LLM_LIVE_LEAVES). Kept here so this provider is a complete drop-in.
-    # max_tool_rounds minimum is 2: the tool round + the final reply round both run. ---
+    # The ReplyConfig field with this engine's own default and minimum: the tool round
+    # and the final reply round both run.
     max_tool_rounds: int = Field(
         2, ge=2,
         title="Max rounds",
         description="Rounds per request: the tool call and the confirmation.",
         json_schema_extra=ADVANCED_FIELD_EXTRA,
     )
-    reply_empty: str = Field(
-        "Я тебя не расслышал, повтори.",
-        title="Reply when empty", json_schema_extra=ADVANCED_FIELD_EXTRA,
-    )
-    reply_empty_after_tools: str = Field(
-        "Готово.",
-        title="Reply when empty after a tool", json_schema_extra=ADVANCED_FIELD_EXTRA,
-    )
-    reply_rate_limit: str = Field(
-        "Лимит запросов исчерпан. Попробуй ещё раз чуть позже.",
-        title="Reply on rate limit", json_schema_extra=ADVANCED_FIELD_EXTRA,
-    )
-    reply_error: str = Field(
-        "Что-то сломалось, попробуй ещё раз попозже.",
-        title="Reply on error",
-        description="Spoken after a tool returned an error, and when the handler fails.",
-        json_schema_extra=ADVANCED_FIELD_EXTRA,
-    )
-    reply_error_after_tools: str = Field(
-        "Сделал, но ответить не смог.",
-        title="Reply on error after a tool", json_schema_extra=ADVANCED_FIELD_EXTRA,
-    )
-
-    # --- Panel UI state (no runtime effect): ids of MCP sources the operator hid in
-    # the NLU catalog editor's Sources bar. Persisted so the selection survives a
-    # reload; the NLU itself always uses every source's aliases/actions. Marked
-    # `hidden` so the generic SchemaForm never renders it, and whitelisted as a
-    # "live" leaf in reconfig so toggling it never rebuilds the NLU model. ---
-    hidden_sources: list[str] = Field(
-        default_factory=list,
-        title="Hidden MCP sources (panel UI state)",
-        description="Source ids hidden in the catalog editor's Sources bar. Panel-only; ignored at runtime.",
-        json_schema_extra={"hidden": True},
-    )
-
-
-# --------------------------------------------------------------------------- #
-# Pure helper functions (module-level, unit-testable). Only nlu_vocabulary reaches a
-# heavy dependency: it loads pymorphy3 lazily for the verbs' infinitives.
-# --------------------------------------------------------------------------- #
-
-def parse_aliases(text: str) -> list[dict]:
-    """Parse the alias mini-format into a list of routing entries.
-
-    Each non-blank, non-'#' line is `phrase1, phrase2, ... = RHS` where RHS is
-    either a bare `value` (auto-route: locate the tool+param whose enum contains
-    it) or `tool.slot:value` (explicit target). Returns a list of dicts:
-    {"phrases": [str, ...], "value": str, "tool": str|None, "slot": str|None}.
-    Phrases are lowercased; lines without a usable LHS/RHS are skipped.
-    """
-    entries: list[dict] = []
-    for raw in (text or "").splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#"):
-            continue
-        if "=" not in line:
-            continue
-        lhs, rhs = line.split("=", 1)
-        phrases = [p.strip().lower() for p in lhs.split(",") if p.strip()]
-        rhs = rhs.strip()
-        if not phrases or not rhs:
-            continue
-        tool: str | None = None
-        slot: str | None = None
-        value = rhs
-        # Explicit form: tool.slot:value. The ':' separates target from value;
-        # the '.' before it separates tool from slot. Be lenient about spaces.
-        if ":" in rhs:
-            target, val = rhs.split(":", 1)
-            target = target.strip()
-            val = val.strip()
-            if "." in target and val:
-                tool, slot = target.split(".", 1)
-                tool = tool.strip()
-                slot = slot.strip()
-                value = val
-        entries.append({"phrases": phrases, "value": value, "tool": tool, "slot": slot})
-    return entries
-
-
-def parse_actions(text: str) -> dict[str, list[str]]:
-    """Parse the action mini-format `action = verb1, verb2, ...` per line.
-
-    Returns {action_name: [verb, ...]} with action names and verbs lowercased.
-    Blank/'#' lines and lines without a usable action or verbs are skipped.
-    """
-    actions: dict[str, list[str]] = {}
-    for raw in (text or "").splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#"):
-            continue
-        if "=" not in line:
-            continue
-        name, verbs_str = line.split("=", 1)
-        name = name.strip().lower()
-        verbs = [v.strip().lower() for v in verbs_str.split(",") if v.strip()]
-        if not name or not verbs:
-            continue
-        actions[name] = verbs
-    return actions
-
-
-# Russian number words 0..100 for spoken-number slots. Units/teens and tens are
-# composed (e.g. "двадцать два" -> 22). Kept compact and bounded.
-_RU_UNITS = {
-    "ноль": 0, "один": 1, "одна": 1, "одно": 1, "два": 2, "две": 2, "три": 3,
-    "четыре": 4, "пять": 5, "шесть": 6, "семь": 7, "восемь": 8, "девять": 9,
-    "десять": 10, "одиннадцать": 11, "двенадцать": 12, "тринадцать": 13,
-    "четырнадцать": 14, "пятнадцать": 15, "шестнадцать": 16, "семнадцать": 17,
-    "восемнадцать": 18, "девятнадцать": 19,
-}
-_RU_TENS = {
-    "двадцать": 20, "тридцать": 30, "сорок": 40, "пятьдесят": 50, "шестьдесят": 60,
-    "семьдесят": 70, "восемьдесят": 80, "девяносто": 90, "сто": 100,
-}
-
-# Words a number brings along once it set a value («ночник на 50 процентов»): strict
-# mode explains them, so a narrowed decoder must be able to emit them.
-_NUMBER_PREPOSITIONS = frozenset({"на", "до"})
-_PERCENT_LEMMA = "процент"
-_PERCENT_FORMS = ("процент", "процента", "процентов")
-
-
-def nlu_vocabulary(
-    aliases_text: str, actions_text: str, filler_text: str = _DEFAULT_FILLER_WORDS
-) -> list[str]:
-    """Collect the distinct spoken Russian words the NLU can match, for use as a
-    Vosk closed-vocabulary grammar. Union of: every word in every alias phrase,
-    every action-verb word and its lemma (the infinitive the matcher also takes),
-    every filler word, the Russian number words 0..100 and the words a number
-    brings along. Phrases are split into individual word tokens (so the decoder can
-    recognise any sequence of them); tokens are lowercased. Returns a sorted,
-    de-duplicated list. The caller appends the Vosk "[unk]" sentinel."""
-    words: set[str] = set()
-    for entry in parse_aliases(aliases_text):
-        for phrase in entry["phrases"]:
-            words.update(re.findall(r"[a-zа-яё0-9]+", phrase.lower()))
-    lemmatize = build_lemmatizer()
-    for verbs in parse_actions(actions_text).values():
-        for verb in verbs:
-            words.update(re.findall(r"[a-zа-яё0-9]+", verb.lower()))
-            words.update(lemmas(verb, lemmatize))
-    # Filler words are in the grammar so a narrowed decoder can emit them instead of
-    # "[unk]", which strict mode treats as an unexplained word.
-    words.update(re.findall(r"[a-zа-яё0-9]+", (filler_text or "").lower()))
-    words.update(_RU_UNITS.keys())
-    words.update(_RU_TENS.keys())
-    words.update(_NUMBER_PREPOSITIONS)
-    words.update(_PERCENT_FORMS)
-    words.discard("")
-    return sorted(words)
-
-
-def extract_number(text: str) -> int | None:
-    """Return the first number in `text`, digits first, else Russian words 0..100.
-
-    Digits are matched by regex. Failing that, Russian number words are scanned in
-    order; adjacent tens+units compose (e.g. "двадцать два" -> 22). Returns the
-    first number found, or None.
-    """
-    if not text:
-        return None
-    m = re.search(r"\d+", text)
-    if m:
-        return int(m.group())
-    tokens = re.findall(r"[а-яё]+", text.lower())
-    i = 0
-    while i < len(tokens):
-        tok = tokens[i]
-        if tok in _RU_TENS:
-            base = _RU_TENS[tok]
-            # Compose tens + a trailing unit only for proper tens (20..90).
-            if base < 100 and i + 1 < len(tokens) and tokens[i + 1] in _RU_UNITS:
-                unit = _RU_UNITS[tokens[i + 1]]
-                if 1 <= unit <= 9:
-                    return base + unit
-            return base
-        if tok in _RU_UNITS:
-            return _RU_UNITS[tok]
-        i += 1
-    return None
-
-
-def _is_number_token(token: str) -> bool:
-    """A digit run or a Russian number word 0..100 (one normalized token)."""
-    return token.isdigit() or token in _RU_UNITS or token in _RU_TENS
-
-
-def _is_number_word(token: str, lemma: str) -> bool:
-    """A number or a word a number brings along: «на», «до», a form of «процент»."""
-    return _is_number_token(token) or token in _NUMBER_PREPOSITIONS or lemma == _PERCENT_LEMMA
-
-
-# --------------------------------------------------------------------------- #
-# Helpers shared with the jev provider, which reads the same aliases and action
-# verbs and answers in the same envelope (module-level, NO heavy imports).
-# --------------------------------------------------------------------------- #
-
-def index_tools(tools: list, action_names: set) -> dict[str, dict]:
-    """Index each advertised tool's params: {tool: {slots: {param: {type, enum,
-    required}}, required, state_slot, enum_slots, number_slots, level_slot,
-    level_type}}. `action_names` are the configured action names; a param whose enum
-    is a subset of them is the tool's state slot."""
-    tools_index: dict[str, dict] = {}
-    for t in tools:
-        fn = t.get("function", {})
-        name = fn.get("name")
-        if not name:
-            continue
-        params = fn.get("parameters") or {}
-        props = params.get("properties") or {}
-        required = set(params.get("required") or [])
-        slots: dict[str, dict] = {}
-        for pname, pschema in props.items():
-            pschema = pschema or {}
-            enum = pschema.get("enum")
-            slots[pname] = {
-                "type": pschema.get("type"),
-                "enum": list(enum) if enum else None,
-                "required": pname in required,
-            }
-        # State slot: enum non-empty AND a subset of the action-name set.
-        state_slot = None
-        for pname, info in slots.items():
-            enum = info["enum"]
-            if enum and set(enum) <= action_names:
-                state_slot = pname
-                break
-        enum_slots = [p for p, i in slots.items() if i["enum"] and p != state_slot]
-        number_slots = [p for p, i in slots.items() if i["type"] in ("integer", "number")]
-        # Level slot: a required, NON-state, NON-enum param a verb can set to a
-        # numeric/off value (e.g. dimmer brightness, climate temperature). Prefer
-        # a numeric one; else accept a lone required string slot.
-        level_candidates = [
-            p for p, i in slots.items()
-            if i["required"] and p != state_slot and not i["enum"]
-        ]
-        level_slot = None
-        level_type = None
-        numeric_candidates = [
-            p for p in level_candidates if slots[p]["type"] in ("integer", "number")
-        ]
-        if numeric_candidates:
-            level_slot = numeric_candidates[0]
-            level_type = "number"
-        elif len(level_candidates) == 1 and slots[level_candidates[0]]["type"] == "string":
-            level_slot = level_candidates[0]
-            level_type = "string"
-        tools_index[name] = {
-            "slots": slots,
-            "required": required,
-            "state_slot": state_slot,
-            "enum_slots": enum_slots,
-            "number_slots": number_slots,
-            "level_slot": level_slot,
-            "level_type": level_type,
-        }
-    return tools_index
-
-
-def resolve_alias(alias: dict, tools_index: dict) -> tuple[str, str] | None:
-    """The (tool, slot) a parsed alias routes to: its explicit target, else the first
-    tool+param whose enum contains its value; None when no enum contains it."""
-    if alias["tool"] and alias["slot"]:
-        return alias["tool"], alias["slot"]
-    for tname, tinfo in tools_index.items():
-        for pname, pinfo in tinfo["slots"].items():
-            if pinfo["enum"] and alias["value"] in pinfo["enum"]:
-                return tname, pname
-    return None
-
-
-def fill_numbers(
-    tinfo: dict, user_text: str, actions: set, args: dict, *, level_on: int, off_token: str
-) -> tuple[bool, str | None]:
-    """Fill the tool's level slot and number slots into `args` from the utterance.
-    `actions` are the action names the utterance carries; an on-verb sets a numeric
-    level slot to `level_on`, an off-verb sets it to 0 (a string one to `off_token`).
-    Returns whether a number filled a slot, and the action ("on"/"off") that filled
-    the level slot or None."""
-    number_used = False
-    level_action = None
-    # Level slot <- an explicit number, else an on/off verb maps to a level.
-    # Done BEFORE number_slots so the level slot wins (the loop below skips
-    # slots already in args). Hardcoded "on"/"off" mirror the existing
-    # convention (action name == enum value).
-    level_slot = tinfo["level_slot"]
-    level_type = tinfo["level_type"]
-    if level_slot is not None and level_slot not in args:
-        num = extract_number(user_text)
-        if num is not None:
-            args[level_slot] = num if level_type == "number" else str(num)
-            number_used = True
-        elif "off" in actions:
-            args[level_slot] = 0 if level_type == "number" else off_token
-            level_action = "off"
-        elif "on" in actions and level_type == "number":
-            args[level_slot] = level_on
-            level_action = "on"
-        # string level slot + on-verb + no number -> leave UNFILLED, so the
-        # required-slot validation correctly no-matches it.
-
-    # Number slots <- first number in the utterance.
-    for slot in tinfo["number_slots"]:
-        if slot in args:
-            continue
-        num = extract_number(user_text)
-        if num is not None:
-            args[slot] = num
-            number_used = True
-    return number_used, level_action
-
-
-def fill_singletons(tinfo: dict, args: dict) -> None:
-    """Set each required enum slot that is still unset and has one value to it."""
-    for slot, info in tinfo["slots"].items():
-        if slot in args or not info["required"]:
-            continue
-        enum = info["enum"]
-        if enum and len(enum) == 1:
-            args[slot] = enum[0]
-
-
-def envelope(content: str, tool_calls, model: str) -> dict:
-    """The OpenAI/Groq-shaped reply the LlmStage loop expects (see src/llm.py)."""
-    return {
-        "choices": [
-            {"message": {"role": "assistant", "content": content, "tool_calls": tool_calls}}
-        ],
-        "usage": {"total_tokens": 0},
-        "model": model,
-    }
-
-
-def last_user_text(messages: list) -> str:
-    for msg in reversed(messages):
-        if msg.get("role") == "user":
-            return (msg.get("content") or "").strip()
-    return ""
-
-
-def has_tool_result(messages: list) -> bool:
-    return any(msg.get("role") == "tool" for msg in messages)
-
-
-def round2_reply(messages: list, reply_done: str, reply_error: str) -> str:
-    """After a tool ran, the confirmation — or `reply_error` if the last tool result
-    looks like an error string (ToolHub returns errors as text, e.g. 'error calling
-    set_light: ...')."""
-    last_tool = None
-    for msg in reversed(messages):
-        if msg.get("role") == "tool":
-            last_tool = msg
-            break
-    content = (last_tool or {}).get("content") or ""
-    low = content.strip().lower()
-    if low.startswith("error") or "error calling" in low:
-        return reply_error
-    return reply_done
 
 
 # --------------------------------------------------------------------------- #
 # Backend.
 # --------------------------------------------------------------------------- #
 
-# Logged-once flags for missing heavy deps (module-level so the warning fires once
-# per process rather than per backend instance).
-_warned_missing: set[str] = set()
-
-
-def _warn_missing(dep: str) -> None:
-    if dep not in _warned_missing:
-        _warned_missing.add(dep)
-        logger.warning(f"simple-nlu: optional dependency '{dep}' unavailable; degrading gracefully")
-
-
-def tokenize(text: str) -> list[str]:
-    """Lowercase, fold ё->е, and tokenize on non-letters (Cyrillic + Latin +
-    digits)."""
-    low = (text or "").lower().replace("ё", "е")
-    return re.findall(r"[a-zа-я0-9]+", low)
-
-
-def lemmas(text: str, lemmatize) -> list[str]:
-    """The lemma of every token of `text`, lowercased with ё folded to е."""
-    return [lemmatize(tok).lower().replace("ё", "е") for tok in tokenize(text)]
-
-
-class _Morph:
-    """pymorphy3 analysis of one lowercased token, memoized: every parse, and the
-    lemma (the first parse's normal form)."""
-
-    def __init__(self, analyzer):
-        self._analyzer = analyzer
-        self._cache: dict[str, list] = {}
-
-    def parses(self, token: str) -> list:
-        hit = self._cache.get(token)
-        if hit is None:
-            hit = self._cache[token] = self._analyzer.parse(token)
-        return hit
-
-    def lemma(self, word: str) -> str:
-        return self.parses(word.lower())[0].normal_form
-
-
-@functools.cache
-def _morph() -> _Morph | None:
-    """The process-wide morphology, or None when pymorphy3 is unavailable."""
-    try:
-        import pymorphy3
-    except ImportError:
-        _warn_missing("pymorphy3")
-        return None
-    return _Morph(pymorphy3.MorphAnalyzer())
-
-
-def build_lemmatizer():
-    """A memoized pymorphy3 lemmatizer of ONE lowercased token, or an
-    identity-lowercase fallback if pymorphy3 is unavailable."""
-    morph = _morph()
-    return morph.lemma if morph is not None else (lambda w: w.lower())
-
-
 def _one_edit(a: str, b: str) -> bool:
     """`a` and `b` are at most one edit apart; False without rapidfuzz."""
     try:
         from rapidfuzz.distance import Levenshtein
     except ImportError:
-        _warn_missing("rapidfuzz")
+        warn_missing("rapidfuzz")
         return False
     return Levenshtein.distance(a, b) <= 1
 
@@ -705,7 +239,7 @@ def _fit_classifier(texts: list[str], labels: list[str]):
         from sklearn.linear_model import SGDClassifier
         from sklearn.pipeline import Pipeline
     except ImportError:
-        _warn_missing("scikit-learn")
+        warn_missing("scikit-learn")
         return None
     try:
         return Pipeline([
@@ -825,7 +359,7 @@ class SimpleNluBackend(LlmBackend):
         the deterministic phrase and verb indices, the gate's alias index and (with
         scikit-learn and at least one command class) the classifier.
         """
-        morph = _morph()
+        morph = morphology()
         if morph is None:
             return None
         lemmatize = morph.lemma
@@ -977,7 +511,7 @@ class SimpleNluBackend(LlmBackend):
             tok for i, (tok, lem, action) in enumerate(zip(tokens, user_lemmas, verb_actions))
             if action not in evidence["actions"]
             and lem not in phrase_lemmas
-            and not (evidence["number"] and _is_number_word(tok, lem))
+            and not (evidence["number"] and is_number_word(tok, lem))
             and not self._is_filler(i, tok)
         ]
 
@@ -1097,7 +631,7 @@ class SimpleNluBackend(LlmBackend):
             return _no_match(f"{said}, verbs do not fit the class")
         # The class's device must come from some word, not from the verb alone.
         if all(
-            action is not None or self._is_filler(i, tok) or _is_number_word(tok, lem)
+            action is not None or self._is_filler(i, tok) or is_number_word(tok, lem)
             for i, (tok, lem, action) in enumerate(zip(tokens, user_lemmas, verb_actions))
         ):
             return _no_match(f"{said}, no device word")
@@ -1219,13 +753,15 @@ class SimpleNluProvider(Provider):
     uses_http_cloud = False
 
     def create(self, cfg: SimpleNluConfig, deps: Deps):
+        # The catalog as it is now: a catalog change rebuilds this backend.
+        commands = deps.commands()
         return SimpleNluBackend(
-            aliases_text=cfg.aliases,
-            actions_text=cfg.actions,
-            filler_text=cfg.filler_words,
+            aliases_text=commands.aliases,
+            actions_text=commands.actions,
+            filler_text=commands.filler_words,
             classifier_threshold=cfg.classifier_threshold,
-            level_on=cfg.level_on,
-            off_token=cfg.off_token,
+            level_on=commands.level_on,
+            off_token=commands.off_token,
             reply_unmatched=cfg.reply_unmatched,
             reply_done=cfg.reply_done,
             reply_error=cfg.reply_error,
@@ -1234,6 +770,6 @@ class SimpleNluProvider(Provider):
     def describe(self, cfg: SimpleNluConfig) -> str:
         return "simple-nlu"
 
-    def vocabulary(self, cfg: SimpleNluConfig) -> list[str]:
+    def vocabulary(self, cfg: SimpleNluConfig, commands) -> list[str]:
         # The closed command vocabulary an offline STT can restrict its grammar to.
-        return nlu_vocabulary(cfg.aliases, cfg.actions, cfg.filler_words)
+        return nlu_vocabulary(commands.aliases, commands.actions, commands.filler_words)
