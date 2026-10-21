@@ -27,6 +27,15 @@ describe("Topbar loading badge", () => {
     expect(badge).toHaveAttribute("title", "Loading: Stress");
   });
 
+  it("names the tools category Tools", () => {
+    useAppData.mockReturnValue({
+      system: { reloading: ["tools"], uptime_seconds: 5, version: "9.9" },
+      connected: true,
+    });
+    render(<Topbar active="dashboard" />);
+    expect(screen.getByText(/Loading/)).toHaveAttribute("title", "Loading: Tools");
+  });
+
   it("hides the loading badge when nothing is reloading", () => {
     useAppData.mockReturnValue({
       system: { reloading: [], uptime_seconds: 5, version: "9.9" },

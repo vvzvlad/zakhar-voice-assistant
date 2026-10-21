@@ -1,8 +1,7 @@
 """Unit tests for build_sources: the shared ToolHub source-list factory.
 
-build_sources must produce the SAME set at boot (app.py) and on hot-reload (reconfig),
-so these tests drive it directly off a real CoreConfig and assert the resulting source
-ids/kinds for each gating combination.
+These tests drive build_sources directly off a real CoreConfig and assert the resulting
+source ids/kinds for each gating combination.
 """
 
 from src.core_config import CoreConfig
@@ -111,9 +110,9 @@ def test_build_sources_calendar_ordered_between_openweathermap_and_reminders():
     assert _ids(sources) == ["openweathermap", "calendar", "reminders", "volume"]
 
 
-def test_build_sources_combined_order_matches_boot():
+def test_build_sources_combined_order():
     # Combined config: external MCP servers first, then openweathermap, then reminders,
-    # then volume — the exact order app.py's boot path produces.
+    # then volume.
     core = CoreConfig(
         mcp_servers=[{"name": "home", "url": "http://home/mcp"}],
         openweathermap={"api_key": "k", "city": "Moscow"},
