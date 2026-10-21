@@ -77,19 +77,19 @@ async def test_the_cleaner_wake_wins_though_its_pre_roll_comes_after_its_wake(tm
 
 async def test_a_winner_the_verifier_rejects_leaves_the_phrase_to_the_other_device(
         tmp_path, monkeypatch):
-    # The speaker would win, but its verifier (a window longer than the pre-roll, as
-    # in production) rejects it: the panel's run goes on instead of being dropped.
+    # The speaker, answering, would win, but its verifier (a window longer than the
+    # pre-roll, as in production) rejects its wake over the answer: the panel's run goes
+    # on instead of being dropped.
     patch_llm(monkeypatch)
     store = FakeRunsStore()
     speaker, _ = make_pipeline(tmp_path, monkeypatch, name="speaker", runs_store=store)
     panel, panel_events = make_pipeline(tmp_path, monkeypatch, name="panel")
     speaker.rt.wakeword_backend = FakeWakewordVerifier(accepted=False, window_ms=2500)
-    panel.rt.wakeword_backend = FakeWakewordVerifier(accepted=True, window_ms=2500)
     panel.has_speaker = False
     speaker.arbiter = panel.arbiter = WakeArbiter(online_count=lambda: 2)
 
     for p in (panel, speaker):
-        p.on_wake("cid", WAKE)
+        p.on_wake("cid", WAKE, over_answer=p is speaker)
         await p.on_audio(preroll(100, 1000))
     for p in (speaker, panel):
         await p.on_audio(bytes(16000))  # 500 ms of live audio fills the verify window
@@ -100,9 +100,9 @@ async def test_a_winner_the_verifier_rejects_leaves_the_phrase_to_the_other_devi
 
 async def test_a_device_that_loses_by_its_own_confirmation_is_not_shown_listening(
         tmp_path, monkeypatch):
-    # Two speakers with equal pre-rolls: the first wake's is confirmed first and shown at
-    # once; the second's confirmation completes the group, which the earlier wake wins:
-    # the second never lights up.
+    # Two answering speakers with equal pre-rolls: the first wake's is confirmed first and
+    # shown at once; the second's confirmation completes the group, which the earlier
+    # wake wins: the second never lights up.
     patch_llm(monkeypatch)
     first, first_events = make_pipeline(tmp_path, monkeypatch, name="first")
     second, second_events = make_pipeline(tmp_path, monkeypatch, name="second")
@@ -115,7 +115,7 @@ async def test_a_device_that_loses_by_its_own_confirmation_is_not_shown_listenin
     second.arbitration_verdict = lambda token, won: (verdicts.append(won), ruled(token, won))
 
     for p in (first, second):
-        p.on_wake("cid", WAKE)
+        p.on_wake("cid", WAKE, over_answer=True)
         await p.on_audio(preroll(100, 1000))
     await first.on_audio(bytes(16000))  # 500 ms of live audio fills the verify window
     await settle(first)
@@ -127,14 +127,15 @@ async def test_a_device_that_loses_by_its_own_confirmation_is_not_shown_listenin
     assert StageEvent.STT_VAD_START not in types_of(second_events)
 
 
-async def test_a_lone_false_wake_leaves_no_cooldown_for_another_device(tmp_path, monkeypatch):
+async def test_a_lone_false_wake_over_an_answer_leaves_no_cooldown_for_another_device(
+        tmp_path, monkeypatch):
     patch_llm(monkeypatch)
     speaker, _ = make_pipeline(tmp_path, monkeypatch, name="speaker")
     panel, panel_events = make_pipeline(tmp_path, monkeypatch, name="panel")
     speaker.rt.wakeword_backend = FakeWakewordVerifier(accepted=False)
     speaker.arbiter = panel.arbiter = WakeArbiter(online_count=lambda: 1)
 
-    speaker.on_wake("cid", WAKE)
+    speaker.on_wake("cid", WAKE, over_answer=True)
     await speaker.on_audio(b"\x01\x02" * 30000)  # > the verify window
     await settle(speaker)
     panel.on_wake("cid", WAKE)
@@ -148,7 +149,7 @@ async def test_a_held_run_shows_listening_at_once_and_is_released_once_it_won(
     patch_llm(monkeypatch, reply="готово")
     store = FakeRunsStore()
     pipeline, events, arbiter = make_arbitrated(
-        tmp_path, monkeypatch, stt_text="включи свет", runs_store=store)
+        tmp_path, monkeypatch, stt_text="захар включи свет", runs_store=store)
     held_phrase(pipeline)
 
     pipeline.on_wake("cid", WAKE)
@@ -159,7 +160,7 @@ async def test_a_held_run_shows_listening_at_once_and_is_released_once_it_won(
     assert types_of(events).count(StageEvent.STT_VAD_START) == 1
     await pipeline.on_audio(FRAME * 6)  # ...and ends
     await settle(pipeline)
-    assert store.records[-1]["stt_text"] == "включи свет"
+    assert store.records[-1]["stt_text"] == "захар включи свет"
 
 
 def held_phrase(pipeline):
@@ -202,8 +203,8 @@ async def test_a_speakerless_device_the_cooldown_dropped_is_shown_the_winners_an
         tmp_path, monkeypatch):
     patch_llm(monkeypatch, reply="готово")
     sent = []
-    speaker, _ = make_pipeline(tmp_path, monkeypatch, name="speaker", stt_text="свет")
-    panel, _ = make_pipeline(tmp_path, monkeypatch, name="panel", stt_text="свет")
+    speaker, _ = make_pipeline(tmp_path, monkeypatch, name="speaker", stt_text="захар свет")
+    panel, _ = make_pipeline(tmp_path, monkeypatch, name="panel", stt_text="захар свет")
     panel.has_speaker = False
     speaker.arbiter = panel.arbiter = WakeArbiter(
         online_count=lambda: 1,
@@ -273,7 +274,7 @@ async def test_a_won_run_with_a_verifier_shows_listening_once_the_verifier_confi
     pipeline, events, arbiter = make_arbitrated(
         tmp_path, monkeypatch, verifier=FakeWakewordVerifier(accepted=True))
 
-    pipeline.on_wake("cid", WAKE)
+    pipeline.on_wake("cid", WAKE, over_answer=True)
     if verifier_first:
         await pipeline.on_audio(b"\x01\x02" * 30000)  # > the verify window
         await settle(pipeline)
@@ -294,7 +295,7 @@ async def test_an_utterance_that_ended_during_the_hold_is_finalized_on_release(
     patch_llm(monkeypatch, reply="ок")
     store = FakeRunsStore()
     pipeline, events, arbiter = make_arbitrated(
-        tmp_path, monkeypatch, stt_text="свет", runs_store=store)
+        tmp_path, monkeypatch, stt_text="захар свет", runs_store=store)
     held_phrase(pipeline)
 
     pipeline.on_wake("cid", WAKE)
@@ -304,5 +305,5 @@ async def test_an_utterance_that_ended_during_the_hold_is_finalized_on_release(
     pipeline.arbitration_verdict(arbiter.tokens[-1], True)
     await settle(pipeline)
     rec = store.records[-1]
-    assert (rec["reason"], rec["stt_text"]) == ("endpoint", "свет")
+    assert (rec["reason"], rec["stt_text"]) == ("endpoint", "захар свет")
     assert types_of(events)[-1] == StageEvent.RUN_END
