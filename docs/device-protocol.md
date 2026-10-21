@@ -166,8 +166,8 @@ device                                   server
   `wake` over a running answer (a run of the device is going or a stream is playing) may be the
   device's own voice: the server holds it until its second wake-word check confirms it on the
   proposal's microphone audio (at once when that check is off), and the older run goes on
-  meanwhile; the check also tells apart words that sound like the wake word (the Vosk check's
-  `answer_sound_alikes`). Any other `wake` is confirmed at once. A confirmed wake is
+  meanwhile; the check also tells apart words that sound like the wake word (a fixed list in
+  the Vosk check, `ANSWER_SOUND_ALIKES`). Any other `wake` is confirmed at once. A confirmed wake is
   taken: the server cancels the older run and sends `play_stop`, which flushes the device's
   playback, a stream the server started before it saw the `wake` included, then `state listening`
   with the proposed `session`, which makes it the device's current session; the audio held
