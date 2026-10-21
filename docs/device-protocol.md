@@ -122,6 +122,12 @@ The owner's words:
   фразу и проиграли» and «всем устройствам без динамика — каждый ответ», «первый вариант наверное,
   да» — the answer of the kept session is shown on the screens of the devices without a speaker
   that lost that phrase.
+- The server's Vosk wake check (2 s pre-roll + 0.5 s) passed 9 of the 28 fused «захар + command»
+  phrases of the owner the speaker caught; GigaAM on the whole phrase heard «захар» in 61 of 72 of
+  them and in none of his 30 negatives. A second chance — a wake the quick check rejects heard to
+  the end of its phrase, unlit, and taken if the phrase starts with «захар» — was chosen and then
+  dropped: «нет никакого смысла городить такую сложную схему, в которой все равно все останется
+  как щас, и я не буду видеть свечение в половине случаев».
 - «дребезжит немного звук иногда на колонке», heard as «Щелчки, звук рвётся»: the speaker played
   with no reserve and a pause in the arriving audio became silence. Option chosen: «колонка копит
   ~0,3 с звука перед фразой», then, against waiting for Fish Audio's second chunk, «Оставить
