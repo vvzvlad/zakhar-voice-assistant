@@ -37,7 +37,9 @@ src/
     dashboard.jsx       Pipeline overview (KPIs, service map, recent runs)
     stages.jsx          VAD, STT, LLM, RUAccent, TTS settings
     log.jsx             Request log + detail drawer (waterfall, tool calls, audio)
-    integrations.jsx    MCP servers, System prompt, Context, Devices
+    tools.jsx           Tools: external MCP servers and built-in tool sources
+    prompt.jsx          System prompt profiles
+    devices.jsx         Devices
     network.jsx         Network / audio server
 ```
 
