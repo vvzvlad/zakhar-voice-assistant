@@ -29,6 +29,8 @@ configured under `core.mcp_servers` in `data/config.json`.
   before changing it.
 - `docs/device-protocol.md` — the normative server↔device contract; a change to the protocol
   changes this file, `src/device_server.py` and `firmware/components/zakhar_link` together.
+  It states the contract as it is, with no decisions log or history: the owner's words behind a
+  change go into its commit message.
 - `firmware/` — Voice PE speaker firmware, ESP-IDF C; the Music Assistant player
   (`main/music.cpp`, sendspin-cpp over the Sendspin protocol) is the only C++. Internal RAM is
   what runs out first: every `operator new` goes to PSRAM (`main/psram_new.cpp`), libraries'
