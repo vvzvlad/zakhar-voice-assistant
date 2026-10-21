@@ -283,7 +283,10 @@ wake-word и VAD.
   (docs/device-protocol.md, «Capture»), а то, что всё-таки потерялось, видно в `gaps`.
   Устройство не в сети — сразу 409. `GET /api/capture?device=<имя>` — состояние (`starting`
   до первого звука, `recording`, `done`, `error`), обратный отсчёт и дыры;
-  `GET /api/capture/result?device=<имя>` — последняя законченная запись. Записи лежат, пока
+  `GET /api/capture/result?device=<имя>` — последняя законченная запись.
+  `POST /api/capture/stop` `{"device": "<имя>"}` — закончить идущую запись сейчас: она
+  остаётся `done` с тем, что успело записаться, или `error` «no audio», если звука ещё не было
+  (нет идущей записи — 409). Записи лежат, пока
   их не удалят: `GET /api/captures` — список, `GET /api/captures/<устройство>/<имя>.wav` —
   скачать, `DELETE /api/captures/<устройство>/<имя>` — удалить.
 - `POST /api/datasets/<набор>` `{"device": "<имя>", "takes": 200, "seconds": 3}` — записать

@@ -160,6 +160,9 @@ static void test_decode(void)
     assert(m.type == ZL_MSG_CAPTURE_RESUME && m.id == 7 && m.from == 24576);
     zl_msg_free(&m);
     assert(!decode("{\"type\": \"capture_resume\", \"id\": 7}", &m));
+    assert(decode("{\"type\": \"capture_stop\", \"id\": 7}", &m) && m.type == ZL_MSG_CAPTURE_STOP && m.id == 7);
+    zl_msg_free(&m);
+    assert(!decode("{\"type\": \"capture_stop\"}", &m));  // the id is required
     assert(decode("{\"type\": \"model\", \"kind\": \"wake\", \"name\": \"zakhar.tflite\", \"size\": 61000}", &m));
     assert(m.type == ZL_MSG_MODEL && m.model == ZL_MODEL_WAKE && strcmp(m.name, "zakhar.tflite") == 0 &&
            m.size == 61000 && !m.has_session);

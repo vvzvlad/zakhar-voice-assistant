@@ -6,13 +6,14 @@
 // the wake, `stop`, the session's and the capture's mic frames, audio_end, wake_peak once a second,
 // `played` of finished streams, `volume`, `ambient`, `stats` after each hello and every 30 s and,
 // while the server asks for it, the device log in `log` messages. It also owns the microphone
-// position, so a `capture` and a `capture_resume` are handed to it; only a follow-up `listening`
-// sets the position on the client's task, under the mutex, together with turning the mic on. A
-// capture outlives a lost link: the next hello names it, and a `capture_resume` sends it on from
-// the frame the server asks for. The client's own task runs the event handler: the hello on
-// connect and every received frame in arrival order, so a play_start, its 0x02 frames and its
-// play_end reach the playback queue in the order sent; a model is assembled from its 0x03 frames
-// and handed to on_model there too. One mutex guards the shared state.
+// position, so a `capture`, a `capture_resume` and a `capture_stop` are handed to it; only a
+// follow-up `listening` sets the position on the client's task, under the mutex, together with
+// turning the mic on. A capture outlives a lost link: the next hello names it, and a
+// `capture_resume` sends it on from the frame the server asks for. The client's own task runs the
+// event handler: the hello on connect and every received frame in arrival order, so a play_start,
+// its 0x02 frames and its play_end reach the playback queue in the order sent; a model is
+// assembled from its 0x03 frames and handed to on_model there too. One mutex guards the shared
+// state.
 // Nothing sends or calls back while holding it: the client's task holds the client lock around
 // the handler, and a send from the component task takes that lock.
 #include "zakhar_link.h"
@@ -69,6 +70,7 @@ static const char *TAG = "zakhar_link";
 #define EV_STOP (1u << 6)
 #define EV_AMBIENT (1u << 7)
 #define EV_STATS (1u << 8)  // a hello went out: the connection's first stats
+#define EV_CAPTURE_STOP (1u << 9)
 
 static zl_config_t s_cfg;
 static zl_callbacks_t s_cb;
@@ -85,6 +87,7 @@ static uint32_t s_backoff = 1; // seconds before the next connect; 1 again after
 static zl_sess_t s_sess;
 static uint32_t s_capture_ms, s_capture_new;  // the last `capture`: its length and id
 static uint32_t s_resume_id, s_resume_from;   // the last `capture_resume`
+static uint32_t s_stop_id;                    // the last `capture_stop`
 // The held capture (s_sess.capture): its id, and whether its frames go to the server on this link
 // (from its `capture` or `capture_resume` until the link is lost).
 static uint32_t s_capture_id;
@@ -126,7 +129,8 @@ static bool s_mic_rewind;
 // session's frame starts at byte 7 with its kind byte, a capture's at byte 3 with its kind byte and
 // the offset at bytes 4..7.
 static int16_t s_tx[4 + ZL_FRAME_FRAMES * 2];
-// The component task only: the held capture's first frame and length (set by capture_start()).
+// The component task only: the held capture's first frame and length (set by capture_start(), cut
+// by capture_stop()).
 static uint32_t s_capture_start, s_capture_frames;
 // The server's URL found by mDNS: written by the component task before it creates a client, read
 // while that client lives.
@@ -333,6 +337,9 @@ static void on_text(esp_websocket_client_handle_t ws, const char *json, size_t l
             s_resume_id = m.id;
             s_resume_from = m.from;
             break;
+        case ZL_MSG_CAPTURE_STOP:
+            s_stop_id = m.id;
+            break;
         case ZL_MSG_DETECT:
             zl_sess_detect(&s_sess, m.on);
             break;
@@ -393,6 +400,9 @@ static void on_text(esp_websocket_client_handle_t ws, const char *json, size_t l
         break;
     case ZL_MSG_CAPTURE_RESUME:
         notify(EV_CAPTURE_RESUME);
+        break;
+    case ZL_MSG_CAPTURE_STOP:
+        notify(EV_CAPTURE_STOP);
         break;
     case ZL_MSG_DETECT:
         ESP_LOGI(TAG, "wake word detection %s", m.on ? "on" : "off");
@@ -730,6 +740,33 @@ static void capture_resume(void)
     }
 }
 
+// A `capture_stop` for the held capture ends it now. One being sent is cut to the frames recorded
+// so far: mic_poll() sends them and capture_poll() its audio_end, as at a normal end. One not being
+// sent (its link lost, no `capture_resume`) ends at once, without audio_end. Any other is ignored.
+static void capture_stop(void)
+{
+    const uint32_t pos = s_cfg.mic_position();
+    lock();
+    const uint32_t id = s_stop_id;
+    const bool held = s_sess.capture && id == s_capture_id;
+    const bool sending = held && s_capture_sending;
+    if (sending) {
+        const uint32_t recorded = pos - s_capture_start;
+        if (recorded < s_capture_frames) s_capture_frames = recorded;
+    } else if (held) {
+        s_sess.capture = false;
+    }
+    unlock();
+    if (sending) {
+        ESP_LOGI(TAG, "capture %u stopped: sending its %u frames", (unsigned)id, (unsigned)s_capture_frames);
+    } else if (held) {
+        ESP_LOGI(TAG, "capture %u stopped: not being sent, ended", (unsigned)id);
+        if (s_cb.on_capture != NULL) s_cb.on_capture(false);
+    } else {
+        ESP_LOGI(TAG, "capture_stop %u ignored", (unsigned)id);
+    }
+}
+
 // The capture ends when its audio is sent, not by the clock: a pass that waited in a send must not
 // cut off the frames still in the tap. One that is not being sent (its link lost, no
 // `capture_resume`) is dropped without audio_end ZL_CAPTURE_KEEP_FRAMES after its last frame.
@@ -932,6 +969,7 @@ static void link_task(void *arg)
         }
         if (ev & EV_CAPTURE) capture_start();
         if (ev & EV_CAPTURE_RESUME) capture_resume();
+        if (ev & EV_CAPTURE_STOP) capture_stop();
         if (ev & EV_STOP) stop();
         if (ev & EV_WAKE) wake();
         if (ev & EV_PLAYED) send_played();

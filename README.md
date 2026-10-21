@@ -279,7 +279,10 @@ Debug and dataset calls of the panel API (`http://<host>:8201`), meant for an ag
   capture (docs/device-protocol.md, «Capture»), and audio that did get lost shows in `gaps`.
   An offline device answers 409 at once. `GET /api/capture?device=<name>` — its state
   (`starting` until the first audio, `recording`, `done`, `error`), countdown and gaps;
-  `GET /api/capture/result?device=<name>` — its newest finished capture. Captures stay until
+  `GET /api/capture/result?device=<name>` — its newest finished capture.
+  `POST /api/capture/stop` `{"device": "<name>"}` — end the running capture now: it is kept as
+  `done` with the audio recorded so far, `error` "no audio" if none came yet (409 when none
+  runs). Captures stay until
   deleted: `GET /api/captures` lists them, `GET /api/captures/<device>/<name>.wav` downloads
   one, `DELETE /api/captures/<device>/<name>` deletes it.
 - `POST /api/datasets/<set>` `{"device": "<name>", "takes": 200, "seconds": 3}` — record a

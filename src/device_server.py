@@ -188,6 +188,10 @@ class CaptureBusyError(Exception):
     """A capture is already in progress on this device (the panel API answers 409)."""
 
 
+class NoCaptureError(Exception):
+    """No capture is running on this device to stop (the panel API answers 409)."""
+
+
 class DeviceOfflineError(RuntimeError):
     """The device is not connected (the panel API answers 409, a dataset take waits)."""
 
@@ -901,6 +905,30 @@ class Device:
         await cap.finished.wait()
         return cap
 
+    def stop_capture(self) -> captures.Capture:
+        """End the running capture early and return it: it is `done` with the audio that came
+        and that length. Online, `capture_stop` makes the device send what it recorded and its
+        `audio_end`, and the watchdog finishes it CAPTURE_WAIT_MARGIN from now if they do not
+        come; offline, it is finished now. Raises NoCaptureError."""
+        cap = self.capture
+        if cap is None:
+            raise NoCaptureError(f"{self.name} has no capture running")
+        cap.stopped = True
+        conn = self.conn
+        logger.info(f"{self.name}: ⏹️ capture {cap.name} stop" + (" sent" if conn else " while offline"))
+        if conn is None:
+            self.finish_capture()
+            return cap
+        self._send_stop(conn, cap)
+        return cap
+
+    def _send_stop(self, conn: Connection, cap: captures.Capture) -> None:
+        """Send `capture_stop` for `cap`; the watchdog finishes it CAPTURE_WAIT_MARGIN from now
+        if the rest of its audio and its `audio_end` do not come."""
+        conn.send({"type": "capture_stop", "id": cap.id})
+        self._capture_watchdog.cancel()
+        self._capture_watchdog = asyncio.get_running_loop().call_later(CAPTURE_WAIT_MARGIN, self.finish_capture)
+
     def _run_capture(self, cap: captures.Capture) -> None:
         """Make `cap` the running capture; the watchdog finishes it with what came by
         CAPTURE_WAIT_MARGIN past its end."""
@@ -922,7 +950,8 @@ class Device:
         """After a hello: take up the capture the device holds, or record the time left of
         one it lost by restarting (docs/device-protocol.md, "Capture"). The capture the
         device holds may be one on disk only (the server restarted); every other unfinished
-        capture of the device on disk is finished as is."""
+        capture of the device on disk is finished as is. A held capture that is not taken up
+        gets `capture_stop`."""
         now = time.time()
         running = self.capture.stem if self.capture is not None else None
         for cap in captures.of_device(self.name):
@@ -935,12 +964,24 @@ class Device:
             cap.finish()
             logger.info(f"{self.name}: capture {cap.name} found unfinished; finished as is ({cap.state})")
         cap = self.capture
+        held = conn.held_capture
+        if held is not None and (cap is None or cap.id != held):
+            # Otherwise the device records it to its end with wake-word detection paused.
+            conn.send({"type": "capture_stop", "id": held})
+            logger.info(f"{self.name}: ⏹️ capture {held} held by the device is not taken up; stop sent")
         if cap is None:
             return
         if conn.held_capture == cap.id:
             start = max(0, cap.end - cap.base)
             conn.send({"type": "capture_resume", "id": cap.id, "from": start})
             logger.info(f"{self.name}: capture {cap.name} resumed from frame {start}")
+            if cap.stopped:
+                # A stop sent before the link was lost may never have reached the device.
+                self._send_stop(conn, cap)
+            return
+        if cap.stopped:
+            # The device came back without it (it restarted): a stopped capture records no more.
+            self.finish_capture()
             return
         left = cap.started + cap.seconds - now
         if left < 1:
@@ -1022,6 +1063,11 @@ class DeviceManager:
         device = self._devices.get(device_name)
         cap = (device.capture if device is not None else None) or captures.newest(device_name)
         return cap.snapshot() if cap is not None else captures.idle(device_name)
+
+    def capture_stop(self, device_name: str) -> captures.Capture:
+        """End the device's running capture early (Device.stop_capture) and return it. Raises
+        LookupError for an unknown device, NoCaptureError when none runs."""
+        return self.find(device_name).stop_capture()
 
     def capture_delete(self, device_name: str, name: str) -> bool:
         """Delete a capture from disk; False when there is no such capture. Raises
