@@ -1,9 +1,10 @@
 // The pure audio pieces of the Voice PE firmware: no ESP headers, host-tested
 // (make fw-voicepe-host-test). The microphone sample conversion, the microphone tap ring, the echo
 // reference (decimator, aligned reads, the skip decision), the echo delay estimator, the mic
-// task's per-chunk bookkeeping, the room's noise level, the speaker's mix of zakhar's playback and
-// the music, and the speaker volume -> DAC register mapping. audio_core.c also implements the
-// music ring, declared in music_ring.h.
+// task's per-chunk bookkeeping (channel 0's stage, when to re-create the AEC, its statistics), the
+// room's noise level, the speaker's mix of zakhar's playback and the music, and the speaker
+// volume -> DAC register mapping. audio_core.c also implements the music ring, declared in
+// music_ring.h.
 #pragma once
 
 #include <stdatomic.h>
@@ -150,6 +151,25 @@ void mic_chunks_init(mic_chunks_t *c, uint32_t frames, uint32_t ref_settle);
 // chunk after the step that asked for the NONE write that went through, and AGC again from the
 // MIC_STAGE_SETTLE-th after the AGC one.
 mic_chunk_t mic_chunks_step(mic_chunks_t *c, uint32_t dropped, bool want_raw, bool wrote, uint32_t ref_written);
+
+// Whether the AEC is to be made anew before this chunk: at the first playback with echo_cancel on
+// (`level` > 0 while `playing`), then at once whenever `mode` or `filter` differ from made_mode
+// and made_filter, the settings it was last made with or failed to be made with (-1 before then).
+bool aec_remake(int made_mode, int made_filter, int mode, int filter, int level, bool playing);
+
+// One playback's echo cancellation on channel 0, logged when channel 0 is back to AGC.
+typedef struct {
+    uint32_t chunks;
+    uint64_t e_in, e_out;  // channel 0's energy into and out of the AEC
+    uint64_t us;           // aec_process time in all
+    uint32_t us_max;
+    uint32_t dropped;      // microphone frames the RX driver dropped
+    float corr;            // the latest estimate's correlation at the lag in use; NAN before one
+} aec_stats_t;
+
+// Counts one chunk through the AEC: `frames` samples of its input `in` and output `out`, and the
+// `us` aec_process took.
+void aec_stats_add(aec_stats_t *st, const int16_t *in, const int16_t *out, size_t frames, uint32_t us);
 
 // ---------------------------------------------------------------- the room's noise level
 
