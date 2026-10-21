@@ -5,7 +5,7 @@ applied ONCE by the pipeline to the finalized utterance — high-pass / peak
 normalization / lead-in trim before STT, and the WAV builder for the diagnostic
 audio paths — never per chunk. The one PER-CHUNK exception is
 ``vad_boost``: a decision-only makeup gain the pipeline applies to each chunk
-on its VAD feed path (gated by core.vad.mic_auto_gain) — the boosted bytes go
+on its VAD feed path, always — the boosted bytes go
 only to the VAD session, never to the buffer/STT/stored audio.
 """
 

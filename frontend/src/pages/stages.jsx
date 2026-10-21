@@ -452,16 +452,16 @@ export function VAD() {
   // vad prop is a $ref to $defs.VadConfig — resolve to the object schema.
   const vadSchema = coreSchema.$defs ? coreSchema.$defs.VadConfig : null;
   const ackSchema = coreSchema.$defs ? coreSchema.$defs.AckConfig : null;
-  // mic_channel / mic_auto_gain / mic_normalize / mic_highpass live in VadConfig but get
+  // mic_channel / mic_normalize / mic_highpass live in VadConfig but get
   // their own card, so core.vad is split into two disjoint parts; both patch core.vad
   // and the merge of the two keeps them apart.
-  const { mic_channel, mic_auto_gain, mic_normalize, mic_highpass, ...vadValues } = catalog.core.values.vad || {};
+  const { mic_channel, mic_normalize, mic_highpass, ...vadValues } = catalog.core.values.vad || {};
   // The chime's `enabled` is switched on the Capture page.
   const { enabled: _ackEnabled, ...ackValues } = catalog.core.values.ack || {};
   const [tab, setTab] = useProviderTab("vad", engines, vadCat?.selected);
   const form = usePageForm([
     { key: "endpointing", values: vadValues, toPatch: (d) => ({ core: { vad: d } }) },
-    { key: "mic", values: { mic_channel, mic_auto_gain, mic_normalize, mic_highpass }, toPatch: (d) => ({ core: { vad: d } }) },
+    { key: "mic", values: { mic_channel, mic_normalize, mic_highpass }, toPatch: (d) => ({ core: { vad: d } }) },
     { key: "ack", values: ackValues, toPatch: (d) => ({ core: { ack: d } }) },
     ...providerParts("vad", engines),
     wake.part,
@@ -480,15 +480,14 @@ export function VAD() {
     ];
   };
 
-  // Mic input card: which device mic channel feeds the pipeline, the boost of quiet
-  // audio for the VAD decision and the pre-STT conditioning toggles. The fields live
-  // in VadConfig (core.vad.mic_*) — a LIVE reconfig, applied on the next utterance.
+  // Mic input card: which device mic channel feeds the pipeline and the pre-STT
+  // conditioning toggles. The fields live in VadConfig (core.vad.mic_*) — a LIVE
+  // reconfig, applied on the next utterance.
   // Build a mini-schema with just those props so they render in their own card.
   const micSchema = vadSchema && vadSchema.properties ? {
     type: "object",
     properties: {
       mic_channel: vadSchema.properties.mic_channel,
-      mic_auto_gain: vadSchema.properties.mic_auto_gain,
       mic_normalize: vadSchema.properties.mic_normalize,
       mic_highpass: vadSchema.properties.mic_highpass,
     },
@@ -510,10 +509,10 @@ export function VAD() {
       </div>}
       <Card title="End-pointing thresholds" sub="when a phrase is considered started / finished">
         <SchemaForm schema={{ ...vadSchema, $defs: coreSchema.$defs }} root={{ ...vadSchema, $defs: coreSchema.$defs }}
-          values={form.draftOf("endpointing")} onChange={form.onChangeOf("endpointing")} skip={["mic_channel", "mic_auto_gain", "mic_normalize", "mic_highpass"]} />
+          values={form.draftOf("endpointing")} onChange={form.onChangeOf("endpointing")} skip={["mic_channel", "mic_normalize", "mic_highpass"]} />
       </Card>
       {micSchema && <Card title="Microphone input & conditioning" sub="which device mic stream feeds the pipeline · its conditioning">
-        {/* The conditioning toggles are advanced: they fold full-width under the channel selector and the auto gain. */}
+        {/* The conditioning toggles are advanced: they fold full-width under the channel selector. */}
         <SchemaForm schema={{ ...micSchema, $defs: coreSchema.$defs }} root={{ ...micSchema, $defs: coreSchema.$defs }}
           values={form.draftOf("mic")} onChange={form.onChangeOf("mic")} />
       </Card>}

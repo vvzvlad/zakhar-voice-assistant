@@ -118,10 +118,6 @@ def test_old_doc_without_vad_slot_gets_webrtc_defaults(tmp_path):
     webrtc = next(p for p in vad["providers"] if p["id"] == "webrtc")
     # vad provider fields are stage-instance paths -> rebuild_backends apply class.
     assert webrtc["schema"]["properties"]["aggressiveness"]["apply"] == "rebuild_backends"
-    # The decision-only boost is a core conditioning toggle now (pipeline-applied,
-    # read live per chunk) -> annotated with the "live" apply class.
-    mic_auto_gain = cat["core"]["schema"]["$defs"]["VadConfig"]["properties"]["mic_auto_gain"]
-    assert mic_auto_gain["apply"] == "live"
 
 
 def test_catalog_exposes_values_plainly(tmp_path):

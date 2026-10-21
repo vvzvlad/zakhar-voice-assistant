@@ -58,8 +58,7 @@ class AgentMcpConfig(BaseModel):
 
 class VadConfig(BaseModel):
     """Engine-independent voice-capture policy: end-pointing thresholds plus the
-    mic channel selection and conditioning toggles (pre-STT highpass/normalize and
-    the decision-only VAD auto gain, applied by the pipeline for every VAD engine).
+    mic channel selection and the pre-STT conditioning toggles (highpass/normalize).
     The speech classifier itself (e.g. WebRTC aggressiveness) is the swappable
     vad stage plugin (src/plugins/vad/*), configured under the `vad` slot."""
 
@@ -123,12 +122,6 @@ class VadConfig(BaseModel):
         title="Low-frequency filter",
         json_schema_extra=ADVANCED_FIELD_EXTRA,
         description="Cuts hum and rumble below about 80 Hz before STT.",
-    )
-    # Lets any VAD engine end-point the quiet, less-processed mic channel. Read live per chunk.
-    mic_auto_gain: bool = Field(
-        False,
-        title="VAD auto gain",
-        description="Boosts quiet audio for the VAD decision only; the recording stays as it is.",
     )
 
 

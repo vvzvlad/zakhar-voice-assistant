@@ -379,7 +379,7 @@ async def test_empty_stt(tmp_path, monkeypatch):
 # returns "" for a hallucinated transcript, which the pipeline handles via the
 # existing empty-transcription path — covered by the empty-STT tests above).
 
-# --- decision-only VAD boost (core.vad.mic_auto_gain) ---------------------------
+# --- decision-only VAD boost ------------------------------------------------------
 # The pipeline applies the boost to every chunk BEFORE it reaches the VAD session
 # (any engine), while the buffer/STT path keeps the raw bytes. The vad_boost
 # primitive itself is unit-tested in tests/test_audio_prep.py.
@@ -425,13 +425,12 @@ def _boosted(chunk, peak):
     ).astype("<i2").tobytes()
 
 
-async def test_mic_auto_gain_boosts_vad_feed_but_buffers_raw(tmp_path, monkeypatch):
-    # With mic_auto_gain on, once a loud chunk has raised the running peak above
-    # the floor, the VAD session receives BOOSTED bytes (scaled by
-    # min(target/peak, 128)) while the run's buffer keeps the raw chunk bytes.
+async def test_vad_boost_lifts_vad_feed_but_buffers_raw(tmp_path, monkeypatch):
+    # Once a loud chunk has raised the running peak above the floor, the VAD
+    # session receives BOOSTED bytes (scaled by min(target/peak, 128)) while the
+    # run's buffer keeps the raw chunk bytes.
     patch_llm(monkeypatch)
     pipeline, _ = make_pipeline(tmp_path, monkeypatch)
-    pipeline.rt.core.vad.mic_auto_gain = True
     backend = RecordingVadBackend()
     pipeline.rt.vad_backend = backend
 
@@ -450,28 +449,11 @@ async def test_mic_auto_gain_boosts_vad_feed_but_buffers_raw(tmp_path, monkeypat
     assert pipeline.preroll_pcm == loud + quiet  # ...while the buffer kept raw
 
 
-async def test_mic_auto_gain_off_feeds_verbatim_and_tracks_no_peak(tmp_path, monkeypatch):
-    # Default (mic_auto_gain=False): the session receives the chunk verbatim and
-    # the pipeline does no peak tracking at all.
-    patch_llm(monkeypatch)
-    pipeline, _ = make_pipeline(tmp_path, monkeypatch)
-    backend = RecordingVadBackend()
-    pipeline.rt.vad_backend = backend
-
-    pipeline.on_wake("cid", None)
-    loud = _const_chunk(3000)
-    await pipeline.on_audio(loud)
-
-    [session] = backend.sessions
-    assert session.fed == [loud]
-
-
-async def test_mic_auto_gain_preroll_below_floor_fed_verbatim(tmp_path, monkeypatch):
+async def test_vad_boost_preroll_below_floor_fed_verbatim(tmp_path, monkeypatch):
     # While the running peak is still below VAD_BOOST_FLOOR, pre-roll silence is
     # NOT amplified: chunks reach the session unchanged (boost identity).
     patch_llm(monkeypatch)
     pipeline, _ = make_pipeline(tmp_path, monkeypatch)
-    pipeline.rt.core.vad.mic_auto_gain = True
     backend = RecordingVadBackend()
     pipeline.rt.vad_backend = backend
 
@@ -483,12 +465,11 @@ async def test_mic_auto_gain_preroll_below_floor_fed_verbatim(tmp_path, monkeypa
     assert session.fed == [preroll]
 
 
-async def test_mic_auto_gain_peak_resets_between_runs(tmp_path, monkeypatch):
+async def test_vad_boost_peak_resets_between_runs(tmp_path, monkeypatch):
     # The running peak is per utterance: a loud first run must not leak its peak
     # into the next run — a quiet (below-floor) chunk in run 2 is fed verbatim.
     patch_llm(monkeypatch)
     pipeline, _ = make_pipeline(tmp_path, monkeypatch)
-    pipeline.rt.core.vad.mic_auto_gain = True
     backend = RecordingVadBackend()
     pipeline.rt.vad_backend = backend
 
