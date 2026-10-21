@@ -46,9 +46,7 @@ from src.followup import NoFollowup
 from src.stage_errors import StageError
 from src.voice_run import PREROLL_BYTES, PREROLL_MS, Run
 from src.wakeword import PassthroughVerifier
-# SAMPLE_RATE now lives in the VAD stage contract module; re-exported here so the
-# many existing `from src.pipeline import SAMPLE_RATE` users keep working.
-from src.vad import SAMPLE_RATE, EndpointPolicy  # noqa: F401  (SAMPLE_RATE re-export)
+from src.vad import SAMPLE_RATE, EndpointPolicy
 
 # Generous hard memory cap (~60s of 16 kHz / 16-bit mono PCM). VAD should end the
 # utterance long before this; the cap only guards against unbounded growth if VAD
