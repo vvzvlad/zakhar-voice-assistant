@@ -35,8 +35,12 @@ help: ## Show this help
 .PHONY: venv
 venv: $(VENV)/bin/python ## Create the local virtualenv (.venv) if missing
 
+# Python 3.11, as in the app image (Dockerfile) and CI: the pinned onnxruntime
+# ships no wheels for newer interpreters than it was built for.
+PYTHON ?= python3.11
+
 $(VENV)/bin/python:
-	python3 -m venv $(VENV)
+	$(PYTHON) -m venv $(VENV)
 
 # Sentinel: dependencies are (re)installed only when a requirements file changes,
 # not on every `make test` / `make run`.
