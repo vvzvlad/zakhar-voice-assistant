@@ -20,7 +20,7 @@ def make_ack_chime_wav(
 
     A pleasant ~300 ms rising two-tone beep with a per-tone attack/decay envelope (so
     there are no clicks), built with numpy. Pure/deterministic — the pipeline builds it ONCE and
-    caches the bytes (see Pipeline._ack_clip / Pipeline._ack_clip_bytes). numpy is
+    caches the bytes (see SpeechMixin._ack_clip / _ack_clip_bytes in src/speech.py). numpy is
     already a dependency.
     """
     import numpy as np

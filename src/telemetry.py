@@ -63,7 +63,7 @@ zakhar/devices/<device>/run/<result> — every finished run (a voice run, a text
         (`chain_<chain>`: stt, handler, text, outcome, error, detail, t_stt, t_handler;
         src/chains.py), the follow-up check (`followup_<provider>_<model>`: text, outcome,
         probability, t) and each TTS variant tried (`tts_<provider>`: outcome, error, t;
-        src/pipeline.py); a key met again gets `_2`, `_3`, …;
+        src/speech.py); a key met again gets `_2`, `_3`, …;
     tools/<n> — every tool call of the run in order, n from 0: round, name, args (the
         arguments as JSON text), result.
 """

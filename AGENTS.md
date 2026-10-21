@@ -29,11 +29,16 @@ configured under `core.mcp_servers` in `data/config.json`.
   before changing it.
 - `docs/device-protocol.md` — the normative server↔device contract; a change to the protocol
   changes this file, `src/device_server.py` and `firmware/components/zakhar_link` together.
+  It states the contract as it is, with no decisions log or history: the owner's words behind a
+  change go into its commit message.
 - `firmware/` — Voice PE speaker firmware, ESP-IDF C; the Music Assistant player
   (`main/music.cpp`, sendspin-cpp over the Sendspin protocol) is the only C++. Internal RAM is
   what runs out first: every `operator new` goes to PSRAM (`main/psram_new.cpp`), libraries'
-  `.bss` too, and the link needs a free 6 KB internal block for its WebSocket task at every
-  connect — after adding anything resident, check free/largest in the boot line `music: player up`
+  `.bss` too, a plain `malloc()` of 4 KB and more as well (`CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL`),
+  and the link needs a free 6 KB internal block for its WebSocket task at every connect; the
+  server logs a warning when a device's `stats` shows a largest block under 8 KB. Add nothing
+  resident to the firmware while issue #18 (the speaker drops parts of its answer) is open; after
+  adding anything resident, check free/largest in the boot line `music: player up`
   (serial console, or the port-23 network log held open across the reboot; the server's device
   log starts after it).
   `components/zakhar_link` is the
