@@ -134,6 +134,9 @@ The owner's words:
   phrase (GigaAM in production) — a phrase without it ends silently. The quick Vosk check stays
   only for a wake over the device's own running answer, where the device's own voice reaches the
   microphone. Both follow one switch, so with it off a wake on an ESPHome model still passes.
+- On the false wakes that now light the device: «ну пусть светится, лишь бы не блямкало». The
+  speaker's own VAD vetoed 224 of its 310 wakes on 2026-10-21, a real one at 21:16 among them;
+  option chosen: «Ослабить: 30 % → 10 %» — the speaker 20f83b0a332d has `vad_cutoff` 10.
 - «дребезжит немного звук иногда на колонке», heard as «Щелчки, звук рвётся»: the speaker played
   with no reserve and a pause in the arriving audio became silence. Option chosen: «колонка копит
   ~0,3 с звука перед фразой», then, against waiting for Fish Audio's second chunk, «Оставить
