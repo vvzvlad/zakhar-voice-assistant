@@ -1,0 +1,9 @@
+--- cfg_v35_node.yaml	2026-10-21 06:00:26.170815167 +0300
++++ cfg_ctl_v35node.yaml	2026-10-21 09:23:01.191332603 +0300
+@@ -1,5 +1,5 @@
+ window_step_ms: 10
+-train_dir: /tmp/zstudio/v35/models/zakhar_v35
++train_dir: /home/claude/zakhar-mww/v36/models/ctl_v35node
+ features:
+ - features_dir: /home/claude/zakhar-mww/features_fish_pos
+   sampling_weight: 16.0

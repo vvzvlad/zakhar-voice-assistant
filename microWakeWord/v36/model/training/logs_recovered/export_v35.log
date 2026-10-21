@@ -1,0 +1,5 @@
+INFO:absl:Cutoff 1.00: frr=1.0000; faph=0.000
+INFO:absl:Cutoff 0.99: frr=0.2291; faph=0.819
+INFO:absl:Cutoff 0.98: frr=0.2079; faph=1.365
+INFO:absl:Cutoff 0.97: frr=0.1958; faph=2.000
+TFLITE_OK: /tmp/zstudio/v35/results/zakhar_v35.tflite  md5=b6d9589245bc1b4f2e04525348f10e53  (0 dequant, deployable)

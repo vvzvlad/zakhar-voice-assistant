@@ -1,0 +1,41 @@
+0001.wav thr=-73 beep_end=0.27 segs=0 wordlike=0 
+0002.wav thr=-75 beep_end=0.30 segs=0 wordlike=0 
+0003.wav thr=-76 beep_end=0.30 segs=1 wordlike=1 [0.75-1.14 d0.39 x16.2 -64.7dB WL]
+0004.wav thr=-76 beep_end=0.30 segs=1 wordlike=1 [0.51-0.99 d0.48 x10.2 -69.4dB WL]
+0005.wav thr=-76 beep_end=0.33 segs=1 wordlike=1 [1.20-1.56 d0.36 x11.0 -68.4dB WL]
+0006.wav thr=-74 beep_end=0.30 segs=1 wordlike=1 [0.66-1.08 d0.42 x7.5 -68.1dB WL]
+0007.wav thr=-76 beep_end=0.30 segs=1 wordlike=1 [0.72-0.99 d0.27 x8.7 -69.4dB WL]
+0008.wav thr=-76 beep_end=0.30 segs=1 wordlike=1 [0.60-1.08 d0.48 x21.2 -62.1dB WL]
+0009.wav thr=-77 beep_end=0.30 segs=1 wordlike=1 [0.48-1.02 d0.54 x26.3 -61.2dB WL]
+0010.wav thr=-74 beep_end=0.30 segs=1 wordlike=1 [0.39-0.93 d0.54 x36.2 -55.7dB WL]
+0011.wav thr=-75 beep_end=0.30 segs=1 wordlike=1 [0.45-0.96 d0.51 x46.4 -54.3dB WL]
+0012.wav thr=-76 beep_end=0.33 segs=0 wordlike=0 
+0013.wav thr=-73 beep_end=0.30 segs=1 wordlike=1 [2.73-3.00 d0.27 x6.0 -69.2dB WL @end]
+0014.wav thr=-76 beep_end=0.30 segs=1 wordlike=1 [0.75-1.14 d0.39 x13.5 -63.2dB WL]
+0015.wav thr=-76 beep_end=0.33 segs=1 wordlike=1 [0.51-0.99 d0.48 x19.1 -64.0dB WL]
+0016.wav thr=-74 beep_end=0.30 segs=1 wordlike=1 [0.51-1.20 d0.69 x33.5 -56.1dB WL]
+0017.wav thr=-76 beep_end=0.33 segs=1 wordlike=1 [0.54-1.11 d0.57 x24.7 -60.6dB WL]
+0018.wav thr=-77 beep_end=0.30 segs=1 wordlike=1 [0.57-0.99 d0.42 x45.1 -56.3dB WL]
+0019.wav thr=-76 beep_end=0.30 segs=0 wordlike=0 
+0020.wav thr=-74 beep_end=0.24 segs=1 wordlike=1 [0.69-1.17 d0.48 x14.9 -63.2dB WL]
+0021.wav thr=-74 beep_end=0.24 segs=0 wordlike=0 
+0022.wav thr=-74 beep_end=0.33 segs=0 wordlike=0 
+0023.wav thr=-76 beep_end=0.27 segs=0 wordlike=0 
+0024.wav thr=-75 beep_end=0.30 segs=1 wordlike=1 [0.45-0.96 d0.51 x55.0 -52.7dB WL]
+0025.wav thr=-76 beep_end=0.30 segs=1 wordlike=1 [0.45-0.93 d0.48 x39.9 -57.2dB WL]
+0026.wav thr=-76 beep_end=0.27 segs=1 wordlike=1 [0.57-1.05 d0.48 x16.9 -64.1dB WL]
+0027.wav thr=-74 beep_end=0.30 segs=1 wordlike=1 [0.33-0.90 d0.57 x14.8 -62.7dB WL]
+0028.wav thr=-76 beep_end=0.30 segs=1 wordlike=1 [0.39-0.99 d0.60 x40.6 -56.6dB WL]
+0029.wav thr=-74 beep_end=0.30 segs=1 wordlike=1 [0.39-0.78 d0.39 x43.0 -54.0dB WL]
+0030.wav thr=-76 beep_end=0.30 segs=1 wordlike=1 [0.66-1.11 d0.45 x16.9 -63.8dB WL]
+0031.wav thr=-77 beep_end=0.30 segs=1 wordlike=1 [0.45-0.96 d0.51 x28.2 -60.0dB WL]
+0032.wav thr=-74 beep_end=0.30 segs=1 wordlike=1 [0.36-0.87 d0.51 x23.0 -58.7dB WL]
+0033.wav thr=-76 beep_end=0.30 segs=1 wordlike=1 [0.36-0.75 d0.39 x22.0 -58.8dB WL]
+0034.wav thr=-76 beep_end=0.33 segs=1 wordlike=1 [0.60-1.11 d0.51 x12.9 -62.2dB WL]
+0035.wav thr=-74 beep_end=0.30 segs=1 wordlike=1 [0.84-1.38 d0.54 x20.0 -55.3dB WL]
+0036.wav thr=-76 beep_end=0.33 segs=1 wordlike=1 [0.54-1.05 d0.51 x34.8 -57.8dB WL]
+0037.wav thr=-77 beep_end=0.33 segs=1 wordlike=1 [0.60-1.08 d0.48 x38.6 -57.9dB WL]
+0038.wav thr=-74 beep_end=0.30 segs=1 wordlike=1 [0.48-1.08 d0.60 x29.6 -57.5dB WL]
+0039.wav thr=-76 beep_end=0.33 segs=1 wordlike=1 [0.54-1.11 d0.57 x26.2 -59.5dB WL]
+0040.wav thr=-74 beep_end=0.27 segs=1 wordlike=1 [0.48-0.93 d0.45 x100.1 -46.8dB WL]
+SEGMENT_DONE 40

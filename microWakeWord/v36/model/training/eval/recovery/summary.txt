@@ -1,0 +1,16 @@
+@0.80                             v33                               v34                               v35                               
+new held-out, per clip (x4)       0/9 = 0.0% [0.0, 29.9]            1/9 = 11.1% [2.0, 43.5]           2/9 = 22.2% [6.3, 54.7]           
+new held-out, session (x4)        1/9 = 11.1% [2.0, 43.5]           1/9 = 11.1% [2.0, 43.5]           1/9 = 11.1% [2.0, 43.5]           
+new train-side, session (x4)      0/19 = 0.0% [0.0, 16.8]           0/19 = 0.0% [0.0, 16.8]           2/19 = 10.5% [2.9, 31.4]          
+no beep: held-out, per clip       3/9 = 33.3% [12.1, 64.6]          5/9 = 55.6% [26.7, 81.1]          7/9 = 77.8% [45.3, 93.7]          
+no beep: held-out, session        3/9 = 33.3% [12.1, 64.6]          3/9 = 33.3% [12.1, 64.6]          7/9 = 77.8% [45.3, 93.7]          
+no beep: train-side, session      7/19 = 36.8% [19.1, 59.0]         9/19 = 47.4% [27.3, 68.3]         13/19 = 68.4% [46.0, 84.6]        
+studio held-out words (x4)        7/17 = 41.2% [21.6, 64.0]         10/17 = 58.8% [36.0, 78.4]        10/17 = 58.8% [36.0, 78.4]        
+studio all segments (x4)          26/53 = 49.1% [36.1, 62.1]        33/53 = 62.3% [48.8, 74.1]        35/53 = 66.0% [52.6, 77.3]        
+speaker 18 home takes (x4)        15/18 = 83.3% [60.8, 94.2]        16/18 = 88.9% [67.2, 96.9]        16/18 = 88.9% [67.2, 96.9]        
+panel held-out words (x1)         19/19 = 100.0% [83.2, 100.0]      19/19 = 100.0% [83.2, 100.0]      19/19 = 100.0% [83.2, 100.0]      
+room held-out FAPH (x4)           0 FA in 5 min = 0.0/h [0.0, 44.27]0 FA in 5 min = 0.0/h [0.0, 44.27]0 FA in 5 min = 0.0/h [0.0, 44.27]
+«сахар» false accepts (x4)        0/2 fire, maxwin 0.127            0/2 fire, maxwin 0.140            0/2 fire, maxwin 0.146            
+studio detections total @0.80: v33 28, v34 38, v35 40
+session detections total @0.80 (28 kept words in 120 s): v33 1, v34 1, v35 3
+new held-out clips, detections outside the word window @0.80: v33 0, v34 0, v35 0

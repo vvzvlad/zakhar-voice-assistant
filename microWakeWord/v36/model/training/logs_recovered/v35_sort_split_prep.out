@@ -1,0 +1,53 @@
+0001.wav rejected         seg=- stt='я' energy: no segment after the beep; STT: no «захар»; STT: other words я
+0002.wav rejected         seg=- stt='Субтитры сделал DimaTorzok' energy: no segment after the beep; STT: no «захар»; STT: other words субтитры сделал
+0003.wav kept     train   seg=0.75-1.14 stt='Захар.'  crop=0.63-1.34
+0004.wav kept     train   seg=0.51-0.99 stt='Захар'  crop=0.39-1.19
+0005.wav kept     train   seg=1.2-1.56 stt='Захар!'  crop=1.08-1.76
+0006.wav kept     train   seg=0.66-1.08 stt='Захар.'  crop=0.54-1.28
+0007.wav rejected         seg=0.72-0.99 stt='заставок' STT: no «захар»; STT: other words заставок
+0008.wav kept     heldout seg=0.6-1.08 stt='Захар' 
+0009.wav kept     heldout seg=0.48-1.02 stt='Захар' 
+0010.wav kept     heldout seg=0.39-0.93 stt='Захар' 
+0011.wav kept     train   seg=0.45-0.96 stt='Захар'  crop=0.33-1.16
+0012.wav rejected         seg=- stt='Спасибо.' energy: no segment after the beep; STT: no «захар»; STT: other words спасибо
+0013.wav rejected         seg=2.73-3.0 stt='Субтитры сделал DimaTorzok' energy: segment runs into the clip end; STT: no «захар»; STT: other words субтитры сделал
+0014.wav kept     train   seg=0.75-1.14 stt='Захар.'  crop=0.63-1.34
+0015.wav kept     train   seg=0.51-0.99 stt='Захар.'  crop=0.39-1.19
+0016.wav kept     heldout seg=0.51-1.2 stt='Захар' 
+0017.wav kept     train   seg=0.54-1.11 stt='Захар.'  crop=0.42-1.31
+0018.wav kept     train   seg=0.57-0.99 stt='Захар'  crop=0.45-1.19
+0019.wav rejected         seg=- stt='Сохло?' energy: no segment after the beep; STT: no «захар»; STT: other words сохло
+0020.wav rejected         seg=0.69-1.17 stt='так' STT: no «захар»; STT: other words так
+0021.wav rejected         seg=- stt='Субтитры сделал DimaTorzok' energy: no segment after the beep; STT: no «захар»; STT: other words субтитры сделал
+0022.wav rejected         seg=- stt='Пока!' energy: no segment after the beep; STT: no «захар»; STT: other words пока
+0023.wav rejected         seg=- stt='Продолжение следует...' energy: no segment after the beep; STT: no «захар»; STT: other words продолжение следует
+0024.wav kept     heldout seg=0.45-0.96 stt='Захар' 
+0025.wav kept     train   seg=0.45-0.93 stt='Захар'  crop=0.33-1.13
+0026.wav kept     heldout seg=0.57-1.05 stt='Захар' 
+0027.wav kept     train   seg=0.33-0.9 stt='Захар.'  crop=0.3-1.1 (start clamped to beep end)
+0028.wav kept     train   seg=0.39-0.99 stt='Захар!'  crop=0.3-1.19 (start clamped to beep end)
+0029.wav kept     train   seg=0.39-0.78 stt='Захар.'  crop=0.3-0.98 (start clamped to beep end)
+0030.wav kept     train   seg=0.66-1.11 stt='захар'  crop=0.54-1.31
+0031.wav kept     heldout seg=0.45-0.96 stt='Захар!' 
+0032.wav kept     train   seg=0.36-0.87 stt='Захар?'  crop=0.3-1.07 (start clamped to beep end)
+0033.wav kept     heldout seg=0.36-0.75 stt='Захар!' 
+0034.wav rejected         seg=0.6-1.11 stt='Захар. Долго еще, Захар?' STT: 2 «захар»; STT: other words долго еще
+0035.wav rejected         seg=0.84-1.38 stt='захар ожидания' STT: other words ожидания
+0036.wav kept     heldout seg=0.54-1.05 stt='Захар' 
+0037.wav kept     train   seg=0.6-1.08 stt='Захар'  crop=0.48-1.28
+0038.wav kept     train   seg=0.48-1.08 stt='Захар'  crop=0.36-1.28
+0039.wav kept     train   seg=0.54-1.11 stt='Захар'  crop=0.42-1.31
+0040.wav kept     train   seg=0.48-0.93 stt='Захар'  crop=0.36-1.13
+SORT: clips=40 kept=28 rejected=12 heldout=9 train=19 -> /tmp/zstudio/v35/studio2_pos_train
+SORT_DONE
+19
+path,beep_end_s,a_s,b_s
+/tmp/zstudio/v35/raw/0008.wav,0.3,0.6,1.08
+/tmp/zstudio/v35/raw/0009.wav,0.3,0.48,1.02
+/tmp/zstudio/v35/raw/0010.wav,0.3,0.39,0.93
+/tmp/zstudio/v35/raw/0016.wav,0.3,0.51,1.2
+/tmp/zstudio/v35/raw/0024.wav,0.3,0.45,0.96
+/tmp/zstudio/v35/raw/0026.wav,0.27,0.57,1.05
+/tmp/zstudio/v35/raw/0031.wav,0.3,0.45,0.96
+/tmp/zstudio/v35/raw/0033.wav,0.3,0.36,0.75
+/tmp/zstudio/v35/raw/0036.wav,0.33,0.54,1.05

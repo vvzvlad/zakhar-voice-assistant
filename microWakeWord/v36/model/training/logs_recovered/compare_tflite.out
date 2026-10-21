@@ -1,0 +1,8 @@
+ops      SAME
+   ref : {'ASSIGN_VARIABLE': 7, 'CALL_ONCE': 1, 'CONCATENATION': 10, 'CONV_2D': 6, 'DEPTHWISE_CONV_2D': 8, 'FULLY_CONNECTED': 1, 'LOGISTIC': 1, 'QUANTIZE': 1, 'READ_VARIABLE': 7, 'RESHAPE': 2, 'SPLIT_V': 3, 'STRIDED_SLICE': 13, 'VAR_HANDLE': 7}
+inputs   SAME
+   ref : [('serving_default_inputs:0', (1, 3, 40), 'int8', (0.10196079, -128.0))]
+outputs  SAME
+   ref : [('StatefulPartitionedCall_1:0', (1, 1), 'uint8', (0.00390625, 0.0))]
+forbidden dequant/rsqrt/square strings: ref 0, cand 0
+COMPARE_OK

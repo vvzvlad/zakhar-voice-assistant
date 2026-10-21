@@ -1,0 +1,22 @@
+--- /tmp/zstudio/v34/cfg_v34.yaml	2026-10-17 06:06:54.096733916 +0300
++++ cfg_v35.yaml	2026-10-19 00:34:15.981015960 +0300
+@@ -1,5 +1,5 @@
+ window_step_ms: 10
+-train_dir: /tmp/zstudio/v34/models/zakhar_v34
++train_dir: /tmp/zstudio/v35/models/zakhar_v35
+ features:
+ - features_dir: /home/claude/zakhar-mww/features_fish_pos
+   sampling_weight: 16.0
+@@ -161,6 +161,12 @@
+   sampling_weight: 18.0
+   penalty_weight: 1.0
+   truth: true
++  truncation_strategy: truncate_start
++  type: mmap
++- features_dir: /tmp/zstudio/v35/features_studio2_pos
++  sampling_weight: 18.0
++  penalty_weight: 1.0
++  truth: true
+   truncation_strategy: truncate_start
+   type: mmap
+ training_steps:

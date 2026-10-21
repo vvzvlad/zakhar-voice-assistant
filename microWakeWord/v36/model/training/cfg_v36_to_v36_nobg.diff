@@ -1,0 +1,22 @@
+--- cfg_v36.yaml	2026-10-21 06:00:26.170815167 +0300
++++ cfg_v36_nobg.yaml	2026-10-21 09:23:01.191332603 +0300
+@@ -1,5 +1,5 @@
+ window_step_ms: 10
+-train_dir: /home/claude/zakhar-mww/v36/models/zakhar_v36
++train_dir: /home/claude/zakhar-mww/v36/models/v36_nobg
+ features:
+ - features_dir: /home/claude/zakhar-mww/features_fish_pos
+   sampling_weight: 16.0
+@@ -175,12 +175,6 @@
+   truth: true
+   truncation_strategy: truncate_start
+   type: mmap
+-- features_dir: /home/claude/zakhar-mww/v36/features/features_studio_bg_neg
+-  sampling_weight: 14.0
+-  penalty_weight: 10.0
+-  truth: false
+-  truncation_strategy: random
+-  type: mmap
+ - features_dir: /home/claude/zakhar-mww/v36/features/features_confus_fused_neg
+   sampling_weight: 8.0
+   penalty_weight: 8.0

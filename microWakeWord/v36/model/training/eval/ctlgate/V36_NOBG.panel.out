@@ -1,0 +1,12 @@
+denominators: held-out words=19  all words=58  energy-events=120  (noise=21.5)
+
+=== v36_nobg ===  (max_win=1.000)
+   cut  HELD-OUT/19    all/58  events/120  hardFA  totaldets
+  0.50     100.0%    98.3%      92.5%      11        172
+  0.60     100.0%    96.6%      91.7%      10        160
+  0.70     100.0%    94.8%      89.2%      10        153
+  0.80     100.0%    94.8%      89.2%      10        149
+  0.90     100.0%    93.1%      85.8%      11        142
+  0.95      89.5%    87.9%      80.0%      10        129
+
+EVAL_PANEL_HELDOUT_DONE

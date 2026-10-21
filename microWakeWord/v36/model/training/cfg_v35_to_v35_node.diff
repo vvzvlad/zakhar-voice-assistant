@@ -1,0 +1,39 @@
+--- recipe/cfg_v35.yaml	2026-10-21 05:05:52.000000000 +0300
++++ cfg_v35_node.yaml	2026-10-21 06:00:26.170815167 +0300
+@@ -139,31 +139,31 @@
+   truth: false
+   truncation_strategy: split
+   type: mmap
+-- features_dir: /tmp/claude-1000/-home-claude/71fbe714-4eba-4120-a077-75d50a00bed2/scratchpad/t8/run1/features_real_pos
++- features_dir: /home/claude/zakhar-mww/v36/features/features_real_pos
+   sampling_weight: 18.0
+   penalty_weight: 1.0
+   truth: true
+   truncation_strategy: truncate_start
+   type: mmap
+-- features_dir: /tmp/claude-1000/-home-claude/71fbe714-4eba-4120-a077-75d50a00bed2/scratchpad/t8/run2/features_hardneg_speech
++- features_dir: /home/claude/zakhar-mww/v36/features/features_hardneg_speech
+   sampling_weight: 14.0
+   penalty_weight: 10.0
+   truth: false
+   truncation_strategy: random
+   type: mmap
+-- features_dir: /tmp/claude-1000/-home-claude/71fbe714-4eba-4120-a077-75d50a00bed2/scratchpad/t8/run3/features_panel_pos
++- features_dir: /home/claude/zakhar-mww/v36/features/features_panel_pos
+   sampling_weight: 18.0
+   penalty_weight: 1.0
+   truth: true
+   truncation_strategy: truncate_start
+   type: mmap
+-- features_dir: /tmp/zstudio/v34/features_studio_pos
++- features_dir: /home/claude/zakhar-mww/v36/features/features_studio_pos
+   sampling_weight: 18.0
+   penalty_weight: 1.0
+   truth: true
+   truncation_strategy: truncate_start
+   type: mmap
+-- features_dir: /tmp/zstudio/v35/features_studio2_pos
++- features_dir: /home/claude/zakhar-mww/v36/features/features_studio2_pos
+   sampling_weight: 18.0
+   penalty_weight: 1.0
+   truth: true

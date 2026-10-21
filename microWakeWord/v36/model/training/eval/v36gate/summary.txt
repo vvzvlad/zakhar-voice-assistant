@@ -1,0 +1,21 @@
+@0.80                             v34                               v35                               v36                               
+new held-out, per clip (x4)       1/9 = 11.1% [2.0, 43.5]           2/9 = 22.2% [6.3, 54.7]           1/9 = 11.1% [2.0, 43.5]           
+new held-out, session (x4)        1/9 = 11.1% [2.0, 43.5]           1/9 = 11.1% [2.0, 43.5]           1/9 = 11.1% [2.0, 43.5]           
+new train-side, session (x4)      0/19 = 0.0% [0.0, 16.8]           2/19 = 10.5% [2.9, 31.4]          0/19 = 0.0% [0.0, 16.8]           
+no beep: held-out, per clip       5/9 = 55.6% [26.7, 81.1]          7/9 = 77.8% [45.3, 93.7]          4/9 = 44.4% [18.9, 73.3]          
+no beep: held-out, session        3/9 = 33.3% [12.1, 64.6]          7/9 = 77.8% [45.3, 93.7]          5/9 = 55.6% [26.7, 81.1]          
+no beep: train-side, session      9/19 = 47.4% [27.3, 68.3]         13/19 = 68.4% [46.0, 84.6]        15/19 = 78.9% [56.7, 91.5]        
+studio held-out words (x4)        10/17 = 58.8% [36.0, 78.4]        10/17 = 58.8% [36.0, 78.4]        9/17 = 52.9% [31.0, 73.8]         
+studio all segments (x4)          33/53 = 62.3% [48.8, 74.1]        35/53 = 66.0% [52.6, 77.3]        33/53 = 62.3% [48.8, 74.1]        
+speaker 18 home takes (x4)        16/18 = 88.9% [67.2, 96.9]        16/18 = 88.9% [67.2, 96.9]        14/18 = 77.8% [54.8, 91.0]        
+panel held-out words (x1)         19/19 = 100.0% [83.2, 100.0]      19/19 = 100.0% [83.2, 100.0]      19/19 = 100.0% [83.2, 100.0]      
+room held-out FAPH (x4)           0 FA in 5 min = 0.0/h [0.0, 44.27]0 FA in 5 min = 0.0/h [0.0, 44.27]0 FA in 5 min = 0.0/h [0.0, 44.27]
+«сахар» false accepts (x4)        0/2 fire, maxwin 0.140            0/2 fire, maxwin 0.146            0/2 fire, maxwin 0.195            
+(a) fused phrases, whole (x1)     233/868 = 26.8% [24.0, 29.9]      242/868 = 27.9% [25.0, 31.0]      514/868 = 59.2% [55.9, 62.4]      
+(a') of them written fused (x1)   37/110 = 33.6% [25.5, 42.9]       39/110 = 35.5% [27.1, 44.7]       71/110 = 64.5% [55.3, 72.9]       
+(b) same voices, isolated (x1)    15/42 = 35.7% [23.0, 50.8]        14/42 = 33.3% [21.0, 48.4]        23/42 = 54.8% [39.9, 68.8]        
+(d) fused «сахар…», whole (x1)    0/228 fire, maxwin 0.784          0/228 fire, maxwin 0.502          0/228 fire, maxwin 0.730          
+(c) studio bg held-out (x1)       0 FA in 5 min = 0.0/h [0.0, 44.27]0 FA in 5 min = 0.0/h [0.0, 44.27]0 FA in 5 min = 0.0/h [0.0, 44.27]
+studio detections total @0.80: v34 38, v35 40, v36 36
+session detections total @0.80 (28 kept words in 120 s): v34 1, v35 3, v36 1
+new held-out clips, detections outside the word window @0.80: v34 0, v35 0, v36 0

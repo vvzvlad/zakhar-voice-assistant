@@ -1,0 +1,18 @@
+WARNING: All log messages before absl::InitializeLog() is called are written to STDERR
+I0000 00:00:1792359357.915609  139191 cudart_stub.cc:31] Could not find cuda drivers on your machine, GPU will not be used.
+I0000 00:00:1792359357.998325  139191 cpu_feature_guard.cc:227] This TensorFlow binary is optimized to use available CPU instructions in performance-critical operations.
+To enable the following instructions: AVX2 FMA, in other operations, rebuild TensorFlow with the appropriate compiler flags.
+WARNING: All log messages before absl::InitializeLog() is called are written to STDERR
+I0000 00:00:1792359360.280866  139191 cudart_stub.cc:31] Could not find cuda drivers on your machine, GPU will not be used.
+E0000 00:00:1792359363.527570  139191 cuda_platform.cc:52] failed call to cuInit: INTERNAL: CUDA error: Failed call to cuInit: UNKNOWN ERROR (303)
+WARNING:absl:ring_buffer_size_in_time_dim overwritten by the passed-in value: 4
+WARNING:absl:ring_buffer_size_in_time_dim overwritten by the passed-in value: 10
+WARNING:absl:ring_buffer_size_in_time_dim overwritten by the passed-in value: 14
+WARNING:absl:ring_buffer_size_in_time_dim overwritten by the passed-in value: 22
+WARNING:absl:ring_buffer_size_in_time_dim overwritten by the passed-in value: 28
+WARNING:absl:ring_buffer_size_in_time_dim overwritten by the passed-in value: 19
+FINE-TUNE real-pos deployable head: 6000 steps lr1e-4 -> /tmp/zstudio/v35/models/zakhar_v35
+step 0/6000 loss 1.3831
+step 2000/6000 loss 0.2759
+step 4000/6000 loss 0.0294
+FT_REAL_DONE

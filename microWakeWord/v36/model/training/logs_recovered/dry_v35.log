@@ -1,0 +1,17 @@
+WARNING: All log messages before absl::InitializeLog() is called are written to STDERR
+I0000 00:00:1792359291.780869  139027 cudart_stub.cc:31] Could not find cuda drivers on your machine, GPU will not be used.
+I0000 00:00:1792359291.873229  139027 cpu_feature_guard.cc:227] This TensorFlow binary is optimized to use available CPU instructions in performance-critical operations.
+To enable the following instructions: AVX2 FMA, in other operations, rebuild TensorFlow with the appropriate compiler flags.
+WARNING: All log messages before absl::InitializeLog() is called are written to STDERR
+I0000 00:00:1792359294.656410  139027 cudart_stub.cc:31] Could not find cuda drivers on your machine, GPU will not be used.
+E0000 00:00:1792359298.668377  139027 cuda_platform.cc:52] failed call to cuInit: INTERNAL: CUDA error: Failed call to cuInit: UNKNOWN ERROR (303)
+WARNING:absl:ring_buffer_size_in_time_dim overwritten by the passed-in value: 4
+WARNING:absl:ring_buffer_size_in_time_dim overwritten by the passed-in value: 10
+WARNING:absl:ring_buffer_size_in_time_dim overwritten by the passed-in value: 14
+WARNING:absl:ring_buffer_size_in_time_dim overwritten by the passed-in value: 22
+WARNING:absl:ring_buffer_size_in_time_dim overwritten by the passed-in value: 28
+WARNING:absl:ring_buffer_size_in_time_dim overwritten by the passed-in value: 19
+DRY finetune: 60 steps, then distribution check
+DRY_DIST pos: n=140 mean=0.861 p10=0.521 p50=0.973 p90=1.000
+DRY_DIST neg: n=116 mean=0.114 p10=0.001 p50=0.016 p90=0.328
+DRY_DONE — inspect separation before the full run. NOTHING SAVED.
