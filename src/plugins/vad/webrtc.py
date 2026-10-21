@@ -4,8 +4,8 @@ Owns everything WebRTC-specific: the 640-byte framing and the webrtcvad.Vad obje
 the speech/silence counters live in the shared EndpointTracker. The generic
 end-pointing thresholds stay in core.vad and arrive per run as an EndpointPolicy.
 The decision-only makeup gain for the quiet less-processed mic channel is the
-pipeline's concern (core.vad.mic_auto_gain, applied before any VAD backend sees
-the chunk), not this plugin's.
+pipeline's concern (applied to every chunk before any VAD backend sees it), not
+this plugin's.
 """
 
 import webrtcvad

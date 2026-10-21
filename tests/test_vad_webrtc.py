@@ -2,9 +2,8 @@
 
 These drive WebRtcVadSession directly (much cleaner than via the pipeline):
 framing across odd chunk sizes and the end-pointing decisions against an
-EndpointPolicy. The decision-only VAD boost lives in the pipeline
-(core.vad.mic_auto_gain); its tests are in tests/test_audio_prep.py and
-tests/test_pipeline.py.
+EndpointPolicy. The decision-only VAD boost lives in the pipeline; its tests
+are in tests/test_audio_prep.py and tests/test_pipeline.py.
 """
 
 import importlib.util

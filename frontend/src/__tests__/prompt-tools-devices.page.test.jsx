@@ -8,7 +8,9 @@
 import React from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, cleanup, fireEvent, waitFor, within } from "@testing-library/react";
-import { MCP, Prompt, Devices } from "../pages/integrations.jsx";
+import { MCP } from "../pages/tools.jsx";
+import { Prompt } from "../pages/prompt.jsx";
+import { Devices } from "../pages/devices.jsx";
 import { useAppData } from "../appData.jsx";
 import { getOptions, getPromptProfile, updatePromptProfile } from "../api.js";
 import { faded } from "./faded.js";

@@ -63,8 +63,7 @@ class Run:
         self.endpoint: str | None = None
         # Claimed for its _run (or ended): later audio is dropped.
         self.finalized = False
-        # The running utterance peak driving the decision-only VAD boost
-        # (core.vad.mic_auto_gain).
+        # The running utterance peak driving the decision-only VAD boost.
         self.vad_peak = 0
         # Logging only: "receiving audio" once per run; the missing second channel
         # warned once per run.

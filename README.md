@@ -170,8 +170,8 @@ Shape (see `templates/default_config.json` for the full default):
 
 - **Stage providers** — each provider has one set of settings under `instances`:
   - `vad`: `webrtc` (WebRTC VAD) — aggressiveness; the end-pointing
-    thresholds and the decision-only VAD auto gain (`mic_auto_gain`, in the core
-    Voice-capture settings) stay in `core.vad`.
+    thresholds stay in `core.vad`. The pipeline always lifts quiet audio for the VAD
+    decision only, before any VAD engine sees it; the recording stays as it is.
   - `stt`: `groq` (cloud Whisper) | `vosk` (offline) | `gigaam` (offline GigaAM v3, model
     directory `models/gigaam-v3-onnx`) | `yandex` (SpeechKit v3 streaming, gRPC).
   - `llm` (handlers): `openrouter` | `groq` — model, api_key, temperature, max_tokens,

@@ -46,9 +46,7 @@ from src.followup import NoFollowup
 from src.stage_errors import StageError
 from src.voice_run import PREROLL_BYTES, PREROLL_MS, Run
 from src.wakeword import PassthroughVerifier
-# SAMPLE_RATE now lives in the VAD stage contract module; re-exported here so the
-# many existing `from src.pipeline import SAMPLE_RATE` users keep working.
-from src.vad import SAMPLE_RATE, EndpointPolicy  # noqa: F401  (SAMPLE_RATE re-export)
+from src.vad import SAMPLE_RATE, EndpointPolicy
 
 # Generous hard memory cap (~60s of 16 kHz / 16-bit mono PCM). VAD should end the
 # utterance long before this; the cap only guards against unbounded growth if VAD
@@ -616,27 +614,25 @@ class Pipeline:
             del run.buffer[HARD_CAP_BYTES:]
             reason = "maxlen"
         elif run.vad is not None:
-            # Feed the SELECTED channel — the same bytes that went into the buffer —
-            # to the per-run VAD session. The session does its own framing/counters
+            # Feed the SELECTED channel (lifted for the decision, see below) to the
+            # per-run VAD session. The session does its own framing/counters
             # and returns a finalize reason ("endpoint" | "maxlen" | "no_speech") or
             # None to keep listening. feed() is SYNCHRONOUS, so the claim logic's
             # atomicity guarantees hold (no await before the claim below). When
             # HARD_CAP already set reason="maxlen" above, the session is NOT fed: we're
             # about to finalize this chunk anyway, and the buffer was truncated, so
             # there's no point feeding (possibly truncated) bytes into the VAD counters.
-            vdata = data
-            if self.core.vad.mic_auto_gain:
-                # Track the running utterance peak and lift the chunk for the
-                # speech/no-speech decision only — the buffer/STT path above keeps
-                # the raw bytes (per-utterance normalization happens pre-STT in _run).
-                m = len(data) - (len(data) % 2)
-                if m:
-                    run.vad_peak = max(
-                        run.vad_peak,
-                        int(np.abs(np.frombuffer(data[:m], dtype="<i2")).max()),
-                    )
-                vdata = vad_boost(data, run.vad_peak)
-            reason = run.vad.feed(vdata)
+            # Track the running utterance peak and lift the chunk for the
+            # speech/no-speech decision only, so any VAD engine can end-point the
+            # quiet, less-processed mic channel — the buffer/STT path above keeps
+            # the raw bytes (per-utterance normalization happens pre-STT in _run).
+            m = len(data) - (len(data) % 2)
+            if m:
+                run.vad_peak = max(
+                    run.vad_peak,
+                    int(np.abs(np.frombuffer(data[:m], dtype="<i2")).max()),
+                )
+            reason = run.vad.feed(vad_boost(data, run.vad_peak))
 
         if reason is not None:
             state = run.vad.debug_state() if run.vad else {}
@@ -1224,7 +1220,7 @@ class Pipeline:
         audio Whisper sees. `pcm2` (the other channel) is deliberately kept raw, so
         the stored stereo WAV allows comparing conditioned vs raw channels.
         NOTE: mic_normalize gates ONLY this pre-STT normalization; the decision-only
-        VAD boost applied per chunk in on_audio is gated by `core.vad.mic_auto_gain`.
+        VAD boost applied per chunk in on_audio always runs.
         """
         trim_ms = self.core.vad.trim_start_ms
         if trim_ms > 0 and trim:

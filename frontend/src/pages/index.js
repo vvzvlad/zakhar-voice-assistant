@@ -3,7 +3,9 @@ import { VAD, STT, LLM, Commands, TTS } from "./stages.jsx";
 import { Capture, Speech } from "./pipeline.jsx";
 import Chains from "./chains.jsx";
 import Log from "./log.jsx";
-import { MCP, Prompt, Devices } from "./integrations.jsx";
+import { MCP } from "./tools.jsx";
+import { Prompt } from "./prompt.jsx";
+import { Devices } from "./devices.jsx";
 import SystemPage from "./system.jsx";
 
 export const PAGES = {

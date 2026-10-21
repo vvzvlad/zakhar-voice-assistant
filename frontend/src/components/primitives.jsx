@@ -309,10 +309,11 @@ export function SaveBar({ noTest }) {
   </div>;
 }
 
-// `id` makes the card the scroll target of a cross-page "configure" link (navCard).
-export function Card({ id, title, sub, children, foot }) {
+// `id` makes the card the scroll target of a cross-page "configure" link (navCard);
+// `right` sits at the end of the header, after the title.
+export function Card({ id, title, sub, children, foot, right }) {
   return <div className="z-card" id={id}>
-    {title && <div className="z-card-h"><b>{title}</b>{sub && <span className="sub">{sub}</span>}</div>}
+    {title && <div className="z-card-h"><b>{title}</b>{sub && <span className="sub">{sub}</span>}{right}</div>}
     <div className="z-card-b">{children}</div>
     {foot}
   </div>;

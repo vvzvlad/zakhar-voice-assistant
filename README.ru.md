@@ -171,9 +171,9 @@ docker compose pull && docker compose up -d
 Структура (полный дефолт см. в `templates/default_config.json`):
 
 - **Провайдеры стадий** — у каждого провайдера один набор настроек в `instances`:
-  - `vad`: `webrtc` (WebRTC VAD) — агрессивность; пороги энд-поинтинга и
-    авто-усиление VAD «только для решения» (`mic_auto_gain`, в основных настройках
-    захвата голоса) остаются в `core.vad`.
+  - `vad`: `webrtc` (WebRTC VAD) — агрессивность; пороги энд-поинтинга остаются в
+    `core.vad`. Пайплайн всегда усиливает тихий звук только для решения VAD, до любого
+    движка VAD; запись остаётся как есть.
   - `stt`: `groq` (облачный Whisper) | `vosk` (офлайн) | `gigaam` (офлайн GigaAM v3, каталог
     модели `models/gigaam-v3-onnx`) | `yandex` (SpeechKit v3, стриминг по gRPC).
   - `llm` (обработчики): `openrouter` | `groq` — model, api_key, temperature, max_tokens,

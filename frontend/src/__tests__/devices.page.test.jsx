@@ -15,7 +15,7 @@
 import React from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
-import { Devices } from "../pages/integrations.jsx";
+import { Devices } from "../pages/devices.jsx";
 import { useAppData } from "../appData.jsx";
 import * as api from "../api.js";
 

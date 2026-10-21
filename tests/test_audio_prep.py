@@ -117,8 +117,7 @@ def test_pcm_to_wav_bytes_mono_empty_pcm_yields_valid_empty_wav():
 
 
 # --- vad_boost: the decision-only per-chunk makeup gain ---------------------------
-# Moved here from the vad/webrtc plugin: the pipeline now applies it to every chunk
-# before any VAD engine sees it (gated by core.vad.mic_auto_gain).
+# The pipeline applies it to every chunk before any VAD engine sees it.
 
 def test_vad_boost_lifts_quiet_frame_toward_target():
     # A frame whose own samples are small, with a representative running utterance
