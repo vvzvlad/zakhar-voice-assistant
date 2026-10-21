@@ -120,6 +120,21 @@ def test_old_doc_without_vad_slot_gets_webrtc_defaults(tmp_path):
     assert webrtc["schema"]["properties"]["aggressiveness"]["apply"] == "rebuild_backends"
 
 
+def test_stored_device_keys_the_config_no_longer_has_load_and_go_on_save(tmp_path):
+    # A stored core.devices[] entry may carry keys DeviceConfig does not have (the speaker's
+    # echo canceller settings): the file loads, and the next save writes the device without them.
+    path = str(tmp_path / "config.json")
+    doc = _doc()
+    doc["core"]["devices"] = [{"name": "kitchen", "wake_cutoff": 70, "echo_cancel": 1, "echo_cancel_mode": 2,
+                               "echo_cancel_filter": 4}]
+    config_store.save(doc, path)
+    svc = ConfigService(config_store.load(path), _deps(), path=path)
+    assert [(d.name, d.wake_cutoff) for d in svc.core.devices] == [("kitchen", 70)]
+    svc.apply({"core": {"tts_timeout": 31}})
+    saved = config_store.load(path)["core"]["devices"][0]
+    assert saved["wake_cutoff"] == 70 and not any(k.startswith("echo_cancel") for k in saved)
+
+
 def test_catalog_exposes_values_plainly(tmp_path):
     # Secrets are plain config values now: catalog() emits them verbatim (no masking).
     doc = _doc()

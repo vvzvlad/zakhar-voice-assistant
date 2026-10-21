@@ -47,8 +47,6 @@ typedef struct {
     const char *text;     // STATE (NULL when absent), TRANSCRIPT and REPLY ("" when absent)
     uint32_t id;          // PLAY_START, PLAY_END, CAPTURE (> 0), CAPTURE_RESUME, CAPTURE_STOP
     uint8_t wake, vad;    // CONFIG, as uint8 cutoffs
-    // CONFIG: echo_cancel 0..3, echo_cancel_mode 0..3, echo_cancel_filter 1..8.
-    int echo_cancel, echo_mode, echo_filter;
     int play_prime_ms;    // CONFIG: 0..2000, the playback reserve
     bool auto_volume;     // CONFIG
     int value;            // SET_VOLUME, percent; VOLUME_BOOST, percent points -100..100
@@ -80,8 +78,6 @@ char *zl_encode_volume(int percent);
 char *zl_encode_wake_peak(int percent);
 char *zl_encode_audio_end(const char *reason, uint32_t id);
 char *zl_encode_model_loaded(zl_model_t kind, const char *name, bool ok);
-// session goes out only with has_session (a stop word outside a session has none).
-char *zl_encode_stop(bool has_session, uint32_t session);
 // len bytes of log lines, not NUL-terminated.
 char *zl_encode_log(const char *text, size_t len);
 // The room's noise level, dBFS, as the caller rounded it.
@@ -107,7 +103,7 @@ void zl_free(char *json);
 // ---------------------------------------------------------------- numbers
 
 const char *zl_state_name(zl_state_t state);  // the wire value: "listening" ...
-const char *zl_model_name(zl_model_t kind);   // the wire value: "wake", "vad", "stop"
+const char *zl_model_name(zl_model_t kind);   // the wire value: "wake", "vad"
 uint8_t zl_cutoff_u8(double percent);  // trunc(percent / 100 * 255)
 int zl_peak_percent(uint8_t peak);     // 0..255 -> 0..100, rounded
 uint32_t zl_backoff_next(uint32_t s);  // 1, 2, 4 ... 30 seconds
@@ -238,7 +234,7 @@ void zl_playq_end(zl_playq_t *q, uint32_t id);
 // last sample went out after its play_end moves to `done`. The caller plays silence for the
 // samples it did not get: when the head stream has started, they count as its `gap`.
 size_t zl_playq_read(zl_playq_t *q, int16_t *out, size_t max);
-// play_stop or the stop word: empties the buffer; writes the ids of the dropped streams to `dropped`
+// play_stop: empties the buffer; writes the ids of the dropped streams to `dropped`
 // (ZL_PLAYQ_STREAMS slots) and returns their count. `done` is kept.
 size_t zl_playq_flush(zl_playq_t *q, uint32_t *dropped);
 // Moves the `done` streams into out (ZL_PLAYQ_STREAMS slots); returns their count.

@@ -157,7 +157,7 @@ const REASONS = {
   endpoint: "end of phrase", no_speech: "no speech", maxlen: "length limit",
   duplicate: "duplicate wake", wakeword_reject: "wake word not confirmed",
   wakeword_error: "wake word check failed", followup_reject: "not a follow-up",
-  followup_error: "follow-up check failed", stop: "stop word", say: "spoken on request",
+  followup_error: "follow-up check failed", stop: "stop phrase", say: "spoken on request",
   text: "text request",
   assistant: "assistant task",
 };

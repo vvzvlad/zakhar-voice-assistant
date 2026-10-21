@@ -2761,7 +2761,7 @@ async def test_time_to_speech_when_the_speech_breaks_off(tmp_path, monkeypatch, 
 
 
 async def test_an_answer_cut_off_mid_speech_keeps_its_time_to_speech(tmp_path, monkeypatch):
-    # A stop word or a newer wake cancels the run while its answer plays: the record
+    # A newer wake cancels the run while its answer plays: the record
     # still says how long the speech took to start.
     patch_llm(monkeypatch, reply="готово")
     store = FakeRunsStore()

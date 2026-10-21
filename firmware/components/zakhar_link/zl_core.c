@@ -21,7 +21,6 @@ static const char *const STATES[] = {
 static const char *const MODELS[] = {
     [ZL_MODEL_WAKE] = "wake",
     [ZL_MODEL_VAD] = "vad",
-    [ZL_MODEL_STOP] = "stop",
 };
 
 static const cJSON *field(const cJSON *o, const char *name)
@@ -81,9 +80,6 @@ static bool decode_fields(const cJSON *o, const char *type, zl_msg_t *m)
     if (strcmp(type, "config") == 0) {
         m->type = ZL_MSG_CONFIG;
         if (!get_percent(field(o, "wake_cutoff"), &a) || !get_percent(field(o, "vad_cutoff"), &b) ||
-            !get_int(field(o, "echo_cancel"), 0, 3, &m->echo_cancel) ||
-            !get_int(field(o, "echo_cancel_mode"), 0, 3, &m->echo_mode) ||
-            !get_int(field(o, "echo_cancel_filter"), 1, 8, &m->echo_filter) ||
             !get_int(field(o, "play_prime_ms"), 0, 2000, &m->play_prime_ms) ||
             !get_bool(field(o, "auto_volume"), &m->auto_volume)) {
             return false;
@@ -306,14 +302,6 @@ char *zl_encode_model_loaded(zl_model_t kind, const char *name, bool ok)
     return finish(o, o != NULL && cJSON_AddStringToObject(o, "kind", MODELS[kind]) != NULL &&
                          cJSON_AddStringToObject(o, "name", name) != NULL &&
                          cJSON_AddBoolToObject(o, "ok", ok) != NULL);
-}
-
-char *zl_encode_stop(bool has_session, uint32_t session)
-{
-    cJSON *o = message("stop");
-    bool ok = o != NULL;
-    if (ok && has_session) ok = cJSON_AddNumberToObject(o, "session", session) != NULL;
-    return finish(o, ok);
 }
 
 char *zl_encode_log(const char *text, size_t len)

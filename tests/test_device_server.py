@@ -251,8 +251,7 @@ async def srv(tmp_path, monkeypatch):
     patch_llm(monkeypatch, reply="готово")
     # The release's models; the wake one spans three 0x03 frames.
     for const, name, size in (("RELEASE_WAKE_MODEL", "zakhar.tflite", 10000),
-                              ("RELEASE_VAD_MODEL", "vad.tflite", 3000),
-                              ("RELEASE_STOP_MODEL", "stop.tflite", 2000)):
+                              ("RELEASE_VAD_MODEL", "vad.tflite", 3000)):
         (tmp_path / name).write_bytes(bytes(i % 251 for i in range(size)))
         monkeypatch.setattr(device_server, const, str(tmp_path / name))
     server = Server(tmp_path)
@@ -288,13 +287,11 @@ def session_msgs(session, *rest):
 
 async def test_hello_gets_config_and_the_models(srv):
     dev = await srv.connect()
-    assert await dev.recv() == {"type": "config", "wake_cutoff": 80, "vad_cutoff": 30, "echo_cancel": 1,
-                                "echo_cancel_mode": 2, "echo_cancel_filter": 4, "play_prime_ms": 700,
+    assert await dev.recv() == {"type": "config", "wake_cutoff": 80, "vad_cutoff": 30, "play_prime_ms": 700,
                                 "auto_volume": False}
     assert await dev.boost() == 0  # a new connection has no `ambient` yet
-    # wake_model / vad_model are empty: the release's files go out, and the stop model always.
-    for kind, path in (("wake", device_server.RELEASE_WAKE_MODEL), ("vad", device_server.RELEASE_VAD_MODEL),
-                       ("stop", device_server.RELEASE_STOP_MODEL)):
+    # wake_model / vad_model are empty: the release's files go out.
+    for kind, path in (("wake", device_server.RELEASE_WAKE_MODEL), ("vad", device_server.RELEASE_VAD_MODEL)):
         msg, data = await dev.model()
         assert msg == {"type": "model", "kind": kind, "name": path, "size": len(data)}
         assert data == Path(path).read_bytes()
@@ -325,7 +322,7 @@ async def test_models_follow_the_config_and_the_reload_command(srv, tmp_path):
         srv.device().reload_model()
     dev = await srv.connect()
     await dev.recv()  # config
-    for _ in range(3):
+    for _ in range(2):
         await dev.model()
 
     # A changed path is sent; the kind whose path stayed is not.
@@ -340,8 +337,7 @@ async def test_models_follow_the_config_and_the_reload_command(srv, tmp_path):
     # The reload command re-reads and sends them all; a file that cannot be read sends nothing.
     missing = str(tmp_path / "missing.tflite")
     srv.svc.apply({"core": {"devices": [{"name": "kitchen", "wake_model": missing, "vad_model": str(other)}]}})
-    assert srv.device().reload_model() == {
-        "device": "kitchen", "models": {"vad": str(other), "stop": device_server.RELEASE_STOP_MODEL}}
+    assert srv.device().reload_model() == {"device": "kitchen", "models": {"vad": str(other)}}
     assert (await dev.model())[0] == {"type": "model", "kind": "vad", "name": str(other), "size": 100}
 
 
@@ -352,7 +348,7 @@ async def test_a_wake_model_name_sends_its_file(srv, tmp_path, monkeypatch):
     path.write_bytes(b"\x05" * 100)
     dev = await srv.connect()
     await dev.recv()  # config
-    for _ in range(3):
+    for _ in range(2):
         await dev.model()
 
     # `model` carries the name, the bytes come from the file it names.
@@ -367,11 +363,11 @@ async def test_a_wake_model_name_sends_its_file(srv, tmp_path, monkeypatch):
     assert srv.device().reload_model()["models"]["wake"] == "zakhar/zakhar_v28"
 
 
-def test_wake_models_are_named_and_listed_in_version_order_without_vad_or_stop(tmp_path, monkeypatch):
+def test_wake_models_are_named_and_listed_in_version_order_without_vad(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     for path in ("v10/candidates/angular_s10_hardneg.tflite", "v10/candidates/angular_s08_hardneg.tflite",
                  "v31/model/zakhar.tflite", "v8/model/zakhar.tflite", "v19/zakhar.tflite", "v1/model/zakhar.tflite",
-                 "esphome/okay_nabu.tflite", "vad/vad.tflite", "stop/stop.tflite", "v8/model/notes.txt"):
+                 "esphome/okay_nabu.tflite", "vad/vad.tflite", "v8/model/notes.txt"):
         (tmp_path / "microWakeWord" / path).parent.mkdir(parents=True, exist_ok=True)
         (tmp_path / "microWakeWord" / path).write_bytes(b"")
     assert device_server.list_wake_models() == [
@@ -728,48 +724,6 @@ async def test_a_wake_that_loses_before_its_check_leaves_the_answer_playing(srv,
     assert len(kitchen.plays[old]) > sent
     await kitchen.mic(stereo(13, -13, 60))  # its phrase ends
     assert await kitchen.recv() == state(2, "idle")
-
-
-async def test_stop_word_in_a_session_ends_it(srv):
-    # Session 1 is mid-playback when the stop word comes: the playback stops, the run is
-    # cancelled and the session ends with exactly one `state idle`.
-    srv.tts.clips.append(b"\x02\x00" * 32000)  # 2 s
-    dev = await srv.connect(buffer_ms=1400)
-    await dev.recv()  # config
-    await dev.wake(1)
-    await dev.phrase()
-    got = [await dev.recv() for _ in range(6)]
-    assert got[-1]["type"] == "play_start"
-    stream = got[-1]["id"]
-    run = srv.device().pipeline._run_task
-
-    await dev.send(type="stop", session=1)
-    assert await dev.recv() == {"type": "play_stop"}
-    sent = len(dev.plays[stream])
-    assert await dev.recv() == state(1, "idle")
-    await dev.send(type="played", id=stream, dropped=True)
-    await until(run.done)
-    assert run.cancelled()
-    with pytest.raises(asyncio.TimeoutError):
-        await dev.recv(timeout=0.5)
-    assert len(dev.plays[stream]) == sent
-
-
-async def test_stop_word_outside_a_session_stops_the_playback_only(srv):
-    srv.tts.clips.append(b"\x02\x00" * 32000)  # 2 s
-    dev = await srv.connect(buffer_ms=1400)
-    await dev.recv()  # config
-    say = asyncio.create_task(srv.manager.announce("kitchen", "молоко"))
-    assert await dev.recv() == {"type": "reply", "text": "молоко"}
-    start = await dev.recv()
-    assert start["type"] == "play_start"
-
-    await dev.send(type="stop")
-    assert await dev.recv() == {"type": "play_stop"}
-    await dev.send(type="played", id=start["id"], dropped=True)
-    await asyncio.wait_for(say, 2)
-    with pytest.raises(asyncio.TimeoutError):
-        await dev.recv(timeout=0.3)
 
 
 async def test_a_reminder_is_a_run_and_a_line_of_the_dialog(srv, tmp_path):
@@ -1250,8 +1204,7 @@ async def test_controls(srv):
     await dev.recv()  # config
     controls = srv.device().controls_snapshot()["controls"]
     assert [(c["id"], c["value"], c["min"], c["max"], c["step"]) for c in controls] == [
-        ("wake_probability_cutoff", 80, 0, 100, 1), ("vad_cutoff", 30, 0, 100, 1), ("echo_cancel", 1, 0, 3, 1),
-        ("echo_cancel_mode", 2, 0, 3, 1), ("echo_cancel_filter", 4, 1, 8, 1), ("play_prime_ms", 700, 0, 2000, 50),
+        ("wake_probability_cutoff", 80, 0, 100, 1), ("vad_cutoff", 30, 0, 100, 1), ("play_prime_ms", 700, 0, 2000, 50),
         ("auto_volume_threshold", -60, -120, 0, 1), ("auto_volume_gain", 2.0, 0, 10, 0.1),
         ("speaker_volume", 60, 0, 100, 1),
     ]
@@ -1260,13 +1213,10 @@ async def test_controls(srv):
     srv.device().set_control("wake_probability_cutoff", 55)
     assert srv.svc.core.devices[0].wake_cutoff == 55
     await srv.manager.reconfigure()
-    rest = {"echo_cancel": 1, "echo_cancel_mode": 2, "echo_cancel_filter": 4, "play_prime_ms": 700,
-            "auto_volume": False}
+    rest = {"play_prime_ms": 700, "auto_volume": False}
     assert await dev.recv() == {"type": "config", "wake_cutoff": 55, "vad_cutoff": 30, **rest}
-    # So are the echo cancellation settings and the playback reserve, each clamped to its range.
-    for control, value, stored in (("echo_cancel", 7, 3), ("echo_cancel_mode", -2, 0), ("echo_cancel_filter", 0, 1),
-                                   ("echo_cancel_filter", 9, 8), ("play_prime_ms", 450, 450),
-                                   ("play_prime_ms", 2500, 2000)):
+    # So is the playback reserve, clamped to its range.
+    for control, value, stored in (("play_prime_ms", 450, 450), ("play_prime_ms", 2500, 2000)):
         srv.device().set_control(control, value)
         assert getattr(srv.svc.core.devices[0], control) == stored
         await srv.manager.reconfigure()
@@ -1276,7 +1226,7 @@ async def test_controls(srv):
     srv.device().set_control("speaker_volume", 40)
     assert await dev.recv() == {"type": "set_volume", "value": 40}
     await dev.send(type="volume", value=70)
-    await until(lambda: srv.device().controls_snapshot()["controls"][8]["value"] == 70)
+    await until(lambda: srv.device().controls_snapshot()["controls"][5]["value"] == 70)
 
     srv.device().set_wake_prob_stream(True)
     assert await dev.recv() == {"type": "wake_peak_stream", "on": True}
@@ -1536,11 +1486,6 @@ async def test_unknown_disabled_and_replaced_ids(srv):
 async def test_text_only_device_gets_no_tts(srv):
     dev = await srv.connect("panel", speaker=False)
     await dev.recv()  # config
-    # No stop model: it listens only while the device plays.
-    assert [(await dev.model())[0]["kind"] for _ in range(2)] == ["wake", "vad"]
-    assert srv.device("panel").reload_model()["models"].keys() == {"wake", "vad"}
-    # A stop model sent on connect would be read here first.
-    assert [(await dev.model())[0]["kind"] for _ in range(2)] == ["wake", "vad"]
     await dev.wake(5)
     await dev.phrase()
     got = [await dev.recv() for _ in range(6)]

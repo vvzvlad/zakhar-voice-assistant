@@ -239,8 +239,8 @@ async def test_no_window_while_proactive_speech_is_queued(tmp_path, monkeypatch)
 
 
 async def test_a_cancelled_run_ends_the_window(tmp_path, monkeypatch):
-    # The stop word cancels the session (the device server sends `idle`): audio that
-    # still arrives in the window is no phrase.
+    # A cancelled run (cancel_run) ends its window: audio that still arrives in it is no
+    # phrase.
     pipeline, _ = _make(tmp_path, monkeypatch)
     await _answer(pipeline)
     pipeline.cancel_run()
@@ -249,7 +249,7 @@ async def test_a_cancelled_run_ends_the_window(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("in_window, text", [
-    (True, "Стоп."),           # the follow-up window, where the device's stop model is off
+    (True, "Стоп."),           # the follow-up window
     (False, "Захар, стоп."),   # right after the wake word
 ])
 async def test_the_stop_word_as_a_phrase_ends_the_session_silently(tmp_path, monkeypatch,

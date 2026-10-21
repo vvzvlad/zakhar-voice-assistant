@@ -10,8 +10,8 @@
 // confirmation, closes on Escape but not on a backdrop click, and shows on every tab why its
 // controls cannot load. It
 // also says a typed text on the device to check the volume — the phrase in flight and the text
-// outlive a tab switch — shows the auto volume's settings and readings only while auto volume is
-// on and writes the stop word's mode picked on a scale as its number.
+// outlive a tab switch — and shows the auto volume's settings and readings only while auto volume
+// is on.
 import React from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
@@ -376,22 +376,6 @@ describe("Devices page", () => {
     fireEvent(track, new MouseEvent("pointerdown", { bubbles: true, clientX: 55 }));
     await waitFor(() => expect(api.setDeviceControl).toHaveBeenCalledWith("kitchen", "wake_probability_cutoff", 55));
     await waitFor(() => expect(data.refreshConfig).toHaveBeenCalledTimes(1));
-  });
-
-  it("edit picks the stop word's mode on a scale and writes its number", async () => {
-    const snap = {
-      device: "kitchen", online: true, versions: [],
-      controls: [{ id: "echo_cancel_mode", name: "Stop word echo cancellation mode (0 SR low, 1 SR high, 2 FD low, 3 FD high)",
-        value: 0, min: 0, max: 3, step: 1, unit: "" }],
-    };
-    api.getDeviceControls.mockResolvedValue(snap);
-    api.setDeviceControl.mockResolvedValue(snap);
-    render(<Devices />);
-    openEdit();
-    fireEvent.click(await screen.findByText("Stop word"));
-    expect(await screen.findByText("Mode")).toBeInTheDocument();
-    fireEvent.click(screen.getByText("FD high"));
-    await waitFor(() => expect(api.setDeviceControl).toHaveBeenCalledWith("kitchen", "echo_cancel_mode", 3));
   });
 
   it("edit says the typed text on the device to check the volume", async () => {

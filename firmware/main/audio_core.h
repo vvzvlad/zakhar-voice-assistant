@@ -1,10 +1,8 @@
 // The pure audio pieces of the Voice PE firmware: no ESP headers, host-tested
-// (make fw-voicepe-host-test). The microphone sample conversion, the microphone tap ring, the echo
-// reference (decimator, aligned reads, the skip decision), the echo delay estimator, the mic
-// task's per-chunk bookkeeping (channel 0's stage, when to re-create the AEC, its statistics), the
-// room's noise level, the speaker's mix of zakhar's playback and the music, and the speaker
-// volume -> DAC register mapping. audio_core.c also implements the music ring, declared in
-// music_ring.h.
+// (make fw-voicepe-host-test). The microphone sample conversion, the microphone tap ring, the mic
+// task's per-chunk bookkeeping of channel 0's stage, the room's noise level, the speaker's mix of
+// zakhar's playback and the music, and the speaker volume -> DAC register mapping. audio_core.c
+// also implements the music ring, declared in music_ring.h.
 #pragma once
 
 #include <stdatomic.h>
@@ -43,69 +41,6 @@ uint32_t tap_position(tap_t *t);
 // window (cap - margin frames back from the newest) is first moved forward to its start. Returns
 // the count copied.
 size_t tap_read(tap_t *t, uint32_t *pos, int16_t *out, size_t max);
-// Copies frames pos..pos+n-1 and moves no position; a frame outside the readable window (not
-// written yet, or older than cap - margin frames back from the newest) reads as zeros.
-void tap_read_at(tap_t *t, uint32_t pos, int16_t *out, size_t n);
-
-// ---------------------------------------------------------------- echo reference
-
-// 48 kHz -> 16 kHz for the echo reference: a 72-tap linear-phase low-pass (a Hamming-windowed sinc
-// with its cutoff at 7 kHz: within 0.1 dB up to 6 kHz, -6 dB at 7 kHz, at least 39 dB down from
-// 8 kHz and 54 dB from 8.5 kHz, DC gain exactly 1) evaluated at every third input.
-#define DEC3_TAPS 72
-
-typedef struct {
-    int16_t win[2 * DEC3_TAPS];  // every input stored twice, so the newest DEC3_TAPS are contiguous
-    int pos;                     // the next write index, 0..DEC3_TAPS-1
-    int phase;                   // inputs since the last output, 0..2
-} dec3_t;
-
-void dec3_init(dec3_t *d);
-// One output per third input, the state carried across calls; returns the outputs written.
-size_t dec3_run(dec3_t *d, const int16_t *in, size_t n, int16_t *out);
-
-// The echo canceller's skip decision for a chunk of `chunk` frames whose reference starts at ref
-// position `aligned`: true when the reference the filter could still be using, the chunk's own and
-// the `tail` frames before it, is all zero (frames outside the readable window count as zero).
-bool aec_skip(tap_t *ref, uint32_t aligned, size_t chunk, size_t tail);
-
-// ---------------------------------------------------------------- echo delay
-
-// The delay of the speaker's echo in the microphone, from the cross-correlation of the short-time
-// log-energy envelopes of the reference and the microphone.
-#define LAG_BIN 64      // frames per envelope bin: 4 ms
-#define LAG_WINDOW 384  // microphone bins correlated: 1.536 s
-#define LAG_MAX 100     // lags searched, 0..LAG_MAX bins: up to 400 ms
-// Bins between the newest one pushed and the window's end: 64 ms, more than the reference and
-// microphone counters, each advancing in its own blocks, wander from their mean offset, so the
-// window's reference is written.
-#define LAG_DELAY 16
-#define LAG_HIST 512  // microphone bins kept: a power of two >= LAG_DELAY + LAG_WINDOW
-
-typedef struct {
-    float env[LAG_HIST];                  // log(1 + mean square) per bin, by bin number % LAG_HIST
-    uint32_t bins;                        // bins pushed
-    float ref_env[LAG_WINDOW + LAG_MAX];  // lag_track_run's scratch
-} lag_track_t;
-
-void lag_track_init(lag_track_t *t);
-// Pushes n microphone frames, n a multiple of LAG_BIN, from every stride-th sample of x.
-void lag_track_push(lag_track_t *t, const int16_t *x, size_t n, size_t stride);
-// Correlates the window of microphone bins with the reference in `ref`, microphone frame m paired
-// with ref position m + offset - lag; mic_end is the microphone position just past the newest frame
-// pushed. corr gets the normalized correlation at each lag 0..LAG_MAX (bins). Returns the lag in
-// frames of a clear peak (correlation >= 0.7 and 0.2 above every lag more than 100 ms away from
-// it), else -1.
-int lag_track_run(lag_track_t *t, tap_t *ref, uint32_t mic_end, uint32_t offset, float *corr);
-// An estimate is the correlation peak of the energy envelopes, which the room's echo tail puts up
-// to a few bins after the echo's onset; the reference is aligned this much earlier, since the
-// filter models a delay but not an advance.
-#define LAG_GUARD (4 * LAG_BIN)
-// The lag in use after an estimate `est` of lag_track_run (-1: no clear peak); `*set` holds
-// whether the lag is already decided. The first clear estimate decides it until a reboot and later
-// ones leave it, since every move of the reference sets the AEC adapting anew. A first estimate
-// within a bin of the lag in use keeps that lag.
-int32_t lag_next(int32_t in_use, int est, bool *set);
 
 // ---------------------------------------------------------------- the mic task's chunks
 
@@ -113,63 +48,28 @@ int32_t lag_next(int32_t in_use, int est, bool *set);
 // the XMOS's own output buffering.
 #define MIC_STAGE_SETTLE 2
 
-// Per chunk: where it sits on the wire, whether its channel 0 is the raw microphone, when the
-// XMOS channel 0 stage is to be written, the reference offset and whether the lag estimator's
-// window holds raw channel 0 only.
+// Per chunk: whether its channel 0 is the raw microphone and when the XMOS channel 0 stage is to be
+// written.
 typedef struct {
-    uint32_t frames;      // per chunk
-    uint32_t ref_settle;  // reference frames written before the offset is taken
-    uint32_t span;        // raw chunks in a row the estimator's window spans
-    uint32_t pos;         // frames on the wire before the next chunk, read or dropped
-    uint32_t offset;
-    bool have_offset;
-    bool none_written;    // channel 0's stage last written is NONE, not AGC
+    bool none_written;      // channel 0's stage last written is NONE, not AGC
     bool asked, asked_raw;  // the previous step asked for a stage write, and which
-    unsigned settle;      // chunks still to come before channel 0 carries none_written for sure
+    unsigned settle;        // chunks still to come before channel 0 carries none_written for sure
     bool raw;
-    uint32_t raw_run;     // raw chunks in a row, none dropped among them
 } mic_chunks_t;
 
 typedef struct {
-    uint32_t pos;     // the chunk's first frame on the wire
-    bool raw;         // its channel 0 is the raw microphone
-    bool settling;    // a stage write is settling: channel 0 may carry either stage
-    bool write;       // a stage write is due: channel 0 to NONE when write_raw, else to AGC
+    bool raw;    // its channel 0 is the raw microphone
+    bool write;  // a stage write is due: channel 0 to NONE when write_raw, else to AGC
     bool write_raw;
-    bool have_offset;
-    uint32_t offset;  // the reference written minus the microphone frames on the wire
-    bool lag_ok;      // the raw chunks in a row, this one included, span the estimator's window
 } mic_chunk_t;
 
-// Chunks of `frames` frames; the offset is taken at the first chunk with at least ref_settle
-// reference frames written. Channel 0 starts at AGC, as the XMOS boots it.
-void mic_chunks_init(mic_chunks_t *c, uint32_t frames, uint32_t ref_settle);
-// One chunk read. `dropped` is the frames the driver dropped since the previous chunk, which come
-// before this one on the wire; `want_raw` the stage channel 0 should have; `wrote` whether the
-// stage write the previous step asked for went through (a failed one is asked for again);
-// `ref_written` the reference frames written so far. A chunk is raw from the MIC_STAGE_SETTLE-th
-// chunk after the step that asked for the NONE write that went through, and AGC again from the
-// MIC_STAGE_SETTLE-th after the AGC one.
-mic_chunk_t mic_chunks_step(mic_chunks_t *c, uint32_t dropped, bool want_raw, bool wrote, uint32_t ref_written);
-
-// Whether the AEC is to be made anew before this chunk: at the first playback with echo_cancel on
-// (`level` > 0 while `playing`), then at once whenever `mode` or `filter` differ from made_mode
-// and made_filter, the settings it was last made with or failed to be made with (-1 before then).
-bool aec_remake(int made_mode, int made_filter, int mode, int filter, int level, bool playing);
-
-// One playback's echo cancellation on channel 0, logged when channel 0 is back to AGC.
-typedef struct {
-    uint32_t chunks;
-    uint64_t e_in, e_out;  // channel 0's energy into and out of the AEC
-    uint64_t us;           // aec_process time in all
-    uint32_t us_max;
-    uint32_t dropped;      // microphone frames the RX driver dropped
-    float corr;            // the latest estimate's correlation at the lag in use; NAN before one
-} aec_stats_t;
-
-// Counts one chunk through the AEC: `frames` samples of its input `in` and output `out`, and the
-// `us` aec_process took.
-void aec_stats_add(aec_stats_t *st, const int16_t *in, const int16_t *out, size_t frames, uint32_t us);
+// Channel 0 starts at AGC, as the XMOS boots it.
+void mic_chunks_init(mic_chunks_t *c);
+// One chunk read. `want_raw` is the stage channel 0 should have; `wrote` whether the stage write
+// the previous step asked for went through (a failed one is asked for again). A chunk is raw from
+// the MIC_STAGE_SETTLE-th chunk after the step that asked for the NONE write that went through,
+// and AGC again from the MIC_STAGE_SETTLE-th after the AGC one.
+mic_chunk_t mic_chunks_step(mic_chunks_t *c, bool want_raw, bool wrote);
 
 // ---------------------------------------------------------------- the room's noise level
 
@@ -222,12 +122,12 @@ typedef struct {
 void mix_init(mix_t *m);
 // One speaker block of `frames` frames. `out` (interleaved stereo) is `voice` (mono, `frames`
 // samples) on both channels plus `music` (interleaved stereo; its first music_frames frames, then
-// silence) times the music's gain, saturating; `mono` is (L + R) / 2 of `out`, the echo reference.
-// The music's gain moves linearly across the block from where the previous block left it to
-// `gain`, or to a tenth of it while `duck`, reaching it at the block's last frame. In place: `out`
-// may be `music` and `mono` may be `voice`, as each frame is read before it is written.
+// silence) times the music's gain, saturating. The music's gain moves linearly across the block
+// from where the previous block left it to `gain`, or to a tenth of it while `duck`, reaching it
+// at the block's last frame. In place: `out` may be `music`, as each frame is read before it is
+// written.
 void mix_block(mix_t *m, const int16_t *voice, const int16_t *music, size_t music_frames, uint32_t gain, bool duck,
-               size_t frames, int16_t *out, int16_t *mono);
+               size_t frames, int16_t *out);
 
 // ---------------------------------------------------------------- speaker volume
 

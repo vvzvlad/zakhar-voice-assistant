@@ -1,13 +1,12 @@
 // Host test of the Voice PE firmware's pure audio core (audio_core.c): the microphone sample
-// conversion against ESPHome's MicrophoneSource, the tap ring, the echo reference and delay
-// estimator, the mic task's chunk bookkeeping, the room's noise level, the speaker's mix, the music
-// ring, and the stock volume -> DAC byte table.
+// conversion against ESPHome's MicrophoneSource, the tap ring, the mic task's chunk bookkeeping,
+// the room's noise level, the speaker's mix, the music ring, and the stock volume -> DAC byte
+// table.
 // `make fw-voicepe-host-test` builds it.
 #include <assert.h>
 #include <math.h>
 #include <stdint.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 
 #include "audio_core.h"
@@ -95,276 +94,73 @@ static void test_tap(void)
     pos = start + 1;
     read_is(&t, &pos, 64, start + 1, 9);
     assert(pos == (uint32_t)(start + 10));
-
-    // A positioned read across the ring's end; frames not written yet or overwritten read as 0.
-    int16_t got[2 * 8], want[2 * 8];
-    tap_read_at(&t, start + 6, got, 4);  // frames start+6..start+9, ring slots 15, 0, 1, 2
-    frames_from(start + 6, want, 4);
-    assert(memcmp(got, want, sizeof(int16_t) * 2 * 4) == 0);
-    tap_read_at(&t, start + 8, got, 4);  // the last two written, then two not yet
-    frames_from(start + 8, want, 2);
-    memset(&want[4], 0, sizeof(int16_t) * 4);
-    assert(memcmp(got, want, sizeof(int16_t) * 2 * 4) == 0);
-    tap_read_at(&t, start - 3, got, 1);  // 13 frames back from the newest: past the readable 12
-    assert(got[0] == 0 && got[1] == 0);
-}
-
-static void test_decimator(void)
-{
-    dec3_t d;
-    int16_t in[720], out[240], parts[240];
-    // DC passes exactly once the 72 taps are filled.
-    dec3_init(&d);
-    for (size_t i = 0; i < 720; i++) in[i] = 10000;
-    assert(dec3_run(&d, in, 720, out) == 240);
-    for (size_t i = DEC3_TAPS / 3; i < 240; i++) assert(out[i] == 10000);
-    // 1 kHz passes at full amplitude; 10 kHz, which would alias to 6 kHz, is gone.
-    const double hz[] = {1000, 10000}, lo[] = {9900, 0}, hi[] = {10100, 10};
-    for (int f = 0; f < 2; f++) {
-        for (size_t i = 0; i < 720; i++) in[i] = (int16_t)lrint(10000 * sin(2 * M_PI * hz[f] * i / 48000));
-        dec3_init(&d);
-        dec3_run(&d, in, 720, out);
-        int peak = 0;
-        for (size_t i = DEC3_TAPS / 3; i < 240; i++) peak = abs(out[i]) > peak ? abs(out[i]) : peak;
-        assert(peak >= lo[f] && peak <= hi[f]);
-    }
-    // The state carries across calls of any size.
-    dec3_init(&d);
-    size_t m = 0;
-    for (size_t i = 0; i < 720; i += 7) m += dec3_run(&d, &in[i], i + 7 <= 720 ? 7 : 720 - i, &parts[m]);
-    assert(m == 240 && memcmp(parts, out, sizeof out) == 0);
-}
-
-static void test_skip(void)
-{
-    int16_t buf[64] = {0}, one = 1;
-    tap_t r;
-    tap_init(&r, buf, 64, 8, 1);  // 56 readable
-    int16_t zeros[40] = {0};
-    tap_write(&r, zeros, 40);
-    tap_write(&r, &one, 1);  // position 40
-    tap_write(&r, zeros, 10);
-    // The window is the chunk and the tail before it: [aligned - tail, aligned + chunk).
-    assert(aec_skip(&r, 20, 10, 10));   // 10..29
-    assert(!aec_skip(&r, 31, 10, 10));  // 21..40: the last frame
-    assert(!aec_skip(&r, 50, 10, 10));  // 40..59: the first frame
-    assert(aec_skip(&r, 51, 10, 10));   // 41..60, partly not written yet
-    tap_write(&r, zeros, 40);
-    tap_write(&r, zeros, 6);  // 97 written: position 40, still in its slot, is past the readable 56
-    assert(aec_skip(&r, 40, 10, 10));
-}
-
-static uint32_t s_rand = 1;
-static int rnd(int span)  // 0..span-1
-{
-    s_rand = s_rand * 1103515245u + 12345u;
-    return (int)((s_rand >> 8) % (uint32_t)span);
-}
-
-// Noise under a syllable-like envelope: runs of 3..20 bins, silent or at 20..100 % amplitude.
-static void speechlike(int16_t *x, size_t n)
-{
-    size_t i = 0;
-    while (i < n) {
-        const size_t run = (size_t)(3 + rnd(18)) * LAG_BIN;
-        const int amp = rnd(3) == 0 ? 0 : 2000 + rnd(8000);
-        for (size_t k = 0; k < run && i < n; k++, i++) x[i] = (int16_t)(amp * (rnd(2001) - 1000) / 1000);
-    }
-}
-
-static void test_lag(void)
-{
-    enum { N = 80 * 512, DELAY = 2600 };
-    static int16_t ref[N], mic[N], ring[1 << 15];
-    static lag_track_t lt;
-    static float corr[LAG_MAX + 1];
-    speechlike(ref, N);
-    // The microphone: the reference DELAY frames later at 0.3, under noise.
-    for (size_t m = 0; m < N; m++) mic[m] = (int16_t)((m >= DELAY ? 3 * ref[m - DELAY] / 10 : 0) + rnd(401) - 200);
-    // The reference counter runs 1000 frames behind the microphone's and wraps on the way.
-    const uint32_t offset = (uint32_t)-1000;
-    tap_t r;
-    tap_init(&r, ring, 1 << 15, 512, 1);
-    atomic_store(&r.written, offset);
-    lag_track_init(&lt);
-    for (size_t m = 0; m < N; m += 512) {
-        tap_write(&r, &ref[m], 512);
-        lag_track_push(&lt, &mic[m], 512, 1);
-    }
-    const int lag = lag_track_run(&lt, &r, N, offset, corr);
-    assert(abs(lag - DELAY) <= LAG_BIN && corr[lag / LAG_BIN] >= 0.9f);
-
-    // A microphone that does not hear the reference: no clear peak.
-    speechlike(mic, N);
-    lag_track_init(&lt);
-    for (size_t m = 0; m < N; m += 512) lag_track_push(&lt, &mic[m], 512, 1);
-    assert(lag_track_run(&lt, &r, N, offset, corr) == -1);
-}
-
-static void test_lag_next(void)
-{
-    bool set = false;
-    // No clear peak: the lag stays, still undecided.
-    assert(lag_next(1344, -1, &set) == 1344 && !set);
-    // The first clear estimate decides it, the reference aligned LAG_GUARD earlier...
-    assert(lag_next(1344, 1600 + LAG_GUARD, &set) == 1600 && set);
-    // ...and a later one does not move it: each move sets the AEC adapting anew.
-    assert(lag_next(1600, 1280 + LAG_GUARD, &set) == 1600 && set);
-    // A first estimate within a bin of the lag in use decides on that lag.
-    set = false;
-    assert(lag_next(1344, 1344 + LAG_BIN + LAG_GUARD, &set) == 1344 && set);
-}
-
-// One chunk of 512 frames with nothing dropped and the reference not yet settled.
-static mic_chunk_t chunk(mic_chunks_t *c, bool want_raw, bool wrote)
-{
-    return mic_chunks_step(c, 0, want_raw, wrote, 0);
 }
 
 static void test_chunk_stages(void)
 {
     mic_chunks_t c;
-    mic_chunks_init(&c, 512, 16000);
-    mic_chunk_t k = chunk(&c, false, false);
-    assert(!k.raw && !k.write && k.pos == 0);
+    mic_chunks_init(&c);
+    mic_chunk_t k = mic_chunks_step(&c, false, false);
+    assert(!k.raw && !k.write);
     // NONE is asked for at chunk 1 and goes through: raw from chunk 3, the 2nd after it.
-    k = chunk(&c, true, false);
-    assert(k.write && k.write_raw && !k.raw && k.pos == 512);
-    k = chunk(&c, true, true);
+    k = mic_chunks_step(&c, true, false);
+    assert(k.write && k.write_raw && !k.raw);
+    k = mic_chunks_step(&c, true, true);
     assert(!k.write && !k.raw);
-    k = chunk(&c, true, false);
+    k = mic_chunks_step(&c, true, false);
     assert(!k.write && k.raw);
     // AGC at chunk 4: still raw at chunk 5, where either stage may come, AGC from chunk 6.
-    k = chunk(&c, false, false);
-    assert(k.write && !k.write_raw && k.raw && !k.settling);
-    k = chunk(&c, false, true);
-    assert(!k.write && k.raw && k.settling);
-    k = chunk(&c, false, false);
-    assert(!k.write && !k.raw && !k.settling);
-    // A failed write is asked for again and counts nothing down.
-    k = chunk(&c, true, false);
-    assert(k.write && k.write_raw);
-    k = chunk(&c, true, false);
-    assert(k.write && k.write_raw && !k.raw);
-    k = chunk(&c, true, true);
+    k = mic_chunks_step(&c, false, false);
+    assert(k.write && !k.write_raw && k.raw);
+    k = mic_chunks_step(&c, false, true);
+    assert(!k.write && k.raw);
+    k = mic_chunks_step(&c, false, false);
     assert(!k.write && !k.raw);
-    k = chunk(&c, true, false);
-    assert(!k.write && k.raw && k.pos == 10 * 512);
+    // A failed write is asked for again and counts nothing down.
+    k = mic_chunks_step(&c, true, false);
+    assert(k.write && k.write_raw);
+    k = mic_chunks_step(&c, true, false);
+    assert(k.write && k.write_raw && !k.raw);
+    k = mic_chunks_step(&c, true, true);
+    assert(!k.write && !k.raw);
+    k = mic_chunks_step(&c, true, false);
+    assert(!k.write && k.raw);
 
     // Raw follows the stage last written, not the one asked for: NONE went through, the AGC write
     // fails as the settle ends, so the wire is still raw.
-    mic_chunks_init(&c, 512, 16000);
-    chunk(&c, true, false);
-    chunk(&c, false, true);
-    k = chunk(&c, false, false);
+    mic_chunks_init(&c);
+    mic_chunks_step(&c, true, false);
+    mic_chunks_step(&c, false, true);
+    k = mic_chunks_step(&c, false, false);
     assert(k.raw && k.write && !k.write_raw);
 }
 
 static void test_chunk_stage_change(void)
 {
     mic_chunks_t c;
-    mic_chunks_init(&c, 512, 16000);
+    mic_chunks_init(&c);
     // NONE written, then AGC wanted before a chunk is raw: AGC is written and no chunk is raw.
-    mic_chunk_t k = chunk(&c, true, false);
+    mic_chunk_t k = mic_chunks_step(&c, true, false);
     assert(k.write && k.write_raw);
-    k = chunk(&c, false, true);
+    k = mic_chunks_step(&c, false, true);
     assert(k.write && !k.write_raw && !k.raw);
     for (int i = 0; i < 3; i++) {
-        k = chunk(&c, false, i == 0);
+        k = mic_chunks_step(&c, false, i == 0);
         assert(!k.write && !k.raw);
     }
     // Raw, then AGC written and NONE wanted again before a chunk is AGC: every chunk stays raw.
-    chunk(&c, true, false);
-    chunk(&c, true, true);
-    assert(chunk(&c, true, false).raw);
-    k = chunk(&c, false, false);
-    assert(k.write && !k.write_raw && k.raw && !k.settling);
+    mic_chunks_step(&c, true, false);
+    mic_chunks_step(&c, true, true);
+    assert(mic_chunks_step(&c, true, false).raw);
+    k = mic_chunks_step(&c, false, false);
+    assert(k.write && !k.write_raw && k.raw);
     // The two chunks after the AGC write may carry AGC, though both count raw.
-    k = chunk(&c, true, true);
-    assert(k.write && k.write_raw && k.raw && k.settling);
+    k = mic_chunks_step(&c, true, true);
+    assert(k.write && k.write_raw && k.raw);
     for (int i = 0; i < 3; i++) {
-        k = chunk(&c, true, i == 0);
-        assert(!k.write && k.raw && k.settling == (i == 0));
+        k = mic_chunks_step(&c, true, i == 0);
+        assert(!k.write && k.raw);
     }
-}
-
-// The bookkeeping after three chunks, the third the first raw one.
-static void chunks_raw(mic_chunks_t *c)
-{
-    mic_chunks_init(c, 512, 16000);
-    chunk(c, true, false);
-    chunk(c, true, true);
-    assert(chunk(c, true, false).raw);
-}
-
-static void test_chunk_loss(void)
-{
-    mic_chunks_t c;
-    chunks_raw(&c);
-    for (int i = 0; i < 60; i++) assert(chunk(&c, true, false).lag_ok == (i >= 48));
-    // 256 frames dropped before a chunk put it 256 frames later and start the raw run anew.
-    const uint32_t next = chunk(&c, true, false).pos + 512;
-    mic_chunk_t k = mic_chunks_step(&c, 256, true, false, 0);
-    assert(k.pos == next + 256 && k.raw && !k.lag_ok);
-    assert(chunk(&c, true, false).pos == next + 256 + 512);
-}
-
-static void test_chunk_lag_span(void)
-{
-    mic_chunks_t c;
-    chunks_raw(&c);  // one raw chunk so far
-    // (LAG_DELAY + LAG_WINDOW) bins of 64 frames = 50 chunks of 512: allowed from the 50th raw one.
-    for (int n = 2; n <= 50; n++) assert(chunk(&c, true, false).lag_ok == (n == 50));
-    // An AGC chunk ends the run.
-    chunk(&c, false, false);
-    chunk(&c, false, true);
-    assert(!chunk(&c, false, false).raw);
-    chunk(&c, true, false);
-    chunk(&c, true, true);
-    for (int n = 1; n <= 50; n++) {
-        const mic_chunk_t k = chunk(&c, true, false);
-        assert(k.raw && k.lag_ok == (n == 50));
-    }
-    // A loss starts it anew: the chunk after the loss is the run's first.
-    assert(!mic_chunks_step(&c, 256, true, false, 0).lag_ok);
-    for (int n = 2; n <= 50; n++) assert(chunk(&c, true, false).lag_ok == (n == 50));
-}
-
-static void test_chunk_offset(void)
-{
-    mic_chunks_t c;
-    mic_chunks_init(&c, 512, 16000);
-    mic_chunk_t k = mic_chunks_step(&c, 0, false, false, 15999);
-    assert(!k.have_offset);
-    // Taken at the first chunk with 16000 reference frames written, against the microphone frames
-    // on the wire to its end, the dropped ones included; then kept.
-    k = mic_chunks_step(&c, 256, false, false, 16100);
-    assert(k.have_offset && k.pos == 768 && k.offset == 16100u - (768 + 512));
-    k = mic_chunks_step(&c, 0, false, false, 17000);
-    assert(k.have_offset && k.offset == 16100u - (768 + 512));
-}
-
-static void test_aec_remake(void)
-{
-    // Not made yet: only a playback with echo_cancel on makes it.
-    assert(!aec_remake(-1, -1, 0, 4, 0, true));
-    assert(!aec_remake(-1, -1, 0, 4, 2, false));
-    assert(aec_remake(-1, -1, 0, 4, 2, true));
-    // Made, or failed to be: the same settings keep it, a new mode or filter re-makes it at once.
-    assert(!aec_remake(0, 4, 0, 4, 2, true));
-    assert(aec_remake(0, 4, 1, 4, 0, false));
-    assert(aec_remake(0, 4, 0, 2, 0, false));
-}
-
-static void test_aec_stats(void)
-{
-    aec_stats_t st = {.corr = NAN};
-    const int16_t in[] = {-32768, 3}, out[] = {4, -5};
-    aec_stats_add(&st, in, out, 2, 120);
-    aec_stats_add(&st, in, out, 2, 80);
-    // Full scale squares to 2^30 without overflow; the time adds up and keeps its maximum.
-    assert(st.chunks == 2 && st.e_in == 2 * ((1ull << 30) + 9) && st.e_out == 2 * 41);
-    assert(st.us == 200 && st.us_max == 120 && st.dropped == 0 && isnan(st.corr));
 }
 
 static void test_ambient(void)
@@ -408,7 +204,7 @@ static bool sched_chunk(ambient_sched_t *s, mic_chunks_t *c, bool *wrote, bool q
     enum { N = 512 };
     static int32_t in[2 * N];
     const bool measuring = ambient_sched_want(s, quiet);
-    const mic_chunk_t k = mic_chunks_step(c, 0, measuring, *wrote, 0);
+    const mic_chunk_t k = mic_chunks_step(c, measuring, *wrote);
     *wrote = k.write;
     for (size_t i = 0; i < N; i++) in[2 * i] = k.raw ? raw_value : 1 << 28;
     return measuring && ambient_sched_take(s, k.raw, in, N);
@@ -420,7 +216,7 @@ static void test_ambient_sched(void)
     mic_chunks_t c;
     bool wrote = false;
     ambient_sched_init(&s, 6, 3);
-    mic_chunks_init(&c, 512, 16000);
+    mic_chunks_init(&c);
     // Quiet chunks 1..5 measure nothing; the 6th starts a measurement.
     for (int i = 1; i <= 5; i++) {
         assert(!sched_chunk(&s, &c, &wrote, true, 1 << 20));
@@ -442,7 +238,7 @@ static void test_ambient_sched(void)
 
     // The end of quiet ends a measurement with nothing to report, and the count starts over.
     ambient_sched_init(&s, 6, 3);
-    mic_chunks_init(&c, 512, 16000);
+    mic_chunks_init(&c);
     wrote = false;
     for (int i = 1; i <= 8; i++) assert(!sched_chunk(&s, &c, &wrote, true, 1 << 20));  // 8: one raw taken
     assert(s.measuring && s.taken == 1);
@@ -458,62 +254,61 @@ static void test_ambient_sched(void)
 static void test_mix(void)
 {
     enum { N = 720 };
-    static int16_t voice[N], music[2 * N], out[2 * N], mono[N];
+    static int16_t voice[N], music[2 * N], out[2 * N];
     mix_t m;
 
-    // Voice only: on both channels as it is, and the reference is the voice itself.
+    // Voice only: on both channels as it is.
     mix_init(&m);
     for (size_t i = 0; i < N; i++) voice[i] = (int16_t)(i * 37 - 13000);
-    mix_block(&m, voice, music, 0, MIX_UNITY, false, N, out, mono);
-    for (size_t i = 0; i < N; i++) assert(out[2 * i] == voice[i] && out[2 * i + 1] == voice[i] && mono[i] == voice[i]);
+    mix_block(&m, voice, music, 0, MIX_UNITY, false, N, out);
+    for (size_t i = 0; i < N; i++) assert(out[2 * i] == voice[i] && out[2 * i + 1] == voice[i]);
 
-    // The music ramps in from silence across the first block, then plays at its gain; the
-    // reference is (L + R) / 2.
+    // The music ramps in from silence across the first block, then plays at its gain.
     mix_init(&m);
     memset(voice, 0, sizeof voice);
     for (size_t i = 0; i < N; i++) {
         music[2 * i] = 20000;
         music[2 * i + 1] = -10000;
     }
-    mix_block(&m, voice, music, N, MIX_UNITY, false, N, out, mono);
+    mix_block(&m, voice, music, N, MIX_UNITY, false, N, out);
     assert(out[0] < 100 && out[2 * (N - 1)] == 20000 && out[2 * (N - 1) + 1] == -10000);
     for (size_t i = 1; i < N; i++) assert(out[2 * i] >= out[2 * (i - 1)]);
-    mix_block(&m, voice, music, N, MIX_UNITY, false, N, out, mono);
-    for (size_t i = 0; i < N; i++) assert(out[2 * i] == 20000 && out[2 * i + 1] == -10000 && mono[i] == 5000);
+    mix_block(&m, voice, music, N, MIX_UNITY, false, N, out);
+    for (size_t i = 0; i < N; i++) assert(out[2 * i] == 20000 && out[2 * i + 1] == -10000);
 
     // Ducked: down to a tenth across one block, monotonically, then held there.
-    mix_block(&m, voice, music, N, MIX_UNITY, true, N, out, mono);
+    mix_block(&m, voice, music, N, MIX_UNITY, true, N, out);
     assert(out[0] > 19900 && out[2 * (N - 1)] == 2000 && out[2 * (N - 1) + 1] == -1000);
     for (size_t i = 1; i < N; i++) assert(out[2 * i] <= out[2 * (i - 1)]);
-    mix_block(&m, voice, music, N, MIX_UNITY, true, N, out, mono);
+    mix_block(&m, voice, music, N, MIX_UNITY, true, N, out);
     for (size_t i = 0; i < N; i++) assert(out[2 * i] == 2000 && out[2 * i + 1] == -1000);
     // And back up once the duck ends.
-    mix_block(&m, voice, music, N, MIX_UNITY, false, N, out, mono);
+    mix_block(&m, voice, music, N, MIX_UNITY, false, N, out);
     assert(out[0] < 2100 && out[2 * (N - 1)] == 20000);
 
     // Fewer music frames than the block: the rest is the voice alone.
     for (size_t i = 0; i < N; i++) voice[i] = 100;
-    mix_block(&m, voice, music, 300, MIX_UNITY, false, N, out, mono);
+    mix_block(&m, voice, music, 300, MIX_UNITY, false, N, out);
     assert(out[2 * 299] == 20100 && out[2 * 299 + 1] == -9900);
-    for (size_t i = 300; i < N; i++) assert(out[2 * i] == 100 && out[2 * i + 1] == 100 && mono[i] == 100);
+    for (size_t i = 300; i < N; i++) assert(out[2 * i] == 100 && out[2 * i + 1] == 100);
 
-    // Voice plus music saturates instead of wrapping, and the reference is of what was saturated.
+    // Voice plus music saturates instead of wrapping.
     for (size_t i = 0; i < N; i++) {
         voice[i] = 30000;
         music[2 * i] = 20000;
         music[2 * i + 1] = -32768;
     }
-    mix_block(&m, voice, music, N, MIX_UNITY, false, N, out, mono);
-    assert(out[0] == INT16_MAX && out[1] == 30000 - 32768 && mono[0] == (INT16_MAX + 30000 - 32768) / 2);
+    mix_block(&m, voice, music, N, MIX_UNITY, false, N, out);
+    assert(out[0] == INT16_MAX && out[1] == 30000 - 32768);
     for (size_t i = 0; i < N; i++) {
         voice[i] = -30000;
         music[2 * i] = -20000;
     }
-    mix_block(&m, voice, music, N, MIX_UNITY, false, N, out, mono);
-    assert(out[0] == INT16_MIN && out[1] == INT16_MIN && mono[0] == INT16_MIN);
+    mix_block(&m, voice, music, N, MIX_UNITY, false, N, out);
+    assert(out[0] == INT16_MIN && out[1] == INT16_MIN);
 
-    // In place, as the speaker task mixes (out over music, the downmix over voice), mid-ramp and
-    // with a short music block: the same block as into separate buffers.
+    // In place, as the speaker task mixes (out over music), mid-ramp and with a short music block:
+    // the same block as into separate buffers.
     for (size_t i = 0; i < N; i++) {
         voice[i] = (int16_t)(i * 29 - 9000);
         music[2 * i] = (int16_t)(15000 - i * 31);
@@ -522,9 +317,9 @@ static void test_mix(void)
     mix_t a, b;
     mix_init(&a);
     mix_init(&b);
-    mix_block(&a, voice, music, 500, MIX_UNITY, false, N, out, mono);
-    mix_block(&b, voice, music, 500, MIX_UNITY, false, N, music, voice);
-    assert(memcmp(out, music, sizeof out) == 0 && memcmp(mono, voice, sizeof mono) == 0 && a.gain == b.gain);
+    mix_block(&a, voice, music, 500, MIX_UNITY, false, N, out);
+    mix_block(&b, voice, music, 500, MIX_UNITY, false, N, music);
+    assert(memcmp(out, music, sizeof out) == 0 && a.gain == b.gain);
 }
 
 // The music ring holds the test stream's frames (frames_from: channel 0 = f, channel 1 = -f).
@@ -658,17 +453,8 @@ int main(void)
 {
     test_samples();
     test_tap();
-    test_decimator();
-    test_skip();
-    test_lag();
-    test_lag_next();
     test_chunk_stages();
     test_chunk_stage_change();
-    test_chunk_loss();
-    test_chunk_lag_span();
-    test_chunk_offset();
-    test_aec_remake();
-    test_aec_stats();
     test_ambient();
     test_ambient_sched();
     test_mix();
