@@ -59,6 +59,9 @@ CONFIG_ESP_WIFI_RX_BA_WIN=6
 # started.
 CONFIG_MDNS_TASK_CREATE_FROM_SPIRAM=y
 CONFIG_MDNS_MEMORY_ALLOC_SPIRAM=y
+# A plain malloc() under this many bytes prefers internal RAM, a larger one PSRAM (ESP-IDF's
+# default is 16384). Task stacks and DMA buffers ask for internal RAM by caps and stay there.
+CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=4096
 
 # The Sendspin music player (main/music.cpp): the player role alone, FLAC and PCM.
 CONFIG_SENDSPIN_ENABLE_PLAYER=y
