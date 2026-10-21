@@ -19,7 +19,7 @@ import soxr
 from src import captures, context, device_server
 from src.config_service import ConfigService
 from src.device_server import (
-    CAPTURE_AUDIO, MIC, MODEL, PLAY, CaptureBusyError, DeviceManager, DeviceOfflineError,
+    CAPTURE_AUDIO, MIC, MODEL, PLAY, CaptureBusyError, DeviceManager, DeviceOfflineError, NoCaptureError,
 )
 from src.plugins.base import Deps
 from src.plugins.vad.webrtc import WebRtcVadBackend
@@ -1072,6 +1072,95 @@ async def test_capture_goes_on_after_a_lost_link(srv):
     assert (capture_status(srv)["duration"], capture_status(srv)["gaps"]) == (1.0, [])
     pcm = capture_samples(name)
     assert set(pcm[:4800]) == {100} and set(pcm[4800:]) == {200}
+
+
+async def test_a_stopped_capture_is_done_with_what_came(srv):
+    dev = await srv.connect()
+    await dev.recv()  # config
+    with pytest.raises(NoCaptureError):
+        srv.manager.capture_stop("kitchen")
+    name = srv.device().start_capture(5).name
+    cid = (await dev.recv())["id"]
+    await dev.capture_audio(0, stereo(100, 0, 300))
+    await until(lambda: capture_status(srv)["duration"] == 0.3)
+    srv.manager.capture_stop("kitchen")
+    assert await dev.recv() == {"type": "capture_stop", "id": cid}
+    # The device sends the rest it recorded, then its audio_end: done at that length, no tail gap.
+    await dev.capture_audio(4800, stereo(100, 0, 200))
+    await dev.send(type="audio_end", reason="capture", id=cid)
+    await until(lambda: capture_status(srv)["state"] == "done")
+    assert capture_status(srv) == {"state": "done", "device": "kitchen", "name": name, "seconds": 0.5,
+                                   "remaining": 0, "duration": 0.5, "gaps": [], "error": None}
+
+
+async def test_a_stopped_capture_the_device_never_finishes_ends_soon(srv, monkeypatch):
+    monkeypatch.setattr(device_server, "CAPTURE_WAIT_MARGIN", 0.2)
+    dev = await srv.connect()
+    await dev.recv()  # config
+    srv.device().start_capture(300)
+    await dev.recv()  # capture
+    await dev.capture_audio(0, stereo(100, 0, 300))
+    await until(lambda: capture_status(srv)["duration"] == 0.3)
+    srv.manager.capture_stop("kitchen")
+    # The device never answers the stop: the capture ends a margin after it, not after 300 s.
+    await until(lambda: capture_status(srv)["state"] == "done", timeout=3.0)
+    assert (capture_status(srv)["seconds"], capture_status(srv)["gaps"]) == (0.3, [])
+
+
+async def test_a_capture_stopped_while_offline_is_done_at_once(srv):
+    dev = await srv.connect()
+    await dev.recv()  # config
+    srv.device().start_capture(5)
+    await dev.recv()  # capture
+    await dev.capture_audio(0, stereo(100, 0, 200))
+    await until(lambda: capture_status(srv)["duration"] == 0.2)
+    await lose_link(srv, dev)
+    srv.manager.capture_stop("kitchen")
+    assert srv.device().capture is None
+    snap = capture_status(srv)
+    assert (snap["state"], snap["seconds"], snap["gaps"]) == ("done", 0.2, [])
+
+
+async def test_a_stop_survives_a_lost_link(srv):
+    dev = await srv.connect()
+    await dev.recv()  # config
+    srv.device().start_capture(5)
+    cid = (await dev.recv())["id"]
+    await dev.capture_audio(0, stereo(100, 0, 300))
+    await until(lambda: capture_status(srv)["duration"] == 0.3)
+    srv.manager.capture_stop("kitchen")
+    await lose_link(srv, dev)  # before the device answered the stop
+    # Back holding the capture: it is resumed and stopped again, and ends at what came.
+    dev = await srv.connect(capture=cid)
+    await dev.recv()  # config
+    assert await dev.recv() == {"type": "capture_resume", "id": cid, "from": 4800}
+    assert await dev.recv() == {"type": "capture_stop", "id": cid}
+    await dev.capture_audio(4800, stereo(100, 0, 100))
+    await dev.send(type="audio_end", reason="capture", id=cid)
+    await until(lambda: capture_status(srv)["state"] == "done")
+    assert (capture_status(srv)["seconds"], capture_status(srv)["gaps"]) == (0.4, [])
+
+
+async def test_a_stopped_capture_the_device_lost_is_not_recorded_on(srv):
+    dev = await srv.connect()
+    await dev.recv()  # config
+    srv.device().start_capture(5)
+    await dev.recv()  # capture
+    await dev.capture_audio(0, stereo(100, 0, 300))
+    await until(lambda: capture_status(srv)["duration"] == 0.3)
+    srv.manager.capture_stop("kitchen")
+    await lose_link(srv, dev)
+    dev = await srv.connect()  # restarted: no capture in hello, so no time left is recorded
+    await dev.recv()  # config
+    await until(lambda: capture_status(srv)["state"] == "done")
+    assert srv.device().capture is None
+    assert (capture_status(srv)["seconds"], capture_status(srv)["gaps"]) == (0.3, [])
+
+
+async def test_a_held_capture_the_server_does_not_take_up_is_stopped(srv):
+    dev = await srv.connect(capture=42)  # a capture this server has no trace of
+    await dev.recv()  # config
+    assert await dev.recv() == {"type": "capture_stop", "id": 42}
 
 
 async def test_a_device_restarted_mid_capture_records_the_time_left(srv):

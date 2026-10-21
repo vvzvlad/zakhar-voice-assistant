@@ -168,6 +168,10 @@ static bool decode_fields(const cJSON *o, const char *type, zl_msg_t *m)
         m->type = ZL_MSG_CAPTURE_RESUME;
         return get_u32(field(o, "id"), &m->id) && get_u32(field(o, "from"), &m->from);
     }
+    if (strcmp(type, "capture_stop") == 0) {
+        m->type = ZL_MSG_CAPTURE_STOP;
+        return get_u32(field(o, "id"), &m->id);
+    }
     if (strcmp(type, "model") == 0) {
         m->type = ZL_MSG_MODEL;
         const cJSON *kind = field(o, "kind"), *name = field(o, "name");
