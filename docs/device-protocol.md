@@ -61,26 +61,14 @@ It replaces the ESPHome Native API: there is no ESPHome on either end.
    closes an older connection of the same `id` with code 4001 when a new one says `hello`.
 3. Server → `config`, right after `hello` and again whenever the values change:
    ```json
-   {"type": "config", "wake_cutoff": 80, "vad_cutoff": 30,
-    "echo_cancel": 1, "echo_cancel_mode": 2, "echo_cancel_filter": 4, "play_prime_ms": 700,
-    "auto_volume": false}
+   {"type": "config", "wake_cutoff": 80, "vad_cutoff": 30, "play_prime_ms": 700, "auto_volume": false}
    ```
    The cutoffs are percent, 0..100. The device applies them as `uint8 = trunc(percent / 100 * 255)`
-   to the wake-word model and to the on-device VAD gate. The `echo_cancel` fields set the device's
-   cancellation of its own playback in the microphone its stop word hears (on the Voice PE: while
-   it plays, the XMOS channel 0 is the raw microphone and ESP-SR's AEC runs on it):
-   - `echo_cancel`: 0 off, the stop word hears the wake word's input; 1..3 on, with the suppression
-     of the echo left over from mild to strongest; default 1. The suppression exists in the
-     full-duplex modes only; in the others 1..3 just mean on.
-   - `echo_cancel_mode`: 0 SR low cost, 1 SR high performance, 2 FD (full-duplex) low cost, 3 FD
-     high performance; default 2.
-   - `echo_cancel_filter`: the filter length, 1..8; default 4.
+   to the wake-word model and to the on-device VAD gate.
 
    `auto_volume`: true has the device measure the room's noise and send `ambient`, see
    [Auto volume](#auto-volume); default false.
 
-   A new mode or filter length re-creates the canceller on the device; when it cannot be created
-   the device works as with `echo_cancel` 0. A device without echo cancellation ignores the three.
    `play_prime_ms`, 0..2000, default 700, is the playback reserve: the audio the device holds
    before it starts a stream, and again after the stream runs dry (see [Playback](#playback)); a
    device without a speaker ignores it. A device that does not measure ignores `auto_volume`.
@@ -89,34 +77,28 @@ It replaces the ESPHome Native API: there is no ESPHome on either end.
    lacks one, or holds one out of its range or of the wrong type, is ignored whole. These values
    live in the server config (`core.devices[]`, whose defaults are the ones named above), not on
    the device, which keeps none of them across a restart and does nothing that depends on them
-   before its first `config`: no wake word or stop word is detected, a `play_start` is answered
-   with `played {id, "dropped": true}`, the echo canceller is off and auto volume does not measure.
+   before its first `config`: no wake word is detected, a `play_start` is answered with
+   `played {id, "dropped": true}` and auto volume does not measure.
 4. Server → `volume_boost {value}` right after `config`: 0, a new connection has no `ambient` yet;
    see [Auto volume](#auto-volume).
 5. Server → `log_stream {on}` with the device's `core.devices[].log`, on or off, after
    `volume_boost` (and after what a capture the device holds needs, see [Capture](#capture)): see
    [Settings and diagnostics](#settings-and-diagnostics).
-6. Server → the wake-word and VAD models, and to a device with a speaker the stop model, right
-   after `log_stream`: see [Models](#models).
+6. Server → the wake-word and VAD models, right after `log_stream`: see [Models](#models).
 
 ## Models
 
-The device stores no model. The server sends the wake-word model, the stop model and the VAD
-model that gates both at every connection, again when the model configured for the device
-changes, on the direct reload command (panel API `POST /api/device/model {device}`), and when a
+The device stores no model. The server sends the wake-word model and the VAD model that gates it
+at every connection, again when the model configured for the device changes, on the direct reload command (panel API `POST /api/device/model {device}`), and when a
 wake-word model file the device uses is uploaded anew (panel API `POST /api/wake-models`). Which
 file goes out is the server's choice: `core.devices[].wake_model` / `vad_model`, empty for the
-models the release ships. The stop model is always the release's
-(`microWakeWord/stop/stop.tflite`, the stock «Stop» of kahrendt/microWakeWord) and is not
-configurable: no device field, no panel setting, no cutoff in `config` — the firmware compiles in
-its cutoff, 0.35 (89 of 255), below the manifest's 0.5. Only a device with a speaker
-(`caps.speaker: true`) gets it.
+models the release ships.
 
 1. Server → `model`, then the bytes:
    ```json
    {"type": "model", "kind": "wake", "name": "zakhar/zakhar_v31", "size": 77848}
    ```
-   `kind` is `wake`, `vad` or `stop`, `name` is the model's name, opaque to the device, and `size`
+   `kind` is `wake` or `vad`, `name` is the model's name, opaque to the device, and `size`
    (> 0) is the length of the .tflite that follows in `0x03` frames of at most 4096 payload bytes.
    `model` carries no `session`, so the session filter lets it through. A new `model` while an
    earlier one is still arriving discards the earlier one; bytes past `size` are discarded.
@@ -130,7 +112,7 @@ its cutoff, 0.35 (89 of 255), below the manifest's 0.5. Only a device with a spe
    shows the `name` of the last wake model loaded as the device's model.
 
 - The device swaps a model live, without a restart. It detects the wake word only while the wake
-  and VAD models are loaded, and the stop word only while the stop and VAD models are.
+  and VAD models are loaded.
 
 ## Voice session
 
@@ -159,12 +141,9 @@ device                                   server
   interleaved when `mic.channels` is 2). On the Voice PE
   channel 0 is the XMOS AGC output and channel 1 the XMOS noise-suppressed output at the wake-word
   gain ×4 (applied before the cut to 16 bits, saturating): exactly the samples the wake-word model
-  gets. While the Voice PE plays with `echo_cancel` on, channel 0 is instead the raw microphone 0
-  with the speaker's own playback cancelled: the raw microphone at gain ×16 (applied before the
-  cut to 16 bits, saturating) through the AEC, exactly the stop word's input; the switch each way
-  takes the device two 32 ms frames. During an auto volume measurement channel 0
-  is the raw microphone 0 as read, at gain 1, switched the same way; a wake ends the measurement
-  and switches it back (see [Auto volume](#auto-volume)).
+  gets. During an auto volume measurement channel 0 is the raw microphone 0 as read, at gain 1;
+  the switch each way takes the device two 32 ms frames, and a wake ends the measurement and
+  switches it back (see [Auto volume](#auto-volume)).
 - The device keeps streaming until the server refuses the wake or, once it takes it, until a
   `state` of this session other than `listening` arrives. The end of the phrase is found by the
   server's VAD; the device has no end-pointing.
@@ -231,16 +210,8 @@ device                                   server
   answers, each ended device without a speaker gets that answer as a `reply` without `session`,
   so its screen shows it; a device with a speaker gets nothing, nor does a later answer of the
   same session (a follow-up).
-- `stop`: `{"type": "stop", "session": 17}`, device → server: the stop word. The device runs the
-  stop model from 1 s after its playback starts until the playback ends; a detection flushes the
-  playback and sends `stop`, then `played {id, "dropped": true}` for each stream it dropped.
-  `session` is the current session's number while it is open, absent outside a session; a
-  proposed one is never named. A stop word starts no session.
-  The server drops the playback as for a `wake` it takes and sends `play_stop`; in a session it
-  then cancels the run and ends the session with `state idle`, outside one (an announcement, an
-  agent's `speak`) only the playback stops. Said as the phrase of a session — after the wake word
-  or in the follow-up window — «стоп» ends the session the same way on the server's side:
-  `state idle`, no sound, no `transcript`.
+- «стоп» said as the phrase of a session — after the wake word or in the follow-up window — ends
+  the session on the server's side: `state idle`, no sound, no `transcript`.
 - A device without a speaker (`caps.speaker: false`) never gets playback: the server skips TTS for
   it and sends the text only.
 
@@ -263,8 +234,7 @@ the answer, so the next phrase needs no wake word:
   a wake. While a proposed wake's audio is streaming, the follow-up goes on in that stream from
   where it is.
 - The server waits `followup` window for speech to start. Silence ends the session with
-  `state idle`, without a sound. A phrase that is «стоп» (see `stop` above) ends it the same way
-  without asking jev. Any other phrase goes to the jev decision model with the assistant's name
+  `state idle`, without a sound. A phrase that is «стоп» ends it the same way without asking jev. Any other phrase goes to the jev decision model with the assistant's name
   (the `word` of the session's `wake`), the last request and answer; one it does not take for a
   continuation of the dialog also ends the session with `state idle`, without a sound and without
   a transcript. One it takes gets the end-of-phrase chime and runs like any phrase, and its answer
@@ -284,9 +254,8 @@ the answer, so the next phrase needs no wake word:
   `play_end` that comes after the last sample is out counts too), `gap_ms` the silence the speaker
   played meanwhile, in ms. The wait before a stream's first sample is not counted.
 - `play_stop` flushes everything queued and playing; the device answers `played {id, "dropped":
-  true}` for each stream it dropped. The stop word flushes the same way, and the server answers it
-  with `play_stop`; a new `wake` flushes nothing on the device, and the server sends `play_stop`
-  once it takes the wake (see [Voice session](#voice-session)). `0x02` frames and `play_end` of a
+  true}` for each stream it dropped. A new `wake` flushes nothing on the device, and the server
+  sends `play_stop` once it takes the wake (see [Voice session](#voice-session)). `0x02` frames and `play_end` of a
   dropped stream that are still on the way are discarded.
 - The server stops waiting for `played` of a stream after its duration plus `buffer_ms` plus 5 s
   and treats it as dropped.
@@ -325,8 +294,7 @@ the answer, so the next phrase needs no wake word:
   to the raw microphone 0 (stage NONE: before the XMOS's echo cancellation, noise suppression and
   AGC) for about a second, takes the RMS of its 32-bit slots and sends `ambient {value}`:
   `20·log10(rms / 2^31)` dBFS, one decimal. Playback starting, a wake or a capture starting ends
-  a measurement at once and nothing is sent: channel 0 goes back to AGC, or stays
-  raw for a playback's echo cancellation. Channel 1, the wake word's input, does not change.
+  a measurement at once and nothing is sent: channel 0 goes back to AGC. Channel 1, the wake word's input, does not change.
 - The server keeps the connection's last 4 `ambient` values (a minute) and sends
   `volume_boost {value}`, `round((median − threshold) × gain)` within −100..100 (negative below
   the threshold), whenever it

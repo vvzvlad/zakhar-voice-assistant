@@ -9,8 +9,7 @@ Server-side VAD end-pointing
 ----------------------------
 The device fires its wake word on-device and then streams mic PCM to us
 continuously (silence included). It has no end-pointing of its own
-(docs/device-protocol.md); the device's `stop`, the stop word, cancels the run through
-cancel_run. To know when the user has
+(docs/device-protocol.md). To know when the user has
 finished speaking we run the configured VAD stage backend over the incoming PCM
 (one VadSession per run, see src/vad.py) and finalize the utterance once it
 reports an endpoint (speech followed by enough trailing silence), a hard max
@@ -51,9 +50,7 @@ from src.vad import SAMPLE_RATE, EndpointPolicy
 # misbehaves, and also forces a finalize when reached.
 HARD_CAP_BYTES = SAMPLE_RATE * 2 * 60
 
-# The word the speaker's own stop model listens for while an answer plays. That model is
-# off in the follow-up window and after a wake, so there the word reaches the server as a
-# phrase; said alone (or right after the wake word) it ends the session the same way.
+# Said as the whole phrase (alone or right after the wake word), it ends the session silently.
 STOP_WORD = "стоп"
 
 

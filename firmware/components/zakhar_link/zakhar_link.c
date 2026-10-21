@@ -3,7 +3,7 @@
 //
 // Two tasks. The component task owns the client: it creates it, and when the link is lost
 // destroys it and connects a new one after the backoff. It sends everything the device starts:
-// the wake, `stop`, the session's and the capture's mic frames, audio_end, wake_peak once a second,
+// the wake, the session's and the capture's mic frames, audio_end, wake_peak once a second,
 // `played` of finished streams, `volume`, `ambient`, `stats` after each hello and every 30 s and,
 // while the server asks for it, the device log in `log` messages. It also owns the microphone
 // position, so a `capture`, a `capture_resume` and a `capture_stop` are handed to it; only a
@@ -67,7 +67,6 @@ static const char *TAG = "zakhar_link";
 #define EV_PLAYED (1u << 3)
 #define EV_VOLUME (1u << 4)
 #define EV_CAPTURE_RESUME (1u << 5)
-#define EV_STOP (1u << 6)
 #define EV_AMBIENT (1u << 7)
 #define EV_STATS (1u << 8)  // a hello went out: the connection's first stats
 #define EV_CAPTURE_STOP (1u << 9)
@@ -358,10 +357,9 @@ static void on_text(esp_websocket_client_handle_t ws, const char *json, size_t l
     }
     switch (m.type) {
     case ZL_MSG_CONFIG:
-        ESP_LOGI(TAG, "config: wake %u, vad %u, echo_cancel %d mode %d filter %d, play_prime_ms %d, auto_volume %d",
-                 m.wake, m.vad, m.echo_cancel, m.echo_mode, m.echo_filter, m.play_prime_ms, m.auto_volume);
+        ESP_LOGI(TAG, "config: wake %u, vad %u, play_prime_ms %d, auto_volume %d", m.wake, m.vad, m.play_prime_ms,
+                 m.auto_volume);
         if (s_cb.on_config != NULL) s_cb.on_config(m.wake, m.vad);
-        if (s_cb.on_echo_cancel != NULL) s_cb.on_echo_cancel(m.echo_cancel, m.echo_mode, m.echo_filter);
         if (s_cb.on_auto_volume != NULL) s_cb.on_auto_volume(m.auto_volume);
         break;
     case ZL_MSG_STATE:
@@ -671,27 +669,6 @@ static void wake(void)
     send_json(s_ws, zl_encode_wake(session, word));
 }
 
-// The stop word: the playback is flushed, and the server stops the open session's run. The
-// session itself ends with the server's `state`.
-static void stop(void)
-{
-    uint32_t dropped[ZL_PLAYQ_STREAMS];
-    lock();
-    const size_t ndropped = zl_playq_flush(&s_playq, dropped);
-    const bool online = s_online;
-    const bool has_session = online && s_sess.open;
-    const uint32_t session = s_sess.session;
-    unlock();
-    if (has_session) {
-        ESP_LOGI(TAG, "stop word: session %u, %u streams dropped", (unsigned)session, (unsigned)ndropped);
-    } else {
-        ESP_LOGI(TAG, "stop word: no session, %u streams dropped", (unsigned)ndropped);
-    }
-    if (!online) return;
-    send_json(s_ws, zl_encode_stop(has_session, session));
-    send_dropped(s_ws, dropped, ndropped);
-}
-
 // A `capture` from the server: from now, no pre-roll, in place of one held already; refused while
 // a session is open or a wake is proposed.
 static void capture_start(void)
@@ -970,7 +947,6 @@ static void link_task(void *arg)
         if (ev & EV_CAPTURE) capture_start();
         if (ev & EV_CAPTURE_RESUME) capture_resume();
         if (ev & EV_CAPTURE_STOP) capture_stop();
-        if (ev & EV_STOP) stop();
         if (ev & EV_WAKE) wake();
         if (ev & EV_PLAYED) send_played();
         if (ev & EV_VOLUME) send_volume();
@@ -1085,9 +1061,4 @@ bool zl_playing(void)
     const bool playing = s_playq.nstreams > 0;
     unlock();
     return playing;
-}
-
-void zl_stop(void)
-{
-    notify(EV_STOP);
 }

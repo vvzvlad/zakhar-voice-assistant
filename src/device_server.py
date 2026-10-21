@@ -47,11 +47,9 @@ HEARTBEAT_S = 10.0
 PLAY_FRAME_BYTES = 4096
 # The release's default models (the Dockerfile copies every .tflite under microWakeWord/ into
 # the image), sent to a device whose core.devices[].wake_model / vad_model is empty: the wake
-# one by its name (wake_model_files), the VAD one by its path. The stop model is not
-# configurable: every device with a speaker gets the release's, by its path.
+# one by its name (wake_model_files), the VAD one by its path.
 RELEASE_WAKE_MODEL = "zakhar/zakhar_v31"
 RELEASE_VAD_MODEL = "microWakeWord/vad/vad.tflite"  # stock: esphome/micro-wake-word-models models/v2/vad.tflite
-RELEASE_STOP_MODEL = "microWakeWord/stop/stop.tflite"  # stock: kahrendt/microWakeWord release `stop`
 # Name prefix of the wake-word models uploaded through the panel (uploaded_wake_models_dir).
 UPLOADED_WAKE_PREFIX = "uploaded/"
 # The server keeps at most buffer_ms minus the play reserve (play_prime_ms) minus this much
@@ -69,9 +67,6 @@ CAPTURE_WAIT_MARGIN = 8.0
 # Panel control ids.
 WAKE_CUTOFF = "wake_probability_cutoff"
 VAD_CUTOFF = "vad_cutoff"
-ECHO_CANCEL = "echo_cancel"
-ECHO_CANCEL_MODE = "echo_cancel_mode"
-ECHO_CANCEL_FILTER = "echo_cancel_filter"
 PLAY_PRIME = "play_prime_ms"
 AUTO_VOLUME_THRESHOLD = "auto_volume_threshold"
 AUTO_VOLUME_GAIN = "auto_volume_gain"
@@ -81,17 +76,13 @@ SPEAKER_VOLUME = "speaker_volume"
 _CONFIG_FIELDS = {
     WAKE_CUTOFF: ("wake_cutoff", 0, 100, 0),
     VAD_CUTOFF: ("vad_cutoff", 0, 100, 0),
-    ECHO_CANCEL: ("echo_cancel", 0, 3, 0),
-    ECHO_CANCEL_MODE: ("echo_cancel_mode", 0, 3, 0),
-    ECHO_CANCEL_FILTER: ("echo_cancel_filter", 1, 8, 0),
     PLAY_PRIME: ("play_prime_ms", 0, 2000, 0),
     AUTO_VOLUME_THRESHOLD: ("auto_volume_threshold", -120, 0, 0),
     AUTO_VOLUME_GAIN: ("auto_volume_gain", 0, 10, 1),
 }
 # The device config's fields `config` carries. The auto volume threshold and gain are not among
 # them: the server turns them into `volume_boost` (_boost).
-_DEVICE_FIELDS = ("wake_cutoff", "vad_cutoff", "echo_cancel", "echo_cancel_mode", "echo_cancel_filter",
-                  "play_prime_ms", "auto_volume")
+_DEVICE_FIELDS = ("wake_cutoff", "vad_cutoff", "play_prime_ms", "auto_volume")
 # The `ambient` values a connection keeps: a minute of them, the device measuring every 15 s.
 AMBIENT_KEEP = 4
 # A device's boot time (the hello's whole-second uptime counted back from its arrival) moving
@@ -138,18 +129,13 @@ def _boost(cfg, ambient) -> int:
     return max(-100, min(100, boost))
 
 
-def _model_paths(cfg, speaker: bool) -> dict[str, tuple[str, str]]:
+def _model_paths(cfg) -> dict[str, tuple[str, str]]:
     """The model sent to a device per `model` kind, as (name, path): the configured one, else
-    the release's; the stop model is always the release's and goes only to a device with a
-    speaker (it listens only while the device plays). A wake value that names a model in
-    wake_model_files opens that model's file; any other value is the path of the file and its
-    own name."""
+    the release's. A wake value that names a model in wake_model_files opens that model's file;
+    any other value is the path of the file and its own name."""
     wake = cfg.wake_model or RELEASE_WAKE_MODEL
     vad = cfg.vad_model or RELEASE_VAD_MODEL
-    models = {"wake": (wake, wake_model_files().get(wake, wake)), "vad": (vad, vad)}
-    if speaker:
-        models["stop"] = (RELEASE_STOP_MODEL, RELEASE_STOP_MODEL)
-    return models
+    return {"wake": (wake, wake_model_files().get(wake, wake)), "vad": (vad, vad)}
 
 
 def uploaded_wake_models_dir() -> Path:
@@ -160,14 +146,14 @@ def uploaded_wake_models_dir() -> Path:
 
 def wake_model_files() -> dict[str, str]:
     """The wake-word models a device's wake_model can name, {name: path}: every .tflite under
-    microWakeWord/ except the VAD and stop models' directories, plus every .tflite directly in
+    microWakeWord/ except the VAD model's directory, plus every .tflite directly in
     uploaded_wake_models_dir(); the path is relative to the working directory (where
     send_model opens it). microWakeWord/esphome/<stem>.tflite is esphome/<stem>;
     microWakeWord/v<N>/…/zakhar.tflite is zakhar/zakhar_v<N> and any other <stem>.tflite
     under v<N> is zakhar/zakhar_v<N>_<stem>; an uploaded <stem>.tflite is uploaded/<stem>."""
     files = {}
     for p in Path("microWakeWord").rglob("*.tflite"):
-        if p.is_relative_to("microWakeWord/vad") or p.is_relative_to("microWakeWord/stop"):
+        if p.is_relative_to("microWakeWord/vad"):
             continue
         top = p.parts[1]
         if top == "esphome":
@@ -403,7 +389,7 @@ class Connection:
         return bool(self._streams)
 
     def drop_playback(self) -> None:
-        """Drop the playback (a wake the server takes, the stop word): every stream in
+        """Drop the playback (a wake the server takes): every stream in
         flight and every queued audio frame is dropped here, and `play_stop` drops on
         the device what it holds and a stream whose play_start is still on the wire."""
         self._out = deque(item for item in self._out if item[0] is None)
@@ -623,17 +609,6 @@ class Device:
             self.publish_event("wake", {"session": msg["session"], "word": msg.get("word"),
                                         "over_answer": over_answer})
             self.pipeline.on_wake(msg["session"], msg.get("word"), over_answer=over_answer)
-        elif kind == "stop":
-            in_session = conn.session_open
-            self.publish_event("stop", {"session": msg.get("session"), "in_session": in_session})
-            # Synchronously, as a wake: the dropped plays and the cancelled run. A cancelled
-            # run emits no RUN_END, so the session's terminal `state idle` goes out here.
-            conn.drop_playback()
-            if in_session:
-                self.pipeline.cancel_run()
-                conn.send_session({"type": "state", "value": "idle"})
-                conn.session_open = False
-            logger.info(f"{self.name}: stop word, playback{' and run' if in_session else ''} stopped")
         elif kind == "played":
             if msg.get("dropped"):
                 self.publish_event("played", {"dropped": True})
@@ -716,22 +691,14 @@ class Device:
         ]
 
     def controls(self) -> list[dict]:
-        """Panel controls: the cutoffs, the stop word's echo cancellation, the playback reserve
-        and the auto volume's threshold and gain (server config) and, on a connected device
-        with a speaker, its volume."""
+        """Panel controls: the cutoffs, the playback reserve and the auto volume's threshold and
+        gain (server config) and, on a connected device with a speaker, its volume."""
         cfg = self.cfg
         out = [
             {"id": WAKE_CUTOFF, "name": "Wake word cutoff", "value": cfg.wake_cutoff,
              "min": 0, "max": 100, "step": 1, "unit": "%"},
             {"id": VAD_CUTOFF, "name": "On-device VAD cutoff", "value": cfg.vad_cutoff,
              "min": 0, "max": 100, "step": 1, "unit": "%"},
-            {"id": ECHO_CANCEL, "name": "Stop word echo cancellation (0 off, 1..3 echo suppression)",
-             "value": cfg.echo_cancel, "min": 0, "max": 3, "step": 1, "unit": ""},
-            {"id": ECHO_CANCEL_MODE,
-             "name": "Stop word echo cancellation mode (0 SR low, 1 SR high, 2 FD low, 3 FD high)",
-             "value": cfg.echo_cancel_mode, "min": 0, "max": 3, "step": 1, "unit": ""},
-            {"id": ECHO_CANCEL_FILTER, "name": "Stop word echo cancellation filter length",
-             "value": cfg.echo_cancel_filter, "min": 1, "max": 8, "step": 1, "unit": ""},
             {"id": PLAY_PRIME, "name": "Playback reserve", "value": cfg.play_prime_ms,
              "min": 0, "max": 2000, "step": 50, "unit": "ms"},
             {"id": AUTO_VOLUME_THRESHOLD, "name": "Auto volume threshold",
@@ -803,13 +770,12 @@ class Device:
         if conn is None:
             raise RuntimeError(f"{self.name} is offline")
         logger.info(f"{self.name}: reloading the models")
-        sent = {kind: name for kind, (name, path) in _model_paths(self.cfg, conn.speaker).items()
+        sent = {kind: name for kind, (name, path) in _model_paths(self.cfg).items()
                 if conn.send_model(kind, name, path)}
         return {"device": self.name, "models": sent}
 
     def set_control(self, control_id: str, value: float) -> None:
-        """A cutoff, a stop word echo cancellation setting, the playback reserve or an auto
-        volume setting is written to the config (the reconfigure that follows sends `config` or
+        """A cutoff, the playback reserve or an auto volume setting is written to the config (the reconfigure that follows sends `config` or
         `volume_boost` to a connected device); the volume goes to the device.
         Raises LookupError (unknown control / no speaker) or RuntimeError (offline)."""
         config = _CONFIG_FIELDS.get(control_id)
@@ -1173,7 +1139,7 @@ class DeviceManager:
             logger.error(f"{name}: captures not taken up: {e}")
         # Off too: the device keeps collecting its log across a lost link until told.
         conn.send_log_stream(cfg.log)
-        for kind, (model, path) in _model_paths(cfg, conn.speaker).items():
+        for kind, (model, path) in _model_paths(cfg).items():
             conn.send_model(kind, model, path)
         logger.info(
             f"{name}: connected ({conn.fw}, speaker={conn.speaker}"
@@ -1208,7 +1174,7 @@ class DeviceManager:
             device.update_boost()
             if conn.log_on != cfg.log:
                 conn.send_log_stream(cfg.log)
-            for kind, (model, path) in _model_paths(cfg, conn.speaker).items():
+            for kind, (model, path) in _model_paths(cfg).items():
                 if conn.models.get(kind) != model:
                     conn.send_model(kind, model, path)
 

@@ -28,11 +28,8 @@ static const char *TAG = "wake_word";
 
 static const int SAMPLE_RATE = 16000;
 static const int FEATURES = 40;  // PREPROCESSOR_FEATURE_SIZE
-static const int WINDOW = 5;     // sliding_window_size, all three manifests
+static const int WINDOW = 5;     // sliding_window_size, both manifests
 static const int MIN_SLICES_BEFORE_DETECTION = 100;
-// The stop model runs from this many 10 ms slices of playback on: the stock firmware's
-// activate_stop_word_once enables it 1 s after the answer starts.
-static const int STOP_ARM_SLICES = 100;
 static const size_t VAR_ARENA_SIZE = 1024;  // STREAMING_MODEL_VARIABLE_ARENA_SIZE
 // Each model's tensor arena, allocated once and reused by every model loaded into it: well above
 // the manifests' tensor_arena_size (Zakhar v31 48000, the stock VAD 16772), so a retrained model
@@ -55,28 +52,16 @@ struct Model {
 };
 
 // The wake and VAD cutoffs come from the server's `config` (wake_word_set_cutoffs); until the first
-// one (s_cutoffs_set) neither the wake word nor the stop word, which the VAD gates too, is detected.
+// one (s_cutoffs_set) the wake word is not detected.
 static Model s_wake(0);
 static Model s_vad(0);
 static std::atomic<bool> s_cutoffs_set{false};
-// The stop model's cutoff is compiled in, below stop.json's probability_cutoff 0.5: over the
-// speaker's own reply at volume 79 % an ordinary «стоп» scored 0.51-0.84 on the window mean, while
-// long replies without one stayed at or below 0.18. trunc(0.35 * 255).
-static Model s_stop(89);
 
 static FrontendState s_fs;
-static FrontendState s_fs_stop;  // the stop model's own input, when wake_word_feed() gets one
 // Held by wake_word_feed() while it runs the models and by wake_word_load() while it swaps one.
 static SemaphoreHandle_t s_lock;
 static std::atomic<uint8_t> s_peak{0};  // the highest wake probability since wake_word_take_peak()
 static std::atomic<void (*)(void)> s_detect_cb{nullptr};
-static std::atomic<bool (*)(void)> s_playing{nullptr};
-static std::atomic<void (*)(void)> s_stop_cb{nullptr};
-// Under s_lock: the consecutive slices fed while playing, whether the stop model runs, and the
-// stop model's highest window sum since it was armed.
-static int s_playing_slices = 0;
-static bool s_stop_armed = false;
-static uint32_t s_stop_peak = 0;
 
 struct Lock {
   Lock() { xSemaphoreTake(s_lock, portMAX_DELAY); }
@@ -172,31 +157,6 @@ static bool next_slice(FrontendState *fs, const int16_t **samples, size_t *n, in
   return false;
 }
 
-// Under s_lock: one slice into the stop model while it is armed, and its detection by the same
-// rule as "Zakhar" in wake_word_feed().
-static void stop_feed(const int8_t *features) {
-  if (!s_stop_armed || s_stop.interp == nullptr) return;
-  if (!model_feed(s_stop, features)) {
-    ESP_LOGW(TAG, "invoke failed");
-    return;
-  }
-  s_stop_peak = std::max(s_stop_peak, window_sum(s_stop));
-  if (s_vad.interp == nullptr || !s_cutoffs_set.load(std::memory_order_acquire) || !s_stop.fresh ||
-      s_stop.ignore < 0) {
-    return;
-  }
-  s_stop.fresh = false;
-  if (!model_above_cutoff(s_stop)) return;
-  if (!model_above_cutoff(s_vad)) {
-    ESP_LOGI(TAG, "\"Stop\" blocked by VAD");
-    return;
-  }
-  ESP_LOGI(TAG, "\"Stop\" detected");
-  if (void (*cb)(void) = s_stop_cb.load(std::memory_order_acquire)) cb();
-  memset(s_stop.probs, 0, sizeof(s_stop.probs));
-  s_stop.ignore = -MIN_SLICES_BEFORE_DETECTION;
-}
-
 extern "C" bool wake_word_init(void) {
   FrontendConfig fc;
   fc.window.size_ms = 30;
@@ -215,9 +175,8 @@ extern "C" bool wake_word_init(void) {
   fc.log_scale.enable_log = 1;
   fc.log_scale.scale_shift = 6;
   s_lock = xSemaphoreCreateMutex();
-  if (s_lock == nullptr || !FrontendPopulateState(&fc, &s_fs, SAMPLE_RATE) ||
-      !FrontendPopulateState(&fc, &s_fs_stop, SAMPLE_RATE) || !model_init(s_wake) || !model_init(s_vad) ||
-      !model_init(s_stop)) {
+  if (s_lock == nullptr || !FrontendPopulateState(&fc, &s_fs, SAMPLE_RATE) || !model_init(s_wake) ||
+      !model_init(s_vad)) {
     ESP_LOGE(TAG, "frontend/arena init failed");
     return false;
   }
@@ -226,8 +185,8 @@ extern "C" bool wake_word_init(void) {
 }
 
 extern "C" bool wake_word_load(wake_word_model_t kind, uint8_t *data, size_t size) {
-  Model &m = kind == WAKE_WORD_MODEL_WAKE ? s_wake : kind == WAKE_WORD_MODEL_VAD ? s_vad : s_stop;
-  const char *name = kind == WAKE_WORD_MODEL_WAKE ? "wake" : kind == WAKE_WORD_MODEL_VAD ? "VAD" : "stop";
+  Model &m = kind == WAKE_WORD_MODEL_WAKE ? s_wake : s_vad;
+  const char *name = kind == WAKE_WORD_MODEL_WAKE ? "wake" : "VAD";
   bool ok;
   size_t used = 0;
   {
@@ -242,38 +201,16 @@ extern "C" bool wake_word_load(wake_word_model_t kind, uint8_t *data, size_t siz
   return ok;
 }
 
-extern "C" void wake_word_feed(const int16_t *wake, const int16_t *stop, size_t n) {
-  // Asked before s_lock is taken: it takes the playback owner's lock.
-  bool (*playing_cb)(void) = s_playing.load(std::memory_order_acquire);
-  const bool playing = playing_cb != nullptr && playing_cb();
+extern "C" void wake_word_feed(const int16_t *samples, size_t n) {
   int8_t features[FEATURES];
-  const int16_t *samples = wake;
   size_t left = n;
   while (next_slice(&s_fs, &samples, &left, features)) {
     Lock lock;
-    if (!playing) {
-      if (s_stop_armed) {
-        ESP_LOGI(TAG, "\"Stop\" off with the playback: its highest window mean %.2f, cutoff %.2f",
-                 s_stop_peak / (WINDOW * 255.0), s_stop.cutoff.load(std::memory_order_relaxed) / 255.0);
-      }
-      s_playing_slices = 0;
-      s_stop_armed = false;
-    } else if (!s_stop_armed && ++s_playing_slices >= STOP_ARM_SLICES) {
-      // As ESPHome's enable_model (reset_probabilities): the stop model starts with an empty
-      // window and the cool-off.
-      s_stop_armed = true;
-      memset(s_stop.probs, 0, sizeof(s_stop.probs));
-      s_stop.idx = 0;
-      s_stop.fresh = false;
-      s_stop.ignore = -MIN_SLICES_BEFORE_DETECTION;
-      s_stop_peak = 0;
-    }
     const bool wake_on = s_wake.interp != nullptr, vad = s_vad.interp != nullptr;
     if ((wake_on && !model_feed(s_wake, features)) || (vad && !model_feed(s_vad, features))) {
       ESP_LOGW(TAG, "invoke failed");
       continue;
     }
-    if (stop == nullptr) stop_feed(features);
     if (!wake_on || !vad || !s_cutoffs_set.load(std::memory_order_acquire)) continue;
     // As WakeWordModel::determine_detected: during the cool-off the probability stays unprocessed,
     // so the window is checked on the very slice the cool-off ends.
@@ -289,14 +226,6 @@ extern "C" void wake_word_feed(const int16_t *wake, const int16_t *stop, size_t 
     memset(s_wake.probs, 0, sizeof(s_wake.probs));
     s_wake.ignore = -MIN_SLICES_BEFORE_DETECTION;
   }
-  // The stop input's own frontend runs on every sample given, armed or not, so its noise
-  // estimate is current when the model is armed.
-  samples = stop;
-  left = stop != nullptr ? n : 0;
-  while (next_slice(&s_fs_stop, &samples, &left, features)) {
-    Lock lock;
-    stop_feed(features);
-  }
 }
 
 extern "C" void wake_word_set_cutoffs(uint8_t wake, uint8_t vad) {
@@ -308,8 +237,3 @@ extern "C" void wake_word_set_cutoffs(uint8_t wake, uint8_t vad) {
 extern "C" uint8_t wake_word_take_peak(void) { return s_peak.exchange(0, std::memory_order_relaxed); }
 
 extern "C" void wake_word_set_detect_cb(void (*cb)(void)) { s_detect_cb.store(cb, std::memory_order_release); }
-
-extern "C" void wake_word_set_stop(bool (*playing)(void), void (*cb)(void)) {
-  s_playing.store(playing, std::memory_order_release);
-  s_stop_cb.store(cb, std::memory_order_release);
-}

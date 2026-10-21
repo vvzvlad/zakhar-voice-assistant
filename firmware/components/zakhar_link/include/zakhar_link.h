@@ -27,7 +27,6 @@ typedef enum {
 typedef enum {
     ZL_MODEL_WAKE,
     ZL_MODEL_VAD,
-    ZL_MODEL_STOP,
 } zl_model_t;
 
 typedef struct {
@@ -83,10 +82,6 @@ typedef struct {
     // model loaded; the answer goes to the server as `model_loaded`. Runs on the client's task
     // and, unlike the others, may take a few milliseconds there.
     bool (*on_model)(zl_model_t kind, uint8_t *data, size_t size);
-    // The `config` echo cancellation: level (echo_cancel) 0 off, 1..3 the echo suppression from mild
-    // to strongest; mode (echo_cancel_mode) 0..3 SR low cost, SR high performance, FD low cost, FD
-    // high performance; filter (echo_cancel_filter) 1..8, the filter length.
-    void (*on_echo_cancel)(int level, int mode, int filter);
     // The `config` auto_volume: the device measures the room's noise and reports it with
     // zl_report_ambient() (true) or not (false).
     void (*on_auto_volume)(bool on);
@@ -133,10 +128,6 @@ size_t zl_play_read(int16_t *out, size_t max);
 // Whether a stream is in the playback buffer (from its play_start until its last sample is out);
 // false on a device without a speaker and before zl_start(). Takes the component's lock briefly.
 bool zl_playing(void);
-
-// The stop word: only notifies the component task, which flushes the playback and sends `stop`
-// (with the open session's number), so it is safe in the detection callback. After zl_start().
-void zl_stop(void);
 
 #ifdef __cplusplus
 }

@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef } from "react";
-import { Field, StatusPill, Modal, Stepper, Select, Slider, Toggle, Seg, ScaleSeg } from "./primitives.jsx";
+import { Field, StatusPill, Modal, Stepper, Select, Slider, Toggle, Seg } from "./primitives.jsx";
 import DeviceLog from "./DeviceLog.jsx";
 import { useAppData } from "../appData.jsx";
 import {
@@ -8,15 +8,15 @@ import {
 } from "../api.js";
 import { deviceVersion, fwVersion } from "../format.js";
 
-const DEVICE_TABS = ["General", "Wake word", "Sound", "Stop word", "Log"];
+const DEVICE_TABS = ["General", "Wake word", "Sound", "Log"];
 
 // Add mode (`onSave({name, enabled})`) asks for a device id. Edit mode (`device`, the saved id)
 // shows the device's status, its id — what the firmware sends in hello — and its versions above
-// five tabs: General (the display label, the enabled switch and any live control no other tab
+// four tabs: General (the display label, the enabled switch and any live control no other tab
 // places), Wake word (the wake word model, the live wake probability, the cutoffs, sample
 // capture), Sound (the speaker volume, a test phrase, the auto volume switch and, while it is on,
-// its settings and readings, the reply compression switch, the playback reserve), Stop word (the
-// echo cancellation) and Log (the device log switch and the log the server keeps). `onSave` gets
+// its settings and readings, the reply compression switch, the playback reserve) and Log (the
+// device log switch and the log the server keeps). `onSave` gets
 // only the changed ones of {label, enabled, wake_model, log, auto_volume, compress_replies}
 // (wake_model "" = the release default; an uploaded .tflite becomes the selected model), whichever
 // tabs they were edited on; a tab holding such a change carries a dot. The live controls are
@@ -163,10 +163,6 @@ export default function DeviceModal({ onSave, onClose, onDelete, title, device, 
         </Field>
         {controls("play_prime_ms")}
       </div>
-      <div hidden={tab !== "Stop word"}>
-        {loading}
-        {controls("echo_cancel", "echo_cancel_mode", "echo_cancel_filter")}
-      </div>
       <div hidden={tab !== "Log"} className="z-logpane">
         {/* The server keeps the log in data/device_logs/<device id>/; off, the device sends
             nothing. No reflash needed. */}
@@ -266,42 +262,22 @@ function CaptureControl({ device, online }) {
 }
 
 // Short per-control hint shown under the control's label, keyed by control id.
-//   echo_cancel: off, the stop word hears the wake word's input; 1..3 add the residual
-//     echo suppression, which only the FD modes have.
 //   play_prime_ms: the reserve is held again after the stream runs dry.
 //   auto_volume_threshold: above it the reply is louder than the dial, below it quieter.
 const CONTROL_HINTS = {
   wake_probability_cutoff: "Higher means fewer false wakes but more missed ones.",
   vad_cutoff: "Lower drops fewer wakes but lets a little more non-speech through.",
-  echo_cancel: "Off, or echo suppression from mild to strongest (FD modes only).",
-  echo_cancel_mode: "Low is cheaper, high cancels better; FD also suppresses echo.",
-  echo_cancel_filter: "From 1 to 8; a change briefly restarts echo cancellation.",
   play_prime_ms: "Buffer before playback: fewer stutters, but a later reply.",
   auto_volume_threshold: "Room noise at which the reply plays at the dial's volume.",
   auto_volume_gain: "Volume % per dB of noise away from the threshold; 2.5 %/dB moves the reply 1 dB per dB.",
 };
 
-// The live controls DeviceModal places on its Wake word, Sound and Stop word tabs; any other
-// control the server lists shows on General.
+// The live controls DeviceModal places on its Wake word and Sound tabs; any other control the
+// server lists shows on General.
 const PLACED_CONTROLS = new Set([
   "wake_probability_cutoff", "vad_cutoff",
   "speaker_volume", "auto_volume_threshold", "auto_volume_gain", "play_prime_ms",
-  "echo_cancel", "echo_cancel_mode", "echo_cancel_filter",
 ]);
-
-// Labels of the controls on the Stop word tab, whose server names repeat the tab's subject;
-// every other control shows the server's name.
-const CONTROL_LABELS = {
-  echo_cancel: "Echo cancellation",
-  echo_cancel_mode: "Mode",
-  echo_cancel_filter: "Filter length",
-};
-
-// Controls shown as a segmented scale: the button labels, the stored value is the button's index.
-const CONTROL_SCALES = {
-  echo_cancel: ["Off", "1", "2", "3"],
-  echo_cancel_mode: ["SR low", "SR high", "FD low", "FD high"],
-};
 
 // A value with its unit: "%" sticks to the number, any other unit follows a space.
 const withUnit = (text, unit) => (!unit || unit === "%" ? `${text}${unit || ""}` : `${text} ${unit}`);
@@ -314,26 +290,22 @@ function Stat({ label, title, children }) {
   </div>;
 }
 
-// One live control: a ScaleSeg for the ids in CONTROL_SCALES, else a Slider over the range and
-// step the server gives it; its label carries a "live" mark: it is written at once, not by Save.
+// One live control: a Slider over the range and step the server gives it; its label carries a
+// "live" mark: it is written at once, not by Save.
 function ControlField({ control: c, value, onChange }) {
-  const scale = CONTROL_SCALES[c.id];
-  const caption = <>{CONTROL_LABELS[c.id] || c.name}<span className="z-live" title="Applies at once, without Save">live</span></>;
+  const caption = <>{c.name}<span className="z-live" title="Applies at once, without Save">live</span></>;
   return <Field row label={caption} hint={CONTROL_HINTS[c.id]}>
     <div className="z-rowctl">
-      {scale
-        ? <ScaleSeg options={scale.map((label, i) => ({ value: i, label }))} value={value} onChange={onChange} />
-        : <Slider min={c.min} max={c.max} step={c.step || 1} value={value} onChange={onChange}
-            fmt={(val) => withUnit(c.step < 1 ? Number(val).toFixed(1) : Math.round(val), c.unit)} />}
+      <Slider min={c.min} max={c.max} step={c.step || 1} value={value} onChange={onChange}
+        fmt={(val) => withUnit(c.step < 1 ? Number(val).toFixed(1) : Math.round(val), c.unit)} />
     </div>
   </Field>;
 }
 
 // The per-device live state of the Edit device dialog, used once by DeviceModal so it keeps
 // polling while the tabs switch: `snap` is the last snapshot {controls, readings, versions}, null
-// before the first. The controls are the wake-word probability cutoff, the VAD cutoff, the stop
-// word's echo cancellation, the playback reserve, the auto volume's threshold and gain (all from
-// the server config) and the speaker volume (read from the connected device, listed only while a
+// before the first. The controls are the wake-word probability cutoff, the VAD cutoff, the
+// playback reserve, the auto volume's threshold and gain (all from the server config) and the speaker volume (read from the connected device, listed only while a
 // device with a speaker is connected); the readings are the auto volume's (the room's noise, the
 // boost), each null before its first value; the versions are the connected firmware's. `write`
 // sends a control's new value debounced, `valueOf` is the value to show, `err` the last failed
@@ -380,8 +352,7 @@ function useDeviceControls(device) {
     if (timers.current[c.id]) clearTimeout(timers.current[c.id]);
     timers.current[c.id] = setTimeout(() => {
       // `device` is a stable prop for the modal's lifetime, so no stale-closure risk.
-      // A cutoff, an echo cancellation setting, the playback reserve or an auto volume setting is
-      // stored in the server config: refresh the config snapshot so a later save of the device
+      // A cutoff, the playback reserve or an auto volume setting is stored in the server config: refresh the config snapshot so a later save of the device
       // list carries the new value.
       setDeviceControl(device, c.id, v)
         .then((snap) => { applySnapshot(snap); setErr(null); return refreshConfig(); })

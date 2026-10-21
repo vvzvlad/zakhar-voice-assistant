@@ -295,8 +295,7 @@ async def test_a_session_publishes_its_events_and_its_run(srv, broker, monkeypat
     await dev.send(type="ambient", value=-50.5)
     await dev.send(type="ambient", value=None)
     await dev.send(type="stats", rssi=-61, cpu0=12, temp=41.5, heap=123456, wifi_reason=201)
-    await dev.send(type="stop")
-    await until(lambda: broker.payloads("devices/kitchen/event/stop"))
+    await until(lambda: broker.payloads("devices/kitchen/stats"))
     assert broker.payloads("devices/kitchen/event/wake") == [
         {"session": 17, "word": "Захар", "over_answer": False}]
     assert broker.payloads("devices/kitchen/event/played") == [{"dry": 0, "gap_ms": 0}]
@@ -305,7 +304,6 @@ async def test_a_session_publishes_its_events_and_its_run(srv, broker, monkeypat
         {"value": -50.5, "zeros": False}, {"zeros": True}]
     assert broker.payloads("devices/kitchen/stats") == [
         {"rssi": -61, "cpu0": 12, "temp": 41.5, "heap": 123456, "wifi_reason": 201}]
-    assert broker.payloads("devices/kitchen/event/stop") == [{"in_session": False}]
     [run] = broker.payloads("devices/kitchen/run/tool")
     assert (run["run_id"], run["stt_text"], run["llm_text"]) == (1, "Захар, включи свет", "готово")
     assert (run["play_dry"], run["play_gap_ms"]) == (0, 0)

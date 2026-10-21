@@ -39,7 +39,6 @@ zakhar/devices/<name>/event/<kind> — a device event, published the moment it h
     disconnected — the live connection closed: code — the WebSocket close code; error —
         the socket's exception, when there was one; connected_s — how long it was connected.
     wake — session; word; over_answer — it came over a running answer or an open session.
-    stop — the stop word: session (absent outside a session); in_session (10/0).
     volume — value: the speaker volume the device reports, percent.
     ambient — value: the noise the device measured, dBFS; zeros (10/0) — the microphone
         read only zeros, which is no level (value absent).

@@ -537,9 +537,9 @@ async def test_on_disconnect_cancels_pending_verify(tmp_path, monkeypatch):
     assert store.records == []
 
 
-@pytest.mark.parametrize("abandon", ["disconnect", "stop"])
+@pytest.mark.parametrize("abandon", ["disconnect", "cancel"])
 async def test_an_abandoned_run_takes_no_audio_after_a_rejected_wake(tmp_path, monkeypatch, abandon):
-    # A run cut off mid-phrase (the device dropped off, or a stop word cancelled it)
+    # A run cut off mid-phrase (the device dropped off, or the run was cancelled)
     # never answers: the frames that still arrive after a later wake is rejected do
     # not complete its phrase and run the old command.
     patch_llm(monkeypatch, reply="готово")

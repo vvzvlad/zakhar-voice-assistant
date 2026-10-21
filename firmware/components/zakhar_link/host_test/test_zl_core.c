@@ -28,9 +28,7 @@ static const struct {
     const char *name, *json;
     int decoded;
 } CONFIG[] = {
-    {"wake_cutoff", "80", 204},   {"vad_cutoff", "30", 76},         {"echo_cancel", "2", 2},
-    {"echo_cancel_mode", "3", 3}, {"echo_cancel_filter", "6", 6},   {"play_prime_ms", "450", 450},
-    {"auto_volume", "true", 1},
+    {"wake_cutoff", "80", 204}, {"vad_cutoff", "30", 76}, {"play_prime_ms", "450", 450}, {"auto_volume", "true", 1},
 };
 #define CONFIG_FIELDS (sizeof CONFIG / sizeof CONFIG[0])
 
@@ -52,13 +50,10 @@ static bool decode_config(const char *name, const char *value, zl_msg_t *m)
 // The decoded value of the `config` field `name`.
 static int config_value(const zl_msg_t *m, const char *name)
 {
-    return strcmp(name, "wake_cutoff") == 0          ? m->wake
-           : strcmp(name, "vad_cutoff") == 0         ? m->vad
-           : strcmp(name, "echo_cancel") == 0        ? m->echo_cancel
-           : strcmp(name, "echo_cancel_mode") == 0   ? m->echo_mode
-           : strcmp(name, "echo_cancel_filter") == 0 ? m->echo_filter
-           : strcmp(name, "play_prime_ms") == 0      ? m->play_prime_ms
-                                                     : m->auto_volume;
+    return strcmp(name, "wake_cutoff") == 0     ? m->wake
+           : strcmp(name, "vad_cutoff") == 0    ? m->vad
+           : strcmp(name, "play_prime_ms") == 0 ? m->play_prime_ms
+                                                : m->auto_volume;
 }
 
 static void test_decode(void)
@@ -77,13 +72,10 @@ static void test_decode(void)
         int want;
     } one[] = {
         {"wake_cutoff", "100", 255},       {"wake_cutoff", "101", -1},        {"vad_cutoff", "0", 0},
-        {"vad_cutoff", "-1", -1},          {"echo_cancel", "0", 0},           {"echo_cancel", "3", 3},
-        {"echo_cancel", "4", -1},          {"echo_cancel", "1.5", -1},        {"echo_cancel_mode", "0", 0},
-        {"echo_cancel_mode", "3", 3},      {"echo_cancel_mode", "-1", -1},    {"echo_cancel_mode", "\"2\"", -1},
-        {"echo_cancel_filter", "1", 1},    {"echo_cancel_filter", "8", 8},    {"echo_cancel_filter", "0", -1},
-        {"echo_cancel_filter", "9", -1},   {"play_prime_ms", "0", 0},         {"play_prime_ms", "2000", 2000},
+        {"vad_cutoff", "-1", -1},          {"play_prime_ms", "0", 0},         {"play_prime_ms", "2000", 2000},
         {"play_prime_ms", "2001", -1},     {"play_prime_ms", "-50", -1},      {"play_prime_ms", "450.5", -1},
-        {"auto_volume", "false", 0},       {"auto_volume", "1", -1},          {"auto_volume", "null", -1},
+        {"play_prime_ms", "\"450\"", -1},  {"auto_volume", "false", 0},       {"auto_volume", "1", -1},
+        {"auto_volume", "null", -1},
     };
     for (size_t i = 0; i < sizeof one / sizeof one[0]; i++) {
         const bool ok = decode_config(one[i].name, one[i].value, &m);
@@ -170,9 +162,6 @@ static void test_decode(void)
     assert(decode("{\"type\": \"model\", \"kind\": \"vad\", \"name\": \"vad.tflite\", \"size\": 1}", &m));
     assert(m.model == ZL_MODEL_VAD);
     zl_msg_free(&m);
-    assert(decode("{\"type\": \"model\", \"kind\": \"stop\", \"name\": \"microWakeWord/stop/stop.tflite\", \"size\": 1}", &m));
-    assert(m.model == ZL_MODEL_STOP && strcmp(m.name, "microWakeWord/stop/stop.tflite") == 0);
-    zl_msg_free(&m);
     assert(!decode("{\"type\": \"model\", \"kind\": \"vad\", \"name\": \"vad.tflite\", \"size\": 0}", &m));
     assert(!decode("{\"type\": \"model\", \"kind\": \"stt\", \"name\": \"x\", \"size\": 5}", &m));
     assert(!decode("{\"type\": \"model\", \"kind\": \"wake\", \"size\": 5}", &m));
@@ -226,8 +215,6 @@ static void test_encode(void)
                "{\"type\":\"model_loaded\",\"kind\":\"wake\",\"name\":\"zakhar.tflite\",\"ok\":true}");
     encoded_is(zl_encode_model_loaded(ZL_MODEL_VAD, "vad.tflite", false),
                "{\"type\":\"model_loaded\",\"kind\":\"vad\",\"name\":\"vad.tflite\",\"ok\":false}");
-    encoded_is(zl_encode_stop(true, 17), "{\"type\":\"stop\",\"session\":17}");
-    encoded_is(zl_encode_stop(false, 17), "{\"type\":\"stop\"}");  // outside a session
     // Only `len` bytes go out; quotes, newlines and the colour escapes are JSON-escaped.
     const char *lines = "I (12) zakhar_link: \"капча\"\n\033[0;33mW (13) x: y\033[0m\nnot yet";
     encoded_is(zl_encode_log(lines, strlen(lines) - strlen("not yet")),
