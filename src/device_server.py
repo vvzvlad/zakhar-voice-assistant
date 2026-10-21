@@ -97,6 +97,9 @@ AMBIENT_KEEP = 4
 # A device's boot time (the hello's whole-second uptime counted back from its arrival) moving
 # later than this between two of its connections is a reboot, not the jitter of a reconnect.
 REBOOT_MARGIN_S = 10
+# A `stats` whose largest free block of internal RAM is under this many bytes is logged as a
+# warning: the speaker's link needs a 6 KB internal block for its WebSocket task at every connect.
+LOW_HEAP_BLOCK = 8192
 
 # StageEvents that map onto a plain `state` message; TTS_START, STT_END and ERROR
 # carry text and are handled in Device._send_event, the rest send nothing.
@@ -644,6 +647,10 @@ class Device:
         elif kind == "stats":
             telemetry.publish(self.rt, f"devices/{self.name}/stats",
                               {k: v for k, v in msg.items() if k != "type"})
+            block = msg.get("heap_block")
+            if isinstance(block, int) and block < LOW_HEAP_BLOCK:
+                logger.warning(f"{self.name}: largest free internal RAM block {block} B, under "
+                               f"{LOW_HEAP_BLOCK} B: the next connect may not get its 6 KB")
         elif kind == "ambient":
             value = msg.get("value")
             # A microphone reading all zeros measures -inf, which arrives as null: not a level.

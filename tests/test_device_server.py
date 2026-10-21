@@ -1284,6 +1284,22 @@ async def test_controls(srv):
     await until(lambda: srv.device().wake_prob()["value"] == 42)
 
 
+async def test_stats_with_a_small_largest_block_is_warned(srv):
+    from loguru import logger
+    warnings = []
+    sink = logger.add(warnings.append, level="WARNING")
+    try:
+        dev = await srv.connect()
+        await dev.recv()  # config
+        # Handled in order: once the second warns, the first has been handled.
+        await dev.send(type="stats", heap=20000, heap_block=device_server.LOW_HEAP_BLOCK)
+        await dev.send(type="stats", heap=9000, heap_block=3328)
+        await until(lambda: warnings)
+    finally:
+        logger.remove(sink)
+    assert len(warnings) == 1 and "3328 B" in warnings[0]
+
+
 async def test_auto_volume_moves_the_volume_by_the_median_noise_against_the_threshold(srv):
     dev = await srv.connect()
     await dev.recv()  # config
