@@ -231,9 +231,9 @@ class PanelServer:
         #   takes one reply of the ZeroClaw assistant (AssistantTasks.on_reply). None ->
         #   POST /api/assistant-tasks/reply returns 503.
         self.assistant_task_reply = assistant_task_reply
-        # reload_status: optional zero-arg callable -> list[str] of backend categories
-        #   currently rebuilding (a model load is in flight); None -> the snapshot
-        #   reports an empty list.
+        # reload_status: optional zero-arg callable -> list[str] of what is currently
+        #   rebuilding (a backend category whose model load is in flight, or "tools" while
+        #   the tool sources connect); None -> the snapshot reports an empty list.
         self.reload_status = reload_status
         # Period (seconds) of the WS system heartbeat used as the panel liveness signal.
         self.heartbeat_interval = heartbeat_interval

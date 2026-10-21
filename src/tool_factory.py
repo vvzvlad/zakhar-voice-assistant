@@ -1,7 +1,7 @@
 """Build the ToolHub source list from the current config.
 
-Reused at boot (app.py) and on hot-reload (reconfig). Keeps the source-construction
-logic in one place so a runtime rebuild produces exactly the same set as boot.
+Called by the Reconfigurator for the boot connect (request_initial_tools_load) and for
+every live tool-config change, so both build the set the same way.
 """
 
 from src.builtin_mcp.openweathermap import build_openweathermap_server

@@ -25,7 +25,6 @@ from src.run_events import RunEventsHub
 from src.runs_store import RunsStore
 from src.runtime import Runtime
 from src.telemetry import Telemetry
-from src.tool_factory import build_sources
 from src.tool_hub import ToolHub
 from src.version import __version__
 
@@ -117,8 +116,8 @@ async def main() -> None:
     # Built-in reminders MCP (one-shot voice reminders). The scheduler needs the device
     # manager to deliver; the manager needs the hub that holds this source — so the
     # deliver callback is late-bound after the manager is constructed (below). The
-    # scheduler is built here (before build_sources) because it gates the reminders
-    # source; build_sources omits reminders when scheduler is None.
+    # scheduler is in place before the reconfig job that builds the tool sources, since
+    # it gates the reminders source: build_sources omits reminders when it is None.
     reminders_store = None
     scheduler = None
     if core.reminders.enabled:
@@ -128,23 +127,17 @@ async def main() -> None:
 
     # Jobs handed off to the ZeroClaw assistant. Always built: the panel takes
     # its replies even while the tool source is off. The service reads its config and the
-    # speakers through `rt`, which is late-bound below (the tool source built off it
-    # exists before the Runtime does).
+    # speakers through `rt`, which is late-bound below.
     assistant_tasks_store = AssistantTasksStore(os.path.join(config_store.DATA_DIR, "assistant_tasks.db"))
     assistant_tasks = AssistantTasks(assistant_tasks_store)
 
     # Multi-source tool hub: an arbitrary list of external MCP servers (one
-    # HttpMcpSource each) plus in-process built-in MCP servers (openweathermap first).
-    # The source list is built by the shared build_sources() factory so boot and
-    # hot-reload produce exactly the same set. Built only here, in the same task as
-    # stop(), per anyio cancel-scope rules. A source failing to start is handled
-    # gracefully inside ToolHub.start(). The weather tool is gated on an OWM api key;
-    # built-in OpenWeatherMap uses the proxied client_ext for its OWM call. Each
-    # external server's source id is its (unique) name.
-    # The volume tool reads the manager at call time: `rt` is assigned further down.
-    sources = build_sources(core, client_ext, scheduler, assistant_tasks, lambda: rt.manager)
-    hub = ToolHub(sources)
-    await hub.start()
+    # HttpMcpSource each) plus in-process built-in MCP servers. It starts empty:
+    # connecting the external servers can take seconds, so the sources are built and
+    # connected in the background by the reconfig drain task once the device server and
+    # the panel are up (request_initial_tools_load below), the same way a live tool-config
+    # change rebuilds them. Until then a request gets no tools.
+    hub = ToolHub([])
 
     # Mutable runtime holder shared by reference across all pipelines. Live config
     # is read THROUGH it (via svc); backends/subsystems are swappable attributes for
@@ -178,10 +171,6 @@ async def main() -> None:
     reconfig_queue: asyncio.Queue = asyncio.Queue()
     reconf = Reconfigurator(rt, deps, reconfig_queue)
     svc.on_change(reconf.on_config_change)
-    # Prepare the chain handlers for the tool catalog in the background (simple-nlu
-    # trains its model on it), so neither boot nor the first request waits for it.
-    # The reference keeps the task from being garbage-collected.
-    warm_task = asyncio.create_task(reconf.warm_handlers())
 
     # Late-bind delivery now that the manager exists (resolves the circular dependency).
     if scheduler is not None:
@@ -246,10 +235,13 @@ async def main() -> None:
         # loads stay off the panel request task and off the event loop (to_thread).
         reconfig_task = asyncio.create_task(reconf.run_loop())
         # Now that the panel is serving and the drain loop is running, start the deferred
-        # accent (stress) model load in the background. It rebuilds via the hot-reload
-        # path: marks reloading() (the panel shows "Loading… Stress") and swaps the real
-        # backend into the runtime when ready; the stage is skipped until then.
+        # stress and wakeword model loads and the tool sources' connect in the background.
+        # Each goes through the hot-reload path: marks reloading() (the panel shows
+        # "Loading… Stress" / "Loading… Tools") and swaps the result into the runtime when
+        # ready; until then the stage is skipped and the hub serves no tools. The two
+        # requests drain as one job, which loads the models before it connects the tools.
         reconf.request_initial_load({"stress", "wakeword"})
+        reconf.request_initial_tools_load()
         # There is no in-app restart trigger anymore: block on a never-fired event
         # so the process runs until cancelled by a signal (SIGINT/SIGTERM).
         await asyncio.Event().wait()

@@ -938,6 +938,34 @@ async def test_apply_job_rebuild_tools_failure_logs_and_continues(monkeypatch):
     await reconf.apply_job({"core.mcp_servers"})
 
     assert hub.set_calls == [["x"]]
+    assert reconf.reloading() == []
+
+
+@pytest.mark.asyncio
+async def test_request_initial_tools_load_connects_tools_marked_reloading(monkeypatch):
+    # The warm-up job enqueued by request_initial_tools_load(), when drained via
+    # apply_job, swaps the built sources into the hub; reloading() reports "tools" while
+    # the sources connect and is empty once they are in.
+    monkeypatch.setattr("src.reconfig.build_sources", lambda c, h, s, t, m: ["src"])
+    seen = []
+
+    class _Hub(_FakeHub):
+        async def set_sources(self, sources):
+            seen.append(reconf.reloading())
+            await super().set_sources(sources)
+
+    hub = _Hub()
+    rt = types.SimpleNamespace(hub=hub, core=types.SimpleNamespace(), scheduler=None,
+                               assistant_tasks=None, llm_backends={})
+    deps = types.SimpleNamespace(http_cloud="cloud-client", tts_timeout=30)
+    reconf = Reconfigurator(rt, deps, asyncio.Queue())
+
+    reconf.request_initial_tools_load()
+    await reconf.apply_job(reconf.queue.get_nowait())
+
+    assert hub.set_calls == [["src"]]
+    assert seen == [["tools"]]
+    assert reconf.reloading() == []
 
 
 # --- apply_job (Tier 3b: external HTTP client rebuild) -----------------------

@@ -4,8 +4,9 @@ import { useAppData } from "../appData.jsx";
 import { fmtUptime } from "../format.js";
 import { STAGES } from "../stageMeta.js";
 
-// Map a backend category id to its short stage name for the loading badge.
-const RELOAD_LABELS = Object.fromEntries(STAGES.map((s) => [s.cat, s.name]));
+// Map a backend category id to its short stage name for the loading badge. "tools"
+// (the tool sources connecting) is not a pipeline stage, so it gets its own label.
+const RELOAD_LABELS = { ...Object.fromEntries(STAGES.map((s) => [s.cat, s.name])), tools: "Tools" };
 
 // `onMenu` opens the sidebar; its button shows only on a narrow screen (styles.css).
 export function Topbar({ active, onMenu }) {
@@ -25,7 +26,8 @@ export function Topbar({ active, onMenu }) {
     <div className="z-bcrumb"><s>{grp ? grp.grp + " / " : ""}</s>{TITLES[active] || active}</div>
     <div className="sp" />
     {/* Global loading badge: shown whenever a backend category is being hot-reloaded
-        (model load in flight), surfaced via the system heartbeat's `reloading` list. */}
+        (model load in flight) or the tool sources are connecting, surfaced via the
+        system heartbeat's `reloading` list. */}
     {reloading.length > 0 && (
       <span className="z-env loading" title={`Loading: ${reloadingNames}`}>
         <span className="z-spin" />

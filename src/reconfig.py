@@ -160,9 +160,10 @@ class Reconfigurator:
         self._reloading: set[str] = set()   # categories currently rebuilding
 
     def reloading(self) -> list[str]:
-        """Backend categories whose rebuild (model load) is in flight right now.
-        Read by the panel's system snapshot to surface a 'loading' state in the UI.
-        Mutated only from the drain task; sorted for a stable payload."""
+        """Backend categories whose rebuild (model load) is in flight right now, plus
+        "tools" while the tool sources are being rebuilt. Read by the panel's system
+        snapshot to surface a 'loading' state in the UI. Mutated only from the drain
+        task; sorted for a stable payload."""
         return sorted(self._reloading)
 
     def request_initial_load(self, cats) -> None:
@@ -178,6 +179,18 @@ class Reconfigurator:
         # category to a backend rebuild and backend_categories() reduces it to {cat}; the
         # "__warmup__" leaf marks it as a boot warm-up rather than a real field change.
         self.queue.put_nowait({f"{c}.__warmup__" for c in cats})
+
+    def request_initial_tools_load(self) -> None:
+        """Queue a one-shot background build of the tool sources so a slow external MCP
+        connect does NOT block boot. Drained by run_loop in the main task: _rebuild_tools
+        marks reloading() ("tools") while the sources connect and swaps them into the hub
+        when ready; until then the hub serves no tools. Routed through the SAME queue as
+        live config changes so it is serialized and coalesced with a tool-config change
+        that arrives during boot."""
+        # Synthetic "core.mcp_servers.__warmup__" path: action_for() maps it to
+        # rebuild_tools; the "__warmup__" leaf marks it as a boot warm-up rather than a
+        # real field change.
+        self.queue.put_nowait({"core.mcp_servers.__warmup__"})
 
     def on_config_change(self, paths) -> None:
         """ConfigService.on_change callback (SYNC, runs on the panel request task).
@@ -249,7 +262,8 @@ class Reconfigurator:
     async def warm_handlers(self) -> None:
         """Prepare every handler backend that has warm_up() for the current tool
         catalog (simple-nlu trains its model on it), so the next request does not pay
-        for it. Run after every job and once in the background at boot."""
+        for it. Run after every job, the boot one that connects the tool sources
+        included."""
         for backend in list(self.rt.llm_backends.values()):
             warm_up = getattr(backend, "warm_up", None)
             if warm_up is not None:
@@ -476,7 +490,9 @@ class Reconfigurator:
             logger.error(f"telemetry reconfigure failed: {e}")
 
     async def _rebuild_tools(self) -> None:
-        """Rebuild the tool source set from current config and hot-swap it into the hub."""
+        """Rebuild the tool source set from current config and hot-swap it into the hub.
+        reloading() reports "tools" while the (possibly slow) external MCP connects run."""
+        self._reloading.add("tools")
         try:
             sources = build_sources(self.rt.core, self.deps.http_cloud, self.rt.scheduler,
                                     self.rt.assistant_tasks, lambda: self.rt.manager)
@@ -484,6 +500,8 @@ class Reconfigurator:
             logger.info("tool sources rebuilt (hot)")
         except Exception as e:
             logger.error(f"tool sources reconfigure failed: {e}")
+        finally:
+            self._reloading.discard("tools")   # clears on success, on failure and on cancel
 
     async def _rebuild_http(self, paths) -> None:
         """Rebuild the external (proxied) HTTP client, then rebuild the stages bound to it
