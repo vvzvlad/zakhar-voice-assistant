@@ -55,6 +55,7 @@ class Capture:
         for field in _FIELDS:
             setattr(self, field, meta[field])
         self.end = 0
+        self.stopped = False  # ended early on request: its length is what came (finish)
         self.finished = asyncio.Event()
         self._fd: int | None = None
 
@@ -124,14 +125,17 @@ class Capture:
         self.save()
 
     def finish(self, error: str | None = None) -> None:
-        """End the capture: `done` with whatever audio came (a missing tail is a gap), or
-        `error` with `error` or with no audio at all. Fixes the header's sizes."""
+        """End the capture: `done` with whatever audio came (a missing tail is a gap; a stopped
+        capture has no tail, its `seconds` become the length that came), or `error` with
+        `error` or with no audio at all. Fixes the header's sizes."""
         if not self.running:
             return
         if error is None and self.end == 0:
             error = "no audio"
         total = self.seconds * RATE
-        if error is None and self.end < total:
+        if error is None and self.stopped:
+            self.seconds = round(self.end / RATE, 3)
+        elif error is None and self.end < total:
             self.gaps.append([self.end, total - self.end])
         fd = self._fileno()
         os.pwrite(fd, wav_header(self.end), 0)

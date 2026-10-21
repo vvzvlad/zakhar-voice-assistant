@@ -22,7 +22,7 @@ import src.plugins  # noqa: F401  register all providers
 from aiohttp.test_utils import TestClient, TestServer
 from src import captures
 from src.config_service import ConfigService
-from src.device_server import RELEASE_WAKE_MODEL, CaptureBusyError, DeviceOfflineError
+from src.device_server import RELEASE_WAKE_MODEL, CaptureBusyError, DeviceOfflineError, NoCaptureError
 from src.panel_api import PanelServer
 from src.plugins.base import Deps
 from src.plugins.tts.fishaudio import FISH_TTS_URL
@@ -1063,6 +1063,35 @@ def _disk_capture(device, frames, *, finish=True):
     return cap
 
 
+async def test_capture_stop(tmp_path, monkeypatch):
+    # POST /api/capture/stop ends the device's running capture and answers with it once it is
+    # finished; 409 when none runs, 404 for an unknown device, 400 for a bad body.
+    monkeypatch.setattr("src.config_store.DATA_DIR", str(tmp_path / "data"))
+
+    def stop(device):
+        if device == "nope":
+            raise LookupError(f"unknown device {device!r}")
+        if device == "idle":
+            raise NoCaptureError(f"{device} has no capture running")
+        cap = _disk_capture(device, 800, finish=False)
+        cap.stopped = True
+        asyncio.get_running_loop().call_soon(cap.finish)  # the device's audio_end comes later
+        return cap
+
+    client, _svc_ = await _client(tmp_path, devices=FakeDevices(capture_stop=stop))
+    try:
+        resp = await client.post("/api/capture/stop", json={"device": "hall"})
+        snap = await resp.json()
+        assert (resp.status, snap["state"], snap["seconds"], snap["gaps"]) == (200, "done", 0.05, [])
+        resp = await client.post("/api/capture/stop", json={"device": "idle"})
+        assert (resp.status, await resp.json()) == (409, {"error": "no capture running"})
+        assert (await client.post("/api/capture/stop", json={"device": "nope"})).status == 404
+        for body in ({}, {"device": ""}, [1]):
+            assert (await client.post("/api/capture/stop", json=body)).status == 400, body
+    finally:
+        await client.close()
+
+
 async def test_captures_are_kept_listed_downloaded_and_deleted(tmp_path, monkeypatch):
     monkeypatch.setattr("src.config_store.DATA_DIR", str(tmp_path / "data"))
     done = _disk_capture("hall", 16000)
@@ -1158,6 +1187,7 @@ async def test_capture_endpoints_without_manager_return_503(tmp_path):
     client, _svc_ = await _client(tmp_path)
     try:
         assert (await client.post("/api/capture", json={"device": "h", "seconds": 5})).status == 503
+        assert (await client.post("/api/capture/stop", json={"device": "h"})).status == 503
         assert (await client.get("/api/capture", params={"device": "h"})).status == 503
         assert (await client.delete("/api/captures/h/20260101-000000-1")).status == 503
     finally:

@@ -32,6 +32,7 @@ typedef enum {
     ZL_MSG_WAKE_PEAK_STREAM,
     ZL_MSG_CAPTURE,
     ZL_MSG_CAPTURE_RESUME,
+    ZL_MSG_CAPTURE_STOP,
     ZL_MSG_DETECT,
     ZL_MSG_MODEL,
     ZL_MSG_LOG_STREAM,
@@ -44,7 +45,7 @@ typedef struct {
     uint32_t session;
     zl_state_t state;     // STATE
     const char *text;     // STATE (NULL when absent), TRANSCRIPT and REPLY ("" when absent)
-    uint32_t id;          // PLAY_START, PLAY_END, CAPTURE (> 0), CAPTURE_RESUME
+    uint32_t id;          // PLAY_START, PLAY_END, CAPTURE (> 0), CAPTURE_RESUME, CAPTURE_STOP
     uint8_t wake, vad;    // CONFIG, as uint8 cutoffs
     // CONFIG: echo_cancel 0..3, echo_cancel_mode 0..3, echo_cancel_filter 1..8.
     int echo_cancel, echo_mode, echo_filter;

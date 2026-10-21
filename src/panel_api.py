@@ -36,8 +36,8 @@ from pydantic import ValidationError
 from src import captures, config_store, dataset_jobs, device_logs
 from src.audio_prep import pcm_to_wav_bytes
 from src.device_server import (
-    CAPTURE_MAX_SECONDS, RELEASE_WAKE_MODEL, UPLOADED_WAKE_PREFIX, CaptureBusyError, DeviceOfflineError,
-    list_wake_models, uploaded_wake_models_dir,
+    CAPTURE_MAX_SECONDS, CAPTURE_WAIT_MARGIN, RELEASE_WAKE_MODEL, UPLOADED_WAKE_PREFIX, CaptureBusyError,
+    DeviceOfflineError, NoCaptureError, list_wake_models, uploaded_wake_models_dir,
 )
 from src.plugins.base import get_provider
 from src.runs_store import db_file_size
@@ -921,6 +921,44 @@ class PanelServer:
             return web.json_response({"error": str(e)}, status=409)
         return web.json_response(snap, status=202)
 
+    async def _post_capture_stop(self, request: web.Request) -> web.Response:
+        """End a device's running capture early.
+
+        Body: {"device": "<name>"}. The device sends what it recorded so far and the capture
+        stays on disk as "done", its `seconds` the length that came (docs/device-protocol.md,
+        "Capture"), or as "error" "no audio" when none came; an offline device's capture is
+        finished at once. The answer waits up to
+        CAPTURE_WAIT_MARGIN seconds for the capture to finish.
+
+        Status codes:
+          - 200 the capture's status snapshot (that of GET /api/capture)
+          - 400 bad input
+          - 404 unknown device
+          - 409 no capture is running on the device
+          - 503 capture not wired (no DeviceManager)
+        """
+        if self.devices is None:
+            return web.json_response({"error": "capture not available"}, status=503)
+        body = await _read_json(request)
+        if not isinstance(body, dict):
+            return web.json_response({"error": "body must be a JSON object"}, status=400)
+        device = body.get("device")
+        if not isinstance(device, str) or not device:
+            return web.json_response(
+                {"error": 'field "device" (string) is required'}, status=400
+            )
+        try:
+            cap = self.devices.capture_stop(device)
+        except LookupError as e:
+            return web.json_response({"error": str(e)}, status=404)
+        except NoCaptureError:
+            return web.json_response({"error": "no capture running"}, status=409)
+        try:
+            await asyncio.wait_for(cap.finished.wait(), CAPTURE_WAIT_MARGIN)
+        except asyncio.TimeoutError:
+            pass  # the watchdog finishes it at about this time; the snapshot shows where it is
+        return web.json_response(cap.snapshot())
+
     async def _get_capture_status(self, request: web.Request) -> web.Response:
         """A device's capture status (drives the live countdown): its running capture, else
         its newest one on disk, else state "idle". The snapshot: {state (starting | recording
@@ -1406,6 +1444,7 @@ class PanelServer:
             web.post("/api/device/model", self._post_model),
             web.post("/api/device/say", self._post_say),
             web.post("/api/capture", self._post_capture),
+            web.post("/api/capture/stop", self._post_capture_stop),
             web.get("/api/capture", self._get_capture_status),
             web.get("/api/capture/result", self._get_capture_result),
             web.get("/api/captures", self._get_captures),

@@ -53,8 +53,10 @@ The owner's words:
   audio arrives and stays there until deleted through the panel API; a lost link does not end it;
   a dataset take the link broke is recorded again; a capture on an offline device fails at once
   and is "recording" only from its first audio; a capture has an id and its audio carries the
-  offset, the device keeps it across a lost link and the server tells it where to go on. The
-  proposed `capture_stop` (end a capture early) was not taken.
+  offset, the device keeps it across a lost link and the server tells it where to go on.
+- «вроде делали же команду», then «ишью сделай» — `capture_stop {id}` ends a running capture
+  early: the device sends what it recorded and `audio_end` as at a normal end, and the server
+  keeps the capture as `done` with its actual length.
 - On a capture across a dropped link (the speaker notices a dead link after its 3 s send timeout,
   then waits the 1 s backoff and ~1 s to reconnect), option chosen: «Оставить как есть» — no
   faster reconnect; audio the tap no longer holds shows as a hole in the capture's `gaps`.
@@ -492,6 +494,7 @@ the answer, so the next phrase needs no wake word:
 | `detect {on}` | server → device | wake-word detection on or off; off: the models keep running (`wake_peak` too) but a detection starts no session. Every new connection starts with detection on |
 | `capture {id, seconds}` | server → device | record a sample, see [Capture](#capture) |
 | `capture_resume {id, from}` | server → device | go on with a capture the device kept across a lost link |
+| `capture_stop {id}` | server → device | end a capture now, see [Capture](#capture) |
 | `audio_end {reason, id}` | device → server | a capture ended on the device: `capture` (all its audio is out) or `busy` (refused, a session is running) |
 | `log_stream {on}` | server → device | send the device log in `log` messages or stop; after every `hello` and whenever `core.devices[].log` changes. Off from boot. A lost link does not turn it off on the device: the lines logged meanwhile wait (16 KB on the Voice PE, a line that does not fit is dropped) for the next connection's `log_stream`, and off drops them |
 | `stats {…}` | device → server | the device's health, right after `hello` and every 30 s while connected: `rssi` (dBm of the access point, absent while not associated), `cpu0`, `cpu1` (load of each core over the last 30 s, percent; `cpu1` absent on a single-core chip; both absent from firmware built without `CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS`, which costs about 1.8 KB of internal RAM — the Voice PE is built without it), `temp` (chip temperature, °C, one decimal; absent when it cannot be read), `heap`, `heap_min`, `heap_block` (internal RAM: free, the lowest free since boot, the largest free block; bytes), `psram`, `psram_min` (PSRAM free and the lowest free since boot; absent without PSRAM), `wifi_drops` (Wi-Fi disconnect events since `zl_start()` at boot — the ones before it are not counted — each failed reconnect attempt included; never reset by a reconnection to the server) and `wifi_reason` (the ESP-IDF reason code of the last one, absent before the first). The server publishes them to its telemetry |
@@ -535,6 +538,13 @@ outside any voice session.
 3. Device → `audio_end {reason: "capture", id}` once its last frame is out. Detection returns to
    what `detect` set. The device shows its own recording indication from the command until then.
 
+Server → `capture_stop {id}` ends the capture early. A device sending the capture stops recording,
+sends the frames it recorded up to the command and then `audio_end {reason: "capture", id}` as in
+step 3; one holding the capture without sending it (its link was lost and no `capture_resume`
+came) ends it at once, without `audio_end`. A `capture_stop` for any other capture is ignored. The
+server keeps a stopped capture as `done`, its `seconds` the length that came, with no tail gap;
+one stopped before any audio came ends as `error` "no audio", like any capture without audio.
+
 A lost link does not end a capture:
 
 - The device keeps the capture and its audio in the microphone tap (about 7 s on the Voice PE and
@@ -543,8 +553,9 @@ A lost link does not end a capture:
   the first frame it lacks. The device goes on sending from there, or from its oldest frame still
   in the tap when that one is overwritten already. A `capture_resume` for any other capture is
   ignored.
-- A server that does not know the capture does not answer. A capture the device cannot send
-  ends 2 s after its last frame was recorded, without `audio_end`.
+- A server that does not take up the capture (it does not know it, or runs another one) answers
+  `capture_stop {id}`, and the device ends it. A capture the device cannot send ends 2 s after
+  its last frame was recorded, without `audio_end`.
 - When the device comes back without the capture (it restarted), the server sends a new `capture`
   for the time that is left and puts its audio after the hole.
 

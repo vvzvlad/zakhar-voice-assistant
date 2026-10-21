@@ -72,7 +72,8 @@ typedef struct {
     void (*on_set_volume)(int percent);
     // A `capture` starts (true) or ends (false): show a recording indication; wake words are
     // ignored meanwhile. A lost link does not end it: it ends once all its audio is sent, or 2 s
-    // after its last frame was recorded when it cannot be sent.
+    // after its last frame was recorded when it cannot be sent. A `capture_stop` cuts it to what
+    // is recorded (then it ends once that is sent), or ends it at once when it is not being sent.
     void (*on_capture)(bool active);
     // Asked on a wake word that would propose a session (online, detection on, no capture, no wake
     // proposed, no session streaming its mic); false ignores it.
