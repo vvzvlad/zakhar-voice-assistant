@@ -512,7 +512,7 @@ def new_record(device: str, reason: str, **fields) -> dict:
         "stt_text": "", "llm_text": "",
         "error_stage": None, "error_text": None,
         # What the run tried: its recognition chains (see chains.ChainRun) and its
-        # TTS variants (Pipeline._start_tts).
+        # TTS variants (SpeechMixin._start_tts, src/speech.py).
         "attempts": [],
         # The reply's playback as the device reports it: times it ran dry and the ms
         # of silence played meanwhile. None when it did not play out.
