@@ -243,6 +243,35 @@ async def test_a_cancelled_run_ends_the_window(tmp_path, monkeypatch):
     assert pipeline.rt.followup_backend.calls == []
 
 
+@pytest.mark.parametrize("in_window, text", [
+    (True, "Стоп."),           # the follow-up window, where the device's stop model is off
+    (False, "Захар, стоп."),   # right after the wake word
+])
+async def test_the_stop_word_as_a_phrase_ends_the_session_silently(tmp_path, monkeypatch,
+                                                                   in_window, text):
+    store = FakeRunsStore()
+    pipeline, events = _make(tmp_path, monkeypatch, runs_store=store)
+    pipeline._schedule_ack = lambda: None
+    if in_window:
+        await _answer(pipeline)
+        events.clear()
+        await _say(pipeline, text)
+    else:
+        pipeline.rt.stt_backends["fake"].text = text
+        await _answer(pipeline)
+    # No follow-up check, no handler, no answer: the session ends.
+    assert pipeline.rt.followup_backend.calls == []
+    assert types_of(events)[-2:] == [StageEvent.STT_END, StageEvent.RUN_END]
+    assert dict(events)[StageEvent.STT_END] == {"text": ""}
+    assert len(pipeline.play.calls) == (1 if in_window else 0)
+    assert len(_context(tmp_path)) == (2 if in_window else 0)
+    rec = store.records[-1]
+    assert (rec["result"], rec["reason"], rec["stt_text"]) == ("ok", "stop", text)
+    # The window is closed: a phrase after it starts no run.
+    await _say(pipeline, "а в спальне")
+    assert pipeline.rt.followup_backend.calls == []
+
+
 async def test_a_follow_up_phrase_keeps_its_start(tmp_path, monkeypatch):
     # trim_start_ms cuts a wake word's tail; a follow-up phrase has none to cut.
     pipeline, _ = _make(tmp_path, monkeypatch)

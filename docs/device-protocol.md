@@ -78,6 +78,10 @@ The owner's words:
   stock «Stop» model (kahrendt/microWakeWord, release `stop`) from 1 s after its playback starts
   until the playback ends; a detection only stops: the playback and the device's run end, no new
   session starts.
+- «"стоп" почини» (a «стоп» said in the follow-up window went to the LLM, which answered «Слушаю
+  вас») — a phrase the server hears that is «стоп» alone, or the wake word and «стоп», ends the
+  session with `state idle`, without a sound, a transcript or a handler: in the follow-up window
+  and right after a wake, where the device's stop model is off.
 - «надо бы сделать» (cancel the speaker's own playback in the microphone, to hear commands over
   its reply), option chosen: «Не делать» — no echo cancellation on the device. Measured on the
   Voice PE with ESP-SR's AEC against the exact playback: the echo drops by 28 dB on a raw
@@ -395,7 +399,9 @@ device                                   server
   proposed one is never named. A stop word starts no session.
   The server drops the playback as for a `wake` it takes and sends `play_stop`; in a session it
   then cancels the run and ends the session with `state idle`, outside one (an announcement, an
-  agent's `speak`) only the playback stops.
+  agent's `speak`) only the playback stops. Said as the phrase of a session — after the wake word
+  or in the follow-up window — «стоп» ends the session the same way on the server's side:
+  `state idle`, no sound, no `transcript`.
 - A device without a speaker (`caps.speaker: false`) never gets playback: the server skips TTS for
   it and sends the text only.
 
@@ -418,7 +424,8 @@ the answer, so the next phrase needs no wake word:
   a wake. While a proposed wake's audio is streaming, the follow-up goes on in that stream from
   where it is.
 - The server waits `followup` window for speech to start. Silence ends the session with
-  `state idle`, without a sound. A phrase goes to the jev decision model with the assistant's name
+  `state idle`, without a sound. A phrase that is «стоп» (see `stop` above) ends it the same way
+  without asking jev. Any other phrase goes to the jev decision model with the assistant's name
   (the `word` of the session's `wake`), the last request and answer; one it does not take for a
   continuation of the dialog also ends the session with `state idle`, without a sound and without
   a transcript. One it takes gets the end-of-phrase chime and runs like any phrase, and its answer

@@ -22,6 +22,7 @@ concurrent eager on_audio tasks.
 
 import asyncio
 import os
+import re
 import time
 
 import numpy as np
@@ -53,6 +54,20 @@ from src.vad import SAMPLE_RATE, EndpointPolicy  # noqa: F401  (SAMPLE_RATE re-e
 # utterance long before this; the cap only guards against unbounded growth if VAD
 # misbehaves, and also forces a finalize when reached.
 HARD_CAP_BYTES = SAMPLE_RATE * 2 * 60
+
+# The word the speaker's own stop model listens for while an answer plays. That model is
+# off in the follow-up window and after a wake, so there the word reaches the server as a
+# phrase; said alone (or right after the wake word) it ends the session the same way.
+STOP_WORD = "стоп"
+
+
+def is_stop_phrase(text: str, wake_word: str | None) -> bool:
+    """True when `text` is the stop word alone, optionally preceded by `wake_word`."""
+    words = re.findall(r"[a-zа-яё]+", text.lower())
+    name = re.findall(r"[a-zа-яё]+", (wake_word or "").lower())
+    if name and words[:len(name)] == name:
+        words = words[len(name):]
+    return words == [STOP_WORD]
 
 
 class _PrefetchedChunks:
@@ -993,6 +1008,17 @@ class Pipeline:
                         }
                         return verdict.accepted
 
+                    # The stop word as the whole phrase (is_stop_phrase): no follow-up
+                    # check, no handler — the run ends silently below.
+                    stop_text = None
+
+                    async def _gate(text: str) -> bool:
+                        nonlocal stop_text
+                        if is_stop_phrase(text, run.word):
+                            stop_text = text
+                            return False
+                        return followup is None or await _followup_gate(text)
+
                     # The recognition chains: each enabled chain's STT then handler, in
                     # order, until one answers. Streaming sessions opened at speech were
                     # fed in on_audio; the runner finishes them. A handler failure is
@@ -1006,9 +1032,15 @@ class Pipeline:
                         streams=dict(stt_streams),
                         on_text=_on_text,
                         on_filler=_speak_filler,
-                        gate=_followup_gate if followup is not None else None,
+                        gate=_gate,
                     )
                     self._record_chain_run(record, chain_run)
+                    if stop_text is not None:
+                        record.update(stt_text=stop_text, result="ok", reason="stop")
+                        logger.info(f"{self.name}: 🛑 stop phrase {stop_text!r}, session ended")
+                        self._emit(StageEvent.STT_END, {"text": ""})
+                        self._emit(StageEvent.RUN_END, {})
+                        return
                     if followup_check is not None:
                         record["attempts"].insert(0, followup_check)
                         if followup_check["outcome"] != "accepted":
