@@ -141,12 +141,12 @@ def test_builtin_prompt_fields_carry_textarea_widget():
     assert cal["widget"] == "textarea"
 
 
-def test_vad_mic_defaults_are_channel1_conditioning_off():
+def test_vad_mic_defaults_are_channel0_conditioning_off():
     # Mic channel + conditioning toggles live inside VadConfig (the Voice-capture
-    # section), not a separate core.mic section. Defaults: raw channel 1, the
+    # section), not a separate core.mic section. Defaults: processed channel 0, the
     # peak-normalize, high-pass and decision-only VAD auto-gain toggles all OFF.
     v = VadConfig()
-    assert v.mic_channel == 1
+    assert v.mic_channel == 0
     assert v.mic_normalize is False
     assert v.mic_highpass is False
     assert v.mic_auto_gain is False
@@ -169,6 +169,6 @@ def test_vad_mic_conditioning_toggles_accept_overrides():
 
 def test_core_config_vad_has_mic_fields():
     vad = CoreConfig().vad
-    assert vad.mic_channel == 1
+    assert vad.mic_channel == 0
     assert vad.mic_normalize is False
     assert vad.mic_highpass is False

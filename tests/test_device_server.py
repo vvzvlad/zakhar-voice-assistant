@@ -202,10 +202,8 @@ class Server:
             "core": {
                 "audio": {"host": "127.0.0.1", "port": 0},
                 "ack": {"enabled": False},
-                # The tests tell the channels apart by their samples (stereo()) and expect
-                # channel 0 in STT unless they switch it.
                 "vad": {"min_speech_ms": 40, "silence_ms": 100, "max_utterance_ms": 400,
-                        "no_speech_timeout_ms": 200, "trim_start_ms": 0, "mic_channel": 0},
+                        "no_speech_timeout_ms": 200, "trim_start_ms": 0},
                 "devices": [{"name": "kitchen"}],
                 "chains": [{"name": "main", "stt": "groq", "handler": "openrouter"}],
             },

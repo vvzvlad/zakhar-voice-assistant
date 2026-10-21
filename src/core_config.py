@@ -100,7 +100,7 @@ class VadConfig(BaseModel):
     # Falls back to the most-processed stream if the device does not send the selected one.
     # Applies on the next utterance.
     mic_channel: Literal[0, 1] = Field(
-        1,
+        0,
         title="Mic processing level",
         # 0 is the XMOS AGC output (louder), 1 the less-processed noise-suppressed one
         # (cleaner, quieter).
