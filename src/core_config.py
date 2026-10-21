@@ -314,12 +314,13 @@ class AckConfig(BaseModel):
     # Server-side "end-of-phrase" confirmation chime ("блям"). The wake-word chime was
     # moved OFF the device (it overlapped the user's command now that the firmware
     # streams continuously with pre-roll); instead the server plays this short clip to
-    # the speaker the instant VAD end-points the utterance — immediate "got it"
-    # feedback, BEFORE STT/LLM/TTS run. The full spoken reply still plays later.
+    # the speaker once the phrase is accepted — the instant VAD end-points it, or, when
+    # its wake word or a follow-up is checked, once recognition passed that check —
+    # before the LLM/TTS run. The full spoken reply still plays later.
     enabled: bool = Field(
         True,
         title="End-of-phrase chime",
-        description="Plays a short chime on the device the moment your phrase ends.",
+        description="Plays a short chime on the device once your phrase is accepted: at its end, or after recognition when its wake word or the follow-up is checked.",
     )
     # The dropdown is fed by GET /api/chimes (bundled assets/chimes clips); an empty
     # value keeps the synthesized chime (a short two-tone sine), which is built once and

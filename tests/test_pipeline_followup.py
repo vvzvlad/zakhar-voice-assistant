@@ -28,6 +28,7 @@ from tests.test_pipeline import (
     settle,
     types_of,
 )
+from tests.test_pipeline_wakeword_gate import FakeWakewordVerifier
 
 ANSWERED = [
     StageEvent.RUN_START, StageEvent.STT_START, StageEvent.STT_VAD_START,
@@ -63,7 +64,7 @@ class OutcomePlayer(FakePlayer):
 
 def _make(tmp_path, monkeypatch, *, gate=None, outcome="played", capable=True, **kw):
     patch_llm(monkeypatch, reply="готово")
-    pipeline, events = make_pipeline(tmp_path, monkeypatch, stt_text="включи свет", **kw)
+    pipeline, events = make_pipeline(tmp_path, monkeypatch, stt_text="Захар, включи свет", **kw)
     pipeline.rt.followup_backend = FakeGate() if gate is None else gate
     pipeline.play = OutcomePlayer(outcome)
     pipeline.has_follow_up = capable
@@ -96,7 +97,8 @@ async def test_a_played_answer_opens_the_window_instead_of_ending(tmp_path, monk
     assert types_of(events) == [*ANSWERED, StageEvent.STT_VAD_START]
     # The next phrase is heard and checked against the turn that opened the window.
     await _say(pipeline, "а в спальне")
-    assert pipeline.rt.followup_backend.calls == [("Захар", "включи свет", "готово", "а в спальне")]
+    assert pipeline.rt.followup_backend.calls == [
+        ("Захар", "Захар, включи свет", "готово", "а в спальне")]
 
 
 @pytest.mark.parametrize("outcome, capable, gate", [
@@ -148,13 +150,13 @@ async def test_a_rejected_phrase_is_dropped_silently(tmp_path, monkeypatch,
     events.clear()
 
     await _say(pipeline, "ну и погодка сегодня")
-    assert gate.calls == [("Захар", "включи свет", "готово", "ну и погодка сегодня")]
+    assert gate.calls == [("Захар", "Захар, включи свет", "готово", "ну и погодка сегодня")]
     # No chime, no transcript, no handler, no answer: `transcribing`, then `idle`.
     assert acks == [1]                      # the wake run's only
     assert events == [(StageEvent.STT_VAD_END, {}), (StageEvent.STT_END, {"text": ""}),
                       (StageEvent.RUN_END, {})]
     assert len(pipeline.play.calls) == 1    # the first answer only
-    assert _context(tmp_path) == [{"role": "user", "content": "включи свет"},
+    assert _context(tmp_path) == [{"role": "user", "content": "Захар, включи свет"},
                                   {"role": "assistant", "content": "готово"}]
     rec = store.records[-1]
     # The log shows what was heard, though the device never got it.
@@ -171,6 +173,9 @@ async def test_an_accepted_phrase_chimes_runs_and_opens_the_window_again(tmp_pat
     gate = FakeGate(accepted=True, probability=0.8)
     pipeline, events = _make(tmp_path, monkeypatch, gate=gate, runs_store=store)
     pipeline._schedule_ack = lambda: events.append(("ack", None))
+    # With the wake-word check loaded: a follow-up phrase carries no wake word and is
+    # not checked for one.
+    pipeline.rt.wakeword_backend = FakeWakewordVerifier()
     await _answer(pipeline)
     events.clear()
 

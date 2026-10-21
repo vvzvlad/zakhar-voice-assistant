@@ -307,7 +307,7 @@ async def test_a_session_publishes_its_events_and_its_run(srv, broker, monkeypat
         {"rssi": -61, "cpu0": 12, "temp": 41.5, "heap": 123456, "wifi_reason": 201}]
     assert broker.payloads("devices/kitchen/event/stop") == [{"in_session": False}]
     [run] = broker.payloads("devices/kitchen/run/tool")
-    assert (run["run_id"], run["stt_text"], run["llm_text"]) == (1, "включи свет", "готово")
+    assert (run["run_id"], run["stt_text"], run["llm_text"]) == (1, "Захар, включи свет", "готово")
     assert (run["play_dry"], run["play_gap_ms"]) == (0, 0)
     assert run["tools"] == {"0": {"round": 1, "name": "set_light", "args": '{"on": true}',
                                   "result": "ok"}}

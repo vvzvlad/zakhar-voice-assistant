@@ -52,7 +52,7 @@ class RecordingStt:
 
     async def transcribe(self, pcm):
         self.pcm.append(pcm)
-        return "включи свет"
+        return "Захар, включи свет"
 
 
 class PcmTts(TtsBackend):
@@ -278,7 +278,7 @@ def session_msgs(session, *rest):
     """The wire messages of one voice session from `transcribing` on."""
     return [
         {"type": "state", "session": session, "value": "transcribing"},
-        {"type": "transcript", "session": session, "text": "включи свет"},
+        {"type": "transcript", "session": session, "text": "Захар, включи свет"},
         {"type": "state", "session": session, "value": "thinking"},
         {"type": "reply", "session": session, "text": "готово"},
         {"type": "state", "session": session, "value": "speaking"},
@@ -602,25 +602,21 @@ async def test_a_rejected_wake_over_an_announcement_ends_its_session(srv):
     await asyncio.wait_for(say, 2)
 
 
-async def test_a_wake_with_nothing_to_protect_is_taken_once_confirmed(srv):
+async def test_a_wake_with_nothing_to_protect_is_taken_at_once(srv):
+    # Not held for the quick check: its phrase confirms it.
     verifier = srv.rt.wakeword_backend = HeldVerifier()
     dev = await srv.connect()
     await dev.recv()  # config
     await wake_over(dev, 1)
-    await until(lambda: verifier.calls)
-    assert verifier.over_answer == [False]
-    # Held like any wake: nothing goes out until the check rules.
-    with pytest.raises(asyncio.TimeoutError):
-        await dev.recv(timeout=0.2)
-    verifier.verdict(11).set_result(WakewordVerdict(accepted=True, score=0.9))
     assert await dev.recv() == {"type": "play_stop"}
     assert await dev.recv() == state(1, "listening")
+    assert verifier.calls == []
 
 
 @pytest.mark.parametrize("outcome", ["confirmed", "rejected", "dropped"])
 async def test_a_held_wake_keeps_the_arbitration_open_until_its_check_rules(srv, outcome, monkeypatch):
     # The kitchen speaker answers and holds a wake when the panel (no speaker) wakes too and
-    # its check rules first: the speaker's wake joined the group at once, and no device keeps
+    # is taken at once: the speaker's wake joined the group at once, and no device keeps
     # the phrase until the speaker's check rules.
     monkeypatch.setattr("src.wake_arbiter.WINDOW_MS", 100)
     monkeypatch.setattr("src.wake_arbiter.COOLDOWN_MS", 300)
@@ -630,15 +626,13 @@ async def test_a_held_wake_keeps_the_arbitration_open_until_its_check_rules(srv,
     old = await answer_playing(srv, speaker, 10)
     await asyncio.sleep(0.3)  # past the cooldown of session 1's phrase
     verifier = srv.rt.wakeword_backend = HeldVerifier()
-    verifier.verdict(500).set_result(WakewordVerdict(accepted=True, score=0.9))
     await wake_over(speaker, 2)
     await until(lambda: verifier.calls)
     await panel.send(type="wake", session=3, word="Захар")
     await panel.mic(stereo(500, -500, 60))
     await panel.mic(stereo(500, -500, 60))
-    await until(lambda: len(verifier.calls) == 2)
     assert await panel.recv() == {"type": "play_stop"}
-    assert await panel.recv() == state(3, "listening")  # its own check confirmed it
+    assert await panel.recv() == state(3, "listening")  # nothing to protect: taken at once
     await asyncio.sleep(0.3)  # the panel's window runs out, the group stays open
     await panel.mic(stereo(500, -500, 60))  # ...and its phrase ends, held
     with pytest.raises(asyncio.TimeoutError):
@@ -691,7 +685,6 @@ async def test_a_held_wake_of_the_panel_does_not_hold_the_speakers_phrase(srv, m
     assert [await panel.recv() for _ in range(3)] == session_msgs(3)[:3]  # up to thinking
     await asyncio.sleep(0.3)  # past the cooldown of session 3's phrase
     verifier = srv.rt.wakeword_backend = HeldVerifier()
-    verifier.verdict(500).set_result(WakewordVerdict(accepted=True, score=0.9))
     await panel.send(type="wake", session=4, word="Захар")
     await panel.mic(stereo(700, -700, 60))
     await panel.mic(stereo(700, -700, 60))
@@ -721,14 +714,13 @@ async def test_a_wake_that_loses_before_its_check_leaves_the_answer_playing(srv,
     old = await answer_playing(srv, kitchen, 10)
     await asyncio.sleep(0.5)  # past the cooldown of session 1's phrase
     verifier = srv.rt.wakeword_backend = HeldVerifier()
-    verifier.verdict(500).set_result(WakewordVerdict(accepted=True, score=0.9))
     await hall.send(type="wake", session=5, word="Захар")
     await hall.phrase(ch0=500)
     assert [await hall.recv() for _ in range(3)] == [
         {"type": "play_stop"}, state(5, "listening"), state(5, "transcribing")]  # the hall won
 
     await wake_over(kitchen, 2)
-    await until(lambda: len(verifier.calls) == 2)
+    await until(lambda: verifier.calls)
     verifier.verdict(11).set_result(WakewordVerdict(accepted=True, score=0.9))
     sent = len(kitchen.plays[old])
     with pytest.raises(asyncio.TimeoutError):
@@ -1501,5 +1493,5 @@ async def test_one_phrase_heard_by_three_devices_runs_on_the_first_speaker(srv, 
     rows = {row["device"]: row for row in srv.rt.runs_store.list()}
     for name in ("panel", "hall"):
         assert (rows[name]["result"], rows[name]["reason"], rows[name]["stt_text"]) == (
-            "rejected", "duplicate", "включи свет")
+            "rejected", "duplicate", "Захар, включи свет")
     assert rows["kitchen"]["result"] == "ok"

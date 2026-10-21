@@ -61,13 +61,26 @@ HARD_CAP_BYTES = SAMPLE_RATE * 2 * 60
 STOP_WORD = "стоп"
 
 
+def _words(text: str) -> list[str]:
+    """The lowercased words of `text`, punctuation dropped."""
+    return re.findall(r"[a-zа-яё]+", text.lower())
+
+
 def is_stop_phrase(text: str, wake_word: str | None) -> bool:
     """True when `text` is the stop word alone, optionally preceded by `wake_word`."""
-    words = re.findall(r"[a-zа-яё]+", text.lower())
-    name = re.findall(r"[a-zа-яё]+", (wake_word or "").lower())
+    words = _words(text)
+    name = _words(wake_word or "")
     if name and words[:len(name)] == name:
         words = words[len(name):]
     return words == [STOP_WORD]
+
+
+def has_wake_word(text: str, wake_word: str) -> bool:
+    """True when one of the first three words of `text` starts with `wake_word`: the
+    STT often fuses the wake word with the next word («захаркоторый час»), and the
+    phrase may open with a word or two the pre-roll caught before it."""
+    name = wake_word.lower()
+    return any(word.startswith(name) for word in _words(text)[:3])
 
 
 class _PrefetchedChunks:
@@ -161,8 +174,8 @@ class Pipeline:
         # removes itself on completion. Fire-and-forget — never awaited by the run.
         self._filler_tasks = set()
 
-        # Background end-of-phrase "ack" chime tasks (the server-side «блям» played the
-        # instant VAD end-points the utterance). Tracked in a set for the same GC reason
+        # Background end-of-phrase "ack" chime tasks (the server-side «блям» played once
+        # the phrase is accepted, see _run). Tracked in a set for the same GC reason
         # as the fillers — fire-and-forget, never awaited by the run so STT isn't delayed.
         self._ack_tasks = set()
         # Lazily-built cache of the ack clip: (source_key, mime, audio_bytes). The
@@ -252,24 +265,26 @@ class Pipeline:
     def on_wake(self, cid, word, over_answer: bool = False) -> None:
         """A wake of the device: propose its run (docs/device-protocol.md, "Voice session").
 
-        Synchronous. The run registers with the cross-device arbitration at once and is
-        held — its audio buffered, nothing shown on the device — until the wake-word
-        check confirms it, when it is taken (_take), and the arbitration lets it
-        through, when it is released (_release); a wake its check rejects or one that
-        loses ends held (_end_held). Until a wake is taken the current run goes on
-        untouched: a wake over the device's own answer or open session (`over_answer`,
-        which the check is told) stops that answer only once confirmed. A newer wake
+        Synchronous. The run registers with the cross-device arbitration at once. A
+        wake over the device's own answer or open session (`over_answer`, which the
+        check is told) may be the device's own voice: it is held — its audio buffered,
+        nothing shown on the device, the current run going on untouched — until the
+        quick wake-word check confirms it, when it is taken (_take), or rejects it, when
+        it ends held (_end_held). Any other wake is taken at once and confirmed later by
+        the wake word in its recognised phrase (_run). A taken run is released (_release)
+        once the arbitration lets it through; one that loses ends held. A newer wake
         replaces a proposal silently."""
         if self._proposed is not None:
             self._drop(self._proposed)
         run = self._proposed = self._new_run(
             cid, word or "", preroll_ms=PREROLL_MS if word else 0,
             no_speech_timeout_ms=self.core.vad.no_speech_timeout_ms, over_answer=over_answer)
-        if self.gates_wake(word):
-            logger.info(f"{self.name}: 🛡️ wake (cid={cid}) waits for the wake-word check"
-                        + (" over the running answer" if over_answer else ""))
+        if over_answer and self.gates_wake(word):
+            logger.info(f"{self.name}: 🛡️ wake (cid={cid}) over the running answer waits "
+                        f"for the wake-word check")
         else:
-            # Unchecked (disabled/None/passthrough/no wake word): its verdict is in.
+            # Not checked here (not over an answer, check disabled/None/passthrough, no
+            # wake word): its verdict is in.
             run.verdict = True
         if word and self.arbiter is not None:
             self._arbitration_token += 1
@@ -876,6 +891,12 @@ class Pipeline:
         conversation_id = run.cid
         # The last turn when this utterance was heard in a follow-up window, else None.
         followup = run.followup
+        # A wake's phrase the quick check did not hold (on_wake): with the wake-word
+        # check on, its wake is confirmed by the wake word in its transcript
+        # (has_wake_word, in _gate below). The same switch as the quick check, so with
+        # it off a wake on a model of another word (Okay Nabu, Hey Jarvis) still passes.
+        text_checked = (followup is None and not run.over_answer
+                        and self.gates_wake(run.word))
         pending_run = None
         try:
             async with self._lock:
@@ -893,18 +914,20 @@ class Pipeline:
                     self._emit(StageEvent.RUN_END, {})
                     return
 
-                # End-of-phrase ack ("блям"): we've just finalized the utterance, so play
-                # a short confirmation chime to the speaker NOW as immediate "got it"
-                # feedback, before STT/LLM/TTS run. Fire-and-forget (scheduled, never
+                # End-of-phrase ack ("блям"): we've just finalized the utterance, so an
+                # unchecked phrase gets a short confirmation chime NOW as immediate "got
+                # it" feedback, before STT/LLM/TTS run. Fire-and-forget (scheduled, never
                 # awaited) so it never delays STT; tracked in a set so it isn't GC'd
                 # mid-playback. The ack, a filler and the reply are separate play()
                 # streams, queued in call order on the device.
                 #
                 # A wake word with no command after it (no_speech) ends the run
-                # silently — no ack chime — so a bare wake word never beeps (a rejected
-                # wake never gets here: _end_held). A follow-up phrase gets its chime
-                # only once the follow-up check accepts it (_followup_gate).
-                if reason != "no_speech" and followup is None:
+                # silently — no ack chime — so a bare wake word never beeps (a wake the
+                # quick check rejected never gets here: _end_held). A text-checked
+                # wake's phrase gets its chime only once the wake word is found in its
+                # transcript, a follow-up phrase only once the follow-up check accepts
+                # it (_gate).
+                if reason != "no_speech" and followup is None and not text_checked:
                     self._schedule_ack()
 
                 # A follow-up phrase has no lead-in: its audio starts at the
@@ -1011,12 +1034,21 @@ class Pipeline:
                     # The stop word as the whole phrase (is_stop_phrase): no follow-up
                     # check, no handler — the run ends silently below.
                     stop_text = None
+                    # A text-checked wake's transcript without the wake word: the wake
+                    # was false, and the run ends silently below. With it, the phrase
+                    # gets the end-of-phrase chime now and runs like any phrase.
+                    wake_reject_text = None
 
                     async def _gate(text: str) -> bool:
-                        nonlocal stop_text
+                        nonlocal stop_text, wake_reject_text
                         if is_stop_phrase(text, run.word):
                             stop_text = text
                             return False
+                        if text_checked:
+                            if not has_wake_word(text, run.word):
+                                wake_reject_text = text
+                                return False
+                            self._schedule_ack()
                         return followup is None or await _followup_gate(text)
 
                     # The recognition chains: each enabled chain's STT then handler, in
@@ -1038,6 +1070,17 @@ class Pipeline:
                     if stop_text is not None:
                         record.update(stt_text=stop_text, result="ok", reason="stop")
                         logger.info(f"{self.name}: 🛑 stop phrase {stop_text!r}, session ended")
+                        self._emit(StageEvent.STT_END, {"text": ""})
+                        self._emit(StageEvent.RUN_END, {})
+                        return
+                    if wake_reject_text is not None:
+                        # Dropped without a sound, like a rejected follow-up: no handler
+                        # ran, no transcript goes to the device, nothing joins the
+                        # context. The log still shows what was heard.
+                        record.update(stt_text=wake_reject_text, result="rejected",
+                                      reason="wakeword_reject")
+                        logger.info(f"{self.name}: 🚫 no wake word in {wake_reject_text!r}, "
+                                    f"wake dropped")
                         self._emit(StageEvent.STT_END, {"text": ""})
                         self._emit(StageEvent.RUN_END, {})
                         return

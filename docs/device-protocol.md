@@ -127,7 +127,11 @@ The owner's words:
   them and in none of his 30 negatives. A second chance — a wake the quick check rejects heard to
   the end of its phrase, unlit, and taken if the phrase starts with «захар» — was chosen and then
   dropped: «нет никакого смысла городить такую сложную схему, в которой все равно все останется
-  как щас, и я не буду видеть свечение в половине случаев».
+  как щас, и я не буду видеть свечение в половине случаев». Then «мы же договорились перевести все
+  на гигу»: a wake is taken and lit at once, and the server checks the wake word in the recognised
+  phrase (GigaAM in production) — a phrase without it ends silently. The quick Vosk check stays
+  only for a wake over the device's own running answer, where the device's own voice reaches the
+  microphone. Both follow one switch, so with it off a wake on an ESPHome model still passes.
 - «дребезжит немного звук иногда на колонке», heard as «Щелчки, звук рвётся»: the speaker played
   with no reserve and a pause in the arriving audio became silence. Option chosen: «колонка копит
   ~0,3 с звука перед фразой», then, against waiting for Fish Audio's second chunk, «Оставить
@@ -359,32 +363,41 @@ device                                   server
   proposes no new session: the phrase is still being said, and a detection inside it must not
   cut it off.
 - After that a new `wake` proposes the next session. A proposal changes only the microphone: its
-  audio streams, while the current session, its playback and the indication stay as they are —
-  the detection may be the device's own voice. The server holds every `wake` until its second
-  wake-word check confirms it on the proposal's microphone audio (at once when that check is off),
-  and the older run goes on meanwhile; over a running answer (a run of the device is going or a
-  stream is playing) the check also tells apart words that sound like the wake word (the Vosk
-  check's `answer_sound_alikes`), since the device's own voice reaches it. A confirmed wake is
+  audio streams, while the current session, its playback and the indication stay as they are. A
+  `wake` over a running answer (a run of the device is going or a stream is playing) may be the
+  device's own voice: the server holds it until its second wake-word check confirms it on the
+  proposal's microphone audio (at once when that check is off), and the older run goes on
+  meanwhile; the check also tells apart words that sound like the wake word (the Vosk check's
+  `answer_sound_alikes`). Any other `wake` is confirmed at once. A confirmed wake is
   taken: the server cancels the older run and sends `play_stop`, which flushes the device's
   playback, a stream the server started before it saw the `wake` included, then `state listening`
   with the proposed `session`, which makes it the device's current session; the audio held
-  meanwhile goes to its run. A rejected one gets `state idle` with the proposed `session` (any
-  `state` of that number other than `listening` refuses it): the device drops the proposal
-  without showing it, and its microphone stops unless the current session listens for a follow-up
-  (the older run opened its follow-up window while the wake was held), which keeps it streaming
-  into that window. The current session goes on under its own number, its playback to its end.
-  A lost link drops a proposal. The run log shows the rejected wake as `rejected`, reason
+  meanwhile goes to its run. A wake the check rejects gets `state idle` with the proposed
+  `session` (any `state` of that number other than `listening` refuses it): the device drops the
+  proposal without showing it, and its microphone stops unless the current session listens for a
+  follow-up (the older run opened its follow-up window while the wake was held), which keeps it
+  streaming into that window. The current session goes on under its own number, its playback to
+  its end. A lost link drops a proposal. The run log shows the rejected wake as `rejected`, reason
   `wakeword_reject` (`wakeword_error` when the check timed out or failed and its policy rejects).
+- A wake taken at once is confirmed by the wake word in its recognised phrase (when the second
+  wake-word check is off, it is not checked): one of the first
+  three words of the transcript must start with the `word` of the `wake`, so a wake word fused
+  with the next one («захаркоторый час») counts. A phrase without it gets no `transcript` and no
+  answer — `state transcribing`, then `state idle` — and the run log shows it as `rejected`,
+  reason `wakeword_reject`, with the recognised text. A phrase with it gets the end-of-phrase
+  chime once the wake word is found, and runs like any phrase.
 - One phrase heard by several devices: the server holds a `wake` for 500 ms to collect the wakes
   of the other online devices, or less once every online device has woken; a lone online device
   is not held. With several wakes it rules only once
-  each of them has its pre-roll in, or 500 ms after that device's own `wake`, and the
-  server's second wake-word check has ruled on it; a wake that check rejects takes no part. Once
+  each of them has its pre-roll in, or 500 ms after that device's own `wake`, and, for a `wake`
+  over a running answer, the server's second wake-word check has ruled on it; a wake that check
+  rejects takes no part. Any other wake takes part as it is and its phrase is checked for the
+  wake word only once it has won, so a false one can win its group and start the cooldown. Once
   a device with a speaker is ready, a device without one is not waited for: it cannot win. A
   `wake` over a running answer (above) joins at its `wake` like any other.
   The server keeps one session — a device with a speaker over one without, between equals the
   higher signal-to-noise ratio of the pre-roll, then the earlier wake. Each held device gets
-  `listening` as soon as the second check confirms its wake (at once when that check is off),
+  `listening` as soon as its wake is confirmed (at once unless it is over a running answer),
   without waiting for the ruling; one ruled out by then — in the cooldown, or by the ruling its
   own confirmation completes — gets none, and is never taken: a running answer of that device plays
   on. The devices that lost stream their microphone on until the server's VAD finds the end of the
