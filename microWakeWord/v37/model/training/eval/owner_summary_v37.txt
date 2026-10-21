@@ -1,0 +1,20 @@
+== free session owner_fused_20261021_174249_ch1.wav: 32 phrases, speaker's rule on the continuous stream @0.80
+  v35          hits 14/32 = 43.8% [28.2, 60.7]   outside the phrases 1 [103.94]   VAD-blocked 30
+  ctl_v35node  hits 10/32 = 31.2% [18.0, 48.6]   outside the phrases 1 [103.94]   VAD-blocked 27
+  v36          hits 15/32 = 46.9% [30.9, 63.6]   outside the phrases 1 [104.0]   VAD-blocked 12
+  v37          hits 28/32 = 87.5% [71.9, 95.0]   outside the phrases 1 [103.94]   VAD-blocked 24
+  speaker live (v36): 15 hits, outside [104.02]
+== free session pairwise vs v36
+  v35          only v36: 3 ['seg08', 'seg23', 'seg24']  only v35: 2 ['seg03', 'seg26']  McNemar p=1
+  ctl_v35node  only v36: 5 ['seg08', 'seg21', 'seg23', 'seg24', 'seg29']  only ctl_v35node: 0 []  McNemar p=0.0625
+  v37          only v36: 0 []  only v37: 13 ['seg01', 'seg02', 'seg03', 'seg05', 'seg06', 'seg07', 'seg13', 'seg14', 'seg19', 'seg20', 'seg28', 'seg30', 'seg32']  McNemar p=0.000244
+== free session pairwise vs v35
+  ctl_v35node  only v35: 4 ['seg03', 'seg21', 'seg26', 'seg29']  only ctl_v35node: 0 []  McNemar p=0.125
+  v36          only v35: 2 ['seg03', 'seg26']  only v36: 3 ['seg08', 'seg23', 'seg24']  McNemar p=1
+  v37          only v35: 1 ['seg26']  only v37: 15 ['seg01', 'seg02', 'seg05', 'seg06', 'seg07', 'seg08', 'seg13', 'seg14', 'seg19', 'seg20', 'seg23', 'seg24', 'seg28', 'seg30', 'seg32']  McNemar p=0.000519
+== read negatives (30 phrases of the read session), fires @0.80, speaker's rule on the continuous stream
+  v35          1/30 fired: neg_19.wav «за хлебом сходи»
+  ctl_v35node  3/30 fired: neg_09.wav «захват держит плохо», neg_19.wav «за хлебом сходи», neg_25.wav «сколько времени»
+  v36          1/30 fired: neg_19.wav «за хлебом сходи»
+  v37          trained on them: not counted
+SUMMARY_DONE

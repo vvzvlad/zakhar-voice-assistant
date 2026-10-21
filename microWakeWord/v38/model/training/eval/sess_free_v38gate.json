@@ -1,0 +1,3160 @@
+{
+ "wav": "owner_fused_20261021_174249_ch1.wav",
+ "n_phrases": 32,
+ "device_live": [
+  30.68,
+  50.36,
+  55.86,
+  60.4,
+  65.02,
+  70.71,
+  84.95,
+  91.09,
+  104.02,
+  113.3,
+  135.41,
+  141.62,
+  148.95,
+  153.24,
+  178.81,
+  190.68
+ ],
+ "device_live_outside": [
+  104.02
+ ],
+ "models": {
+  "v35": {
+   "dev_cont_det": [
+    25.22,
+    30.65,
+    55.85,
+    60.35,
+    65.0,
+    70.73,
+    84.95,
+    91.07,
+    103.94,
+    113.33,
+    135.35,
+    141.65,
+    168.29,
+    178.88,
+    190.7
+   ],
+   "dev_cont_outside": [
+    103.94
+   ],
+   "vad_blocked": [
+    55.79,
+    55.82,
+    91.04,
+    96.74,
+    96.77,
+    96.8,
+    96.83,
+    96.86,
+    96.89,
+    96.92,
+    96.95,
+    178.82,
+    178.85,
+    190.64,
+    190.67,
+    196.01,
+    196.04,
+    196.07,
+    196.1,
+    196.13,
+    196.16,
+    196.19,
+    196.52,
+    196.55,
+    200.54,
+    200.57,
+    200.6,
+    200.63,
+    200.66,
+    200.69
+   ],
+   "py_cont_det": [
+    25.22,
+    30.65,
+    55.79,
+    60.35,
+    65.0,
+    70.73,
+    84.95,
+    91.04,
+    96.74,
+    103.97,
+    113.33,
+    135.35,
+    141.65,
+    168.29,
+    178.82,
+    190.64,
+    196.01,
+    197.87,
+    200.54
+   ],
+   "py_cont_outside": [
+    96.74,
+    103.97,
+    196.01,
+    197.87,
+    200.54
+   ],
+   "phrases": [
+    {
+     "id": "seg01",
+     "text": "",
+     "kind": "free",
+     "s": 16.16,
+     "e": 17.16,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.271,
+     "py_cont_peak": 0.272
+    },
+    {
+     "id": "seg02",
+     "text": "час",
+     "kind": "free",
+     "s": 20.2,
+     "e": 21.26,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.011,
+     "py_cont_peak": 0.015
+    },
+    {
+     "id": "seg03",
+     "text": "",
+     "kind": "free",
+     "s": 24.4,
+     "e": 25.62,
+     "live": [],
+     "dev_cont": [
+      25.22
+     ],
+     "py_cont": [
+      25.22
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.801,
+     "py_cont_peak": 0.904
+    },
+    {
+     "id": "seg04",
+     "text": "включи свет",
+     "kind": "free",
+     "s": 30.12,
+     "e": 31.2,
+     "live": [
+      30.68
+     ],
+     "dev_cont": [
+      30.65
+     ],
+     "py_cont": [
+      30.65
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.974,
+     "py_cont_peak": 0.998
+    },
+    {
+     "id": "seg05",
+     "text": "захар сколько времени",
+     "kind": "free",
+     "s": 35.34,
+     "e": 36.32,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.605,
+     "py_cont_peak": 0.682
+    },
+    {
+     "id": "seg06",
+     "text": "захар который час",
+     "kind": "free",
+     "s": 41.32,
+     "e": 42.4,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.246,
+     "py_cont_peak": 0.236
+    },
+    {
+     "id": "seg07",
+     "text": "захар что в кулинария",
+     "kind": "free",
+     "s": 45.24,
+     "e": 46.42,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.005,
+     "py_cont_peak": 0.007
+    },
+    {
+     "id": "seg08",
+     "text": "угля",
+     "kind": "free",
+     "s": 49.76,
+     "e": 50.98,
+     "live": [
+      50.36
+     ],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.192,
+     "py_cont_peak": 0.334
+    },
+    {
+     "id": "seg09",
+     "text": "за включи свет",
+     "kind": "free",
+     "s": 55.18,
+     "e": 56.3,
+     "live": [
+      55.86
+     ],
+     "dev_cont": [
+      55.85
+     ],
+     "py_cont": [
+      55.79
+     ],
+     "vad_blocked": [
+      55.79,
+      55.82
+     ],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "seg10",
+     "text": "захар режим ночь",
+     "kind": "free",
+     "s": 59.72,
+     "e": 61.0,
+     "live": [
+      60.4
+     ],
+     "dev_cont": [
+      60.35
+     ],
+     "py_cont": [
+      60.35
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.995,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "seg11",
+     "text": "захар режим можешь",
+     "kind": "free",
+     "s": 64.44,
+     "e": 65.72,
+     "live": [
+      65.02
+     ],
+     "dev_cont": [
+      65.0
+     ],
+     "py_cont": [
+      65.0
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "seg12",
+     "text": "захар поищи в гугле",
+     "kind": "free",
+     "s": 70.12,
+     "e": 71.4,
+     "live": [
+      70.71
+     ],
+     "dev_cont": [
+      70.73
+     ],
+     "py_cont": [
+      70.73
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.863,
+     "py_cont_peak": 0.988
+    },
+    {
+     "id": "seg13",
+     "text": "захар включи свет",
+     "kind": "free",
+     "s": 73.74,
+     "e": 75.36,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.011,
+     "py_cont_peak": 0.01
+    },
+    {
+     "id": "seg14",
+     "text": "захар королев включи",
+     "kind": "free",
+     "s": 76.18,
+     "e": 80.18,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.081,
+     "py_cont_peak": 0.108
+    },
+    {
+     "id": "seg15",
+     "text": "захар коридор выключи",
+     "kind": "free",
+     "s": 84.38,
+     "e": 86.24,
+     "live": [
+      84.95
+     ],
+     "dev_cont": [
+      84.95
+     ],
+     "py_cont": [
+      84.95
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "seg16",
+     "text": "включи свет в туалете",
+     "kind": "free",
+     "s": 90.5,
+     "e": 91.82,
+     "live": [
+      91.09
+     ],
+     "dev_cont": [
+      91.07
+     ],
+     "py_cont": [
+      91.04
+     ],
+     "vad_blocked": [
+      91.04
+     ],
+     "dev_cont_peak": 0.976,
+     "py_cont_peak": 0.995
+    },
+    {
+     "id": "seg17",
+     "text": "захар включи свет",
+     "kind": "free",
+     "s": 97.16,
+     "e": 98.02,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.851,
+     "py_cont_peak": 0.773
+    },
+    {
+     "id": "seg18",
+     "text": "сколько времени",
+     "kind": "free",
+     "s": 112.76,
+     "e": 114.36,
+     "live": [
+      113.3
+     ],
+     "dev_cont": [
+      113.33
+     ],
+     "py_cont": [
+      113.33
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.882,
+     "py_cont_peak": 0.922
+    },
+    {
+     "id": "seg19",
+     "text": "захарчук делаешь",
+     "kind": "free",
+     "s": 118.46,
+     "e": 119.44,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.109,
+     "py_cont_peak": 0.125
+    },
+    {
+     "id": "seg20",
+     "text": "захар веруешь",
+     "kind": "free",
+     "s": 124.3,
+     "e": 125.7,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.014,
+     "py_cont_peak": 0.022
+    },
+    {
+     "id": "seg21",
+     "text": "захар что с печкой",
+     "kind": "free",
+     "s": 134.76,
+     "e": 135.96,
+     "live": [
+      135.41
+     ],
+     "dev_cont": [
+      135.35
+     ],
+     "py_cont": [
+      135.35
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.861,
+     "py_cont_peak": 0.941
+    },
+    {
+     "id": "seg22",
+     "text": "захар какие глазурью у нас есть",
+     "kind": "free",
+     "s": 141.06,
+     "e": 142.76,
+     "live": [
+      141.62
+     ],
+     "dev_cont": [
+      141.65
+     ],
+     "py_cont": [
+      141.65
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.955,
+     "py_cont_peak": 0.988
+    },
+    {
+     "id": "seg23",
+     "text": "прошлись",
+     "kind": "free",
+     "s": 148.32,
+     "e": 149.32,
+     "live": [
+      148.95
+     ],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.434,
+     "py_cont_peak": 0.449
+    },
+    {
+     "id": "seg24",
+     "text": "давай спать",
+     "kind": "free",
+     "s": 152.66,
+     "e": 153.64,
+     "live": [
+      153.24
+     ],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.348,
+     "py_cont_peak": 0.374
+    },
+    {
+     "id": "seg25",
+     "text": "как захар запиши в за мягче",
+     "kind": "free",
+     "s": 157.36,
+     "e": 159.12,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.694,
+     "py_cont_peak": 0.675
+    },
+    {
+     "id": "seg26",
+     "text": "захаров напиши кому-нибудь ответ",
+     "kind": "free",
+     "s": 166.68,
+     "e": 168.6,
+     "live": [],
+     "dev_cont": [
+      168.29
+     ],
+     "py_cont": [
+      168.29
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.877,
+     "py_cont_peak": 0.92
+    },
+    {
+     "id": "seg27",
+     "text": "",
+     "kind": "free",
+     "s": 169.28,
+     "e": 169.8,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.002,
+     "py_cont_peak": 0.002
+    },
+    {
+     "id": "seg28",
+     "text": "захаров включи радио",
+     "kind": "free",
+     "s": 172.26,
+     "e": 173.78,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.253,
+     "py_cont_peak": 0.254
+    },
+    {
+     "id": "seg29",
+     "text": "захарова включи радио",
+     "kind": "free",
+     "s": 178.24,
+     "e": 179.3,
+     "live": [
+      178.81
+     ],
+     "dev_cont": [
+      178.88
+     ],
+     "py_cont": [
+      178.82
+     ],
+     "vad_blocked": [
+      178.82,
+      178.85
+     ],
+     "dev_cont_peak": 0.972,
+     "py_cont_peak": 0.985
+    },
+    {
+     "id": "seg30",
+     "text": "захар тебя там происходит",
+     "kind": "free",
+     "s": 185.86,
+     "e": 187.56,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.552,
+     "py_cont_peak": 0.515
+    },
+    {
+     "id": "seg31",
+     "text": "захар включи музыку",
+     "kind": "free",
+     "s": 190.12,
+     "e": 191.3,
+     "live": [
+      190.68
+     ],
+     "dev_cont": [
+      190.7
+     ],
+     "py_cont": [
+      190.64
+     ],
+     "vad_blocked": [
+      190.64,
+      190.67
+     ],
+     "dev_cont_peak": 0.983,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "seg32",
+     "text": "поищи в гугле",
+     "kind": "free",
+     "s": 211.12,
+     "e": 212.52,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.021,
+     "py_cont_peak": 0.024
+    }
+   ]
+  },
+  "ctl_v35node": {
+   "dev_cont_det": [
+    30.71,
+    55.85,
+    60.38,
+    65.03,
+    70.76,
+    84.95,
+    91.07,
+    103.94,
+    113.33,
+    141.68,
+    190.73
+   ],
+   "dev_cont_outside": [
+    103.94
+   ],
+   "vad_blocked": [
+    55.79,
+    55.82,
+    91.04,
+    96.77,
+    96.8,
+    96.83,
+    96.86,
+    96.89,
+    96.92,
+    196.04,
+    196.07,
+    196.1,
+    196.13,
+    197.78,
+    197.81,
+    197.84,
+    197.87,
+    197.9,
+    197.93,
+    197.96,
+    200.54,
+    200.57,
+    200.6,
+    200.63,
+    200.66,
+    200.69,
+    240.98
+   ],
+   "py_cont_det": [
+    30.71,
+    55.79,
+    60.38,
+    65.03,
+    70.76,
+    84.95,
+    91.04,
+    96.77,
+    103.94,
+    113.33,
+    141.68,
+    190.7,
+    196.04,
+    197.78,
+    200.54,
+    240.95
+   ],
+   "py_cont_outside": [
+    96.77,
+    103.94,
+    196.04,
+    197.78,
+    200.54,
+    240.95
+   ],
+   "phrases": [
+    {
+     "id": "seg01",
+     "text": "",
+     "kind": "free",
+     "s": 16.16,
+     "e": 17.16,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.052,
+     "py_cont_peak": 0.074
+    },
+    {
+     "id": "seg02",
+     "text": "час",
+     "kind": "free",
+     "s": 20.2,
+     "e": 21.26,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.01,
+     "py_cont_peak": 0.009
+    },
+    {
+     "id": "seg03",
+     "text": "",
+     "kind": "free",
+     "s": 24.4,
+     "e": 25.62,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.215,
+     "py_cont_peak": 0.24
+    },
+    {
+     "id": "seg04",
+     "text": "включи свет",
+     "kind": "free",
+     "s": 30.12,
+     "e": 31.2,
+     "live": [
+      30.68
+     ],
+     "dev_cont": [
+      30.71
+     ],
+     "py_cont": [
+      30.71
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.805,
+     "py_cont_peak": 0.848
+    },
+    {
+     "id": "seg05",
+     "text": "захар сколько времени",
+     "kind": "free",
+     "s": 35.34,
+     "e": 36.32,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.353,
+     "py_cont_peak": 0.311
+    },
+    {
+     "id": "seg06",
+     "text": "захар который час",
+     "kind": "free",
+     "s": 41.32,
+     "e": 42.4,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.075,
+     "py_cont_peak": 0.079
+    },
+    {
+     "id": "seg07",
+     "text": "захар что в кулинария",
+     "kind": "free",
+     "s": 45.24,
+     "e": 46.42,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.017,
+     "py_cont_peak": 0.017
+    },
+    {
+     "id": "seg08",
+     "text": "угля",
+     "kind": "free",
+     "s": 49.76,
+     "e": 50.98,
+     "live": [
+      50.36
+     ],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.02,
+     "py_cont_peak": 0.02
+    },
+    {
+     "id": "seg09",
+     "text": "за включи свет",
+     "kind": "free",
+     "s": 55.18,
+     "e": 56.3,
+     "live": [
+      55.86
+     ],
+     "dev_cont": [
+      55.85
+     ],
+     "py_cont": [
+      55.79
+     ],
+     "vad_blocked": [
+      55.79,
+      55.82
+     ],
+     "dev_cont_peak": 0.99,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "seg10",
+     "text": "захар режим ночь",
+     "kind": "free",
+     "s": 59.72,
+     "e": 61.0,
+     "live": [
+      60.4
+     ],
+     "dev_cont": [
+      60.38
+     ],
+     "py_cont": [
+      60.38
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.909,
+     "py_cont_peak": 0.996
+    },
+    {
+     "id": "seg11",
+     "text": "захар режим можешь",
+     "kind": "free",
+     "s": 64.44,
+     "e": 65.72,
+     "live": [
+      65.02
+     ],
+     "dev_cont": [
+      65.03
+     ],
+     "py_cont": [
+      65.03
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.995,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "seg12",
+     "text": "захар поищи в гугле",
+     "kind": "free",
+     "s": 70.12,
+     "e": 71.4,
+     "live": [
+      70.71
+     ],
+     "dev_cont": [
+      70.76
+     ],
+     "py_cont": [
+      70.76
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.855,
+     "py_cont_peak": 0.892
+    },
+    {
+     "id": "seg13",
+     "text": "захар включи свет",
+     "kind": "free",
+     "s": 73.74,
+     "e": 75.36,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.011,
+     "py_cont_peak": 0.009
+    },
+    {
+     "id": "seg14",
+     "text": "захар королев включи",
+     "kind": "free",
+     "s": 76.18,
+     "e": 80.18,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.023,
+     "py_cont_peak": 0.031
+    },
+    {
+     "id": "seg15",
+     "text": "захар коридор выключи",
+     "kind": "free",
+     "s": 84.38,
+     "e": 86.24,
+     "live": [
+      84.95
+     ],
+     "dev_cont": [
+      84.95
+     ],
+     "py_cont": [
+      84.95
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.97,
+     "py_cont_peak": 0.98
+    },
+    {
+     "id": "seg16",
+     "text": "включи свет в туалете",
+     "kind": "free",
+     "s": 90.5,
+     "e": 91.82,
+     "live": [
+      91.09
+     ],
+     "dev_cont": [
+      91.07
+     ],
+     "py_cont": [
+      91.04
+     ],
+     "vad_blocked": [
+      91.04
+     ],
+     "dev_cont_peak": 0.94,
+     "py_cont_peak": 0.997
+    },
+    {
+     "id": "seg17",
+     "text": "захар включи свет",
+     "kind": "free",
+     "s": 97.16,
+     "e": 98.02,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.723,
+     "py_cont_peak": 0.675
+    },
+    {
+     "id": "seg18",
+     "text": "сколько времени",
+     "kind": "free",
+     "s": 112.76,
+     "e": 114.36,
+     "live": [
+      113.3
+     ],
+     "dev_cont": [
+      113.33
+     ],
+     "py_cont": [
+      113.33
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.819,
+     "py_cont_peak": 0.925
+    },
+    {
+     "id": "seg19",
+     "text": "захарчук делаешь",
+     "kind": "free",
+     "s": 118.46,
+     "e": 119.44,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.082,
+     "py_cont_peak": 0.111
+    },
+    {
+     "id": "seg20",
+     "text": "захар веруешь",
+     "kind": "free",
+     "s": 124.3,
+     "e": 125.7,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.012,
+     "py_cont_peak": 0.012
+    },
+    {
+     "id": "seg21",
+     "text": "захар что с печкой",
+     "kind": "free",
+     "s": 134.76,
+     "e": 135.96,
+     "live": [
+      135.41
+     ],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.788,
+     "py_cont_peak": 0.797
+    },
+    {
+     "id": "seg22",
+     "text": "захар какие глазурью у нас есть",
+     "kind": "free",
+     "s": 141.06,
+     "e": 142.76,
+     "live": [
+      141.62
+     ],
+     "dev_cont": [
+      141.68
+     ],
+     "py_cont": [
+      141.68
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.825,
+     "py_cont_peak": 0.982
+    },
+    {
+     "id": "seg23",
+     "text": "прошлись",
+     "kind": "free",
+     "s": 148.32,
+     "e": 149.32,
+     "live": [
+      148.95
+     ],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.391,
+     "py_cont_peak": 0.464
+    },
+    {
+     "id": "seg24",
+     "text": "давай спать",
+     "kind": "free",
+     "s": 152.66,
+     "e": 153.64,
+     "live": [
+      153.24
+     ],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.586,
+     "py_cont_peak": 0.612
+    },
+    {
+     "id": "seg25",
+     "text": "как захар запиши в за мягче",
+     "kind": "free",
+     "s": 157.36,
+     "e": 159.12,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.08,
+     "py_cont_peak": 0.115
+    },
+    {
+     "id": "seg26",
+     "text": "захаров напиши кому-нибудь ответ",
+     "kind": "free",
+     "s": 166.68,
+     "e": 168.6,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.512,
+     "py_cont_peak": 0.637
+    },
+    {
+     "id": "seg27",
+     "text": "",
+     "kind": "free",
+     "s": 169.28,
+     "e": 169.8,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.005,
+     "py_cont_peak": 0.003
+    },
+    {
+     "id": "seg28",
+     "text": "захаров включи радио",
+     "kind": "free",
+     "s": 172.26,
+     "e": 173.78,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.053,
+     "py_cont_peak": 0.064
+    },
+    {
+     "id": "seg29",
+     "text": "захарова включи радио",
+     "kind": "free",
+     "s": 178.24,
+     "e": 179.3,
+     "live": [
+      178.81
+     ],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.55,
+     "py_cont_peak": 0.565
+    },
+    {
+     "id": "seg30",
+     "text": "захар тебя там происходит",
+     "kind": "free",
+     "s": 185.86,
+     "e": 187.56,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.331,
+     "py_cont_peak": 0.322
+    },
+    {
+     "id": "seg31",
+     "text": "захар включи музыку",
+     "kind": "free",
+     "s": 190.12,
+     "e": 191.3,
+     "live": [
+      190.68
+     ],
+     "dev_cont": [
+      190.73
+     ],
+     "py_cont": [
+      190.7
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.904,
+     "py_cont_peak": 0.979
+    },
+    {
+     "id": "seg32",
+     "text": "поищи в гугле",
+     "kind": "free",
+     "s": 211.12,
+     "e": 212.52,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.004,
+     "py_cont_peak": 0.004
+    }
+   ]
+  },
+  "v36": {
+   "dev_cont_det": [
+    30.68,
+    50.39,
+    55.85,
+    60.35,
+    65.0,
+    70.73,
+    84.92,
+    91.07,
+    104.0,
+    113.3,
+    135.35,
+    141.65,
+    148.97,
+    153.26,
+    178.88,
+    190.7
+   ],
+   "dev_cont_outside": [
+    104.0
+   ],
+   "vad_blocked": [
+    55.79,
+    55.82,
+    91.04,
+    178.82,
+    178.85,
+    196.07,
+    196.1,
+    197.81,
+    197.84,
+    197.87,
+    197.9,
+    197.93
+   ],
+   "py_cont_det": [
+    30.68,
+    50.39,
+    55.79,
+    60.35,
+    65.0,
+    70.73,
+    84.92,
+    91.04,
+    104.0,
+    113.3,
+    135.35,
+    141.65,
+    148.97,
+    153.26,
+    178.82,
+    190.7,
+    196.07,
+    197.81
+   ],
+   "py_cont_outside": [
+    104.0,
+    196.07,
+    197.81
+   ],
+   "phrases": [
+    {
+     "id": "seg01",
+     "text": "",
+     "kind": "free",
+     "s": 16.16,
+     "e": 17.16,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.339,
+     "py_cont_peak": 0.296
+    },
+    {
+     "id": "seg02",
+     "text": "час",
+     "kind": "free",
+     "s": 20.2,
+     "e": 21.26,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.059,
+     "py_cont_peak": 0.061
+    },
+    {
+     "id": "seg03",
+     "text": "",
+     "kind": "free",
+     "s": 24.4,
+     "e": 25.62,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.711,
+     "py_cont_peak": 0.73
+    },
+    {
+     "id": "seg04",
+     "text": "включи свет",
+     "kind": "free",
+     "s": 30.12,
+     "e": 31.2,
+     "live": [
+      30.68
+     ],
+     "dev_cont": [
+      30.68
+     ],
+     "py_cont": [
+      30.68
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.988,
+     "py_cont_peak": 0.999
+    },
+    {
+     "id": "seg05",
+     "text": "захар сколько времени",
+     "kind": "free",
+     "s": 35.34,
+     "e": 36.32,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.711,
+     "py_cont_peak": 0.687
+    },
+    {
+     "id": "seg06",
+     "text": "захар который час",
+     "kind": "free",
+     "s": 41.32,
+     "e": 42.4,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.674,
+     "py_cont_peak": 0.667
+    },
+    {
+     "id": "seg07",
+     "text": "захар что в кулинария",
+     "kind": "free",
+     "s": 45.24,
+     "e": 46.42,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.064,
+     "py_cont_peak": 0.06
+    },
+    {
+     "id": "seg08",
+     "text": "угля",
+     "kind": "free",
+     "s": 49.76,
+     "e": 50.98,
+     "live": [
+      50.36
+     ],
+     "dev_cont": [
+      50.39
+     ],
+     "py_cont": [
+      50.39
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.814,
+     "py_cont_peak": 0.918
+    },
+    {
+     "id": "seg09",
+     "text": "за включи свет",
+     "kind": "free",
+     "s": 55.18,
+     "e": 56.3,
+     "live": [
+      55.86
+     ],
+     "dev_cont": [
+      55.85
+     ],
+     "py_cont": [
+      55.79
+     ],
+     "vad_blocked": [
+      55.79,
+      55.82
+     ],
+     "dev_cont_peak": 0.995,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "seg10",
+     "text": "захар режим ночь",
+     "kind": "free",
+     "s": 59.72,
+     "e": 61.0,
+     "live": [
+      60.4
+     ],
+     "dev_cont": [
+      60.35
+     ],
+     "py_cont": [
+      60.35
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "seg11",
+     "text": "захар режим можешь",
+     "kind": "free",
+     "s": 64.44,
+     "e": 65.72,
+     "live": [
+      65.02
+     ],
+     "dev_cont": [
+      65.0
+     ],
+     "py_cont": [
+      65.0
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "seg12",
+     "text": "захар поищи в гугле",
+     "kind": "free",
+     "s": 70.12,
+     "e": 71.4,
+     "live": [
+      70.71
+     ],
+     "dev_cont": [
+      70.73
+     ],
+     "py_cont": [
+      70.73
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.982,
+     "py_cont_peak": 0.998
+    },
+    {
+     "id": "seg13",
+     "text": "захар включи свет",
+     "kind": "free",
+     "s": 73.74,
+     "e": 75.36,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.291,
+     "py_cont_peak": 0.292
+    },
+    {
+     "id": "seg14",
+     "text": "захар королев включи",
+     "kind": "free",
+     "s": 76.18,
+     "e": 80.18,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.5,
+     "py_cont_peak": 0.502
+    },
+    {
+     "id": "seg15",
+     "text": "захар коридор выключи",
+     "kind": "free",
+     "s": 84.38,
+     "e": 86.24,
+     "live": [
+      84.95
+     ],
+     "dev_cont": [
+      84.92
+     ],
+     "py_cont": [
+      84.92
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "seg16",
+     "text": "включи свет в туалете",
+     "kind": "free",
+     "s": 90.5,
+     "e": 91.82,
+     "live": [
+      91.09
+     ],
+     "dev_cont": [
+      91.07
+     ],
+     "py_cont": [
+      91.04
+     ],
+     "vad_blocked": [
+      91.04
+     ],
+     "dev_cont_peak": 0.989,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "seg17",
+     "text": "захар включи свет",
+     "kind": "free",
+     "s": 97.16,
+     "e": 98.02,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.41,
+     "py_cont_peak": 0.31
+    },
+    {
+     "id": "seg18",
+     "text": "сколько времени",
+     "kind": "free",
+     "s": 112.76,
+     "e": 114.36,
+     "live": [
+      113.3
+     ],
+     "dev_cont": [
+      113.3
+     ],
+     "py_cont": [
+      113.3
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.941,
+     "py_cont_peak": 0.991
+    },
+    {
+     "id": "seg19",
+     "text": "захарчук делаешь",
+     "kind": "free",
+     "s": 118.46,
+     "e": 119.44,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.177,
+     "py_cont_peak": 0.149
+    },
+    {
+     "id": "seg20",
+     "text": "захар веруешь",
+     "kind": "free",
+     "s": 124.3,
+     "e": 125.7,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.023,
+     "py_cont_peak": 0.026
+    },
+    {
+     "id": "seg21",
+     "text": "захар что с печкой",
+     "kind": "free",
+     "s": 134.76,
+     "e": 135.96,
+     "live": [
+      135.41
+     ],
+     "dev_cont": [
+      135.35
+     ],
+     "py_cont": [
+      135.35
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.841,
+     "py_cont_peak": 0.958
+    },
+    {
+     "id": "seg22",
+     "text": "захар какие глазурью у нас есть",
+     "kind": "free",
+     "s": 141.06,
+     "e": 142.76,
+     "live": [
+      141.62
+     ],
+     "dev_cont": [
+      141.65
+     ],
+     "py_cont": [
+      141.65
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "seg23",
+     "text": "прошлись",
+     "kind": "free",
+     "s": 148.32,
+     "e": 149.32,
+     "live": [
+      148.95
+     ],
+     "dev_cont": [
+      148.97
+     ],
+     "py_cont": [
+      148.97
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.848,
+     "py_cont_peak": 0.841
+    },
+    {
+     "id": "seg24",
+     "text": "давай спать",
+     "kind": "free",
+     "s": 152.66,
+     "e": 153.64,
+     "live": [
+      153.24
+     ],
+     "dev_cont": [
+      153.26
+     ],
+     "py_cont": [
+      153.26
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.85,
+     "py_cont_peak": 0.907
+    },
+    {
+     "id": "seg25",
+     "text": "как захар запиши в за мягче",
+     "kind": "free",
+     "s": 157.36,
+     "e": 159.12,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.027,
+     "py_cont_peak": 0.027
+    },
+    {
+     "id": "seg26",
+     "text": "захаров напиши кому-нибудь ответ",
+     "kind": "free",
+     "s": 166.68,
+     "e": 168.6,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.218,
+     "py_cont_peak": 0.219
+    },
+    {
+     "id": "seg27",
+     "text": "",
+     "kind": "free",
+     "s": 169.28,
+     "e": 169.8,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.0,
+     "py_cont_peak": 0.0
+    },
+    {
+     "id": "seg28",
+     "text": "захаров включи радио",
+     "kind": "free",
+     "s": 172.26,
+     "e": 173.78,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.679,
+     "py_cont_peak": 0.616
+    },
+    {
+     "id": "seg29",
+     "text": "захарова включи радио",
+     "kind": "free",
+     "s": 178.24,
+     "e": 179.3,
+     "live": [
+      178.81
+     ],
+     "dev_cont": [
+      178.88
+     ],
+     "py_cont": [
+      178.82
+     ],
+     "vad_blocked": [
+      178.82,
+      178.85
+     ],
+     "dev_cont_peak": 0.902,
+     "py_cont_peak": 0.918
+    },
+    {
+     "id": "seg30",
+     "text": "захар тебя там происходит",
+     "kind": "free",
+     "s": 185.86,
+     "e": 187.56,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.636,
+     "py_cont_peak": 0.628
+    },
+    {
+     "id": "seg31",
+     "text": "захар включи музыку",
+     "kind": "free",
+     "s": 190.12,
+     "e": 191.3,
+     "live": [
+      190.68
+     ],
+     "dev_cont": [
+      190.7
+     ],
+     "py_cont": [
+      190.7
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.984,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "seg32",
+     "text": "поищи в гугле",
+     "kind": "free",
+     "s": 211.12,
+     "e": 212.52,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.02,
+     "py_cont_peak": 0.027
+    }
+   ]
+  },
+  "v37": {
+   "dev_cont_det": [
+    16.73,
+    20.81,
+    25.13,
+    30.62,
+    35.87,
+    41.87,
+    45.83,
+    50.3,
+    55.85,
+    60.26,
+    64.94,
+    70.67,
+    74.81,
+    79.37,
+    84.86,
+    91.07,
+    103.94,
+    113.27,
+    118.97,
+    124.91,
+    135.35,
+    141.59,
+    148.82,
+    153.14,
+    172.82,
+    178.88,
+    186.8,
+    190.7,
+    211.7
+   ],
+   "dev_cont_outside": [
+    103.94
+   ],
+   "vad_blocked": [
+    55.7,
+    55.73,
+    55.76,
+    55.79,
+    55.82,
+    90.98,
+    91.01,
+    91.04,
+    135.2,
+    135.23,
+    135.26,
+    135.29,
+    135.32,
+    178.73,
+    178.76,
+    178.79,
+    178.82,
+    178.85,
+    186.74,
+    186.77,
+    190.58,
+    190.61,
+    190.64,
+    190.67
+   ],
+   "py_cont_det": [
+    16.73,
+    20.81,
+    25.13,
+    30.62,
+    35.87,
+    41.87,
+    45.83,
+    50.3,
+    55.7,
+    60.26,
+    64.94,
+    70.67,
+    74.81,
+    79.37,
+    84.86,
+    90.98,
+    103.94,
+    113.27,
+    118.97,
+    124.91,
+    135.23,
+    141.59,
+    148.82,
+    153.14,
+    172.82,
+    178.73,
+    186.74,
+    190.61,
+    211.7
+   ],
+   "py_cont_outside": [
+    103.94
+   ],
+   "phrases": [
+    {
+     "id": "seg01",
+     "text": "",
+     "kind": "free",
+     "s": 16.16,
+     "e": 17.16,
+     "live": [],
+     "dev_cont": [
+      16.73
+     ],
+     "py_cont": [
+      16.73
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.995,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "seg02",
+     "text": "час",
+     "kind": "free",
+     "s": 20.2,
+     "e": 21.26,
+     "live": [],
+     "dev_cont": [
+      20.81
+     ],
+     "py_cont": [
+      20.81
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.872,
+     "py_cont_peak": 0.904
+    },
+    {
+     "id": "seg03",
+     "text": "",
+     "kind": "free",
+     "s": 24.4,
+     "e": 25.62,
+     "live": [],
+     "dev_cont": [
+      25.13
+     ],
+     "py_cont": [
+      25.13
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.847,
+     "py_cont_peak": 0.871
+    },
+    {
+     "id": "seg04",
+     "text": "включи свет",
+     "kind": "free",
+     "s": 30.12,
+     "e": 31.2,
+     "live": [
+      30.68
+     ],
+     "dev_cont": [
+      30.62
+     ],
+     "py_cont": [
+      30.62
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "seg05",
+     "text": "захар сколько времени",
+     "kind": "free",
+     "s": 35.34,
+     "e": 36.32,
+     "live": [],
+     "dev_cont": [
+      35.87
+     ],
+     "py_cont": [
+      35.87
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "seg06",
+     "text": "захар который час",
+     "kind": "free",
+     "s": 41.32,
+     "e": 42.4,
+     "live": [],
+     "dev_cont": [
+      41.87
+     ],
+     "py_cont": [
+      41.87
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "seg07",
+     "text": "захар что в кулинария",
+     "kind": "free",
+     "s": 45.24,
+     "e": 46.42,
+     "live": [],
+     "dev_cont": [
+      45.83
+     ],
+     "py_cont": [
+      45.83
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.905,
+     "py_cont_peak": 0.978
+    },
+    {
+     "id": "seg08",
+     "text": "угля",
+     "kind": "free",
+     "s": 49.76,
+     "e": 50.98,
+     "live": [
+      50.36
+     ],
+     "dev_cont": [
+      50.3
+     ],
+     "py_cont": [
+      50.3
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "seg09",
+     "text": "за включи свет",
+     "kind": "free",
+     "s": 55.18,
+     "e": 56.3,
+     "live": [
+      55.86
+     ],
+     "dev_cont": [
+      55.85
+     ],
+     "py_cont": [
+      55.7
+     ],
+     "vad_blocked": [
+      55.7,
+      55.73,
+      55.76,
+      55.79,
+      55.82
+     ],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "seg10",
+     "text": "захар режим ночь",
+     "kind": "free",
+     "s": 59.72,
+     "e": 61.0,
+     "live": [
+      60.4
+     ],
+     "dev_cont": [
+      60.26
+     ],
+     "py_cont": [
+      60.26
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "seg11",
+     "text": "захар режим можешь",
+     "kind": "free",
+     "s": 64.44,
+     "e": 65.72,
+     "live": [
+      65.02
+     ],
+     "dev_cont": [
+      64.94
+     ],
+     "py_cont": [
+      64.94
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "seg12",
+     "text": "захар поищи в гугле",
+     "kind": "free",
+     "s": 70.12,
+     "e": 71.4,
+     "live": [
+      70.71
+     ],
+     "dev_cont": [
+      70.67
+     ],
+     "py_cont": [
+      70.67
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "seg13",
+     "text": "захар включи свет",
+     "kind": "free",
+     "s": 73.74,
+     "e": 75.36,
+     "live": [],
+     "dev_cont": [
+      74.81
+     ],
+     "py_cont": [
+      74.81
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.9,
+     "py_cont_peak": 0.965
+    },
+    {
+     "id": "seg14",
+     "text": "захар королев включи",
+     "kind": "free",
+     "s": 76.18,
+     "e": 80.18,
+     "live": [],
+     "dev_cont": [
+      79.37
+     ],
+     "py_cont": [
+      79.37
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.966,
+     "py_cont_peak": 0.983
+    },
+    {
+     "id": "seg15",
+     "text": "захар коридор выключи",
+     "kind": "free",
+     "s": 84.38,
+     "e": 86.24,
+     "live": [
+      84.95
+     ],
+     "dev_cont": [
+      84.86
+     ],
+     "py_cont": [
+      84.86
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "seg16",
+     "text": "включи свет в туалете",
+     "kind": "free",
+     "s": 90.5,
+     "e": 91.82,
+     "live": [
+      91.09
+     ],
+     "dev_cont": [
+      91.07
+     ],
+     "py_cont": [
+      90.98
+     ],
+     "vad_blocked": [
+      90.98,
+      91.01,
+      91.04
+     ],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "seg17",
+     "text": "захар включи свет",
+     "kind": "free",
+     "s": 97.16,
+     "e": 98.02,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.578,
+     "py_cont_peak": 0.541
+    },
+    {
+     "id": "seg18",
+     "text": "сколько времени",
+     "kind": "free",
+     "s": 112.76,
+     "e": 114.36,
+     "live": [
+      113.3
+     ],
+     "dev_cont": [
+      113.27
+     ],
+     "py_cont": [
+      113.27
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.993,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "seg19",
+     "text": "захарчук делаешь",
+     "kind": "free",
+     "s": 118.46,
+     "e": 119.44,
+     "live": [],
+     "dev_cont": [
+      118.97
+     ],
+     "py_cont": [
+      118.97
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.995,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "seg20",
+     "text": "захар веруешь",
+     "kind": "free",
+     "s": 124.3,
+     "e": 125.7,
+     "live": [],
+     "dev_cont": [
+      124.91
+     ],
+     "py_cont": [
+      124.91
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.879,
+     "py_cont_peak": 0.93
+    },
+    {
+     "id": "seg21",
+     "text": "захар что с печкой",
+     "kind": "free",
+     "s": 134.76,
+     "e": 135.96,
+     "live": [
+      135.41
+     ],
+     "dev_cont": [
+      135.35
+     ],
+     "py_cont": [
+      135.23
+     ],
+     "vad_blocked": [
+      135.2,
+      135.23,
+      135.26,
+      135.29,
+      135.32
+     ],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "seg22",
+     "text": "захар какие глазурью у нас есть",
+     "kind": "free",
+     "s": 141.06,
+     "e": 142.76,
+     "live": [
+      141.62
+     ],
+     "dev_cont": [
+      141.59
+     ],
+     "py_cont": [
+      141.59
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "seg23",
+     "text": "прошлись",
+     "kind": "free",
+     "s": 148.32,
+     "e": 149.32,
+     "live": [
+      148.95
+     ],
+     "dev_cont": [
+      148.82
+     ],
+     "py_cont": [
+      148.82
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "seg24",
+     "text": "давай спать",
+     "kind": "free",
+     "s": 152.66,
+     "e": 153.64,
+     "live": [
+      153.24
+     ],
+     "dev_cont": [
+      153.14
+     ],
+     "py_cont": [
+      153.14
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "seg25",
+     "text": "как захар запиши в за мягче",
+     "kind": "free",
+     "s": 157.36,
+     "e": 159.12,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.007,
+     "py_cont_peak": 0.01
+    },
+    {
+     "id": "seg26",
+     "text": "захаров напиши кому-нибудь ответ",
+     "kind": "free",
+     "s": 166.68,
+     "e": 168.6,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.325,
+     "py_cont_peak": 0.293
+    },
+    {
+     "id": "seg27",
+     "text": "",
+     "kind": "free",
+     "s": 169.28,
+     "e": 169.8,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.001,
+     "py_cont_peak": 0.0
+    },
+    {
+     "id": "seg28",
+     "text": "захаров включи радио",
+     "kind": "free",
+     "s": 172.26,
+     "e": 173.78,
+     "live": [],
+     "dev_cont": [
+      172.82
+     ],
+     "py_cont": [
+      172.82
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.927,
+     "py_cont_peak": 0.988
+    },
+    {
+     "id": "seg29",
+     "text": "захарова включи радио",
+     "kind": "free",
+     "s": 178.24,
+     "e": 179.3,
+     "live": [
+      178.81
+     ],
+     "dev_cont": [
+      178.88
+     ],
+     "py_cont": [
+      178.73
+     ],
+     "vad_blocked": [
+      178.73,
+      178.76,
+      178.79,
+      178.82,
+      178.85
+     ],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "seg30",
+     "text": "захар тебя там происходит",
+     "kind": "free",
+     "s": 185.86,
+     "e": 187.56,
+     "live": [],
+     "dev_cont": [
+      186.8
+     ],
+     "py_cont": [
+      186.74
+     ],
+     "vad_blocked": [
+      186.74,
+      186.77
+     ],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "seg31",
+     "text": "захар включи музыку",
+     "kind": "free",
+     "s": 190.12,
+     "e": 191.3,
+     "live": [
+      190.68
+     ],
+     "dev_cont": [
+      190.7
+     ],
+     "py_cont": [
+      190.61
+     ],
+     "vad_blocked": [
+      190.58,
+      190.61,
+      190.64,
+      190.67
+     ],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "seg32",
+     "text": "поищи в гугле",
+     "kind": "free",
+     "s": 211.12,
+     "e": 212.52,
+     "live": [],
+     "dev_cont": [
+      211.7
+     ],
+     "py_cont": [
+      211.7
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.898,
+     "py_cont_peak": 0.875
+    }
+   ]
+  },
+  "v38": {
+   "dev_cont_det": [
+    16.7,
+    20.78,
+    25.13,
+    30.62,
+    35.87,
+    41.84,
+    45.83,
+    50.3,
+    55.85,
+    60.26,
+    64.91,
+    70.67,
+    74.81,
+    79.37,
+    84.86,
+    91.07,
+    97.73,
+    103.94,
+    113.24,
+    118.97,
+    124.91,
+    135.35,
+    141.59,
+    148.82,
+    153.14,
+    172.82,
+    178.88,
+    186.8,
+    190.7,
+    211.7
+   ],
+   "dev_cont_outside": [
+    103.94
+   ],
+   "vad_blocked": [
+    55.7,
+    55.73,
+    55.76,
+    55.79,
+    55.82,
+    74.78,
+    90.98,
+    91.01,
+    91.04,
+    96.83,
+    96.86,
+    96.89,
+    135.2,
+    135.23,
+    135.26,
+    135.29,
+    135.32,
+    172.79,
+    178.73,
+    178.76,
+    178.79,
+    178.82,
+    178.85,
+    186.74,
+    186.77,
+    190.58,
+    190.61,
+    190.64,
+    190.67,
+    211.67
+   ],
+   "py_cont_det": [
+    16.7,
+    20.78,
+    25.1,
+    30.62,
+    35.87,
+    41.84,
+    45.83,
+    50.3,
+    55.7,
+    60.26,
+    64.91,
+    70.67,
+    74.78,
+    79.37,
+    84.86,
+    90.98,
+    96.8,
+    97.73,
+    103.94,
+    113.24,
+    118.97,
+    124.91,
+    135.2,
+    141.59,
+    148.82,
+    153.14,
+    172.79,
+    178.73,
+    186.74,
+    190.58,
+    211.67
+   ],
+   "py_cont_outside": [
+    96.8,
+    103.94
+   ],
+   "phrases": [
+    {
+     "id": "seg01",
+     "text": "",
+     "kind": "free",
+     "s": 16.16,
+     "e": 17.16,
+     "live": [],
+     "dev_cont": [
+      16.7
+     ],
+     "py_cont": [
+      16.7
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "seg02",
+     "text": "час",
+     "kind": "free",
+     "s": 20.2,
+     "e": 21.26,
+     "live": [],
+     "dev_cont": [
+      20.78
+     ],
+     "py_cont": [
+      20.78
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.804,
+     "py_cont_peak": 0.929
+    },
+    {
+     "id": "seg03",
+     "text": "",
+     "kind": "free",
+     "s": 24.4,
+     "e": 25.62,
+     "live": [],
+     "dev_cont": [
+      25.13
+     ],
+     "py_cont": [
+      25.1
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.841,
+     "py_cont_peak": 0.914
+    },
+    {
+     "id": "seg04",
+     "text": "включи свет",
+     "kind": "free",
+     "s": 30.12,
+     "e": 31.2,
+     "live": [
+      30.68
+     ],
+     "dev_cont": [
+      30.62
+     ],
+     "py_cont": [
+      30.62
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "seg05",
+     "text": "захар сколько времени",
+     "kind": "free",
+     "s": 35.34,
+     "e": 36.32,
+     "live": [],
+     "dev_cont": [
+      35.87
+     ],
+     "py_cont": [
+      35.87
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "seg06",
+     "text": "захар который час",
+     "kind": "free",
+     "s": 41.32,
+     "e": 42.4,
+     "live": [],
+     "dev_cont": [
+      41.84
+     ],
+     "py_cont": [
+      41.84
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "seg07",
+     "text": "захар что в кулинария",
+     "kind": "free",
+     "s": 45.24,
+     "e": 46.42,
+     "live": [],
+     "dev_cont": [
+      45.83
+     ],
+     "py_cont": [
+      45.83
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.887,
+     "py_cont_peak": 0.945
+    },
+    {
+     "id": "seg08",
+     "text": "угля",
+     "kind": "free",
+     "s": 49.76,
+     "e": 50.98,
+     "live": [
+      50.36
+     ],
+     "dev_cont": [
+      50.3
+     ],
+     "py_cont": [
+      50.3
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "seg09",
+     "text": "за включи свет",
+     "kind": "free",
+     "s": 55.18,
+     "e": 56.3,
+     "live": [
+      55.86
+     ],
+     "dev_cont": [
+      55.85
+     ],
+     "py_cont": [
+      55.7
+     ],
+     "vad_blocked": [
+      55.7,
+      55.73,
+      55.76,
+      55.79,
+      55.82
+     ],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "seg10",
+     "text": "захар режим ночь",
+     "kind": "free",
+     "s": 59.72,
+     "e": 61.0,
+     "live": [
+      60.4
+     ],
+     "dev_cont": [
+      60.26
+     ],
+     "py_cont": [
+      60.26
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "seg11",
+     "text": "захар режим можешь",
+     "kind": "free",
+     "s": 64.44,
+     "e": 65.72,
+     "live": [
+      65.02
+     ],
+     "dev_cont": [
+      64.91
+     ],
+     "py_cont": [
+      64.91
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "seg12",
+     "text": "захар поищи в гугле",
+     "kind": "free",
+     "s": 70.12,
+     "e": 71.4,
+     "live": [
+      70.71
+     ],
+     "dev_cont": [
+      70.67
+     ],
+     "py_cont": [
+      70.67
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "seg13",
+     "text": "захар включи свет",
+     "kind": "free",
+     "s": 73.74,
+     "e": 75.36,
+     "live": [],
+     "dev_cont": [
+      74.81
+     ],
+     "py_cont": [
+      74.78
+     ],
+     "vad_blocked": [
+      74.78
+     ],
+     "dev_cont_peak": 0.963,
+     "py_cont_peak": 0.991
+    },
+    {
+     "id": "seg14",
+     "text": "захар королев включи",
+     "kind": "free",
+     "s": 76.18,
+     "e": 80.18,
+     "live": [],
+     "dev_cont": [
+      79.37
+     ],
+     "py_cont": [
+      79.37
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.964,
+     "py_cont_peak": 0.995
+    },
+    {
+     "id": "seg15",
+     "text": "захар коридор выключи",
+     "kind": "free",
+     "s": 84.38,
+     "e": 86.24,
+     "live": [
+      84.95
+     ],
+     "dev_cont": [
+      84.86
+     ],
+     "py_cont": [
+      84.86
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "seg16",
+     "text": "включи свет в туалете",
+     "kind": "free",
+     "s": 90.5,
+     "e": 91.82,
+     "live": [
+      91.09
+     ],
+     "dev_cont": [
+      91.07
+     ],
+     "py_cont": [
+      90.98
+     ],
+     "vad_blocked": [
+      90.98,
+      91.01,
+      91.04
+     ],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "seg17",
+     "text": "захар включи свет",
+     "kind": "free",
+     "s": 97.16,
+     "e": 98.02,
+     "live": [],
+     "dev_cont": [
+      97.73
+     ],
+     "py_cont": [
+      97.73
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.879,
+     "py_cont_peak": 0.954
+    },
+    {
+     "id": "seg18",
+     "text": "сколько времени",
+     "kind": "free",
+     "s": 112.76,
+     "e": 114.36,
+     "live": [
+      113.3
+     ],
+     "dev_cont": [
+      113.24
+     ],
+     "py_cont": [
+      113.24
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "seg19",
+     "text": "захарчук делаешь",
+     "kind": "free",
+     "s": 118.46,
+     "e": 119.44,
+     "live": [],
+     "dev_cont": [
+      118.97
+     ],
+     "py_cont": [
+      118.97
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.991,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "seg20",
+     "text": "захар веруешь",
+     "kind": "free",
+     "s": 124.3,
+     "e": 125.7,
+     "live": [],
+     "dev_cont": [
+      124.91
+     ],
+     "py_cont": [
+      124.91
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.884,
+     "py_cont_peak": 0.874
+    },
+    {
+     "id": "seg21",
+     "text": "захар что с печкой",
+     "kind": "free",
+     "s": 134.76,
+     "e": 135.96,
+     "live": [
+      135.41
+     ],
+     "dev_cont": [
+      135.35
+     ],
+     "py_cont": [
+      135.2
+     ],
+     "vad_blocked": [
+      135.2,
+      135.23,
+      135.26,
+      135.29,
+      135.32
+     ],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "seg22",
+     "text": "захар какие глазурью у нас есть",
+     "kind": "free",
+     "s": 141.06,
+     "e": 142.76,
+     "live": [
+      141.62
+     ],
+     "dev_cont": [
+      141.59
+     ],
+     "py_cont": [
+      141.59
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "seg23",
+     "text": "прошлись",
+     "kind": "free",
+     "s": 148.32,
+     "e": 149.32,
+     "live": [
+      148.95
+     ],
+     "dev_cont": [
+      148.82
+     ],
+     "py_cont": [
+      148.82
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "seg24",
+     "text": "давай спать",
+     "kind": "free",
+     "s": 152.66,
+     "e": 153.64,
+     "live": [
+      153.24
+     ],
+     "dev_cont": [
+      153.14
+     ],
+     "py_cont": [
+      153.14
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "seg25",
+     "text": "как захар запиши в за мягче",
+     "kind": "free",
+     "s": 157.36,
+     "e": 159.12,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.004,
+     "py_cont_peak": 0.004
+    },
+    {
+     "id": "seg26",
+     "text": "захаров напиши кому-нибудь ответ",
+     "kind": "free",
+     "s": 166.68,
+     "e": 168.6,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.331,
+     "py_cont_peak": 0.278
+    },
+    {
+     "id": "seg27",
+     "text": "",
+     "kind": "free",
+     "s": 169.28,
+     "e": 169.8,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.002,
+     "py_cont_peak": 0.002
+    },
+    {
+     "id": "seg28",
+     "text": "захаров включи радио",
+     "kind": "free",
+     "s": 172.26,
+     "e": 173.78,
+     "live": [],
+     "dev_cont": [
+      172.82
+     ],
+     "py_cont": [
+      172.79
+     ],
+     "vad_blocked": [
+      172.79
+     ],
+     "dev_cont_peak": 0.985,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "seg29",
+     "text": "захарова включи радио",
+     "kind": "free",
+     "s": 178.24,
+     "e": 179.3,
+     "live": [
+      178.81
+     ],
+     "dev_cont": [
+      178.88
+     ],
+     "py_cont": [
+      178.73
+     ],
+     "vad_blocked": [
+      178.73,
+      178.76,
+      178.79,
+      178.82,
+      178.85
+     ],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "seg30",
+     "text": "захар тебя там происходит",
+     "kind": "free",
+     "s": 185.86,
+     "e": 187.56,
+     "live": [],
+     "dev_cont": [
+      186.8
+     ],
+     "py_cont": [
+      186.74
+     ],
+     "vad_blocked": [
+      186.74,
+      186.77
+     ],
+     "dev_cont_peak": 0.995,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "seg31",
+     "text": "захар включи музыку",
+     "kind": "free",
+     "s": 190.12,
+     "e": 191.3,
+     "live": [
+      190.68
+     ],
+     "dev_cont": [
+      190.7
+     ],
+     "py_cont": [
+      190.58
+     ],
+     "vad_blocked": [
+      190.58,
+      190.61,
+      190.64,
+      190.67
+     ],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "seg32",
+     "text": "поищи в гугле",
+     "kind": "free",
+     "s": 211.12,
+     "e": 212.52,
+     "live": [],
+     "dev_cont": [
+      211.7
+     ],
+     "py_cont": [
+      211.67
+     ],
+     "vad_blocked": [
+      211.67
+     ],
+     "dev_cont_peak": 0.917,
+     "py_cont_peak": 0.899
+    }
+   ]
+  }
+ }
+}

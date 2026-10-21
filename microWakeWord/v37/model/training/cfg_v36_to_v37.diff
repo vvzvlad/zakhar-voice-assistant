@@ -1,0 +1,17 @@
+2c2
+< train_dir: /home/claude/zakhar-mww/v36/models/zakhar_v36
+---
+> train_dir: /home/claude/zakhar-mww/v37/models/zakhar_v37
+184a185,196
+>   sampling_weight: 8.0
+>   penalty_weight: 8.0
+>   truth: false
+>   truncation_strategy: truncate_start
+>   type: mmap
+> - features_dir: /home/claude/zakhar-mww/v37/features/features_owner_pos
+>   sampling_weight: 18.0
+>   penalty_weight: 1.0
+>   truth: true
+>   truncation_strategy: truncate_start
+>   type: mmap
+> - features_dir: /home/claude/zakhar-mww/v37/features/features_owner_neg

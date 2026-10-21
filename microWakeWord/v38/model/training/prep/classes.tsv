@@ -1,0 +1,119 @@
+run	time	result	reason	dur	ch1_side	gain_applied	text_ch1	text_ch0	class	zakhar_heard_in
+3702	2026-10-16 17:14:08	empty	endpoint	2.82	right	4		захар	pos	ch0
+3704	2026-10-16 18:53:06	rejected	wakeword_reject	2.53	right	4			neg	-
+3705	2026-10-19 00:53:41	rejected	wakeword_reject	2.56	right	4			neg	-
+3706	2026-10-19 00:54:59	rejected	wakeword_reject	2.56	right	4			neg	-
+3707	2026-10-19 00:58:34	rejected	wakeword_reject	2.62	right	4			neg	-
+3710	2026-10-19 03:01:07	rejected	wakeword_reject	2.56	right	4			neg	-
+3711	2026-10-19 03:02:35	rejected	wakeword_reject	2.56	right	4			neg	-
+3712	2026-10-19 03:04:49	rejected	wakeword_reject	2.56	right	4			neg	-
+3713	2026-10-19 03:06:01	rejected	wakeword_reject	2.56	right	4			neg	-
+3719	2026-10-19 03:39:46	rejected	wakeword_reject	2.53	right	4	захар включи свет	захар включи свет	pos	ch1+ch0
+3721	2026-10-19 03:51:43	rejected	wakeword_reject	2.59	right	4		включи свет	neg	-
+3727	2026-10-19 04:37:32	rejected	wakeword_reject	2.72	right	4			neg	-
+3730	2026-10-19 05:23:39	rejected	wakeword_reject	3.33	right	4		узнай у агента какие глазури заканчивают	neg	-
+3734	2026-10-19 05:32:50	rejected	wakeword_reject	2.66	right	4			neg	-
+3735	2026-10-19 05:34:07	rejected	wakeword_reject	2.66	right	4			neg	-
+3737	2026-10-19 08:05:31	rejected	wakeword_reject	2.62	right	4			neg	-
+3738	2026-10-19 12:42:15	rejected	wakeword_reject	2.82	right	4			neg	-
+3739	2026-10-19 12:47:37	rejected	wakeword_reject	2.56	right	4			neg	-
+3740	2026-10-19 12:47:43	rejected	wakeword_reject	2.62	right	4			neg	-
+3741	2026-10-19 12:47:51	rejected	wakeword_reject	2.59	right	4			neg	-
+3742	2026-10-19 12:49:36	rejected	wakeword_reject	2.82	right	4			neg	-
+3743	2026-10-19 12:50:50	rejected	wakeword_reject	2.66	right	4			neg	-
+3746	2026-10-19 14:09:43	rejected	wakeword_reject	2.62	right	4			neg	-
+3747	2026-10-19 14:14:05	rejected	wakeword_reject	2.62	right	4			neg	-
+3748	2026-10-19 15:40:38	rejected	wakeword_reject	2.62	right	4			neg	-
+3749	2026-10-19 15:40:59	rejected	wakeword_reject	2.62	right	4			neg	-
+3752	2026-10-19 15:46:12	rejected	wakeword_reject	2.62	right	4			neg	-
+3758	2026-10-19 16:00:51	rejected	wakeword_reject	2.66	right	4			neg	-
+3788	2026-10-19 16:58:12	rejected	wakeword_reject	2.62	right	1			neg	-
+3789	2026-10-19 17:02:19	rejected	wakeword_reject	2.75	right	1			neg	-
+3797	2026-10-19 17:18:56	rejected	wakeword_reject	2.75	right	1			neg	-
+3798	2026-10-19 17:30:00	rejected	wakeword_reject	2.62	right	1			neg	-
+3799	2026-10-19 17:34:17	rejected	wakeword_reject	2.66	right	1			neg	-
+3800	2026-10-19 17:48:17	rejected	wakeword_reject	2.69	right	1			neg	-
+3802	2026-10-19 17:56:05	rejected	wakeword_reject	2.69	right	1		захар	pos	ch0
+3803	2026-10-19 17:56:13	rejected	wakeword_reject	2.62	right	1			neg	-
+3804	2026-10-19 17:58:23	rejected	wakeword_reject	2.69	right	1	захар	захар	pos	ch1+ch0
+3806	2026-10-19 18:05:35	rejected	wakeword_reject	2.66	right	1			neg	-
+3807	2026-10-19 18:06:27	rejected	wakeword_reject	2.62	right	1			neg	-
+3824	2026-10-19 18:29:04	rejected	wakeword_reject	2.66	right	1		а	neg	-
+3825	2026-10-19 18:29:27	rejected	wakeword_reject	2.82	right	1			neg	-
+3839	2026-10-19 18:44:44	rejected	wakeword_reject	2.85	right	1	сбер включи свет на столе	захар включи свет на столе	pos	ch0
+3841	2026-10-19 18:44:50	rejected	wakeword_reject	2.82	right	1	сбер включи свет	захар включи свет на столе	pos	ch0
+3843	2026-10-19 18:45:26	rejected	wakeword_reject	2.62	right	1			neg	-
+3845	2026-10-19 19:20:53	rejected	wakeword_reject	2.62	right	1			neg	-
+3848	2026-10-19 19:36:31	rejected	wakeword_reject	2.66	right	1			neg	-
+3851	2026-10-19 19:38:26	rejected	wakeword_reject	2.78	right	1	расскажи анекдот	ха расскажи анекдот	neg	-
+3853	2026-10-19 19:38:40	rejected	wakeword_reject	2.66	right	1		вот еще один два экономиста что это	neg	-
+3864	2026-10-19 20:23:33	rejected	wakeword_reject	2.72	right	1			neg	-
+3884	2026-10-19 21:14:17	rejected	wakeword_reject	2.59	right	1			neg	-
+3890	2026-10-19 22:28:38	rejected	wakeword_reject	2.56	right	1	сука	сука	neg	-
+3939	2026-10-19 23:47:17	rejected	wakeword_reject	2.56	right	1		самое	neg	-
+3940	2026-10-20 00:11:25	rejected	wakeword_reject	2.78	right	1			neg	-
+3941	2026-10-20 00:12:01	rejected	wakeword_reject	2.66	right	1			neg	-
+3956	2026-10-20 01:53:46	rejected	wakeword_reject	3.84	right	1			neg	-
+3960	2026-10-20 02:04:23	rejected	wakeword_reject	2.72	right	1	захар	я знаю что	pos	ch1
+4009	2026-10-20 07:42:49	rejected	wakeword_reject	2.72	right	1			neg	-
+4010	2026-10-20 11:24:52	rejected	wakeword_reject	2.69	right	1			neg	-
+4011	2026-10-20 11:46:05	rejected	wakeword_reject	2.66	right	1			neg	-
+4012	2026-10-20 11:49:03	rejected	wakeword_reject	2.69	right	1			neg	-
+4013	2026-10-20 11:55:15	rejected	wakeword_reject	2.66	right	1		да	neg	-
+4014	2026-10-20 11:58:14	rejected	wakeword_reject	2.66	right	1		да	neg	-
+4015	2026-10-20 12:03:46	rejected	wakeword_reject	2.62	right	1			neg	-
+4016	2026-10-20 12:10:59	rejected	wakeword_reject	2.62	right	1			neg	-
+4017	2026-10-20 12:11:56	rejected	wakeword_reject	2.62	right	1			neg	-
+4018	2026-10-20 12:15:22	rejected	wakeword_reject	2.72	right	1			neg	-
+4019	2026-10-20 12:24:41	rejected	wakeword_reject	2.66	right	1			neg	-
+4020	2026-10-20 12:28:58	rejected	wakeword_reject	2.66	right	1		а	neg	-
+4021	2026-10-20 12:29:36	rejected	wakeword_reject	2.66	right	1		а	neg	-
+4022	2026-10-20 12:32:24	rejected	wakeword_reject	2.66	right	1			neg	-
+4023	2026-10-20 12:32:25	rejected	wakeword_reject	2.66	right	1			neg	-
+4024	2026-10-20 12:32:43	rejected	wakeword_reject	2.62	right	1			neg	-
+4025	2026-10-20 12:33:06	rejected	wakeword_reject	2.62	right	1			neg	-
+4026	2026-10-20 12:33:16	rejected	wakeword_reject	2.69	right	1			neg	-
+4027	2026-10-20 12:39:21	rejected	wakeword_reject	2.66	right	1			neg	-
+4028	2026-10-20 12:39:23	rejected	wakeword_reject	2.69	right	1			neg	-
+4029	2026-10-20 12:41:13	rejected	wakeword_reject	2.66	right	1			neg	-
+4030	2026-10-20 18:10:44	rejected	wakeword_reject	2.69	right	1			neg	-
+4074	2026-10-20 19:12:24	rejected	followup_reject	4.9	right	1	включи на столько свет	включилась новый свет	neg	-
+4076	2026-10-21 03:06:20	rejected	wakeword_reject	2.66	left	1		уф	neg	-
+4095	2026-10-21 03:38:13	rejected	wakeword_reject	2.69	left	1			neg	-
+4110	2026-10-21 04:12:08	rejected	wakeword_reject	2.69	left	1	захар расскажи анекдот	захар расскажи анекдот	pos	ch1+ch0
+4114	2026-10-21 04:12:12	rejected	wakeword_reject	3.1	left	1	захар расскажи анекдот	захар расскажи анекдот	pos	ch1+ch0
+4117	2026-10-21 04:12:28	empty	no_speech	6.02	left	1	захар расскажи анекдот	захар расскажи анекдот	pos	ch1+ch0
+4126	2026-10-21 04:13:32	empty	no_speech	6.02	left	1	захар расскажи анекдот	захар расскажи анекдот	pos	ch1+ch0
+4129	2026-10-21 04:13:47	empty	no_speech	6.02	left	1	захар расскажи анекдот	захар расскажи анекдот	pos	ch1+ch0
+4131	2026-10-21 04:14:14	empty	no_speech	6.02	left	1	захар расскажи анекдот	захар расскажи анекдот	pos	ch1+ch0
+4134	2026-10-21 04:14:50	empty	no_speech	6.02	left	1	захар расскажи анекдот	захар расскажи анекдот	pos	ch1+ch0
+4136	2026-10-21 04:26:24	rejected	wakeword_reject	3.23	left	1		але	neg	-
+4137	2026-10-21 04:27:28	rejected	wakeword_reject	2.59	left	1			neg	-
+4139	2026-10-21 04:37:06	rejected	wakeword_reject	2.82	left	1			neg	-
+4143	2026-10-21 04:59:38	rejected	wakeword_reject	2.59	right	1			neg	-
+4145	2026-10-21 12:03:47	rejected	wakeword_reject	2.72	right	1			neg	-
+4146	2026-10-21 12:04:38	rejected	wakeword_reject	2.66	right	1			neg	-
+4147	2026-10-21 12:04:41	rejected	wakeword_reject	2.69	right	1			neg	-
+4148	2026-10-21 12:04:50	rejected	wakeword_reject	2.88	right	1			neg	-
+4149	2026-10-21 12:04:57	rejected	wakeword_reject	2.66	right	1			neg	-
+4150	2026-10-21 12:05:02	rejected	wakeword_reject	2.69	right	1			neg	-
+4151	2026-10-21 12:07:26	rejected	wakeword_reject	2.62	right	1			neg	-
+4152	2026-10-21 12:07:59	rejected	wakeword_reject	2.69	right	1			neg	-
+4153	2026-10-21 12:08:34	rejected	wakeword_reject	2.69	right	1			neg	-
+4154	2026-10-21 12:09:07	rejected	wakeword_reject	2.69	right	1			neg	-
+4155	2026-10-21 12:09:18	rejected	wakeword_reject	2.66	right	1			neg	-
+4156	2026-10-21 12:29:00	rejected	wakeword_reject	2.66	right	1			neg	-
+4157	2026-10-21 12:29:15	rejected	wakeword_reject	2.78	right	1			neg	-
+4158	2026-10-21 12:29:18	rejected	wakeword_reject	2.66	right	1			neg	-
+4159	2026-10-21 12:32:46	rejected	wakeword_reject	2.66	right	1			neg	-
+4160	2026-10-21 13:57:27	rejected	wakeword_reject	2.62	right	1			neg	-
+4161	2026-10-21 14:45:19	rejected	wakeword_reject	2.69	right	1			neg	-
+4162	2026-10-21 15:37:50	rejected	wakeword_reject	2.66	right	1			neg	-
+4163	2026-10-21 16:15:07	rejected	wakeword_reject	2.82	right	1			neg	-
+4164	2026-10-21 16:19:16	rejected	wakeword_reject	2.66	right	1			neg	-
+4165	2026-10-21 16:19:37	rejected	wakeword_reject	2.66	right	1		захар включи ночник	pos	ch0
+4166	2026-10-21 16:19:42	rejected	wakeword_reject	2.72	right	1	захар включи	захар включи	pos	ch1+ch0
+4167	2026-10-21 16:19:46	rejected	wakeword_reject	2.59	right	1	захар включи	захар включи ночник	pos	ch1+ch0
+4168	2026-10-21 16:31:07	rejected	wakeword_reject	2.66	right	1			neg	-
+4169	2026-10-21 17:09:48	rejected	wakeword_reject	2.82	right	1			neg	-
+4174	2026-10-21 18:11:03	rejected	wakeword_reject	2.82	right	1			neg	-

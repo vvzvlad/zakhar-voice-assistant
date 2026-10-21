@@ -1,0 +1,24 @@
+== 18 home takes (x4): v35 catches 16/18
+  ctl_v35node  14/18  only v35: 2  only ctl_v35node: 0  McNemar p=0.5
+      only v35: 0013.wav 0.963->0.183, 0045.wav 1.000->0.637
+      only ctl_v35node: -
+  v36          14/18  only v35: 2  only v36: 0  McNemar p=0.5
+      only v35: 0013.wav 0.963->0.406, 0045.wav 1.000->0.793
+      only v36: -
+  v37          16/18  only v35: 1  only v37: 1  McNemar p=1
+      only v35: 0013.wav 0.963->0.782
+      only v37: 0024.wav 0.156->0.930
+== no beep: held-out, per clip: v35 catches 7/9
+  ctl_v35node  1/9  only v35: 6  only ctl_v35node: 0  McNemar p=0.0312
+      only v35: 0009.wav 1.000->0.654, 0016.wav 0.893->0.373, 0024.wav 1.000->0.635, 0026.wav 0.863->0.070, 0031.wav 0.960->0.115, 0036.wav 1.000->0.681
+      only ctl_v35node: -
+  v36          4/9  only v35: 3  only v36: 0  McNemar p=0.25
+      only v35: 0016.wav 0.893->0.322, 0026.wav 0.863->0.309, 0031.wav 0.960->0.491
+      only v36: -
+  v37          4/9  only v35: 3  only v37: 0  McNemar p=0.25
+      only v35: 0016.wav 0.893->0.330, 0026.wav 0.863->0.583, 0031.wav 0.960->0.769
+      only v37: -
+== (a) fused phrases, whole (x1): v35 catches 242/868
+  ctl_v35node  222/868  only v35: 43  only ctl_v35node: 23  McNemar p=0.0187
+  v36          514/868  only v35: 3  only v36: 275  McNemar p=1.47e-77
+  v37          561/868  only v35: 2  only v37: 321  McNemar p=6.12e-93

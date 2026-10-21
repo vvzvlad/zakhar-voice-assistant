@@ -1,0 +1,4315 @@
+{
+ "wav": "read_20261021_182044_ch1.wav",
+ "n_phrases": 70,
+ "device_live": [
+  15.28,
+  18.93,
+  22.77,
+  51.57,
+  60.34,
+  103.12,
+  119.66,
+  146.51,
+  155.5,
+  161.26,
+  167.15,
+  182.29,
+  248.84,
+  292.81
+ ],
+ "device_live_outside": [],
+ "models": {
+  "v35": {
+   "dev_cont_det": [
+    15.32,
+    18.86,
+    22.76,
+    30.32,
+    51.59,
+    55.97,
+    103.1,
+    119.69,
+    182.27,
+    292.82
+   ],
+   "dev_cont_outside": [],
+   "vad_blocked": [
+    119.6,
+    119.63,
+    119.66,
+    222.98,
+    223.01,
+    223.04,
+    303.62,
+    303.65,
+    303.68,
+    303.71,
+    303.74,
+    303.77,
+    303.8,
+    303.83,
+    303.86,
+    303.89,
+    303.92
+   ],
+   "py_cont_det": [
+    15.32,
+    18.86,
+    30.32,
+    51.59,
+    55.97,
+    103.07,
+    119.6,
+    182.27,
+    222.95,
+    292.85,
+    303.62
+   ],
+   "py_cont_outside": [
+    222.95,
+    303.62
+   ],
+   "phrases": [
+    {
+     "id": "pos_01.wav",
+     "text": "захар который час",
+     "kind": "pos",
+     "s": 14.64,
+     "e": 15.88,
+     "live": [
+      15.28
+     ],
+     "dev_cont": [
+      15.32
+     ],
+     "py_cont": [
+      15.32
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.963,
+     "py_cont_peak": 0.998
+    },
+    {
+     "id": "pos_02.wav",
+     "text": "захар сколько времени",
+     "kind": "pos",
+     "s": 18.34,
+     "e": 19.46,
+     "live": [
+      18.93
+     ],
+     "dev_cont": [
+      18.86
+     ],
+     "py_cont": [
+      18.86
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.976,
+     "py_cont_peak": 0.992
+    },
+    {
+     "id": "pos_03.wav",
+     "text": "захар включи свет",
+     "kind": "pos",
+     "s": 22.02,
+     "e": 23.1,
+     "live": [
+      22.77
+     ],
+     "dev_cont": [
+      22.76
+     ],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.803,
+     "py_cont_peak": 0.752
+    },
+    {
+     "id": "pos_04.wav",
+     "text": "захар выключи свет",
+     "kind": "pos",
+     "s": 25.68,
+     "e": 26.78,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.175,
+     "py_cont_peak": 0.18
+    },
+    {
+     "id": "pos_05.wav",
+     "text": "захар включи свет в коридоре",
+     "kind": "pos",
+     "s": 29.24,
+     "e": 31.2,
+     "live": [],
+     "dev_cont": [
+      30.32
+     ],
+     "py_cont": [
+      30.32
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.852,
+     "py_cont_peak": 0.959
+    },
+    {
+     "id": "pos_06.wav",
+     "text": "захар выключи свет в туалете",
+     "kind": "pos",
+     "s": 33.92,
+     "e": 35.54,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.527,
+     "py_cont_peak": 0.504
+    },
+    {
+     "id": "pos_07.wav",
+     "text": "захар какая погода",
+     "kind": "pos",
+     "s": 38.9,
+     "e": 40.02,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.26,
+     "py_cont_peak": 0.249
+    },
+    {
+     "id": "pos_08.wav",
+     "text": "захар что на улице",
+     "kind": "pos",
+     "s": 42.84,
+     "e": 43.92,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.026,
+     "py_cont_peak": 0.028
+    },
+    {
+     "id": "pos_09.wav",
+     "text": "захар сколько градусов",
+     "kind": "pos",
+     "s": 47.06,
+     "e": 48.06,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.082,
+     "py_cont_peak": 0.082
+    },
+    {
+     "id": "pos_10.wav",
+     "text": "захар будет дождь",
+     "kind": "pos",
+     "s": 51.04,
+     "e": 51.92,
+     "live": [
+      51.57
+     ],
+     "dev_cont": [
+      51.59
+     ],
+     "py_cont": [
+      51.59
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.871,
+     "py_cont_peak": 0.947
+    },
+    {
+     "id": "pos_11.wav",
+     "text": "захар включи музыку",
+     "kind": "pos",
+     "s": 55.4,
+     "e": 56.48,
+     "live": [],
+     "dev_cont": [
+      55.97
+     ],
+     "py_cont": [
+      55.97
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.809,
+     "py_cont_peak": 0.918
+    },
+    {
+     "id": "pos_12.wav",
+     "text": "захар включи радио",
+     "kind": "pos",
+     "s": 59.62,
+     "e": 60.72,
+     "live": [
+      60.34
+     ],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.525,
+     "py_cont_peak": 0.649
+    },
+    {
+     "id": "pos_13.wav",
+     "text": "захар сделай потише",
+     "kind": "pos",
+     "s": 65.6,
+     "e": 66.74,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.055,
+     "py_cont_peak": 0.06
+    },
+    {
+     "id": "pos_14.wav",
+     "text": "захар сделай погромче",
+     "kind": "pos",
+     "s": 70.68,
+     "e": 71.78,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.003,
+     "py_cont_peak": 0.003
+    },
+    {
+     "id": "pos_15.wav",
+     "text": "захар поставь таймер на десять минут",
+     "kind": "pos",
+     "s": 75.26,
+     "e": 76.98,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.012,
+     "py_cont_peak": 0.01
+    },
+    {
+     "id": "pos_16.wav",
+     "text": "захар напомни через час",
+     "kind": "pos",
+     "s": 80.54,
+     "e": 81.68,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.049,
+     "py_cont_peak": 0.039
+    },
+    {
+     "id": "pos_17.wav",
+     "text": "захар что с печкой",
+     "kind": "pos",
+     "s": 85.22,
+     "e": 86.1,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.009,
+     "py_cont_peak": 0.009
+    },
+    {
+     "id": "pos_18.wav",
+     "text": "захар какая температура в печи",
+     "kind": "pos",
+     "s": 89.54,
+     "e": 91.22,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.01,
+     "py_cont_peak": 0.01
+    },
+    {
+     "id": "pos_19.wav",
+     "text": "захар сколько осталось до конца обжига",
+     "kind": "pos",
+     "s": 96.6,
+     "e": 98.56,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.02,
+     "py_cont_peak": 0.027
+    },
+    {
+     "id": "pos_20.wav",
+     "text": "захар какие глазури у нас есть",
+     "kind": "pos",
+     "s": 102.48,
+     "e": 104.06,
+     "live": [
+      103.12
+     ],
+     "dev_cont": [
+      103.1
+     ],
+     "py_cont": [
+      103.07
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.929,
+     "py_cont_peak": 0.997
+    },
+    {
+     "id": "pos_21.wav",
+     "text": "захар поищи в гугле",
+     "kind": "pos",
+     "s": 107.84,
+     "e": 108.9,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.007,
+     "py_cont_peak": 0.009
+    },
+    {
+     "id": "pos_22.wav",
+     "text": "захар найди рецепт",
+     "kind": "pos",
+     "s": 113.12,
+     "e": 114.48,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.014,
+     "py_cont_peak": 0.013
+    },
+    {
+     "id": "pos_23.wav",
+     "text": "захар режим ночь",
+     "kind": "pos",
+     "s": 119.06,
+     "e": 120.22,
+     "live": [
+      119.66
+     ],
+     "dev_cont": [
+      119.69
+     ],
+     "py_cont": [
+      119.6
+     ],
+     "vad_blocked": [
+      119.6,
+      119.63,
+      119.66
+     ],
+     "dev_cont_peak": 0.995,
+     "py_cont_peak": 0.999
+    },
+    {
+     "id": "pos_24.wav",
+     "text": "захар выключи всё",
+     "kind": "pos",
+     "s": 123.9,
+     "e": 124.94,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.527,
+     "py_cont_peak": 0.542
+    },
+    {
+     "id": "pos_25.wav",
+     "text": "захар что у меня завтра",
+     "kind": "pos",
+     "s": 127.94,
+     "e": 129.04,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.088,
+     "py_cont_peak": 0.079
+    },
+    {
+     "id": "pos_26.wav",
+     "text": "захар какое сегодня число",
+     "kind": "pos",
+     "s": 132.32,
+     "e": 133.66,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.124,
+     "py_cont_peak": 0.104
+    },
+    {
+     "id": "pos_27.wav",
+     "text": "захар какой день недели",
+     "kind": "pos",
+     "s": 136.96,
+     "e": 139.12,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.009,
+     "py_cont_peak": 0.013
+    },
+    {
+     "id": "pos_28.wav",
+     "text": "захар расскажи анекдот",
+     "kind": "pos",
+     "s": 141.16,
+     "e": 142.24,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.254,
+     "py_cont_peak": 0.299
+    },
+    {
+     "id": "pos_29.wav",
+     "text": "захар напиши в телеграм",
+     "kind": "pos",
+     "s": 145.84,
+     "e": 147.12,
+     "live": [
+      146.51
+     ],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.691,
+     "py_cont_peak": 0.716
+    },
+    {
+     "id": "pos_30.wav",
+     "text": "захар закажи пиццу",
+     "kind": "pos",
+     "s": 150.46,
+     "e": 151.46,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.21,
+     "py_cont_peak": 0.218
+    },
+    {
+     "id": "pos_31.wav",
+     "text": "захар включи настольную лампу",
+     "kind": "pos",
+     "s": 154.88,
+     "e": 156.42,
+     "live": [
+      155.5
+     ],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.399,
+     "py_cont_peak": 0.34
+    },
+    {
+     "id": "pos_32.wav",
+     "text": "захар выключи подсветку",
+     "kind": "pos",
+     "s": 160.2,
+     "e": 161.64,
+     "live": [
+      161.26
+     ],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.614,
+     "py_cont_peak": 0.795
+    },
+    {
+     "id": "pos_33.wav",
+     "text": "захар включи ленту",
+     "kind": "pos",
+     "s": 165.1,
+     "e": 167.62,
+     "live": [
+      167.15
+     ],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.698,
+     "py_cont_peak": 0.643
+    },
+    {
+     "id": "pos_34.wav",
+     "text": "захар сколько стоит доллар",
+     "kind": "pos",
+     "s": 171.2,
+     "e": 172.42,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.0,
+     "py_cont_peak": 0.0
+    },
+    {
+     "id": "pos_35.wav",
+     "text": "захар переведи на английский",
+     "kind": "pos",
+     "s": 176.28,
+     "e": 177.74,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.684,
+     "py_cont_peak": 0.7
+    },
+    {
+     "id": "pos_36.wav",
+     "text": "захар что ты умеешь",
+     "kind": "pos",
+     "s": 181.24,
+     "e": 182.76,
+     "live": [
+      182.29
+     ],
+     "dev_cont": [
+      182.27
+     ],
+     "py_cont": [
+      182.27
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.816,
+     "py_cont_peak": 0.921
+    },
+    {
+     "id": "pos_37.wav",
+     "text": "захар повтори",
+     "kind": "pos",
+     "s": 185.82,
+     "e": 186.48,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.039,
+     "py_cont_peak": 0.037
+    },
+    {
+     "id": "pos_38.wav",
+     "text": "захар отмена",
+     "kind": "pos",
+     "s": 188.84,
+     "e": 189.6,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.164,
+     "py_cont_peak": 0.155
+    },
+    {
+     "id": "pos_39.wav",
+     "text": "захар добавь в список покупок молоко",
+     "kind": "pos",
+     "s": 192.54,
+     "e": 194.58,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.024,
+     "py_cont_peak": 0.027
+    },
+    {
+     "id": "pos_40.wav",
+     "text": "захар спокойной ночи",
+     "kind": "pos",
+     "s": 199.16,
+     "e": 200.4,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.765,
+     "py_cont_peak": 0.747
+    },
+    {
+     "id": "neg_01.wav",
+     "text": "сахар кончился",
+     "kind": "neg",
+     "s": 231.5,
+     "e": 232.52,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.059,
+     "py_cont_peak": 0.043
+    },
+    {
+     "id": "neg_02.wav",
+     "text": "сахар в шкафу",
+     "kind": "neg",
+     "s": 234.2,
+     "e": 235.1,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.0,
+     "py_cont_peak": 0.0
+    },
+    {
+     "id": "neg_03.wav",
+     "text": "добавь сахар в чай",
+     "kind": "neg",
+     "s": 237.08,
+     "e": 238.12,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.037,
+     "py_cont_peak": 0.037
+    },
+    {
+     "id": "neg_04.wav",
+     "text": "купи сахар и молоко",
+     "kind": "neg",
+     "s": 240.58,
+     "e": 241.76,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.0,
+     "py_cont_peak": 0.0
+    },
+    {
+     "id": "neg_05.wav",
+     "text": "загар уже сошёл",
+     "kind": "neg",
+     "s": 244.64,
+     "e": 245.8,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.0,
+     "py_cont_peak": 0.002
+    },
+    {
+     "id": "neg_06.wav",
+     "text": "заказ пришёл",
+     "kind": "neg",
+     "s": 248.18,
+     "e": 249.08,
+     "live": [
+      248.84
+     ],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.037,
+     "py_cont_peak": 0.044
+    },
+    {
+     "id": "neg_07.wav",
+     "text": "оформи заказ на завтра",
+     "kind": "neg",
+     "s": 253.0,
+     "e": 254.18,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.003,
+     "py_cont_peak": 0.002
+    },
+    {
+     "id": "neg_08.wav",
+     "text": "закат сегодня красивый",
+     "kind": "neg",
+     "s": 258.44,
+     "e": 259.52,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.012,
+     "py_cont_peak": 0.01
+    },
+    {
+     "id": "neg_09.wav",
+     "text": "захват держит плохо",
+     "kind": "neg",
+     "s": 262.28,
+     "e": 263.32,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.652,
+     "py_cont_peak": 0.592
+    },
+    {
+     "id": "neg_10.wav",
+     "text": "закрой захват покрепче",
+     "kind": "neg",
+     "s": 266.04,
+     "e": 267.12,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.46,
+     "py_cont_peak": 0.435
+    },
+    {
+     "id": "neg_11.wav",
+     "text": "заходи давай",
+     "kind": "neg",
+     "s": 269.14,
+     "e": 269.7,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.06,
+     "py_cont_peak": 0.067
+    },
+    {
+     "id": "neg_12.wav",
+     "text": "захотел чаю",
+     "kind": "neg",
+     "s": 271.66,
+     "e": 272.34,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.027,
+     "py_cont_peak": 0.025
+    },
+    {
+     "id": "neg_13.wav",
+     "text": "на базаре дешевле",
+     "kind": "neg",
+     "s": 274.36,
+     "e": 275.1,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.754,
+     "py_cont_peak": 0.793
+    },
+    {
+     "id": "neg_14.wav",
+     "text": "комар кусается",
+     "kind": "neg",
+     "s": 277.1,
+     "e": 278.06,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.002,
+     "py_cont_peak": 0.0
+    },
+    {
+     "id": "neg_15.wav",
+     "text": "самовар закипел",
+     "kind": "neg",
+     "s": 279.52,
+     "e": 280.6,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.02,
+     "py_cont_peak": 0.017
+    },
+    {
+     "id": "neg_16.wav",
+     "text": "гончар лепит чашку",
+     "kind": "neg",
+     "s": 282.1,
+     "e": 283.42,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.021,
+     "py_cont_peak": 0.022
+    },
+    {
+     "id": "neg_17.wav",
+     "text": "товар уже на складе",
+     "kind": "neg",
+     "s": 285.0,
+     "e": 286.02,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.023,
+     "py_cont_peak": 0.038
+    },
+    {
+     "id": "neg_18.wav",
+     "text": "захлопни дверь",
+     "kind": "neg",
+     "s": 287.8,
+     "e": 288.66,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.064,
+     "py_cont_peak": 0.055
+    },
+    {
+     "id": "neg_19.wav",
+     "text": "за хлебом сходи",
+     "kind": "neg",
+     "s": 292.26,
+     "e": 292.6,
+     "live": [
+      292.81
+     ],
+     "dev_cont": [
+      292.82
+     ],
+     "py_cont": [
+      292.85
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.954,
+     "py_cont_peak": 0.991
+    },
+    {
+     "id": "neg_20.wav",
+     "text": "за час успеем",
+     "kind": "neg",
+     "s": 295.12,
+     "e": 295.9,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.002,
+     "py_cont_peak": 0.001
+    },
+    {
+     "id": "neg_21.wav",
+     "text": "за хорошую работу",
+     "kind": "neg",
+     "s": 298.26,
+     "e": 299.02,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.552,
+     "py_cont_peak": 0.453
+    },
+    {
+     "id": "neg_22.wav",
+     "text": "захожу в магазин",
+     "kind": "neg",
+     "s": 305.5,
+     "e": 306.3,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.083,
+     "py_cont_peak": 0.075
+    },
+    {
+     "id": "neg_23.wav",
+     "text": "который час",
+     "kind": "neg",
+     "s": 308.94,
+     "e": 309.72,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.004,
+     "py_cont_peak": 0.004
+    },
+    {
+     "id": "neg_24.wav",
+     "text": "включи свет",
+     "kind": "neg",
+     "s": 311.44,
+     "e": 312.14,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.008,
+     "py_cont_peak": 0.007
+    },
+    {
+     "id": "neg_25.wav",
+     "text": "сколько времени",
+     "kind": "neg",
+     "s": 313.4,
+     "e": 314.32,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.574,
+     "py_cont_peak": 0.514
+    },
+    {
+     "id": "neg_26.wav",
+     "text": "какая погода",
+     "kind": "neg",
+     "s": 315.36,
+     "e": 316.28,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.083,
+     "py_cont_peak": 0.075
+    },
+    {
+     "id": "neg_27.wav",
+     "text": "включи музыку",
+     "kind": "neg",
+     "s": 317.94,
+     "e": 318.72,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.0,
+     "py_cont_peak": 0.0
+    },
+    {
+     "id": "neg_28.wav",
+     "text": "что с печкой",
+     "kind": "neg",
+     "s": 319.88,
+     "e": 320.8,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.0,
+     "py_cont_peak": 0.0
+    },
+    {
+     "id": "neg_29.wav",
+     "text": "поставь таймер на пять минут",
+     "kind": "neg",
+     "s": 322.22,
+     "e": 323.7,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.0,
+     "py_cont_peak": 0.0
+    },
+    {
+     "id": "neg_30.wav",
+     "text": "спокойной ночи",
+     "kind": "neg",
+     "s": 325.44,
+     "e": 326.22,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.005,
+     "py_cont_peak": 0.006
+    }
+   ]
+  },
+  "ctl_v35node": {
+   "dev_cont_det": [
+    15.32,
+    18.89,
+    51.62,
+    103.1,
+    119.69,
+    161.21,
+    263.84,
+    292.79,
+    314.63
+   ],
+   "dev_cont_outside": [],
+   "vad_blocked": [
+    119.6,
+    119.63,
+    119.66,
+    222.92,
+    222.95,
+    222.98,
+    223.01,
+    223.04,
+    223.07,
+    303.77,
+    303.8,
+    303.83,
+    303.86,
+    303.89
+   ],
+   "py_cont_det": [
+    15.32,
+    18.89,
+    51.65,
+    103.1,
+    119.6,
+    161.24,
+    222.92,
+    263.84,
+    292.79,
+    303.77,
+    314.6
+   ],
+   "py_cont_outside": [
+    222.92,
+    303.77
+   ],
+   "phrases": [
+    {
+     "id": "pos_01.wav",
+     "text": "захар который час",
+     "kind": "pos",
+     "s": 14.64,
+     "e": 15.88,
+     "live": [
+      15.28
+     ],
+     "dev_cont": [
+      15.32
+     ],
+     "py_cont": [
+      15.32
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.966,
+     "py_cont_peak": 0.999
+    },
+    {
+     "id": "pos_02.wav",
+     "text": "захар сколько времени",
+     "kind": "pos",
+     "s": 18.34,
+     "e": 19.46,
+     "live": [
+      18.93
+     ],
+     "dev_cont": [
+      18.89
+     ],
+     "py_cont": [
+      18.89
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.869,
+     "py_cont_peak": 0.965
+    },
+    {
+     "id": "pos_03.wav",
+     "text": "захар включи свет",
+     "kind": "pos",
+     "s": 22.02,
+     "e": 23.1,
+     "live": [
+      22.77
+     ],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.5,
+     "py_cont_peak": 0.453
+    },
+    {
+     "id": "pos_04.wav",
+     "text": "захар выключи свет",
+     "kind": "pos",
+     "s": 25.68,
+     "e": 26.78,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.057,
+     "py_cont_peak": 0.047
+    },
+    {
+     "id": "pos_05.wav",
+     "text": "захар включи свет в коридоре",
+     "kind": "pos",
+     "s": 29.24,
+     "e": 31.2,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.452,
+     "py_cont_peak": 0.515
+    },
+    {
+     "id": "pos_06.wav",
+     "text": "захар выключи свет в туалете",
+     "kind": "pos",
+     "s": 33.92,
+     "e": 35.54,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.046,
+     "py_cont_peak": 0.049
+    },
+    {
+     "id": "pos_07.wav",
+     "text": "захар какая погода",
+     "kind": "pos",
+     "s": 38.9,
+     "e": 40.02,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.018,
+     "py_cont_peak": 0.027
+    },
+    {
+     "id": "pos_08.wav",
+     "text": "захар что на улице",
+     "kind": "pos",
+     "s": 42.84,
+     "e": 43.92,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.012,
+     "py_cont_peak": 0.018
+    },
+    {
+     "id": "pos_09.wav",
+     "text": "захар сколько градусов",
+     "kind": "pos",
+     "s": 47.06,
+     "e": 48.06,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.148,
+     "py_cont_peak": 0.159
+    },
+    {
+     "id": "pos_10.wav",
+     "text": "захар будет дождь",
+     "kind": "pos",
+     "s": 51.04,
+     "e": 51.92,
+     "live": [
+      51.57
+     ],
+     "dev_cont": [
+      51.62
+     ],
+     "py_cont": [
+      51.65
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.84,
+     "py_cont_peak": 0.863
+    },
+    {
+     "id": "pos_11.wav",
+     "text": "захар включи музыку",
+     "kind": "pos",
+     "s": 55.4,
+     "e": 56.48,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.369,
+     "py_cont_peak": 0.43
+    },
+    {
+     "id": "pos_12.wav",
+     "text": "захар включи радио",
+     "kind": "pos",
+     "s": 59.62,
+     "e": 60.72,
+     "live": [
+      60.34
+     ],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.169,
+     "py_cont_peak": 0.198
+    },
+    {
+     "id": "pos_13.wav",
+     "text": "захар сделай потише",
+     "kind": "pos",
+     "s": 65.6,
+     "e": 66.74,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.13,
+     "py_cont_peak": 0.112
+    },
+    {
+     "id": "pos_14.wav",
+     "text": "захар сделай погромче",
+     "kind": "pos",
+     "s": 70.68,
+     "e": 71.78,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.007,
+     "py_cont_peak": 0.006
+    },
+    {
+     "id": "pos_15.wav",
+     "text": "захар поставь таймер на десять минут",
+     "kind": "pos",
+     "s": 75.26,
+     "e": 76.98,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.01,
+     "py_cont_peak": 0.012
+    },
+    {
+     "id": "pos_16.wav",
+     "text": "захар напомни через час",
+     "kind": "pos",
+     "s": 80.54,
+     "e": 81.68,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.058,
+     "py_cont_peak": 0.053
+    },
+    {
+     "id": "pos_17.wav",
+     "text": "захар что с печкой",
+     "kind": "pos",
+     "s": 85.22,
+     "e": 86.1,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.017,
+     "py_cont_peak": 0.026
+    },
+    {
+     "id": "pos_18.wav",
+     "text": "захар какая температура в печи",
+     "kind": "pos",
+     "s": 89.54,
+     "e": 91.22,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.004,
+     "py_cont_peak": 0.004
+    },
+    {
+     "id": "pos_19.wav",
+     "text": "захар сколько осталось до конца обжига",
+     "kind": "pos",
+     "s": 96.6,
+     "e": 98.56,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.009,
+     "py_cont_peak": 0.008
+    },
+    {
+     "id": "pos_20.wav",
+     "text": "захар какие глазури у нас есть",
+     "kind": "pos",
+     "s": 102.48,
+     "e": 104.06,
+     "live": [
+      103.12
+     ],
+     "dev_cont": [
+      103.1
+     ],
+     "py_cont": [
+      103.1
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.802,
+     "py_cont_peak": 0.967
+    },
+    {
+     "id": "pos_21.wav",
+     "text": "захар поищи в гугле",
+     "kind": "pos",
+     "s": 107.84,
+     "e": 108.9,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.0,
+     "py_cont_peak": 0.0
+    },
+    {
+     "id": "pos_22.wav",
+     "text": "захар найди рецепт",
+     "kind": "pos",
+     "s": 113.12,
+     "e": 114.48,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.051,
+     "py_cont_peak": 0.045
+    },
+    {
+     "id": "pos_23.wav",
+     "text": "захар режим ночь",
+     "kind": "pos",
+     "s": 119.06,
+     "e": 120.22,
+     "live": [
+      119.66
+     ],
+     "dev_cont": [
+      119.69
+     ],
+     "py_cont": [
+      119.6
+     ],
+     "vad_blocked": [
+      119.6,
+      119.63,
+      119.66
+     ],
+     "dev_cont_peak": 0.966,
+     "py_cont_peak": 0.967
+    },
+    {
+     "id": "pos_24.wav",
+     "text": "захар выключи всё",
+     "kind": "pos",
+     "s": 123.9,
+     "e": 124.94,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.403,
+     "py_cont_peak": 0.38
+    },
+    {
+     "id": "pos_25.wav",
+     "text": "захар что у меня завтра",
+     "kind": "pos",
+     "s": 127.94,
+     "e": 129.04,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.071,
+     "py_cont_peak": 0.069
+    },
+    {
+     "id": "pos_26.wav",
+     "text": "захар какое сегодня число",
+     "kind": "pos",
+     "s": 132.32,
+     "e": 133.66,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.084,
+     "py_cont_peak": 0.121
+    },
+    {
+     "id": "pos_27.wav",
+     "text": "захар какой день недели",
+     "kind": "pos",
+     "s": 136.96,
+     "e": 139.12,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.002,
+     "py_cont_peak": 0.002
+    },
+    {
+     "id": "pos_28.wav",
+     "text": "захар расскажи анекдот",
+     "kind": "pos",
+     "s": 141.16,
+     "e": 142.24,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.32,
+     "py_cont_peak": 0.38
+    },
+    {
+     "id": "pos_29.wav",
+     "text": "захар напиши в телеграм",
+     "kind": "pos",
+     "s": 145.84,
+     "e": 147.12,
+     "live": [
+      146.51
+     ],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.608,
+     "py_cont_peak": 0.623
+    },
+    {
+     "id": "pos_30.wav",
+     "text": "захар закажи пиццу",
+     "kind": "pos",
+     "s": 150.46,
+     "e": 151.46,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.07,
+     "py_cont_peak": 0.066
+    },
+    {
+     "id": "pos_31.wav",
+     "text": "захар включи настольную лампу",
+     "kind": "pos",
+     "s": 154.88,
+     "e": 156.42,
+     "live": [
+      155.5
+     ],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.464,
+     "py_cont_peak": 0.394
+    },
+    {
+     "id": "pos_32.wav",
+     "text": "захар выключи подсветку",
+     "kind": "pos",
+     "s": 160.2,
+     "e": 161.64,
+     "live": [
+      161.26
+     ],
+     "dev_cont": [
+      161.21
+     ],
+     "py_cont": [
+      161.24
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.799,
+     "py_cont_peak": 0.933
+    },
+    {
+     "id": "pos_33.wav",
+     "text": "захар включи ленту",
+     "kind": "pos",
+     "s": 165.1,
+     "e": 167.62,
+     "live": [
+      167.15
+     ],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.664,
+     "py_cont_peak": 0.67
+    },
+    {
+     "id": "pos_34.wav",
+     "text": "захар сколько стоит доллар",
+     "kind": "pos",
+     "s": 171.2,
+     "e": 172.42,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.0,
+     "py_cont_peak": 0.0
+    },
+    {
+     "id": "pos_35.wav",
+     "text": "захар переведи на английский",
+     "kind": "pos",
+     "s": 176.28,
+     "e": 177.74,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.423,
+     "py_cont_peak": 0.34
+    },
+    {
+     "id": "pos_36.wav",
+     "text": "захар что ты умеешь",
+     "kind": "pos",
+     "s": 181.24,
+     "e": 182.76,
+     "live": [
+      182.29
+     ],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.741,
+     "py_cont_peak": 0.722
+    },
+    {
+     "id": "pos_37.wav",
+     "text": "захар повтори",
+     "kind": "pos",
+     "s": 185.82,
+     "e": 186.48,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.014,
+     "py_cont_peak": 0.013
+    },
+    {
+     "id": "pos_38.wav",
+     "text": "захар отмена",
+     "kind": "pos",
+     "s": 188.84,
+     "e": 189.6,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.166,
+     "py_cont_peak": 0.204
+    },
+    {
+     "id": "pos_39.wav",
+     "text": "захар добавь в список покупок молоко",
+     "kind": "pos",
+     "s": 192.54,
+     "e": 194.58,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.025,
+     "py_cont_peak": 0.038
+    },
+    {
+     "id": "pos_40.wav",
+     "text": "захар спокойной ночи",
+     "kind": "pos",
+     "s": 199.16,
+     "e": 200.4,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.22,
+     "py_cont_peak": 0.268
+    },
+    {
+     "id": "neg_01.wav",
+     "text": "сахар кончился",
+     "kind": "neg",
+     "s": 231.5,
+     "e": 232.52,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.075,
+     "py_cont_peak": 0.06
+    },
+    {
+     "id": "neg_02.wav",
+     "text": "сахар в шкафу",
+     "kind": "neg",
+     "s": 234.2,
+     "e": 235.1,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.001,
+     "py_cont_peak": 0.002
+    },
+    {
+     "id": "neg_03.wav",
+     "text": "добавь сахар в чай",
+     "kind": "neg",
+     "s": 237.08,
+     "e": 238.12,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.0,
+     "py_cont_peak": 0.0
+    },
+    {
+     "id": "neg_04.wav",
+     "text": "купи сахар и молоко",
+     "kind": "neg",
+     "s": 240.58,
+     "e": 241.76,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.0,
+     "py_cont_peak": 0.0
+    },
+    {
+     "id": "neg_05.wav",
+     "text": "загар уже сошёл",
+     "kind": "neg",
+     "s": 244.64,
+     "e": 245.8,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.0,
+     "py_cont_peak": 0.0
+    },
+    {
+     "id": "neg_06.wav",
+     "text": "заказ пришёл",
+     "kind": "neg",
+     "s": 248.18,
+     "e": 249.08,
+     "live": [
+      248.84
+     ],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.104,
+     "py_cont_peak": 0.104
+    },
+    {
+     "id": "neg_07.wav",
+     "text": "оформи заказ на завтра",
+     "kind": "neg",
+     "s": 253.0,
+     "e": 254.18,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.01,
+     "py_cont_peak": 0.012
+    },
+    {
+     "id": "neg_08.wav",
+     "text": "закат сегодня красивый",
+     "kind": "neg",
+     "s": 258.44,
+     "e": 259.52,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.004,
+     "py_cont_peak": 0.004
+    },
+    {
+     "id": "neg_09.wav",
+     "text": "захват держит плохо",
+     "kind": "neg",
+     "s": 262.28,
+     "e": 263.32,
+     "live": [],
+     "dev_cont": [
+      263.84
+     ],
+     "py_cont": [
+      263.84
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.945,
+     "py_cont_peak": 0.955
+    },
+    {
+     "id": "neg_10.wav",
+     "text": "закрой захват покрепче",
+     "kind": "neg",
+     "s": 266.04,
+     "e": 267.12,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.331,
+     "py_cont_peak": 0.344
+    },
+    {
+     "id": "neg_11.wav",
+     "text": "заходи давай",
+     "kind": "neg",
+     "s": 269.14,
+     "e": 269.7,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.095,
+     "py_cont_peak": 0.1
+    },
+    {
+     "id": "neg_12.wav",
+     "text": "захотел чаю",
+     "kind": "neg",
+     "s": 271.66,
+     "e": 272.34,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.012,
+     "py_cont_peak": 0.016
+    },
+    {
+     "id": "neg_13.wav",
+     "text": "на базаре дешевле",
+     "kind": "neg",
+     "s": 274.36,
+     "e": 275.1,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.166,
+     "py_cont_peak": 0.148
+    },
+    {
+     "id": "neg_14.wav",
+     "text": "комар кусается",
+     "kind": "neg",
+     "s": 277.1,
+     "e": 278.06,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.0,
+     "py_cont_peak": 0.002
+    },
+    {
+     "id": "neg_15.wav",
+     "text": "самовар закипел",
+     "kind": "neg",
+     "s": 279.52,
+     "e": 280.6,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.023,
+     "py_cont_peak": 0.028
+    },
+    {
+     "id": "neg_16.wav",
+     "text": "гончар лепит чашку",
+     "kind": "neg",
+     "s": 282.1,
+     "e": 283.42,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.038,
+     "py_cont_peak": 0.036
+    },
+    {
+     "id": "neg_17.wav",
+     "text": "товар уже на складе",
+     "kind": "neg",
+     "s": 285.0,
+     "e": 286.02,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.169,
+     "py_cont_peak": 0.1
+    },
+    {
+     "id": "neg_18.wav",
+     "text": "захлопни дверь",
+     "kind": "neg",
+     "s": 287.8,
+     "e": 288.66,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.059,
+     "py_cont_peak": 0.086
+    },
+    {
+     "id": "neg_19.wav",
+     "text": "за хлебом сходи",
+     "kind": "neg",
+     "s": 292.26,
+     "e": 292.6,
+     "live": [
+      292.81
+     ],
+     "dev_cont": [
+      292.79
+     ],
+     "py_cont": [
+      292.79
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.945,
+     "py_cont_peak": 0.986
+    },
+    {
+     "id": "neg_20.wav",
+     "text": "за час успеем",
+     "kind": "neg",
+     "s": 295.12,
+     "e": 295.9,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.0,
+     "py_cont_peak": 0.0
+    },
+    {
+     "id": "neg_21.wav",
+     "text": "за хорошую работу",
+     "kind": "neg",
+     "s": 298.26,
+     "e": 299.02,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.394,
+     "py_cont_peak": 0.395
+    },
+    {
+     "id": "neg_22.wav",
+     "text": "захожу в магазин",
+     "kind": "neg",
+     "s": 305.5,
+     "e": 306.3,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.132,
+     "py_cont_peak": 0.127
+    },
+    {
+     "id": "neg_23.wav",
+     "text": "который час",
+     "kind": "neg",
+     "s": 308.94,
+     "e": 309.72,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.0,
+     "py_cont_peak": 0.0
+    },
+    {
+     "id": "neg_24.wav",
+     "text": "включи свет",
+     "kind": "neg",
+     "s": 311.44,
+     "e": 312.14,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.007,
+     "py_cont_peak": 0.006
+    },
+    {
+     "id": "neg_25.wav",
+     "text": "сколько времени",
+     "kind": "neg",
+     "s": 313.4,
+     "e": 314.32,
+     "live": [],
+     "dev_cont": [
+      314.63
+     ],
+     "py_cont": [
+      314.6
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.805,
+     "py_cont_peak": 0.815
+    },
+    {
+     "id": "neg_26.wav",
+     "text": "какая погода",
+     "kind": "neg",
+     "s": 315.36,
+     "e": 316.28,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.171,
+     "py_cont_peak": 0.14
+    },
+    {
+     "id": "neg_27.wav",
+     "text": "включи музыку",
+     "kind": "neg",
+     "s": 317.94,
+     "e": 318.72,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.0,
+     "py_cont_peak": 0.0
+    },
+    {
+     "id": "neg_28.wav",
+     "text": "что с печкой",
+     "kind": "neg",
+     "s": 319.88,
+     "e": 320.8,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.0,
+     "py_cont_peak": 0.0
+    },
+    {
+     "id": "neg_29.wav",
+     "text": "поставь таймер на пять минут",
+     "kind": "neg",
+     "s": 322.22,
+     "e": 323.7,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.0,
+     "py_cont_peak": 0.0
+    },
+    {
+     "id": "neg_30.wav",
+     "text": "спокойной ночи",
+     "kind": "neg",
+     "s": 325.44,
+     "e": 326.22,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.004,
+     "py_cont_peak": 0.003
+    }
+   ]
+  },
+  "v36": {
+   "dev_cont_det": [
+    15.29,
+    18.89,
+    22.7,
+    51.56,
+    103.1,
+    119.69,
+    146.45,
+    155.54,
+    161.24,
+    167.21,
+    182.33,
+    199.82,
+    292.82
+   ],
+   "dev_cont_outside": [],
+   "vad_blocked": [
+    119.57,
+    119.6,
+    119.63,
+    119.66
+   ],
+   "py_cont_det": [
+    15.29,
+    18.89,
+    22.7,
+    51.59,
+    103.13,
+    119.57,
+    146.45,
+    161.24,
+    167.21,
+    182.33,
+    248.81,
+    292.79
+   ],
+   "py_cont_outside": [],
+   "phrases": [
+    {
+     "id": "pos_01.wav",
+     "text": "захар который час",
+     "kind": "pos",
+     "s": 14.64,
+     "e": 15.88,
+     "live": [
+      15.28
+     ],
+     "dev_cont": [
+      15.29
+     ],
+     "py_cont": [
+      15.29
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "pos_02.wav",
+     "text": "захар сколько времени",
+     "kind": "pos",
+     "s": 18.34,
+     "e": 19.46,
+     "live": [
+      18.93
+     ],
+     "dev_cont": [
+      18.89
+     ],
+     "py_cont": [
+      18.89
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.974,
+     "py_cont_peak": 0.987
+    },
+    {
+     "id": "pos_03.wav",
+     "text": "захар включи свет",
+     "kind": "pos",
+     "s": 22.02,
+     "e": 23.1,
+     "live": [
+      22.77
+     ],
+     "dev_cont": [
+      22.7
+     ],
+     "py_cont": [
+      22.7
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.889,
+     "py_cont_peak": 0.945
+    },
+    {
+     "id": "pos_04.wav",
+     "text": "захар выключи свет",
+     "kind": "pos",
+     "s": 25.68,
+     "e": 26.78,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.605,
+     "py_cont_peak": 0.576
+    },
+    {
+     "id": "pos_05.wav",
+     "text": "захар включи свет в коридоре",
+     "kind": "pos",
+     "s": 29.24,
+     "e": 31.2,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.613,
+     "py_cont_peak": 0.626
+    },
+    {
+     "id": "pos_06.wav",
+     "text": "захар выключи свет в туалете",
+     "kind": "pos",
+     "s": 33.92,
+     "e": 35.54,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.582,
+     "py_cont_peak": 0.502
+    },
+    {
+     "id": "pos_07.wav",
+     "text": "захар какая погода",
+     "kind": "pos",
+     "s": 38.9,
+     "e": 40.02,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.034,
+     "py_cont_peak": 0.036
+    },
+    {
+     "id": "pos_08.wav",
+     "text": "захар что на улице",
+     "kind": "pos",
+     "s": 42.84,
+     "e": 43.92,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.159,
+     "py_cont_peak": 0.172
+    },
+    {
+     "id": "pos_09.wav",
+     "text": "захар сколько градусов",
+     "kind": "pos",
+     "s": 47.06,
+     "e": 48.06,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.3,
+     "py_cont_peak": 0.275
+    },
+    {
+     "id": "pos_10.wav",
+     "text": "захар будет дождь",
+     "kind": "pos",
+     "s": 51.04,
+     "e": 51.92,
+     "live": [
+      51.57
+     ],
+     "dev_cont": [
+      51.56
+     ],
+     "py_cont": [
+      51.59
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.991,
+     "py_cont_peak": 0.988
+    },
+    {
+     "id": "pos_11.wav",
+     "text": "захар включи музыку",
+     "kind": "pos",
+     "s": 55.4,
+     "e": 56.48,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.77,
+     "py_cont_peak": 0.728
+    },
+    {
+     "id": "pos_12.wav",
+     "text": "захар включи радио",
+     "kind": "pos",
+     "s": 59.62,
+     "e": 60.72,
+     "live": [
+      60.34
+     ],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.689,
+     "py_cont_peak": 0.626
+    },
+    {
+     "id": "pos_13.wav",
+     "text": "захар сделай потише",
+     "kind": "pos",
+     "s": 65.6,
+     "e": 66.74,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.438,
+     "py_cont_peak": 0.471
+    },
+    {
+     "id": "pos_14.wav",
+     "text": "захар сделай погромче",
+     "kind": "pos",
+     "s": 70.68,
+     "e": 71.78,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.025,
+     "py_cont_peak": 0.03
+    },
+    {
+     "id": "pos_15.wav",
+     "text": "захар поставь таймер на десять минут",
+     "kind": "pos",
+     "s": 75.26,
+     "e": 76.98,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.159,
+     "py_cont_peak": 0.16
+    },
+    {
+     "id": "pos_16.wav",
+     "text": "захар напомни через час",
+     "kind": "pos",
+     "s": 80.54,
+     "e": 81.68,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.059,
+     "py_cont_peak": 0.061
+    },
+    {
+     "id": "pos_17.wav",
+     "text": "захар что с печкой",
+     "kind": "pos",
+     "s": 85.22,
+     "e": 86.1,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.108,
+     "py_cont_peak": 0.096
+    },
+    {
+     "id": "pos_18.wav",
+     "text": "захар какая температура в печи",
+     "kind": "pos",
+     "s": 89.54,
+     "e": 91.22,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.036,
+     "py_cont_peak": 0.041
+    },
+    {
+     "id": "pos_19.wav",
+     "text": "захар сколько осталось до конца обжига",
+     "kind": "pos",
+     "s": 96.6,
+     "e": 98.56,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.125,
+     "py_cont_peak": 0.106
+    },
+    {
+     "id": "pos_20.wav",
+     "text": "захар какие глазури у нас есть",
+     "kind": "pos",
+     "s": 102.48,
+     "e": 104.06,
+     "live": [
+      103.12
+     ],
+     "dev_cont": [
+      103.1
+     ],
+     "py_cont": [
+      103.13
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.944,
+     "py_cont_peak": 0.984
+    },
+    {
+     "id": "pos_21.wav",
+     "text": "захар поищи в гугле",
+     "kind": "pos",
+     "s": 107.84,
+     "e": 108.9,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.009,
+     "py_cont_peak": 0.005
+    },
+    {
+     "id": "pos_22.wav",
+     "text": "захар найди рецепт",
+     "kind": "pos",
+     "s": 113.12,
+     "e": 114.48,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.19,
+     "py_cont_peak": 0.191
+    },
+    {
+     "id": "pos_23.wav",
+     "text": "захар режим ночь",
+     "kind": "pos",
+     "s": 119.06,
+     "e": 120.22,
+     "live": [
+      119.66
+     ],
+     "dev_cont": [
+      119.69
+     ],
+     "py_cont": [
+      119.57
+     ],
+     "vad_blocked": [
+      119.57,
+      119.6,
+      119.63,
+      119.66
+     ],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "pos_24.wav",
+     "text": "захар выключи всё",
+     "kind": "pos",
+     "s": 123.9,
+     "e": 124.94,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.375,
+     "py_cont_peak": 0.406
+    },
+    {
+     "id": "pos_25.wav",
+     "text": "захар что у меня завтра",
+     "kind": "pos",
+     "s": 127.94,
+     "e": 129.04,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.405,
+     "py_cont_peak": 0.397
+    },
+    {
+     "id": "pos_26.wav",
+     "text": "захар какое сегодня число",
+     "kind": "pos",
+     "s": 132.32,
+     "e": 133.66,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.152,
+     "py_cont_peak": 0.143
+    },
+    {
+     "id": "pos_27.wav",
+     "text": "захар какой день недели",
+     "kind": "pos",
+     "s": 136.96,
+     "e": 139.12,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.044,
+     "py_cont_peak": 0.044
+    },
+    {
+     "id": "pos_28.wav",
+     "text": "захар расскажи анекдот",
+     "kind": "pos",
+     "s": 141.16,
+     "e": 142.24,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.511,
+     "py_cont_peak": 0.469
+    },
+    {
+     "id": "pos_29.wav",
+     "text": "захар напиши в телеграм",
+     "kind": "pos",
+     "s": 145.84,
+     "e": 147.12,
+     "live": [
+      146.51
+     ],
+     "dev_cont": [
+      146.45
+     ],
+     "py_cont": [
+      146.45
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.914,
+     "py_cont_peak": 0.968
+    },
+    {
+     "id": "pos_30.wav",
+     "text": "захар закажи пиццу",
+     "kind": "pos",
+     "s": 150.46,
+     "e": 151.46,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.263,
+     "py_cont_peak": 0.248
+    },
+    {
+     "id": "pos_31.wav",
+     "text": "захар включи настольную лампу",
+     "kind": "pos",
+     "s": 154.88,
+     "e": 156.42,
+     "live": [
+      155.5
+     ],
+     "dev_cont": [
+      155.54
+     ],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.802,
+     "py_cont_peak": 0.781
+    },
+    {
+     "id": "pos_32.wav",
+     "text": "захар выключи подсветку",
+     "kind": "pos",
+     "s": 160.2,
+     "e": 161.64,
+     "live": [
+      161.26
+     ],
+     "dev_cont": [
+      161.24
+     ],
+     "py_cont": [
+      161.24
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.88,
+     "py_cont_peak": 0.954
+    },
+    {
+     "id": "pos_33.wav",
+     "text": "захар включи ленту",
+     "kind": "pos",
+     "s": 165.1,
+     "e": 167.62,
+     "live": [
+      167.15
+     ],
+     "dev_cont": [
+      167.21
+     ],
+     "py_cont": [
+      167.21
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.838,
+     "py_cont_peak": 0.843
+    },
+    {
+     "id": "pos_34.wav",
+     "text": "захар сколько стоит доллар",
+     "kind": "pos",
+     "s": 171.2,
+     "e": 172.42,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.008,
+     "py_cont_peak": 0.008
+    },
+    {
+     "id": "pos_35.wav",
+     "text": "захар переведи на английский",
+     "kind": "pos",
+     "s": 176.28,
+     "e": 177.74,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.752,
+     "py_cont_peak": 0.798
+    },
+    {
+     "id": "pos_36.wav",
+     "text": "захар что ты умеешь",
+     "kind": "pos",
+     "s": 181.24,
+     "e": 182.76,
+     "live": [
+      182.29
+     ],
+     "dev_cont": [
+      182.33
+     ],
+     "py_cont": [
+      182.33
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.841,
+     "py_cont_peak": 0.899
+    },
+    {
+     "id": "pos_37.wav",
+     "text": "захар повтори",
+     "kind": "pos",
+     "s": 185.82,
+     "e": 186.48,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.085,
+     "py_cont_peak": 0.082
+    },
+    {
+     "id": "pos_38.wav",
+     "text": "захар отмена",
+     "kind": "pos",
+     "s": 188.84,
+     "e": 189.6,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.616,
+     "py_cont_peak": 0.608
+    },
+    {
+     "id": "pos_39.wav",
+     "text": "захар добавь в список покупок молоко",
+     "kind": "pos",
+     "s": 192.54,
+     "e": 194.58,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.237,
+     "py_cont_peak": 0.217
+    },
+    {
+     "id": "pos_40.wav",
+     "text": "захар спокойной ночи",
+     "kind": "pos",
+     "s": 199.16,
+     "e": 200.4,
+     "live": [],
+     "dev_cont": [
+      199.82
+     ],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.802,
+     "py_cont_peak": 0.776
+    },
+    {
+     "id": "neg_01.wav",
+     "text": "сахар кончился",
+     "kind": "neg",
+     "s": 231.5,
+     "e": 232.52,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.082,
+     "py_cont_peak": 0.088
+    },
+    {
+     "id": "neg_02.wav",
+     "text": "сахар в шкафу",
+     "kind": "neg",
+     "s": 234.2,
+     "e": 235.1,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.004,
+     "py_cont_peak": 0.004
+    },
+    {
+     "id": "neg_03.wav",
+     "text": "добавь сахар в чай",
+     "kind": "neg",
+     "s": 237.08,
+     "e": 238.12,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.0,
+     "py_cont_peak": 0.0
+    },
+    {
+     "id": "neg_04.wav",
+     "text": "купи сахар и молоко",
+     "kind": "neg",
+     "s": 240.58,
+     "e": 241.76,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.0,
+     "py_cont_peak": 0.0
+    },
+    {
+     "id": "neg_05.wav",
+     "text": "загар уже сошёл",
+     "kind": "neg",
+     "s": 244.64,
+     "e": 245.8,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.0,
+     "py_cont_peak": 0.0
+    },
+    {
+     "id": "neg_06.wav",
+     "text": "заказ пришёл",
+     "kind": "neg",
+     "s": 248.18,
+     "e": 249.08,
+     "live": [
+      248.84
+     ],
+     "dev_cont": [],
+     "py_cont": [
+      248.81
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.786,
+     "py_cont_peak": 0.824
+    },
+    {
+     "id": "neg_07.wav",
+     "text": "оформи заказ на завтра",
+     "kind": "neg",
+     "s": 253.0,
+     "e": 254.18,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.012,
+     "py_cont_peak": 0.011
+    },
+    {
+     "id": "neg_08.wav",
+     "text": "закат сегодня красивый",
+     "kind": "neg",
+     "s": 258.44,
+     "e": 259.52,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.031,
+     "py_cont_peak": 0.024
+    },
+    {
+     "id": "neg_09.wav",
+     "text": "захват держит плохо",
+     "kind": "neg",
+     "s": 262.28,
+     "e": 263.32,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.784,
+     "py_cont_peak": 0.787
+    },
+    {
+     "id": "neg_10.wav",
+     "text": "закрой захват покрепче",
+     "kind": "neg",
+     "s": 266.04,
+     "e": 267.12,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.307,
+     "py_cont_peak": 0.3
+    },
+    {
+     "id": "neg_11.wav",
+     "text": "заходи давай",
+     "kind": "neg",
+     "s": 269.14,
+     "e": 269.7,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.091,
+     "py_cont_peak": 0.091
+    },
+    {
+     "id": "neg_12.wav",
+     "text": "захотел чаю",
+     "kind": "neg",
+     "s": 271.66,
+     "e": 272.34,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.015,
+     "py_cont_peak": 0.014
+    },
+    {
+     "id": "neg_13.wav",
+     "text": "на базаре дешевле",
+     "kind": "neg",
+     "s": 274.36,
+     "e": 275.1,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.081,
+     "py_cont_peak": 0.099
+    },
+    {
+     "id": "neg_14.wav",
+     "text": "комар кусается",
+     "kind": "neg",
+     "s": 277.1,
+     "e": 278.06,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.018,
+     "py_cont_peak": 0.02
+    },
+    {
+     "id": "neg_15.wav",
+     "text": "самовар закипел",
+     "kind": "neg",
+     "s": 279.52,
+     "e": 280.6,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.057,
+     "py_cont_peak": 0.054
+    },
+    {
+     "id": "neg_16.wav",
+     "text": "гончар лепит чашку",
+     "kind": "neg",
+     "s": 282.1,
+     "e": 283.42,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.002,
+     "py_cont_peak": 0.003
+    },
+    {
+     "id": "neg_17.wav",
+     "text": "товар уже на складе",
+     "kind": "neg",
+     "s": 285.0,
+     "e": 286.02,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.006,
+     "py_cont_peak": 0.007
+    },
+    {
+     "id": "neg_18.wav",
+     "text": "захлопни дверь",
+     "kind": "neg",
+     "s": 287.8,
+     "e": 288.66,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.044,
+     "py_cont_peak": 0.044
+    },
+    {
+     "id": "neg_19.wav",
+     "text": "за хлебом сходи",
+     "kind": "neg",
+     "s": 292.26,
+     "e": 292.6,
+     "live": [
+      292.81
+     ],
+     "dev_cont": [
+      292.82
+     ],
+     "py_cont": [
+      292.79
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.861,
+     "py_cont_peak": 0.931
+    },
+    {
+     "id": "neg_20.wav",
+     "text": "за час успеем",
+     "kind": "neg",
+     "s": 295.12,
+     "e": 295.9,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.0,
+     "py_cont_peak": 0.0
+    },
+    {
+     "id": "neg_21.wav",
+     "text": "за хорошую работу",
+     "kind": "neg",
+     "s": 298.26,
+     "e": 299.02,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.246,
+     "py_cont_peak": 0.242
+    },
+    {
+     "id": "neg_22.wav",
+     "text": "захожу в магазин",
+     "kind": "neg",
+     "s": 305.5,
+     "e": 306.3,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.018,
+     "py_cont_peak": 0.023
+    },
+    {
+     "id": "neg_23.wav",
+     "text": "который час",
+     "kind": "neg",
+     "s": 308.94,
+     "e": 309.72,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.008,
+     "py_cont_peak": 0.008
+    },
+    {
+     "id": "neg_24.wav",
+     "text": "включи свет",
+     "kind": "neg",
+     "s": 311.44,
+     "e": 312.14,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.0,
+     "py_cont_peak": 0.0
+    },
+    {
+     "id": "neg_25.wav",
+     "text": "сколько времени",
+     "kind": "neg",
+     "s": 313.4,
+     "e": 314.32,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.144,
+     "py_cont_peak": 0.173
+    },
+    {
+     "id": "neg_26.wav",
+     "text": "какая погода",
+     "kind": "neg",
+     "s": 315.36,
+     "e": 316.28,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.208,
+     "py_cont_peak": 0.223
+    },
+    {
+     "id": "neg_27.wav",
+     "text": "включи музыку",
+     "kind": "neg",
+     "s": 317.94,
+     "e": 318.72,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.0,
+     "py_cont_peak": 0.0
+    },
+    {
+     "id": "neg_28.wav",
+     "text": "что с печкой",
+     "kind": "neg",
+     "s": 319.88,
+     "e": 320.8,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.0,
+     "py_cont_peak": 0.0
+    },
+    {
+     "id": "neg_29.wav",
+     "text": "поставь таймер на пять минут",
+     "kind": "neg",
+     "s": 322.22,
+     "e": 323.7,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.0,
+     "py_cont_peak": 0.0
+    },
+    {
+     "id": "neg_30.wav",
+     "text": "спокойной ночи",
+     "kind": "neg",
+     "s": 325.44,
+     "e": 326.22,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.007,
+     "py_cont_peak": 0.005
+    }
+   ]
+  },
+  "v37": {
+   "dev_cont_det": [
+    15.23,
+    18.83,
+    22.55,
+    26.15,
+    30.23,
+    34.46,
+    39.5,
+    43.34,
+    47.6,
+    51.5,
+    55.91,
+    60.23,
+    66.2,
+    71.21,
+    75.83,
+    85.82,
+    90.17,
+    97.22,
+    103.04,
+    108.47,
+    114.05,
+    119.69,
+    124.43,
+    128.57,
+    132.86,
+    137.6,
+    141.68,
+    146.36,
+    150.95,
+    155.42,
+    161.12,
+    167.09,
+    171.8,
+    176.81,
+    182.24,
+    186.17,
+    189.44,
+    193.16,
+    199.73
+   ],
+   "dev_cont_outside": [],
+   "vad_blocked": [
+    119.51,
+    119.54,
+    119.57,
+    119.6,
+    119.63,
+    119.66,
+    193.07,
+    193.1,
+    193.13
+   ],
+   "py_cont_det": [
+    15.23,
+    18.83,
+    22.55,
+    26.15,
+    30.23,
+    34.46,
+    39.5,
+    43.34,
+    47.6,
+    51.5,
+    55.91,
+    60.2,
+    66.2,
+    71.21,
+    75.83,
+    85.82,
+    90.17,
+    97.25,
+    103.04,
+    114.05,
+    119.54,
+    124.43,
+    128.54,
+    132.86,
+    141.68,
+    146.39,
+    150.95,
+    155.42,
+    161.12,
+    167.09,
+    171.8,
+    176.81,
+    182.24,
+    186.17,
+    189.44,
+    193.07,
+    199.73
+   ],
+   "py_cont_outside": [],
+   "phrases": [
+    {
+     "id": "pos_01.wav",
+     "text": "захар который час",
+     "kind": "pos",
+     "s": 14.64,
+     "e": 15.88,
+     "live": [
+      15.28
+     ],
+     "dev_cont": [
+      15.23
+     ],
+     "py_cont": [
+      15.23
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "pos_02.wav",
+     "text": "захар сколько времени",
+     "kind": "pos",
+     "s": 18.34,
+     "e": 19.46,
+     "live": [
+      18.93
+     ],
+     "dev_cont": [
+      18.83
+     ],
+     "py_cont": [
+      18.83
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "pos_03.wav",
+     "text": "захар включи свет",
+     "kind": "pos",
+     "s": 22.02,
+     "e": 23.1,
+     "live": [
+      22.77
+     ],
+     "dev_cont": [
+      22.55
+     ],
+     "py_cont": [
+      22.55
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "pos_04.wav",
+     "text": "захар выключи свет",
+     "kind": "pos",
+     "s": 25.68,
+     "e": 26.78,
+     "live": [],
+     "dev_cont": [
+      26.15
+     ],
+     "py_cont": [
+      26.15
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "pos_05.wav",
+     "text": "захар включи свет в коридоре",
+     "kind": "pos",
+     "s": 29.24,
+     "e": 31.2,
+     "live": [],
+     "dev_cont": [
+      30.23
+     ],
+     "py_cont": [
+      30.23
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "pos_06.wav",
+     "text": "захар выключи свет в туалете",
+     "kind": "pos",
+     "s": 33.92,
+     "e": 35.54,
+     "live": [],
+     "dev_cont": [
+      34.46
+     ],
+     "py_cont": [
+      34.46
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.98,
+     "py_cont_peak": 0.999
+    },
+    {
+     "id": "pos_07.wav",
+     "text": "захар какая погода",
+     "kind": "pos",
+     "s": 38.9,
+     "e": 40.02,
+     "live": [],
+     "dev_cont": [
+      39.5
+     ],
+     "py_cont": [
+      39.5
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.847,
+     "py_cont_peak": 0.903
+    },
+    {
+     "id": "pos_08.wav",
+     "text": "захар что на улице",
+     "kind": "pos",
+     "s": 42.84,
+     "e": 43.92,
+     "live": [],
+     "dev_cont": [
+      43.34
+     ],
+     "py_cont": [
+      43.34
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.978,
+     "py_cont_peak": 0.986
+    },
+    {
+     "id": "pos_09.wav",
+     "text": "захар сколько градусов",
+     "kind": "pos",
+     "s": 47.06,
+     "e": 48.06,
+     "live": [],
+     "dev_cont": [
+      47.6
+     ],
+     "py_cont": [
+      47.6
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.979,
+     "py_cont_peak": 0.998
+    },
+    {
+     "id": "pos_10.wav",
+     "text": "захар будет дождь",
+     "kind": "pos",
+     "s": 51.04,
+     "e": 51.92,
+     "live": [
+      51.57
+     ],
+     "dev_cont": [
+      51.5
+     ],
+     "py_cont": [
+      51.5
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "pos_11.wav",
+     "text": "захар включи музыку",
+     "kind": "pos",
+     "s": 55.4,
+     "e": 56.48,
+     "live": [],
+     "dev_cont": [
+      55.91
+     ],
+     "py_cont": [
+      55.91
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "pos_12.wav",
+     "text": "захар включи радио",
+     "kind": "pos",
+     "s": 59.62,
+     "e": 60.72,
+     "live": [
+      60.34
+     ],
+     "dev_cont": [
+      60.23
+     ],
+     "py_cont": [
+      60.2
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.994,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "pos_13.wav",
+     "text": "захар сделай потише",
+     "kind": "pos",
+     "s": 65.6,
+     "e": 66.74,
+     "live": [],
+     "dev_cont": [
+      66.2
+     ],
+     "py_cont": [
+      66.2
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.905,
+     "py_cont_peak": 0.991
+    },
+    {
+     "id": "pos_14.wav",
+     "text": "захар сделай погромче",
+     "kind": "pos",
+     "s": 70.68,
+     "e": 71.78,
+     "live": [],
+     "dev_cont": [
+      71.21
+     ],
+     "py_cont": [
+      71.21
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.916,
+     "py_cont_peak": 0.973
+    },
+    {
+     "id": "pos_15.wav",
+     "text": "захар поставь таймер на десять минут",
+     "kind": "pos",
+     "s": 75.26,
+     "e": 76.98,
+     "live": [],
+     "dev_cont": [
+      75.83
+     ],
+     "py_cont": [
+      75.83
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.896,
+     "py_cont_peak": 0.973
+    },
+    {
+     "id": "pos_16.wav",
+     "text": "захар напомни через час",
+     "kind": "pos",
+     "s": 80.54,
+     "e": 81.68,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.317,
+     "py_cont_peak": 0.292
+    },
+    {
+     "id": "pos_17.wav",
+     "text": "захар что с печкой",
+     "kind": "pos",
+     "s": 85.22,
+     "e": 86.1,
+     "live": [],
+     "dev_cont": [
+      85.82
+     ],
+     "py_cont": [
+      85.82
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.879,
+     "py_cont_peak": 0.906
+    },
+    {
+     "id": "pos_18.wav",
+     "text": "захар какая температура в печи",
+     "kind": "pos",
+     "s": 89.54,
+     "e": 91.22,
+     "live": [],
+     "dev_cont": [
+      90.17
+     ],
+     "py_cont": [
+      90.17
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.878,
+     "py_cont_peak": 0.921
+    },
+    {
+     "id": "pos_19.wav",
+     "text": "захар сколько осталось до конца обжига",
+     "kind": "pos",
+     "s": 96.6,
+     "e": 98.56,
+     "live": [],
+     "dev_cont": [
+      97.22
+     ],
+     "py_cont": [
+      97.25
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.816,
+     "py_cont_peak": 0.893
+    },
+    {
+     "id": "pos_20.wav",
+     "text": "захар какие глазури у нас есть",
+     "kind": "pos",
+     "s": 102.48,
+     "e": 104.06,
+     "live": [
+      103.12
+     ],
+     "dev_cont": [
+      103.04
+     ],
+     "py_cont": [
+      103.04
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "pos_21.wav",
+     "text": "захар поищи в гугле",
+     "kind": "pos",
+     "s": 107.84,
+     "e": 108.9,
+     "live": [],
+     "dev_cont": [
+      108.47
+     ],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.818,
+     "py_cont_peak": 0.788
+    },
+    {
+     "id": "pos_22.wav",
+     "text": "захар найди рецепт",
+     "kind": "pos",
+     "s": 113.12,
+     "e": 114.48,
+     "live": [],
+     "dev_cont": [
+      114.05
+     ],
+     "py_cont": [
+      114.05
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.994,
+     "py_cont_peak": 0.999
+    },
+    {
+     "id": "pos_23.wav",
+     "text": "захар режим ночь",
+     "kind": "pos",
+     "s": 119.06,
+     "e": 120.22,
+     "live": [
+      119.66
+     ],
+     "dev_cont": [
+      119.69
+     ],
+     "py_cont": [
+      119.54
+     ],
+     "vad_blocked": [
+      119.51,
+      119.54,
+      119.57,
+      119.6,
+      119.63,
+      119.66
+     ],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "pos_24.wav",
+     "text": "захар выключи всё",
+     "kind": "pos",
+     "s": 123.9,
+     "e": 124.94,
+     "live": [],
+     "dev_cont": [
+      124.43
+     ],
+     "py_cont": [
+      124.43
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.994,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "pos_25.wav",
+     "text": "захар что у меня завтра",
+     "kind": "pos",
+     "s": 127.94,
+     "e": 129.04,
+     "live": [],
+     "dev_cont": [
+      128.57
+     ],
+     "py_cont": [
+      128.54
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.93,
+     "py_cont_peak": 0.998
+    },
+    {
+     "id": "pos_26.wav",
+     "text": "захар какое сегодня число",
+     "kind": "pos",
+     "s": 132.32,
+     "e": 133.66,
+     "live": [],
+     "dev_cont": [
+      132.86
+     ],
+     "py_cont": [
+      132.86
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.92,
+     "py_cont_peak": 0.993
+    },
+    {
+     "id": "pos_27.wav",
+     "text": "захар какой день недели",
+     "kind": "pos",
+     "s": 136.96,
+     "e": 139.12,
+     "live": [],
+     "dev_cont": [
+      137.6
+     ],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.798,
+     "py_cont_peak": 0.759
+    },
+    {
+     "id": "pos_28.wav",
+     "text": "захар расскажи анекдот",
+     "kind": "pos",
+     "s": 141.16,
+     "e": 142.24,
+     "live": [],
+     "dev_cont": [
+      141.68
+     ],
+     "py_cont": [
+      141.68
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.988,
+     "py_cont_peak": 0.998
+    },
+    {
+     "id": "pos_29.wav",
+     "text": "захар напиши в телеграм",
+     "kind": "pos",
+     "s": 145.84,
+     "e": 147.12,
+     "live": [
+      146.51
+     ],
+     "dev_cont": [
+      146.36
+     ],
+     "py_cont": [
+      146.39
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "pos_30.wav",
+     "text": "захар закажи пиццу",
+     "kind": "pos",
+     "s": 150.46,
+     "e": 151.46,
+     "live": [],
+     "dev_cont": [
+      150.95
+     ],
+     "py_cont": [
+      150.95
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "pos_31.wav",
+     "text": "захар включи настольную лампу",
+     "kind": "pos",
+     "s": 154.88,
+     "e": 156.42,
+     "live": [
+      155.5
+     ],
+     "dev_cont": [
+      155.42
+     ],
+     "py_cont": [
+      155.42
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.994,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "pos_32.wav",
+     "text": "захар выключи подсветку",
+     "kind": "pos",
+     "s": 160.2,
+     "e": 161.64,
+     "live": [
+      161.26
+     ],
+     "dev_cont": [
+      161.12
+     ],
+     "py_cont": [
+      161.12
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "pos_33.wav",
+     "text": "захар включи ленту",
+     "kind": "pos",
+     "s": 165.1,
+     "e": 167.62,
+     "live": [
+      167.15
+     ],
+     "dev_cont": [
+      167.09
+     ],
+     "py_cont": [
+      167.09
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "pos_34.wav",
+     "text": "захар сколько стоит доллар",
+     "kind": "pos",
+     "s": 171.2,
+     "e": 172.42,
+     "live": [],
+     "dev_cont": [
+      171.8
+     ],
+     "py_cont": [
+      171.8
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.87,
+     "py_cont_peak": 0.899
+    },
+    {
+     "id": "pos_35.wav",
+     "text": "захар переведи на английский",
+     "kind": "pos",
+     "s": 176.28,
+     "e": 177.74,
+     "live": [],
+     "dev_cont": [
+      176.81
+     ],
+     "py_cont": [
+      176.81
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.995,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "pos_36.wav",
+     "text": "захар что ты умеешь",
+     "kind": "pos",
+     "s": 181.24,
+     "e": 182.76,
+     "live": [
+      182.29
+     ],
+     "dev_cont": [
+      182.24
+     ],
+     "py_cont": [
+      182.24
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.99,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "pos_37.wav",
+     "text": "захар повтори",
+     "kind": "pos",
+     "s": 185.82,
+     "e": 186.48,
+     "live": [],
+     "dev_cont": [
+      186.17
+     ],
+     "py_cont": [
+      186.17
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.986,
+     "py_cont_peak": 0.995
+    },
+    {
+     "id": "pos_38.wav",
+     "text": "захар отмена",
+     "kind": "pos",
+     "s": 188.84,
+     "e": 189.6,
+     "live": [],
+     "dev_cont": [
+      189.44
+     ],
+     "py_cont": [
+      189.44
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.991,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "pos_39.wav",
+     "text": "захар добавь в список покупок молоко",
+     "kind": "pos",
+     "s": 192.54,
+     "e": 194.58,
+     "live": [],
+     "dev_cont": [
+      193.16
+     ],
+     "py_cont": [
+      193.07
+     ],
+     "vad_blocked": [
+      193.07,
+      193.1,
+      193.13
+     ],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "pos_40.wav",
+     "text": "захар спокойной ночи",
+     "kind": "pos",
+     "s": 199.16,
+     "e": 200.4,
+     "live": [],
+     "dev_cont": [
+      199.73
+     ],
+     "py_cont": [
+      199.73
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.98,
+     "py_cont_peak": 0.999
+    },
+    {
+     "id": "neg_01.wav",
+     "text": "сахар кончился",
+     "kind": "neg",
+     "s": 231.5,
+     "e": 232.52,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.018,
+     "py_cont_peak": 0.018
+    },
+    {
+     "id": "neg_02.wav",
+     "text": "сахар в шкафу",
+     "kind": "neg",
+     "s": 234.2,
+     "e": 235.1,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.006,
+     "py_cont_peak": 0.009
+    },
+    {
+     "id": "neg_03.wav",
+     "text": "добавь сахар в чай",
+     "kind": "neg",
+     "s": 237.08,
+     "e": 238.12,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.003,
+     "py_cont_peak": 0.002
+    },
+    {
+     "id": "neg_04.wav",
+     "text": "купи сахар и молоко",
+     "kind": "neg",
+     "s": 240.58,
+     "e": 241.76,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.0,
+     "py_cont_peak": 0.0
+    },
+    {
+     "id": "neg_05.wav",
+     "text": "загар уже сошёл",
+     "kind": "neg",
+     "s": 244.64,
+     "e": 245.8,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.004,
+     "py_cont_peak": 0.004
+    },
+    {
+     "id": "neg_06.wav",
+     "text": "заказ пришёл",
+     "kind": "neg",
+     "s": 248.18,
+     "e": 249.08,
+     "live": [
+      248.84
+     ],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.148,
+     "py_cont_peak": 0.107
+    },
+    {
+     "id": "neg_07.wav",
+     "text": "оформи заказ на завтра",
+     "kind": "neg",
+     "s": 253.0,
+     "e": 254.18,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.004,
+     "py_cont_peak": 0.004
+    },
+    {
+     "id": "neg_08.wav",
+     "text": "закат сегодня красивый",
+     "kind": "neg",
+     "s": 258.44,
+     "e": 259.52,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.006,
+     "py_cont_peak": 0.008
+    },
+    {
+     "id": "neg_09.wav",
+     "text": "захват держит плохо",
+     "kind": "neg",
+     "s": 262.28,
+     "e": 263.32,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.112,
+     "py_cont_peak": 0.139
+    },
+    {
+     "id": "neg_10.wav",
+     "text": "закрой захват покрепче",
+     "kind": "neg",
+     "s": 266.04,
+     "e": 267.12,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.074,
+     "py_cont_peak": 0.07
+    },
+    {
+     "id": "neg_11.wav",
+     "text": "заходи давай",
+     "kind": "neg",
+     "s": 269.14,
+     "e": 269.7,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.019,
+     "py_cont_peak": 0.015
+    },
+    {
+     "id": "neg_12.wav",
+     "text": "захотел чаю",
+     "kind": "neg",
+     "s": 271.66,
+     "e": 272.34,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.006,
+     "py_cont_peak": 0.005
+    },
+    {
+     "id": "neg_13.wav",
+     "text": "на базаре дешевле",
+     "kind": "neg",
+     "s": 274.36,
+     "e": 275.1,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.01,
+     "py_cont_peak": 0.011
+    },
+    {
+     "id": "neg_14.wav",
+     "text": "комар кусается",
+     "kind": "neg",
+     "s": 277.1,
+     "e": 278.06,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.005,
+     "py_cont_peak": 0.005
+    },
+    {
+     "id": "neg_15.wav",
+     "text": "самовар закипел",
+     "kind": "neg",
+     "s": 279.52,
+     "e": 280.6,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.0,
+     "py_cont_peak": 0.0
+    },
+    {
+     "id": "neg_16.wav",
+     "text": "гончар лепит чашку",
+     "kind": "neg",
+     "s": 282.1,
+     "e": 283.42,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.005,
+     "py_cont_peak": 0.005
+    },
+    {
+     "id": "neg_17.wav",
+     "text": "товар уже на складе",
+     "kind": "neg",
+     "s": 285.0,
+     "e": 286.02,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.0,
+     "py_cont_peak": 0.0
+    },
+    {
+     "id": "neg_18.wav",
+     "text": "захлопни дверь",
+     "kind": "neg",
+     "s": 287.8,
+     "e": 288.66,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.005,
+     "py_cont_peak": 0.006
+    },
+    {
+     "id": "neg_19.wav",
+     "text": "за хлебом сходи",
+     "kind": "neg",
+     "s": 292.26,
+     "e": 292.6,
+     "live": [
+      292.81
+     ],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.037,
+     "py_cont_peak": 0.03
+    },
+    {
+     "id": "neg_20.wav",
+     "text": "за час успеем",
+     "kind": "neg",
+     "s": 295.12,
+     "e": 295.9,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.0,
+     "py_cont_peak": 0.0
+    },
+    {
+     "id": "neg_21.wav",
+     "text": "за хорошую работу",
+     "kind": "neg",
+     "s": 298.26,
+     "e": 299.02,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.041,
+     "py_cont_peak": 0.057
+    },
+    {
+     "id": "neg_22.wav",
+     "text": "захожу в магазин",
+     "kind": "neg",
+     "s": 305.5,
+     "e": 306.3,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.01,
+     "py_cont_peak": 0.009
+    },
+    {
+     "id": "neg_23.wav",
+     "text": "который час",
+     "kind": "neg",
+     "s": 308.94,
+     "e": 309.72,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.003,
+     "py_cont_peak": 0.003
+    },
+    {
+     "id": "neg_24.wav",
+     "text": "включи свет",
+     "kind": "neg",
+     "s": 311.44,
+     "e": 312.14,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.0,
+     "py_cont_peak": 0.0
+    },
+    {
+     "id": "neg_25.wav",
+     "text": "сколько времени",
+     "kind": "neg",
+     "s": 313.4,
+     "e": 314.32,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.244,
+     "py_cont_peak": 0.177
+    },
+    {
+     "id": "neg_26.wav",
+     "text": "какая погода",
+     "kind": "neg",
+     "s": 315.36,
+     "e": 316.28,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.196,
+     "py_cont_peak": 0.178
+    },
+    {
+     "id": "neg_27.wav",
+     "text": "включи музыку",
+     "kind": "neg",
+     "s": 317.94,
+     "e": 318.72,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.0,
+     "py_cont_peak": 0.0
+    },
+    {
+     "id": "neg_28.wav",
+     "text": "что с печкой",
+     "kind": "neg",
+     "s": 319.88,
+     "e": 320.8,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.0,
+     "py_cont_peak": 0.0
+    },
+    {
+     "id": "neg_29.wav",
+     "text": "поставь таймер на пять минут",
+     "kind": "neg",
+     "s": 322.22,
+     "e": 323.7,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.0,
+     "py_cont_peak": 0.0
+    },
+    {
+     "id": "neg_30.wav",
+     "text": "спокойной ночи",
+     "kind": "neg",
+     "s": 325.44,
+     "e": 326.22,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.0,
+     "py_cont_peak": 0.0
+    }
+   ]
+  }
+ }
+}

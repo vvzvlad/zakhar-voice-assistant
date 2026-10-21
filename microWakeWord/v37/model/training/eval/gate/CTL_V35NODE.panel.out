@@ -1,0 +1,12 @@
+denominators: held-out words=19  all words=58  energy-events=120  (noise=21.5)
+
+=== ctl_v35node ===  (max_win=1.000)
+   cut  HELD-OUT/19    all/58  events/120  hardFA  totaldets
+  0.50     100.0%    94.8%      89.2%       9        159
+  0.60     100.0%    94.8%      89.2%      10        151
+  0.70     100.0%    94.8%      88.3%       9        146
+  0.80     100.0%    94.8%      87.5%      10        137
+  0.90      89.5%    89.7%      82.5%       9        128
+  0.95      84.2%    87.9%      80.0%       8        121
+
+EVAL_PANEL_HELDOUT_DONE

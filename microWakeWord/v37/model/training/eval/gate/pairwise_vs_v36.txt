@@ -1,0 +1,10 @@
+== 18 home takes (x4): v36 catches 14/18
+  v37          16/18  only v36: 0  only v37: 2  McNemar p=0.5
+      only v36: -
+      only v37: 0024.wav 0.648->0.930, 0045.wav 0.793->0.987
+== no beep: held-out, per clip: v36 catches 4/9
+  v37          4/9  only v36: 0  only v37: 0  McNemar p=1
+      only v36: -
+      only v37: -
+== (a) fused phrases, whole (x1): v36 catches 514/868
+  v37          561/868  only v36: 12  only v37: 59  McNemar p=1.35e-08

@@ -1,0 +1,98 @@
+file	run	time	result	reason	text	text_ch1	text_ch0	class	zakhar_heard_in	ch1_side	gain_applied	zakhar_end_s	clip_end_s
+run_3704.wav	3704	2026-10-16 18:53:06	rejected	wakeword_reject				neg	-	right	4		2.528
+run_3705.wav	3705	2026-10-19 00:53:41	rejected	wakeword_reject				neg	-	right	4		2.56
+run_3706.wav	3706	2026-10-19 00:54:59	rejected	wakeword_reject				neg	-	right	4		2.56
+run_3707.wav	3707	2026-10-19 00:58:34	rejected	wakeword_reject				neg	-	right	4		2.624
+run_3710.wav	3710	2026-10-19 03:01:07	rejected	wakeword_reject				neg	-	right	4		2.56
+run_3711.wav	3711	2026-10-19 03:02:35	rejected	wakeword_reject				neg	-	right	4		2.56
+run_3712.wav	3712	2026-10-19 03:04:49	rejected	wakeword_reject				neg	-	right	4		2.56
+run_3713.wav	3713	2026-10-19 03:06:01	rejected	wakeword_reject				neg	-	right	4		2.56
+run_3727.wav	3727	2026-10-19 04:37:32	rejected	wakeword_reject				neg	-	right	4		2.72
+run_3734.wav	3734	2026-10-19 05:32:50	rejected	wakeword_reject				neg	-	right	4		2.656
+run_3735.wav	3735	2026-10-19 05:34:07	rejected	wakeword_reject				neg	-	right	4		2.656
+run_3737.wav	3737	2026-10-19 08:05:31	rejected	wakeword_reject				neg	-	right	4		2.624
+run_3738.wav	3738	2026-10-19 12:42:15	rejected	wakeword_reject				neg	-	right	4		2.816
+run_3739.wav	3739	2026-10-19 12:47:37	rejected	wakeword_reject				neg	-	right	4		2.56
+run_3740.wav	3740	2026-10-19 12:47:43	rejected	wakeword_reject				neg	-	right	4		2.624
+run_3741.wav	3741	2026-10-19 12:47:51	rejected	wakeword_reject				neg	-	right	4		2.592
+run_3742.wav	3742	2026-10-19 12:49:36	rejected	wakeword_reject				neg	-	right	4		2.816
+run_3743.wav	3743	2026-10-19 12:50:50	rejected	wakeword_reject				neg	-	right	4		2.656
+run_3746.wav	3746	2026-10-19 14:09:43	rejected	wakeword_reject				neg	-	right	4		2.624
+run_3747.wav	3747	2026-10-19 14:14:05	rejected	wakeword_reject				neg	-	right	4		2.624
+run_3748.wav	3748	2026-10-19 15:40:38	rejected	wakeword_reject				neg	-	right	4		2.624
+run_3749.wav	3749	2026-10-19 15:40:59	rejected	wakeword_reject				neg	-	right	4		2.624
+run_3752.wav	3752	2026-10-19 15:46:12	rejected	wakeword_reject				neg	-	right	4		2.624
+run_3758.wav	3758	2026-10-19 16:00:51	rejected	wakeword_reject				neg	-	right	4		2.656
+run_3788.wav	3788	2026-10-19 16:58:12	rejected	wakeword_reject				neg	-	right	1		2.624
+run_3789.wav	3789	2026-10-19 17:02:19	rejected	wakeword_reject				neg	-	right	1		2.752
+run_3797.wav	3797	2026-10-19 17:18:56	rejected	wakeword_reject				neg	-	right	1		2.752
+run_3798.wav	3798	2026-10-19 17:30:00	rejected	wakeword_reject				neg	-	right	1		2.624
+run_3799.wav	3799	2026-10-19 17:34:17	rejected	wakeword_reject				neg	-	right	1		2.656
+run_3800.wav	3800	2026-10-19 17:48:17	rejected	wakeword_reject				neg	-	right	1		2.688
+run_3803.wav	3803	2026-10-19 17:56:13	rejected	wakeword_reject				neg	-	right	1		2.624
+run_3806.wav	3806	2026-10-19 18:05:35	rejected	wakeword_reject				neg	-	right	1		2.656
+run_3807.wav	3807	2026-10-19 18:06:27	rejected	wakeword_reject				neg	-	right	1		2.624
+run_3824.wav	3824	2026-10-19 18:29:04	rejected	wakeword_reject	а		а	neg	-	right	1		2.656
+run_3825.wav	3825	2026-10-19 18:29:27	rejected	wakeword_reject				neg	-	right	1		2.816
+run_3843.wav	3843	2026-10-19 18:45:26	rejected	wakeword_reject				neg	-	right	1		2.624
+run_3845.wav	3845	2026-10-19 19:20:53	rejected	wakeword_reject				neg	-	right	1		2.624
+run_3848.wav	3848	2026-10-19 19:36:31	rejected	wakeword_reject				neg	-	right	1		2.656
+run_3853.wav	3853	2026-10-19 19:38:40	rejected	wakeword_reject	вот еще один два экономиста что это		вот еще один два экономиста что это	neg	-	right	1		2.656
+run_3864.wav	3864	2026-10-19 20:23:33	rejected	wakeword_reject				neg	-	right	1		2.72
+run_3884.wav	3884	2026-10-19 21:14:17	rejected	wakeword_reject				neg	-	right	1		2.592
+run_3890.wav	3890	2026-10-19 22:28:38	rejected	wakeword_reject	сука	сука	сука	neg	-	right	1		2.56
+run_3939.wav	3939	2026-10-19 23:47:17	rejected	wakeword_reject	самое		самое	neg	-	right	1		2.56
+run_3940.wav	3940	2026-10-20 00:11:25	rejected	wakeword_reject				neg	-	right	1		2.784
+run_3941.wav	3941	2026-10-20 00:12:01	rejected	wakeword_reject				neg	-	right	1		2.656
+run_3956.wav	3956	2026-10-20 01:53:46	rejected	wakeword_reject				neg	-	right	1		3.2
+run_4009.wav	4009	2026-10-20 07:42:49	rejected	wakeword_reject				neg	-	right	1		2.72
+run_4010.wav	4010	2026-10-20 11:24:52	rejected	wakeword_reject				neg	-	right	1		2.688
+run_4011.wav	4011	2026-10-20 11:46:05	rejected	wakeword_reject				neg	-	right	1		2.656
+run_4012.wav	4012	2026-10-20 11:49:03	rejected	wakeword_reject				neg	-	right	1		2.688
+run_4013.wav	4013	2026-10-20 11:55:15	rejected	wakeword_reject	да		да	neg	-	right	1		2.656
+run_4014.wav	4014	2026-10-20 11:58:14	rejected	wakeword_reject	да		да	neg	-	right	1		2.656
+run_4015.wav	4015	2026-10-20 12:03:46	rejected	wakeword_reject				neg	-	right	1		2.624
+run_4016.wav	4016	2026-10-20 12:10:59	rejected	wakeword_reject				neg	-	right	1		2.624
+run_4017.wav	4017	2026-10-20 12:11:56	rejected	wakeword_reject				neg	-	right	1		2.624
+run_4018.wav	4018	2026-10-20 12:15:22	rejected	wakeword_reject				neg	-	right	1		2.72
+run_4019.wav	4019	2026-10-20 12:24:41	rejected	wakeword_reject				neg	-	right	1		2.656
+run_4020.wav	4020	2026-10-20 12:28:58	rejected	wakeword_reject	а		а	neg	-	right	1		2.656
+run_4021.wav	4021	2026-10-20 12:29:36	rejected	wakeword_reject	а		а	neg	-	right	1		2.656
+run_4022.wav	4022	2026-10-20 12:32:24	rejected	wakeword_reject				neg	-	right	1		2.656
+run_4023.wav	4023	2026-10-20 12:32:25	rejected	wakeword_reject				neg	-	right	1		2.656
+run_4024.wav	4024	2026-10-20 12:32:43	rejected	wakeword_reject				neg	-	right	1		2.624
+run_4025.wav	4025	2026-10-20 12:33:06	rejected	wakeword_reject				neg	-	right	1		2.624
+run_4026.wav	4026	2026-10-20 12:33:16	rejected	wakeword_reject				neg	-	right	1		2.688
+run_4027.wav	4027	2026-10-20 12:39:21	rejected	wakeword_reject				neg	-	right	1		2.656
+run_4028.wav	4028	2026-10-20 12:39:23	rejected	wakeword_reject				neg	-	right	1		2.688
+run_4029.wav	4029	2026-10-20 12:41:13	rejected	wakeword_reject				neg	-	right	1		2.656
+run_4030.wav	4030	2026-10-20 18:10:44	rejected	wakeword_reject				neg	-	right	1		2.688
+run_4076.wav	4076	2026-10-21 03:06:20	rejected	wakeword_reject	уф		уф	neg	-	left	1		2.656
+run_4095.wav	4095	2026-10-21 03:38:13	rejected	wakeword_reject				neg	-	left	1		2.688
+run_4136.wav	4136	2026-10-21 04:26:24	rejected	wakeword_reject	але		але	neg	-	left	1		3.2
+run_4137.wav	4137	2026-10-21 04:27:28	rejected	wakeword_reject				neg	-	left	1		2.592
+run_4139.wav	4139	2026-10-21 04:37:06	rejected	wakeword_reject				neg	-	left	1		2.816
+run_4143.wav	4143	2026-10-21 04:59:38	rejected	wakeword_reject				neg	-	right	1		2.592
+run_4145.wav	4145	2026-10-21 12:03:47	rejected	wakeword_reject				neg	-	right	1		2.72
+run_4146.wav	4146	2026-10-21 12:04:38	rejected	wakeword_reject				neg	-	right	1		2.656
+run_4147.wav	4147	2026-10-21 12:04:41	rejected	wakeword_reject				neg	-	right	1		2.688
+run_4148.wav	4148	2026-10-21 12:04:50	rejected	wakeword_reject				neg	-	right	1		2.88
+run_4149.wav	4149	2026-10-21 12:04:57	rejected	wakeword_reject				neg	-	right	1		2.656
+run_4150.wav	4150	2026-10-21 12:05:02	rejected	wakeword_reject				neg	-	right	1		2.688
+run_4151.wav	4151	2026-10-21 12:07:26	rejected	wakeword_reject				neg	-	right	1		2.624
+run_4152.wav	4152	2026-10-21 12:07:59	rejected	wakeword_reject				neg	-	right	1		2.688
+run_4153.wav	4153	2026-10-21 12:08:34	rejected	wakeword_reject				neg	-	right	1		2.688
+run_4154.wav	4154	2026-10-21 12:09:07	rejected	wakeword_reject				neg	-	right	1		2.688
+run_4155.wav	4155	2026-10-21 12:09:18	rejected	wakeword_reject				neg	-	right	1		2.656
+run_4156.wav	4156	2026-10-21 12:29:00	rejected	wakeword_reject				neg	-	right	1		2.656
+run_4157.wav	4157	2026-10-21 12:29:15	rejected	wakeword_reject				neg	-	right	1		2.784
+run_4158.wav	4158	2026-10-21 12:29:18	rejected	wakeword_reject				neg	-	right	1		2.656
+run_4159.wav	4159	2026-10-21 12:32:46	rejected	wakeword_reject				neg	-	right	1		2.656
+run_4160.wav	4160	2026-10-21 13:57:27	rejected	wakeword_reject				neg	-	right	1		2.624
+run_4161.wav	4161	2026-10-21 14:45:19	rejected	wakeword_reject				neg	-	right	1		2.688
+run_4162.wav	4162	2026-10-21 15:37:50	rejected	wakeword_reject				neg	-	right	1		2.656
+run_4163.wav	4163	2026-10-21 16:15:07	rejected	wakeword_reject				neg	-	right	1		2.816
+run_4164.wav	4164	2026-10-21 16:19:16	rejected	wakeword_reject				neg	-	right	1		2.656
+run_4168.wav	4168	2026-10-21 16:31:07	rejected	wakeword_reject				neg	-	right	1		2.656
+run_4169.wav	4169	2026-10-21 17:09:48	rejected	wakeword_reject				neg	-	right	1		2.816
+run_4174.wav	4174	2026-10-21 18:11:03	rejected	wakeword_reject				neg	-	right	1		2.816
