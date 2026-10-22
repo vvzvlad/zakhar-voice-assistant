@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useCallback } from "react";
 import { Ic } from "../components/icons.jsx";
 import {
-  Card, Field, KeyInput, PageHeader, FormPage, StatusPill, Pill, Modal, Loading, Select,
+  Card, Field, KeyInput, PageHeader, FormPage, StatusPill, Pill, Modal, Loading, Select, Toggle,
 } from "../components/primitives.jsx";
 import SchemaForm from "../components/SchemaForm.jsx";
 import { useAppData } from "../appData.jsx";
@@ -31,10 +31,19 @@ function ToolChips({ tools }) {
   </div>;
 }
 
+// A source card's Enabled switch, in the card's header; `hint` is the field's own
+// description, shown as its tooltip. The click is cancelled after the switch has
+// handled it, so switching a built-in card does not fold or unfold it.
+function HeaderToggle({ on, onChange, hint }) {
+  return <span title={hint} style={{ display: "flex" }} onClick={(e) => e.preventDefault()}>
+    <Toggle on={on} onChange={(v) => onChange("enabled", v)} />
+  </span>;
+}
+
 // One built-in source card, folded to its header until opened: header (name + kind
-// badge + status pill), an editable SchemaForm bound to its core.* sub-section, and
-// the live tool chips. The card's draft belongs to the page form, saved with the
-// page's one Save.
+// badge + status pill + Enabled switch), an editable SchemaForm bound to the rest of
+// its core.* sub-section, and the live tool chips. The card's draft belongs to the
+// page form, saved with the page's one Save.
 //   name      — human title; sub — short caption under it
 //   schema    — resolved JSON sub-schema (from core.schema, $defs available on root)
 //   root      — full core schema (holds $defs for the SchemaForm)
@@ -69,11 +78,12 @@ function SourceCard({ name, sub, schema, root, draft, onChange, configured, live
       <div style={{ display: "flex", alignItems: "center", gap: 12, marginLeft: "auto" }}>
         <Pill tone={kind === "http" ? "warn" : "muted"}>{kind === "http" ? "external" : "built-in"}</Pill>
         {pill}
+        <HeaderToggle on={draft.enabled ?? true} onChange={onChange} hint={schema?.properties?.enabled?.description} />
       </div>
     </summary>
     <div className="z-card-b">
       {schema
-        ? <SchemaForm schema={schema} root={root} values={draft} onChange={onChange} />
+        ? <SchemaForm schema={schema} root={root} values={draft} onChange={onChange} skip={["enabled"]} />
         : <div className="z-fh">Schema unavailable.</div>}
       {children}
       <ToolChips tools={live?.tools} />
@@ -301,12 +311,12 @@ function McpServerModal({ initial, onSave, onClose, title, takenNames }) {
   </Modal>;
 }
 
-// One external MCP server card: header (name + status pill), the url in mono, the
-// Enabled switch (`enabledSchema`, rendered like the built-in sources' switch) and the
-// live tool chips matched from /api/tools by source id === server name. The switch and
-// the Edit / Delete buttons change the page's draft; a disabled server is dimmed except
-// its controls and shows a "disabled" pill (missing flag = enabled).
-function McpServerCard({ server, saved, live, enabledSchema, root, onChange, onEdit, onDelete }) {
+// One external MCP server card: header (name + url in mono + status pill + Edit /
+// Delete + the Enabled switch, `enabledHint` its tooltip) and the live tool chips
+// matched from /api/tools by source id === server name. The switch and the buttons
+// change the page's draft; a disabled server is dimmed except its controls and shows
+// a "disabled" pill (missing flag = enabled).
+function McpServerCard({ server, saved, live, enabledHint, onChange, onEdit, onDelete }) {
   const enabled = server.enabled ?? true;
   const dim = enabled ? "" : "z-dim";
   let pill;
@@ -333,10 +343,10 @@ function McpServerCard({ server, saved, live, enabledSchema, root, onChange, onE
           <button className="z-btn g sm" onClick={onEdit}>Edit</button>
           <button className="z-btn d sm" onClick={onDelete}>Delete</button>
         </div>
+        <HeaderToggle on={enabled} onChange={onChange} hint={enabledHint} />
       </div>
     </div>
     <div className="z-card-b">
-      <SchemaForm schema={enabledSchema} root={root} values={{ enabled }} onChange={onChange} />
       <div className={dim}><ToolChips tools={live?.tools} /></div>
     </div>
   </div>;
@@ -350,8 +360,8 @@ export function MCP() {
   // properties.<section> is a $ref into $defs; resolve it so SchemaForm gets a
   // schema with `.properties` (and pass the full core schema as `root` for $defs).
   const sub = (key) => deref(coreSchema.properties?.[key] || {}, coreSchema);
-  // An external server's Enabled switch: the `enabled` field of its schema alone.
-  const enabledSchema = { properties: { enabled: deref(sub("mcp_servers").items, coreSchema).properties?.enabled } };
+  // An external server's Enabled switch takes its tooltip from the `enabled` field of its schema.
+  const enabledHint = deref(sub("mcp_servers").items, coreSchema).properties?.enabled?.description;
 
   const [tools, setTools] = useState(null);   // null = loading; [] = loaded/empty
   const [toolsErr, setToolsErr] = useState(null);
@@ -422,7 +432,7 @@ export function MCP() {
           ? <Card><div className="z-fh" style={{ padding: "6px 0" }}>No external MCP servers — smart home is unavailable.</div></Card>
           : servers.map((s, i) => <McpServerCard key={s.name || i} server={s} live={liveOf(s.name)}
               saved={(coreValues.mcp_servers || []).some((x) => x.name === s.name)}
-              enabledSchema={enabledSchema} root={coreSchema} onChange={onServerChange(i)}
+              enabledHint={enabledHint} onChange={onServerChange(i)}
               onEdit={() => setModal({ mode: "edit", index: i })} onDelete={() => onDelete(i)} />)}
         <div className="z-sl">Built-in sources<div className="ln" /></div>
         {BUILTIN_SOURCES.map((s) => <SourceCard key={s.id} name={s.name} sub={s.sub} schema={sub(s.id)} root={coreSchema}
