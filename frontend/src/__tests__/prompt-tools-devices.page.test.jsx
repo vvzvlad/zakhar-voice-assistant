@@ -229,6 +229,23 @@ describe("one Save per page", () => {
     } });
   });
 
+  it("Tools: each card's Enabled switch sits in its header, and switching a folded card leaves it folded", async () => {
+    const data = appData({ mcp_servers: [{ name: "home", url: "http://h/mcp" }] });
+    data.catalog.core.schema.properties.openweathermap = { type: "object", properties: {
+      enabled: { type: "boolean", title: "Enabled" }, city: { type: "string", title: "city" } } };
+    useAppData.mockReturnValue(data);
+    render(<MCP />);
+    const home = (await screen.findByText("http://h/mcp")).closest(".z-card");
+    expect(within(home.querySelector(".z-card-h")).getByRole("switch")).toBeInTheDocument();
+    const owm = screen.getByText("OpenWeatherMap").closest("details");
+    expect(within(owm).getAllByRole("switch")).toHaveLength(1);
+    expect(within(owm).queryByText("Enabled")).toBeNull();
+    fireEvent.click(within(owm.querySelector("summary")).getByRole("switch"));
+    expect(owm.open).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(data.patch).toHaveBeenCalledWith({ core: { openweathermap: { enabled: false, api_key: "", city: "Moscow" } } }));
+  });
+
   it("Tools: Edit → Done leaves the page clean, and a changed URL goes out on Save", async () => {
     const data = appData({ mcp_servers: [{ name: "home", url: "http://h/mcp", slow: true }] });
     useAppData.mockReturnValue(data);
