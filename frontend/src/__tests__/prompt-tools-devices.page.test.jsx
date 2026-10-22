@@ -234,10 +234,11 @@ describe("Tools — built-in sources", () => {
 });
 
 describe("a switched-off item fades its content, not its buttons", () => {
-  it("speaker (its row has no buttons: a click opens its dialog)", () => {
+  it("speaker (its Enabled switch stays unfaded; a click elsewhere on the row opens its dialog)", () => {
     useAppData.mockReturnValue(appData({ devices: [{ name: "kitchen", enabled: false }] }));
     render(<Devices />);
     expect(faded(screen.getByText("kitchen"))).toBe(true);
+    expect(faded(screen.getByRole("switch"))).toBe(false);
   });
 
   it("MCP server", async () => {

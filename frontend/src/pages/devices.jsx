@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { Ic } from "../components/icons.jsx";
-import { Card, PageHeader, StatusPill, Pill } from "../components/primitives.jsx";
+import { Card, PageHeader, StatusPill, Pill, Toggle } from "../components/primitives.jsx";
 import DeviceModal from "../components/DeviceModal.jsx";
 import { useAppData } from "../appData.jsx";
 import { errorLines } from "../useStageForm.js";
@@ -61,10 +61,10 @@ export function Devices() {
           still too wide scrolls inside the card, not the page. */}
       <div style={{ overflowX: "auto" }}>
       <table className="z-tbl z-devtbl">
-        <thead><tr><th>Name</th><th>Firmware</th><th>Wake word model</th><th>Uptime</th><th>Status</th></tr></thead>
+        <thead><tr><th style={{ width: 72 }}>Enabled</th><th>Name</th><th>Firmware</th><th>Wake word model</th><th>Uptime</th><th>Status</th></tr></thead>
         <tbody>
           {devices.length === 0
-            ? <tr><td colSpan={5} style={{ color: "var(--mut)", padding: "14px 0" }}>No devices configured.</td></tr>
+            ? <tr><td colSpan={6} style={{ color: "var(--mut)", padding: "14px 0" }}>No devices configured.</td></tr>
             : devices.map((d, i) => {
               const enabled = d.enabled ?? true;
               const dim = enabled ? "" : "z-dim";
@@ -73,6 +73,11 @@ export function Devices() {
               // model, which may have changed elsewhere since this page loaded.
               return <tr key={i} data-testid="device-row" onClick={() => refreshConfig().catch(() => {})
                 .finally(() => setModal({ mode: "edit", name: d.name }))}>
+                {/* The switch writes at once and does not open the row's dialog. .z-toggle is an
+                    inline span sized by width/height: it needs a flex parent to take its size. */}
+                <td onClick={(e) => e.stopPropagation()}><div style={{ display: "flex" }}>
+                  <Toggle sm on={enabled} onChange={(on) => onEdit(d.name, { enabled: on })} />
+                </div></td>
                 <td className={dim} style={{ fontWeight: 600 }}>{d.label || d.name}</td>
                 {/* Firmware/model versions come from the live WS snapshot; "—" while offline/disabled.
                     The firmware's build hash is in its tooltip. */}

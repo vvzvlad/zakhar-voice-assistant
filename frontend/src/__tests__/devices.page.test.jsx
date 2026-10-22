@@ -2,8 +2,9 @@
 // Devices page: every write of the device list starts from the server's current
 // list (a cutoff set from a slider, a device that connected while the page was
 // open), and a slider write or a newly connected device refreshes the app's config snapshot.
-// A click on a row opens the Edit dialog from the re-read config; it shows the id as text and
-// the firmware without its build hash in its header, saves a display label, the enabled switch,
+// A row's Enabled switch saves at once without opening the dialog. A click elsewhere on a
+// row opens the Edit dialog from the re-read config; it shows the id as text and the firmware
+// without its build hash in its header, saves a display label, the enabled switch,
 // a wake-word model (a listed or an uploaded one), the device log, the auto volume and the reply
 // compression switches — edits on different tabs survive the switch, mark their tabs and go out
 // in one save; only the open tab shows — marks its live controls, deletes the device after a
@@ -40,8 +41,12 @@ afterEach(cleanup);
 
 // Open the Edit dialog of the page's only device.
 const openEdit = () => fireEvent.click(screen.getByTestId("device-row"));
-// The switch of the dialog field labelled `label`.
-const switchOf = async (label) => (await screen.findByText(label)).closest(".z-f").querySelector('[role="switch"]');
+// The switch of the dialog field labelled `label` (the table's Enabled header has the same text).
+const switchOf = (label) => waitFor(() => {
+  const field = screen.getAllByText(label).map((e) => e.closest(".z-f")).find(Boolean);
+  expect(field).toBeTruthy();
+  return field.querySelector('[role="switch"]');
+});
 
 // What the page rendered from: kitchen at the old cutoff, no hall yet.
 const STALE = [{ name: "kitchen", enabled: true, wake_cutoff: 80, vad_cutoff: 30 }];
@@ -79,6 +84,20 @@ describe("Devices page", () => {
       { ...FRESH[0], enabled: false },
       FRESH[1],
     ] } });
+  });
+
+  it("the row's Enabled switch saves at once onto the server's current list without opening the dialog", async () => {
+    render(<Devices />);
+    const sw = screen.getByTestId("device-row").querySelector('[role="switch"]');
+    expect(sw).toHaveAttribute("aria-checked", "true");
+    fireEvent.click(sw);
+    // The row's click, which re-reads the config before opening the dialog, never ran.
+    expect(data.refreshConfig).not.toHaveBeenCalled();
+    await waitFor(() => expect(data.patch).toHaveBeenCalledWith({ core: { devices: [
+      { ...FRESH[0], enabled: false },
+      FRESH[1],
+    ] } }));
+    expect(screen.queryByText("Edit device")).toBeNull();
   });
 
   it("Delete device asks first, then deletes from the server's current list and closes the dialog", async () => {
