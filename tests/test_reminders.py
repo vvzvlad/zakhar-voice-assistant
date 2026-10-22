@@ -710,7 +710,7 @@ def test_fire_hands_each_kind_to_its_device():
     asyncio.run(main())
     assert kitchen.calls == [
         ("announce", "минуту назад вы просили напомнить вам молоко", "reminder"),
-        ("ring", "Таймер на 5 минут, пицца", "timer", TIMER_RING_S),
+        ("ring", "Сработал таймер на 5 минут, пицца", "timer", TIMER_RING_S),
         ("ring", "Будильник", "alarm", ALARM_RING_S),
         ("run_command", "включи свет"),
     ]
@@ -769,8 +769,8 @@ def test_format_duration_and_the_timer_and_alarm_phrases():
     assert [format_duration(s) for s in (60, 300, 3600, 5400, 90, 7322)] == [
         "минуту", "5 минут", "час", "1 час 30 минут", "1 минуту 30 секунд",
         "2 часа 2 минуты 2 секунды"]
-    assert format_timer_speech("пицца", 1300.4, 1000.0) == "Таймер на 5 минут, пицца"
-    assert format_timer_speech(None, 1021.0, 1000.0) == "Таймер на 21 секунду"
+    assert format_timer_speech("пицца", 1300.4, 1000.0) == "Сработал таймер на 5 минут, пицца"
+    assert format_timer_speech(None, 1021.0, 1000.0) == "Сработал таймер на 21 секунду"
     assert format_alarm_speech(None) == "Будильник"
     assert format_alarm_speech("на работу") == "Будильник, на работу"
 

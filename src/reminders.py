@@ -127,8 +127,9 @@ def format_duration(seconds: int) -> str:
 
 
 def format_timer_speech(label, due_ts: float, created_ts: float) -> str:
-    """The phrase a timer fires with: "Таймер на <due - created>", then its label."""
-    phrase = f"Таймер на {format_duration(round(due_ts - created_ts))}"
+    """The phrase a timer fires with: "Сработал таймер на <due - created>", then its label
+    ("Сработал" so it is not heard as the confirmation of setting one)."""
+    phrase = f"Сработал таймер на {format_duration(round(due_ts - created_ts))}"
     return f"{phrase}, {label}" if label else phrase
 
 

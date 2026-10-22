@@ -855,7 +855,7 @@ async def test_a_timer_rings_right_behind_its_phrase_until_a_wake_stops_it(srv, 
     dev = await srv.connect()
     await dev.recv()  # config
     fire = asyncio.create_task(srv.manager.fire(due_row("timer", "пицца", created_ts=1000.0)))
-    assert await dev.recv() == {"type": "reply", "text": "Таймер на 5 минут, пицца"}
+    assert await dev.recv() == {"type": "reply", "text": "Сработал таймер на 5 минут, пицца"}
     phrase = await dev.recv()
     assert (await dev.recv())["type"] == "play_end"
     # The ring is on the wire before the device reports the phrase played: no gap between them.
@@ -871,7 +871,7 @@ async def test_a_timer_rings_right_behind_its_phrase_until_a_wake_stops_it(srv, 
     await asyncio.wait_for(fire, 2)
     assert samples(dev.plays[ring["id"]][:3200]) != {0}  # it starts with a beep
     assert [(r["reason"], r["llm_text"]) for r in srv.rt.runs_store.list() if r["reason"] == "timer"] == [
-        ("timer", "Таймер на 5 минут, пицца")]
+        ("timer", "Сработал таймер на 5 минут, пицца")]
 
 
 async def test_an_alarm_rings_to_its_limit_and_a_phrase_the_button_drops_gets_no_ring(srv, monkeypatch):
