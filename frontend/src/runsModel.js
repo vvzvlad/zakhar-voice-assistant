@@ -110,6 +110,12 @@ export function isAnnouncement(r) {
   return !!r && (r.reason === "say" || r.reason === "reminder");
 }
 
+// What a finished run with no request text shows in its place: why it has none.
+export function emptyRequestText(r) {
+  return r.reason === "duplicate" ? "(duplicate)"
+    : r.reason === "wake_stop" ? "(answer stopped)" : "(silence)";
+}
+
 // Apply a streamed run (live partial or finalized) to the current list.
 // Rows are keyed by `mapped.key` (real id when finalized, "live:<device>" while
 // live). A finalized run ALWAYS removes the live row it supersedes (same device),

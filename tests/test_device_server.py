@@ -424,9 +424,11 @@ async def test_wake_session_end_to_end(srv, tmp_path):
     assert (row["play_dry"], row["play_gap_ms"]) == (1, 40)
 
 
-async def test_new_wake_drops_the_older_session(srv):
-    # Session 1 is mid-playback (paced, never reported played) when wake 2 arrives:
-    # nothing of session 1 may reach the device after that.
+async def test_a_wake_over_the_answer_stops_it_and_ends_its_session(srv):
+    # Session 1 is mid-playback (paced, never reported played) when wake 2 arrives,
+    # confirmed at once (no quick check): nothing of session 1 reaches the device after
+    # that, and session 2 ends at once — its phrase, which carries the end of the
+    # answer, is not recognised.
     srv.tts.clips.append(b"\x02\x00" * 32000)  # 2 s
     dev = await srv.connect(buffer_ms=1400)
     await dev.recv()  # config
@@ -435,32 +437,26 @@ async def test_new_wake_drops_the_older_session(srv):
     got = [await dev.recv() for _ in range(6)]
     assert got[-1]["type"] == "play_start"
     old = got[-1]["id"]
+    heard = len(srv.stt.pcm)
 
     await dev.send(type="wake", session=2, word="Захар")
     assert await dev.recv() == {"type": "play_stop"}
-    await dev.send(type="played", id=old, dropped=True)
     assert await dev.recv() == state(2, "listening")
+    assert await dev.recv() == state(2, "idle")
+    await dev.send(type="played", id=old, dropped=True)
     sent_before_wake = len(dev.plays[old])
     assert 0 < sent_before_wake < 64000
 
     await dev.phrase()
-    got = [await dev.recv() for _ in range(7)]
-    new = got[5]["id"]
-    await dev.send(type="played", id=new, dry=0, gap_ms=0)
-    got.append(await dev.recv())
-    assert got == session_msgs(
-        2,
-        {"type": "play_start", "id": new, "session": 2},
-        {"type": "play_end", "id": new, "session": 2},
-        {"type": "state", "session": 2, "value": "idle"},
-    )
+    with pytest.raises(asyncio.TimeoutError):
+        await dev.recv(timeout=0.3)
     assert len(dev.plays[old]) == sent_before_wake
-    assert dev.plays[new] == b"\x01\x00" * 1600
+    assert len(srv.stt.pcm) == heard
 
 
 async def test_wake_drops_an_announcement_already_on_the_wire(srv):
     # The announcement's play_start left before the server saw the wake: play_stop
-    # drops it on the device, and neither the announcement nor the session waits on it.
+    # drops it on the device, and the announcement does not wait on it.
     dev = await srv.connect()
     await dev.recv()  # config
     say = asyncio.create_task(srv.manager.announce("kitchen", "молоко"))
@@ -473,17 +469,8 @@ async def test_wake_drops_an_announcement_already_on_the_wire(srv):
     assert await dev.recv() == {"type": "play_stop"}
     await dev.send(type="played", id=start["id"], dropped=True)
     assert await dev.recv() == state(1, "listening")
+    assert await dev.recv() == state(1, "idle")
     await asyncio.wait_for(say, 2)
-
-    await dev.phrase()
-    got = await dev.finish()
-    stream = got[5]["id"]
-    assert got == session_msgs(
-        1,
-        {"type": "play_start", "id": stream, "session": 1},
-        {"type": "play_end", "id": stream, "session": 1},
-        state(1, "idle"),
-    )
 
 
 class HeldVerifier(WakewordVerifier):
@@ -530,6 +517,7 @@ async def wake_over(dev, session):
 async def test_a_wake_over_the_answer_drops_it_only_once_confirmed(srv):
     dev = await srv.connect(buffer_ms=1400)
     old = await answer_playing(srv, dev, 10)
+    heard = len(srv.stt.pcm)
     verifier = srv.rt.wakeword_backend = HeldVerifier()
     await wake_over(dev, 2)
     await until(lambda: verifier.calls)
@@ -540,23 +528,47 @@ async def test_a_wake_over_the_answer_drops_it_only_once_confirmed(srv):
         await asyncio.wait_for(dev.recv(), 0.5)
     assert len(dev.plays[old]) > sent
     assert verifier.over_answer == [True]  # judged as a wake over the answer
-    # A frame that comes while the check runs is held too; it ends the phrase.
-    await dev.mic(stereo(13, -13, 60))
 
     verifier.verdict(11).set_result(WakewordVerdict(accepted=True, score=0.9))
     assert await dev.recv() == {"type": "play_stop"}
     assert await dev.recv() == state(2, "listening")
+    assert await dev.recv() == state(2, "idle")
     await dev.send(type="played", id=old, dropped=True)
-    got = await dev.finish()
-    stream = got[5]["id"]
-    assert got == session_msgs(
-        2,
-        {"type": "play_start", "id": stream, "session": 2},
-        {"type": "play_end", "id": stream, "session": 2},
-        state(2, "idle"),
-    )
-    assert np.frombuffer(srv.stt.pcm[-1], dtype="<i2").tolist() == [11] * 960 + [12] * 960 + [13] * 960
+    # The wake only stops the answer: its held audio, which carries the answer's end, goes
+    # to no STT.
+    assert len(srv.stt.pcm) == heard
     assert len(verifier.calls) == 1  # the confirmed wake is not checked again
+
+
+async def test_a_wake_while_the_speaker_thinks_runs_its_phrase(srv, monkeypatch):
+    # Nothing plays yet (session 1's answer is slow): a confirmed wake over the open session
+    # cancels that run, and its phrase runs as a new command instead of only stopping.
+    calls = []
+
+    class SlowFirst:
+        def __init__(self, backend, hub, cfg):
+            pass
+
+        async def respond(self, req, *, on_filler=None, has_next=False):
+            calls.append(req)
+            if len(calls) == 1:
+                await asyncio.Event().wait()  # session 1 thinks until it is cancelled
+            return make_llm_result("готово")
+
+    monkeypatch.setattr("src.llm.LlmStage", SlowFirst)
+    dev = await srv.connect()
+    await dev.recv()  # config
+    await dev.wake(1)
+    await dev.phrase()
+    assert [await dev.recv() for _ in range(3)] == session_msgs(1)[:3]  # up to thinking
+    verifier = srv.rt.wakeword_backend = HeldVerifier()
+    verifier.verdict(11).set_result(WakewordVerdict(accepted=True, score=0.9))
+    await wake_over(dev, 2)
+    assert await dev.recv() == {"type": "play_stop"}
+    assert await dev.recv() == state(2, "listening")
+    assert verifier.over_answer == [True]  # checked as a wake over the open session
+    await dev.mic(stereo(13, -13, 60))  # the phrase ends
+    assert await dev.recv() == state(2, "transcribing")
 
 
 async def test_a_rejected_wake_leaves_the_answer_playing(srv, tmp_path):

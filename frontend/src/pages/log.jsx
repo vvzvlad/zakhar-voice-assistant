@@ -6,7 +6,7 @@ import React, { useState, useEffect, useCallback, useRef } from "react";
 import { Ic } from "../components/icons.jsx";
 import { PageHeader, Waterfall, KV, Loading, ErrorBox, Select, fillerMarkerPct } from "../components/primitives.jsx";
 import { getRuns, getRun, openRunsStream, runAudioUrl, downloadRunAudio, runTtsAudioUrl, downloadRunTtsAudio } from "../api.js";
-import { STAGE_COLOR, fmtSec, fmtTime, mapRun, totalMs, statusMeta, isAnnouncement, applyStreamedRun, pageWindow } from "../runsModel.js";
+import { STAGE_COLOR, fmtSec, fmtTime, mapRun, totalMs, statusMeta, isAnnouncement, emptyRequestText, applyStreamedRun, pageWindow } from "../runsModel.js";
 import { FILLER_COLOR } from "../stageMeta.js";
 import { matchesFilters } from "../runsFilters.js";
 import { useDeviceList, useChainList, useProviderLabel } from "../appData.jsx";
@@ -157,7 +157,8 @@ const REASONS = {
   endpoint: "end of phrase", no_speech: "no speech", maxlen: "length limit",
   duplicate: "duplicate wake", wakeword_reject: "wake word not confirmed",
   wakeword_error: "wake word check failed", followup_reject: "not a follow-up",
-  followup_error: "follow-up check failed", stop: "stop phrase", say: "spoken on request",
+  followup_error: "follow-up check failed", stop: "stop phrase",
+  wake_stop: "answer stopped by the wake word", say: "spoken on request",
   text: "text request",
   assistant: "assistant task",
 };
@@ -517,7 +518,7 @@ function Log() {
                         <td className="tm">{fmtTime(r.ts)}</td>
                         <td className="z-cmid" style={{ fontWeight: 600 }}>{deviceLabel(devices, r.device)}</td>
                         <td className="mono z-cwide" data-testid="run-chain" style={{ fontSize: 11.5, color: r.chain ? "var(--ink2)" : "var(--mut2)" }}>{r.chain || "—"}</td>
-                        <td><div className={"z-tx" + (r.stt ? "" : " mut")}>{r.stt || (r.live ? "…" : isAnnouncement(r) ? "—" : r.reason === "duplicate" ? "(duplicate)" : "(silence)")}</div></td>
+                        <td><div className={"z-tx" + (r.stt ? "" : " mut")}>{r.stt || (r.live ? "…" : isAnnouncement(r) ? "—" : emptyRequestText(r))}</div></td>
                         <td><div className={"z-tx" + (r.llm ? "" : " mut")}>{r.llm || (r.live ? "…" : "—")}</div></td>
                         <td className="num z-cwide">{r.tokens || "—"}</td>
                         <td className="z-cwide"><Waterfall r={r} /></td>

@@ -171,7 +171,10 @@ device                                   server
   taken: the server cancels the older run and sends `play_stop`, which flushes the device's
   playback, a stream the server started before it saw the `wake` included, then `state listening`
   with the proposed `session`, which makes it the device's current session; the audio held
-  meanwhile goes to its run. A wake the check rejects gets `state idle` with the proposed
+  meanwhile goes to its run. A wake over a playing stream goes no further than stopping it: its
+  audio carries the device's own voice, so once the arbitration lets it through (below) its
+  session ends with `state idle` — no transcript, no answer — and the run log shows it as `ok`,
+  reason `wake_stop`; a command takes a new wake. A wake the check rejects gets `state idle` with the proposed
   `session` (any `state` of that number other than `listening` refuses it): the device drops the
   proposal without showing it, and its microphone stops unless the current session listens for a
   follow-up (the older run opened its follow-up window while the wake was held), which keeps it

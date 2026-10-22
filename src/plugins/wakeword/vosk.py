@@ -176,7 +176,7 @@ class VoskWakewordConfig(BaseModel):
     enabled: bool = Field(
         True,
         title="Wake word verify",
-        description="Checks wakes on the server: one over the device's running answer with offline recognition before the request runs, any other by the wake word in its recognised phrase. Off — every wake passes.",
+        description="Checks wakes on the server: one over the device's running answer with offline recognition before the request runs (one over its playing answer only stops it), any other by the wake word in its recognised phrase. Off — every wake passes.",
     )
     model_path: str = Field(
         "models/vosk-model-small-ru-0.22",

@@ -207,7 +207,7 @@ class Pipeline(SpeechMixin):
             and not isinstance(wb, PassthroughVerifier)
         )
 
-    def on_wake(self, cid, word, over_answer: bool = False) -> None:
+    def on_wake(self, cid, word, over_answer: bool = False, over_playback: bool = False) -> None:
         """A wake of the device: propose its run (docs/device-protocol.md, "Voice session").
 
         Synchronous. The run registers with the cross-device arbitration at once. A
@@ -217,13 +217,15 @@ class Pipeline(SpeechMixin):
         quick wake-word check confirms it, when it is taken (_take), or rejects it, when
         it ends held (_end_held). Any other wake is taken at once and confirmed later by
         the wake word in its recognised phrase (_run). A taken run is released (_release)
-        once the arbitration lets it through; one that loses ends held. A newer wake
-        replaces a proposal silently."""
+        once the arbitration lets it through; one that loses ends held. A released wake
+        over the device's playing stream (`over_playback`), checked or not, only stops
+        it (_stop_answer). A newer wake replaces a proposal silently."""
         if self._proposed is not None:
             self._drop(self._proposed)
         run = self._proposed = self._new_run(
             cid, word or "", preroll_ms=PREROLL_MS if word else 0,
-            no_speech_timeout_ms=self.core.vad.no_speech_timeout_ms, over_answer=over_answer)
+            no_speech_timeout_ms=self.core.vad.no_speech_timeout_ms, over_answer=over_answer,
+            over_playback=over_playback)
         if over_answer and self.gates_wake(word):
             logger.info(f"{self.name}: 🛡️ wake (cid={cid}) over the running answer waits "
                         f"for the wake-word check")
@@ -332,8 +334,12 @@ class Pipeline(SpeechMixin):
         Synchronously opens its STT streams and feeds each the audio held so far once
         — no await in between, so a concurrent on_audio can't double-feed or lose a
         chunk. If the utterance already ended while held (Run.endpoint), the run is
-        claimed here as well and its _run started as the run task."""
+        claimed here as well and its _run started as the run task. A wake over the
+        device's playing stream gets neither: it ends here (_stop_answer)."""
         run.released = True
+        if run.over_playback:
+            self._stop_answer(run)
+            return
         self._open_stt_streams(run)
         # Feed the whole backlog buffered during the hold once, so streaming STT sees
         # the same audio the batch path would.
@@ -344,6 +350,19 @@ class Pipeline(SpeechMixin):
         if run.endpoint is not None:
             pcm, pcm2 = run.claim()
             self._run_task = asyncio.create_task(self._run(run, run.endpoint, pcm, pcm2=pcm2))
+
+    def _stop_answer(self, run: Run) -> None:
+        """End a released wake over the device's playing stream: taking it already
+        stopped that playback (_take), and it goes no further — no STT, no handler —
+        because its audio carries the device's own voice it cut into the phrase
+        (docs/device-protocol.md, "Voice session"). Synchronous: the run is claimed,
+        its session ends (an empty STT_END and RUN_END, the device's `state idle`) and
+        the run log record follows as its own task, `ok`, reason `wake_stop`."""
+        pcm, pcm2 = run.claim()
+        logger.info(f"{self.name}: 🛑 wake over the playback stopped it, session ended")
+        self._emit(StageEvent.STT_END, {"text": ""})
+        self._emit(StageEvent.RUN_END, {})
+        self._spawn(self._record_held(run, "wake_stop", pcm, pcm2, result="ok"))
 
     def _end_held(self, run: Run, reason: str) -> None:
         """End a held run that will not be released: its check rejected it
@@ -693,15 +712,17 @@ class Pipeline(SpeechMixin):
         run.lost = not won
         self._advance(run)
 
-    async def _record_held(self, run: Run, reason: str, pcm: bytes, pcm2: bytes) -> None:
-        """The run log record of a run _end_held ended: `rejected`, with its reason, its
-        check's latency and score and its stored audio, no ack chime and no capture
-        file. A duplicate's phrase is recognized by the first enabled chain's STT for
-        the run log only — the device never gets that transcript — unless the VAD found
-        no speech in it: the STT would make up words for the noise."""
+    async def _record_held(self, run: Run, reason: str, pcm: bytes, pcm2: bytes,
+                           result: str = "rejected") -> None:
+        """The run log record of a run _end_held or _stop_answer ended: `result`, with
+        its reason, its check's latency and score and its stored audio, no ack chime
+        and no capture file. A duplicate's phrase is recognized by the first enabled
+        chain's STT for the run log only — the device never gets that transcript —
+        unless the VAD found no speech in it: the STT would make up words for the
+        noise."""
         t0 = time.perf_counter()
         pcm, pcm2 = self._condition_audio(pcm, pcm2, trim=True)
-        record = self._new_record(reason, run, pcm, result="rejected")
+        record = self._new_record(reason, run, pcm, result=result)
         if reason == "duplicate" and run.endpoint != "no_speech":
             stt_t = time.perf_counter()
             try:

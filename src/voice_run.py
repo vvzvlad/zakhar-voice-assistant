@@ -19,7 +19,7 @@ class Run:
     """The state of one run, from its wake (or its follow-up window) to its end."""
 
     def __init__(self, cid, word: str, vad, vad_desc: str, *, over_answer=False,
-                 followup=None, taken=False):
+                 over_playback=False, followup=None, taken=False):
         # The conversation id (the device's session) the run's events are labelled with.
         self.cid = cid
         # The wake word; a follow-up window keeps the word of its session's wake.
@@ -31,6 +31,9 @@ class Run:
         # A wake over the device's own answer or open session, which the wake-word
         # check is told (WakewordVerifier.verify).
         self.over_answer = over_answer
+        # A wake over the device's playing stream: its audio carries that playback, so
+        # it only stops it (Pipeline._stop_answer).
+        self.over_playback = over_playback
         # (name, recognized request, un-accented spoken reply) of the turn before a
         # follow-up window, for the follow-up check; None for a wake's run.
         self.followup = followup

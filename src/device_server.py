@@ -604,11 +604,12 @@ class Device:
         if kind == "wake":
             # Over a running answer or an open session the wake may be the speaker's
             # own voice, which the check is told; the answer goes on until the wake is
-            # taken (take_session).
+            # taken (take_session). One over a playing stream only stops it.
             over_answer = conn.session_open or conn.playing
             self.publish_event("wake", {"session": msg["session"], "word": msg.get("word"),
                                         "over_answer": over_answer})
-            self.pipeline.on_wake(msg["session"], msg.get("word"), over_answer=over_answer)
+            self.pipeline.on_wake(msg["session"], msg.get("word"), over_answer=over_answer,
+                                  over_playback=conn.playing)
         elif kind == "played":
             if msg.get("dropped"):
                 self.publish_event("played", {"dropped": True})

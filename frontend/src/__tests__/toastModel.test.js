@@ -74,6 +74,10 @@ describe("toastFromRun", () => {
     expect(toastFromRun({ ...finalized, stt_text: undefined }).text).toBe("(silence)");
   });
 
+  it("says the answer stopped for a wake over the device's playback, which has no request", () => {
+    expect(toastFromRun({ ...finalized, reason: "wake_stop", stt_text: "" }).text).toBe("(answer stopped)");
+  });
+
   it("shows what was spoken for a finalized announcement, which has no request", () => {
     expect(toastFromRun({ ...finalized, reason: "say", stt_text: null, llm_text: "молоко" }).text).toBe("молоко");
   });

@@ -10,9 +10,11 @@ import pytest
 from src.pipeline_events import StageEvent
 from tests.test_pipeline import (
     FRAME,
+    PHRASE,
     FakeRunsStore,
     FakeSttBackend,
     install_fake_vad,
+    install_phrase_vad,
     make_pipeline,
     patch_llm,
     set_small_vad_thresholds,
@@ -20,7 +22,7 @@ from tests.test_pipeline import (
     types_of,
 )
 from src.wake_arbiter import WakeArbiter
-from tests.test_pipeline_wakeword_gate import WAKE, FakeWakewordVerifier
+from tests.test_pipeline_wakeword_gate import HEAD_BYTES, WAKE, FakeWakewordVerifier
 from tests.test_wake_arbiter import preroll
 
 
@@ -53,6 +55,59 @@ def make_arbitrated(tmp_path, monkeypatch, *, verifier=None, **kw):
     pipeline.rt.wakeword_backend = verifier
     arbiter = pipeline.arbiter = RecordingArbiter()
     return pipeline, events, arbiter
+
+
+class _RecordingStreamSession:
+    """Streaming STT session double recording every fed chunk + finish() result."""
+
+    def __init__(self, text):
+        self.fed = []
+        self._text = text
+
+    def feed(self, pcm):
+        self.fed.append(pcm)
+
+    async def finish(self):
+        return self._text
+
+    async def aclose(self):
+        pass
+
+
+class _RecordingStreamSttBackend:
+    def __init__(self, text):
+        self._text = text
+        self.session = _RecordingStreamSession(text)
+
+    async def transcribe(self, pcm):
+        return self._text  # unused: the streaming path takes finish()
+
+    def open_stream(self):
+        return self.session
+
+
+async def test_a_held_run_feeds_its_streaming_stt_the_backlog_once_on_release(
+        tmp_path, monkeypatch):
+    # Streaming STT under the hold: the stream is not opened or fed while the run is
+    # held; on release the whole buffered backlog is fed exactly once, then later chunks
+    # feed incrementally (no double-feed, no lost audio).
+    patch_llm(monkeypatch, reply="готово")
+    stt = _RecordingStreamSttBackend("включи свет")
+    pipeline, events, arbiter = make_arbitrated(tmp_path, monkeypatch, stt_backend=stt)
+    install_phrase_vad(pipeline)
+
+    pipeline.on_wake("cid", WAKE)
+    backlog = PHRASE[:HEAD_BYTES]  # does not end the phrase yet
+    await pipeline.on_audio(backlog)
+    assert stt.session.fed == []
+    pipeline.arbitration_verdict(arbiter.tokens[-1], True)
+    assert stt.session.fed == [backlog]
+
+    tail = PHRASE[HEAD_BYTES:]  # ends the phrase
+    await pipeline.on_audio(tail)
+    assert stt.session.fed == [backlog, tail]
+    await settle(pipeline)
+    assert StageEvent.STT_END in types_of(events)
 
 
 async def test_the_cleaner_wake_wins_though_its_pre_roll_comes_after_its_wake(tmp_path, monkeypatch):

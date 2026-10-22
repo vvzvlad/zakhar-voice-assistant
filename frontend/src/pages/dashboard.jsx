@@ -9,7 +9,7 @@ import { PageHeader, Waterfall, Loading, Toggle, StatusPill, Pill, NavLink } fro
 import { useAppData } from "../appData.jsx";
 import { getMetrics, getRuns, openRunsStream, getConfig } from "../api.js";
 import { errorLines } from "../useStageForm.js";
-import { STAGE_COLOR, fmtSec, fmtTime, mapRun, totalMs, statusMeta, isAnnouncement, applyStreamedRun } from "../runsModel.js";
+import { STAGE_COLOR, fmtSec, fmtTime, mapRun, totalMs, statusMeta, isAnnouncement, emptyRequestText, applyStreamedRun } from "../runsModel.js";
 import { chainsOf, chainRows, ttsVariantsOf, voiceOf } from "../chains.js";
 import { deviceLabel, fmtPct } from "../format.js";
 
@@ -210,7 +210,7 @@ function Dashboard() {
                     return <tr key={r.key} onClick={() => { if (r.id == null) return; try { localStorage.setItem("z-openreq", String(r.id)); } catch { /* ignore */ } nav("log"); }}>
                       <td className="tm">{fmtTime(r.ts)}</td>
                       <td className="z-cmid" style={{ fontWeight: 600 }}>{deviceLabel(catalog?.core?.values?.devices, r.device)}</td>
-                      <td><div className={"z-tx" + (r.stt ? "" : " mut")}>{r.stt || (r.live ? "…" : isAnnouncement(r) ? "—" : r.reason === "duplicate" ? "(duplicate)" : "(silence)")}</div></td>
+                      <td><div className={"z-tx" + (r.stt ? "" : " mut")}>{r.stt || (r.live ? "…" : isAnnouncement(r) ? "—" : emptyRequestText(r))}</div></td>
                       <td><div className={"z-tx wide" + (r.llm ? "" : " mut")}>{r.llm || (r.live ? "…" : "—")}</div></td>
                       <td className="z-cwide"><Waterfall r={r} /></td>
                       <td className="num z-cmid" style={{ fontWeight: 600 }}>{fmtSec(totalMs(r))}</td>
