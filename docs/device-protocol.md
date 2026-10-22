@@ -152,7 +152,7 @@ device                                   server
   draws its indication from the states of its current session only: between `wake` and the
   server's ruling it goes on showing what the current session shows, a running answer included.
 - `transcript` and `reply` carry the recognised phrase and the answer text, for devices with a
-  screen. `reply` without `session` is an announcement (a reminder, an agent's `speak`).
+  screen. `reply` without `session` is an announcement (a reminder, a timer or an alarm, an agent's `speak`).
 - Every server message of a session carries its `session`; the device drops messages whose
   `session` is neither its current one nor the one it proposed, except `play_start` and
   `play_end`, which it takes whatever their `session`: only `play_stop` drops the playback, and a

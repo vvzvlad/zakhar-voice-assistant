@@ -1,6 +1,6 @@
 // Unit tests for the backend-row -> UI-run adapter (src/runsModel.js).
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { fmtTime, mapRun, totalMs, fmtSec, statusMeta, applyStreamedRun, pageWindow } from "../runsModel.js";
+import { fmtTime, mapRun, totalMs, fmtSec, statusMeta, applyStreamedRun, pageWindow, isAnnouncement } from "../runsModel.js";
 
 describe("mapRun", () => {
   it("returns null for a null row (pass-through)", () => {
@@ -92,6 +92,13 @@ describe("statusMeta", () => {
 
   it("names a wake another device kept a 'Duplicate'", () => {
     expect(statusMeta({ result: "rejected", reason: "duplicate" })).toEqual({ label: "Duplicate", tone: "muted" });
+  });
+});
+
+describe("isAnnouncement", () => {
+  it("takes a timer's and an alarm's run for speech without a request, not a deferred command's", () => {
+    expect(["say", "reminder", "timer", "alarm", "command", "text"].map((reason) => isAnnouncement({ reason })))
+      .toEqual([true, true, true, true, false, false]);
   });
 });
 

@@ -161,6 +161,7 @@ const REASONS = {
   wake_stop: "answer stopped by the wake word", say: "spoken on request",
   text: "text request",
   assistant: "assistant task",
+  timer: "timer", alarm: "alarm", command: "deferred command",
 };
 
 // A model-free handler (simple-nlu, jev) records "<provider id>/<what it decided>": shown as the

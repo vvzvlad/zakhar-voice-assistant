@@ -1382,18 +1382,18 @@ class Pipeline(SpeechMixin):
         except Exception as e:
             logger.error(f"{self.name}: run broadcast failed: {e}")
 
-    async def run_text(self, text: str, speak: bool = True) -> dict:
-        """Public entry for TEXT requests (agent MCP `ask`): a full handler turn
-        through the recognition chains (with tools and conversation context),
-        optionally spoken on the speaker.
+    async def run_text(self, text: str, speak: bool = True, reason: str = "text") -> dict:
+        """Public entry for TEXT requests (agent MCP `ask`, a fired deferred command):
+        a full handler turn through the recognition chains (with tools and conversation
+        context), optionally spoken on the speaker.
 
         The chains of a voice run entered at the handler, its reply spoken by the same
         speak_reply: no audio, no VAD/STT and no stage events of its own (there is no
         voice session for a text run, so they would reach the device out of band; the
         speech first ends an open follow-up window, see _close_followup). Serialized
         with voice runs via the same per-device lock. The run is recorded to the runs
-        store with reason="text" and the request in stt_text, so the panel run log
-        shows it in the usual column.
+        store with `reason` ("text", or "command" for a deferred command) and the
+        request in stt_text, so the panel run log shows it in the usual column.
 
         Returns {"reply", "result", "error_stage", "error_text"}.
         """
@@ -1404,7 +1404,7 @@ class Pipeline(SpeechMixin):
                 t0 = time.perf_counter()
                 # A pipeline run's record: audio-stage fields stay at their text-run
                 # values (t_vad/t_stt = 0, audio_* = None).
-                record = self._new_record("text", stt_text=text)
+                record = self._new_record(reason, stt_text=text)
                 try:
                     # The recognition chains, entered at the handler step (no STT): each
                     # enabled chain's handler in order until one answers. No on_filler:

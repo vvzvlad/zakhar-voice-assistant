@@ -117,16 +117,17 @@ async def main() -> None:
     # panel WebSocket endpoint (consumers). Cheap; always created.
     run_events = RunEventsHub()
 
-    # Built-in reminders MCP (one-shot voice reminders). The scheduler needs the device
-    # manager to deliver; the manager needs the hub that holds this source — so the
-    # deliver callback is late-bound after the manager is constructed (below). The
-    # scheduler is in place before the reconfig job that builds the tool sources, since
-    # it gates the reminders source: build_sources omits reminders when it is None.
+    # Built-in reminders MCP (reminders, timers, alarms, deferred commands). The scheduler
+    # needs the device manager to deliver; the manager needs the hub that holds this
+    # source — so the deliver callback is late-bound after the manager is constructed
+    # (below). The scheduler is in place before the reconfig job that builds the tool
+    # sources, since it gates the reminders source: build_sources omits reminders when it
+    # is None.
     reminders_store = None
     scheduler = None
     if core.reminders.enabled:
         from src.reminders import ReminderScheduler, RemindersStore
-        reminders_store = RemindersStore(os.path.join(config_store.DATA_DIR, "reminders.db"))
+        reminders_store = RemindersStore(os.path.join(config_store.DATA_DIR, "schedule.db"))
         scheduler = ReminderScheduler(reminders_store)
 
     # Jobs handed off to the ZeroClaw assistant. Always built: the panel takes
@@ -179,7 +180,7 @@ async def main() -> None:
 
     # Late-bind delivery now that the manager exists (resolves the circular dependency).
     if scheduler is not None:
-        scheduler.deliver = manager.announce
+        scheduler.deliver = manager.fire
     rt.scheduler = scheduler                 # may be None
     rt.reminders_store = reminders_store     # may be None; a hot toggle may swap both
 

@@ -113,6 +113,16 @@ describe("Request log — chains", () => {
     expect(screen.getByText("id 7 · end of phrase")).toBeInTheDocument();
   });
 
+  it("names the run of a timer, an alarm and a deferred command in words", async () => {
+    for (const [reason, label] of [["timer", "timer"], ["alarm", "alarm"], ["command", "deferred command"]]) {
+      getRun.mockResolvedValue({ ...ROW, reason });
+      render(<Log />);
+      fireEvent.click((await screen.findAllByText("Солнечно"))[0]);
+      expect(await screen.findByText(`id 7 · ${label}`)).toBeInTheDocument();
+      cleanup();
+    }
+  });
+
   it("copies the device, time, id and the run's link, without how the run ended", async () => {
     const writeText = vi.fn().mockResolvedValue();
     Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });

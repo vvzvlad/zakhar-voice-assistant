@@ -1,14 +1,17 @@
 """Tests for the voice-reminders subsystem.
 
 Layers covered:
-  * RemindersStore (sync SQLite): insert/list ordering, next_due_ts, pop_due,
-    drop_overdue, delete, NULL device.
-  * ReminderScheduler (async): fires after due, drops overdue on start, cancel.
+  * RemindersStore (sync SQLite): insert/list ordering, next_due_ts, pop_due (a
+    repeating alarm moves on, the rest is deleted), delete, NULL device.
+  * next_occurrence and the spoken phrases of reminders, timers and alarms.
+  * ReminderScheduler (async): fires the row after due, takes overdue rows on start
+    without firing, cancel.
   * Built-in reminders MCP server driven through BuiltinMcpSource.call_tool:
-    set_reminder reads current_device, list/cancel text output.
+    set_reminder reads current_device, the timer/alarm/command tools, list/cancel text
+    output.
   * LlmStage device wiring: LlmRequest.device travels via hub.call's ContextVar
     publication to an in-process tool and resets after the run.
-  * DeviceManager.announce routing: named-online / named-offline / None.
+  * DeviceManager.fire routing: each kind, named-offline, None.
 
 Async code is driven with asyncio.run(...) (config-independent), matching the
 existing test style.
@@ -19,20 +22,25 @@ import time
 from datetime import datetime
 
 from src.builtin_mcp.reminders import _format_due, build_reminders_server
+from src.device_server import ALARM_RING_S, TIMER_RING_S
 from src.llm import LlmRequest, LlmStage
 from src.plugins.llm.base import LlmConfig
 from src.reminders import (
     ReminderScheduler,
     RemindersStore,
     _format_ago,
-    _format_reminder_speech,
+    format_alarm_speech,
+    format_duration,
+    format_reminder_speech,
+    format_timer_speech,
+    next_occurrence,
 )
-from src.run_context import current_device
+from src.run_context import current_device, in_command
 from src.tool_hub import BuiltinMcpSource, ToolHub
 
 
 def _store(tmp_path):
-    return RemindersStore(str(tmp_path / "reminders.db"))
+    return RemindersStore(str(tmp_path / "schedule.db"))
 
 
 # --- RemindersStore (sync) ---------------------------------------------------
@@ -76,17 +84,37 @@ def test_pop_due_returns_and_deletes_only_due(tmp_path):
     store.close()
 
 
-def test_drop_overdue_deletes_only_overdue_and_returns_count(tmp_path):
+def test_pop_due_moves_a_repeating_alarm_on_and_deletes_the_rest(tmp_path):
     store = _store(tmp_path)
-    now = time.time()
-    store.insert("old1", now - 10, "d")
-    store.insert("old2", now - 1, "d")
-    store.insert("fresh", now + 100, "d")
+    now = datetime(2026, 10, 22, 7, 0, 30).timestamp()  # a Thursday
+    alarm = store.insert(None, datetime(2026, 10, 22, 7, 0).timestamp(), "d",
+                         kind="alarm", days=[1, 4])
+    store.insert("пицца", now - 1, "d", kind="timer")
+    later = store.insert("выключи свет", now + 100, "d", kind="command")
 
-    count = store.drop_overdue(now)
-    assert count == 2
-    assert [r["text"] for r in store.list_pending()] == ["fresh"]
+    popped = store.pop_due(now)
+    assert [(r["kind"], r["text"], r["days"]) for r in popped] == [
+        ("alarm", None, [1, 4]), ("timer", "пицца", None)]
+    # The alarm keeps its id and moves to Monday 07:00; the timer is gone.
+    assert [(r["id"], r["kind"], r["due_ts"]) for r in store.list_pending()] == [
+        (later, "command", now + 100),
+        (alarm, "alarm", datetime(2026, 10, 26, 7, 0).timestamp()),
+    ]
     store.close()
+
+
+def test_next_occurrence_is_the_first_matching_local_time_after():
+    def at(*a):
+        return datetime(*a).timestamp()
+
+    thu_8 = at(2026, 10, 22, 8, 0)  # a Thursday
+    weekdays = [1, 2, 3, 4, 5]
+    assert next_occurrence(9, 0, None, thu_8) == at(2026, 10, 22, 9, 0)  # still ahead today
+    assert next_occurrence(8, 0, None, thu_8) == at(2026, 10, 23, 8, 0)  # not now: tomorrow
+    assert next_occurrence(7, 0, weekdays, thu_8) == at(2026, 10, 23, 7, 0)
+    assert next_occurrence(7, 0, weekdays, at(2026, 10, 23, 8, 0)) == at(2026, 10, 26, 7, 0)
+    assert next_occurrence(9, 0, [4], thu_8) == at(2026, 10, 22, 9, 0)
+    assert next_occurrence(7, 0, [4], thu_8) == at(2026, 10, 29, 7, 0)  # a week on
 
 
 def test_delete_returns_true_false(tmp_path):
@@ -116,8 +144,8 @@ def test_scheduler_fires_deliver_after_due(tmp_path):
     captured = []
     fired = asyncio.Event()
 
-    async def fake_deliver(device, text):
-        captured.append((device, text))
+    async def fake_deliver(row):
+        captured.append(row)
         fired.set()
 
     async def main():
@@ -129,22 +157,22 @@ def test_scheduler_fires_deliver_after_due(tmp_path):
         await sched.stop()
 
     asyncio.run(main())
-    assert len(captured) == 1
-    device, text = captured[0]
-    assert device == "kitchen"
-    assert "молоко" in text
-    assert "вы просили напомнить вам" in text
+    [row] = captured
+    assert (row["kind"], row["text"], row["device"]) == ("reminder", "молоко", "kitchen")
+    assert store.list_pending() == []
     store.close()
 
 
-def test_scheduler_drops_overdue_on_start(tmp_path):
+def test_scheduler_start_drops_overdue_rows_and_moves_a_repeating_alarm_on(tmp_path):
     store = _store(tmp_path)
-    # Pre-insert a reminder already past due.
+    # Pre-insert a reminder and an everyday alarm already past due.
     store.insert("missed", time.time() - 60, "kitchen")
+    due = time.time() - 3600
+    alarm = store.insert(None, due, "kitchen", kind="alarm", days=[1, 2, 3, 4, 5, 6, 7])
     captured = []
 
-    async def fake_deliver(device, text):
-        captured.append((device, text))
+    async def fake_deliver(row):
+        captured.append(row)
 
     async def main():
         sched = ReminderScheduler(store)
@@ -156,7 +184,10 @@ def test_scheduler_drops_overdue_on_start(tmp_path):
 
     asyncio.run(main())
     assert captured == []
-    assert store.list_pending() == []
+    [left] = store.list_pending()
+    assert left["id"] == alarm and 0 < left["due_ts"] - time.time() <= 86400
+    assert (datetime.fromtimestamp(left["due_ts"]).strftime("%H:%M")
+            == datetime.fromtimestamp(due).strftime("%H:%M"))
     store.close()
 
 
@@ -164,8 +195,8 @@ def test_scheduler_cancel_prevents_fire(tmp_path):
     store = _store(tmp_path)
     captured = []
 
-    async def fake_deliver(device, text):
-        captured.append((device, text))
+    async def fake_deliver(row):
+        captured.append(row)
 
     async def main():
         sched = ReminderScheduler(store)
@@ -233,8 +264,8 @@ def test_scheduler_survives_deliver_exception_and_delivers_next(tmp_path):
     calls = []
     second_delivered = asyncio.Event()
 
-    async def flaky_deliver(device, text):
-        calls.append((device, text))
+    async def flaky_deliver(row):
+        calls.append(row)
         if len(calls) == 1:
             raise RuntimeError("boom on first delivery")
         second_delivered.set()
@@ -251,12 +282,37 @@ def test_scheduler_survives_deliver_exception_and_delivers_next(tmp_path):
     asyncio.run(main())
     # Both reminders reached deliver: the first raised, the loop survived, the second
     # was delivered afterwards.
-    assert len(calls) == 2
-    assert "первое" in calls[0][1]
-    assert calls[1][0] == "bedroom"
-    assert "второе" in calls[1][1]
+    assert [(r["text"], r["device"]) for r in calls] == [("первое", "kitchen"), ("второе", "bedroom")]
     # Both one-shot rows are gone from the store.
     assert store.list_pending() == []
+    store.close()
+
+
+def test_a_ringing_delivery_does_not_hold_back_the_next_row(tmp_path):
+    # An alarm rings for minutes: the timer due meanwhile fires on time, and stop()
+    # cancels the delivery still ringing.
+    store = _store(tmp_path)
+    timer_fired = asyncio.Event()
+    ringing = asyncio.Event()
+
+    async def deliver(row):
+        if row["kind"] == "alarm":
+            ringing.set()
+            await asyncio.sleep(60)  # rings until stopped
+        else:
+            timer_fired.set()
+
+    async def main():
+        sched = ReminderScheduler(store)
+        sched.deliver = deliver
+        await sched.start()
+        sched.add("", time.time() + 0.05, "bedroom", kind="alarm")
+        sched.add("", time.time() + 0.1, "kitchen", kind="timer")
+        await asyncio.wait_for(timer_fired.wait(), timeout=2.0)
+        assert ringing.is_set()
+        await asyncio.wait_for(sched.stop(), timeout=2.0)
+
+    asyncio.run(main())
     store.close()
 
 
@@ -267,16 +323,17 @@ class FakeScheduler:
     """Records scheduler calls so the tool layer can be tested in isolation."""
 
     def __init__(self, pending=None):
-        self.added = []  # list of dict(text, due_ts, device)
+        self.added = []  # list of dict(text, due_ts, device, kind, days)
         self.cancelled = []  # list of reminder_id
         self._pending = pending or []
         self._next_id = 1
         self.cancel_result = True
 
-    def add(self, text, due_ts, device):
+    def add(self, text, due_ts, device, kind="reminder", days=None):
         rid = self._next_id
         self._next_id += 1
-        self.added.append({"text": text, "due_ts": due_ts, "device": device})
+        self.added.append({"text": text, "due_ts": due_ts, "device": device, "kind": kind,
+                           "days": days})
         return rid
 
     def cancel(self, reminder_id):
@@ -289,6 +346,15 @@ class FakeScheduler:
 
 def _source(scheduler):
     return BuiltinMcpSource("reminders", build_reminders_server(scheduler))
+
+
+def _call(scheduler, name, args):
+    async def main():
+        source = _source(scheduler)
+        await source.start()
+        return await source.call(name, args)
+
+    return asyncio.run(main())
 
 
 def test_set_reminder_in_minutes_uses_current_device():
@@ -402,24 +468,83 @@ def test_set_reminder_non_positive_minutes():
     assert sched.added == []
 
 
-def test_list_reminders_text_output():
+def test_list_reminders_shows_each_kind():
     now = time.time()
     pending = [
-        {"id": 1, "text": "молоко", "due_ts": now + 600, "device": "kitchen",
-         "created_ts": now},
-        {"id": 2, "text": "позвонить", "due_ts": now + 1200, "device": None,
-         "created_ts": now},
+        {"id": 1, "kind": "reminder", "text": "молоко", "due_ts": now + 600, "days": None,
+         "device": "kitchen", "created_ts": now},
+        {"id": 2, "kind": "timer", "text": None, "due_ts": now + 90, "days": None,
+         "device": "kitchen", "created_ts": now},
+        {"id": 3, "kind": "alarm", "text": "на работу", "due_ts": now + 3600,
+         "days": [1, 2, 3, 4, 5], "device": None, "created_ts": now},
+        {"id": 4, "kind": "command", "text": "выключи свет", "due_ts": now + 2400, "days": None,
+         "device": "kitchen", "created_ts": now},
     ]
-    sched = FakeScheduler(pending=pending)
+    lines = _call(FakeScheduler(pending=pending), "list_reminders", {}).split("\n")
+    assert lines[0].startswith("№1 напоминание: молоко — ")
+    assert lines[0].endswith("(через 10 мин) [kitchen]")
+    assert lines[1].startswith("№2 таймер — ")
+    assert lines[1].endswith(", через 1 минуту 30 секунд [kitchen]")
+    assert lines[2].startswith("№3 будильник: на работу — ")
+    assert lines[2].endswith(", повтор: пн, вт, ср, чт, пт")
+    assert lines[3].startswith("№4 отложенная команда: выключи свет — ")
 
-    async def main():
-        source = _source(sched)
-        await source.start()
-        return await source.call("list_reminders", {})
 
-    out = asyncio.run(main())
-    assert "№1" in out and "молоко" in out and "kitchen" in out
-    assert "№2" in out and "позвонить" in out
+def test_set_timer_stores_a_timer_and_says_for_how_long():
+    sched = FakeScheduler()
+    assert _call(sched, "set_timer", {"seconds": 300, "label": "пицца"}) == (
+        "Таймер поставлен (№1) на 5 минут.")
+    [added] = sched.added
+    assert (added["kind"], added["text"], added["days"]) == ("timer", "пицца", None)
+    assert abs(added["due_ts"] - (time.time() + 300)) < 5
+    assert "положительное" in _call(sched, "set_timer", {"seconds": 0})
+    assert len(sched.added) == 1
+
+
+def test_set_alarm_repeats_on_its_days_or_rings_once():
+    sched = FakeScheduler()
+    assert _call(sched, "set_alarm", {"time": "07:30", "days": [5, 1, 1]}).endswith(
+        ", повтор: пн, пт.")
+    # Neither days nor date: once, today if 07:30 is still ahead, else tomorrow.
+    _call(sched, "set_alarm", {"time": "07:30", "label": "на работу"})
+    _call(sched, "set_alarm", {"time": "07:30", "date": "2099-01-02"})
+    weekly, once, dated = sched.added
+    assert (weekly["kind"], weekly["days"], weekly["text"]) == ("alarm", [1, 5], None)
+    assert weekly["due_ts"] == next_occurrence(7, 30, [1, 5], time.time())
+    assert (once["days"], once["text"]) == (None, "на работу")
+    assert once["due_ts"] == next_occurrence(7, 30, None, time.time())
+    assert (dated["days"], dated["due_ts"]) == (None, datetime(2099, 1, 2, 7, 30).timestamp())
+
+
+def test_set_alarm_refuses_what_it_cannot_read():
+    sched = FakeScheduler()
+    for args, words in (
+        ({"time": "7:3x"}, "ЧЧ:ММ"),
+        ({"time": "07:30", "days": [1], "date": "2099-01-02"}, "не оба"),
+        ({"time": "07:30", "days": [0, 8]}, "от 1"),
+        ({"time": "07:30", "date": "02.01.2099"}, "ГГГГ-ММ-ДД"),
+        ({"time": "07:30", "date": "2000-01-01"}, "уже прошло"),
+    ):
+        assert words in _call(sched, "set_alarm", args)
+    assert sched.added == []
+
+
+def test_schedule_command_defers_the_phrase_but_not_from_a_fired_command():
+    sched = FakeScheduler()
+    out = _call(sched, "schedule_command", {"command": "выключи свет в туалете", "in_minutes": 40})
+    assert out.startswith("Команда отложена (№1)")
+    [added] = sched.added
+    assert (added["kind"], added["text"]) == ("command", "выключи свет в туалете")
+    assert abs(added["due_ts"] - (time.time() + 40 * 60)) < 5
+    assert "уже прошло" in _call(sched, "schedule_command",
+                                 {"command": "x", "at": "2000-01-01T10:00"})
+    token = in_command.set(True)
+    try:
+        out = _call(sched, "schedule_command", {"command": "выключи свет", "in_minutes": 40})
+    finally:
+        in_command.reset(token)
+    assert "выполни её сейчас" in out
+    assert len(sched.added) == 1
 
 
 def test_list_reminders_empty():
@@ -431,7 +556,7 @@ def test_list_reminders_empty():
         return await source.call("list_reminders", {})
 
     out = asyncio.run(main())
-    assert out == "Активных напоминаний нет."
+    assert out == "Нет ни напоминаний, ни таймеров, ни будильников, ни отложенных команд."
 
 
 def test_cancel_reminder_found_and_not_found():
@@ -532,23 +657,28 @@ def test_llm_stage_publishes_device_via_hub_and_resets():
     assert current_device.get() is None
 
 
-# --- DeviceManager.announce routing ------------------------------------------
-
-
-class _FakeClientCfg:
-    def __init__(self, name):
-        self.name = name
+# --- DeviceManager.fire routing ----------------------------------------------
 
 
 class _FakeClient:
     def __init__(self, name, online):
         self.name = name
-        self.cfg = _FakeClientCfg(name)
         self.online = online
-        self.announced = []
+        self.calls = []
 
     async def announce(self, text, reason):
-        self.announced.append(text)
+        self.calls.append(("announce", text, reason))
+
+    async def ring(self, text, reason, seconds):
+        self.calls.append(("ring", text, reason, seconds))
+
+    async def run_command(self, text):
+        self.calls.append(("run_command", text))
+
+
+def _row(kind="reminder", text="молоко", device="kitchen", created_ts=None):
+    return {"id": 1, "kind": kind, "text": text, "due_ts": 1300.0, "days": None,
+            "device": device, "created_ts": created_ts}
 
 
 def _manager_with(clients):
@@ -566,32 +696,47 @@ def _manager_with(clients):
     return _Manager()
 
 
-def test_announce_routes_to_named_online_client():
+def test_fire_hands_each_kind_to_its_device():
     kitchen = _FakeClient("kitchen", online=True)
     bedroom = _FakeClient("bedroom", online=True)
     mgr = _manager_with([kitchen, bedroom])
 
-    asyncio.run(mgr.announce("kitchen", "молоко"))
-    assert kitchen.announced == ["молоко"]
-    assert bedroom.announced == []
+    async def main():
+        await mgr.fire(_row(created_ts=time.time() - 60))
+        await mgr.fire(_row("timer", "пицца", created_ts=1000.0))
+        await mgr.fire(_row("alarm", None))
+        await mgr.fire(_row("command", "включи свет"))
+
+    asyncio.run(main())
+    assert kitchen.calls == [
+        ("announce", "минуту назад вы просили напомнить вам молоко", "reminder"),
+        ("ring", "Таймер на 5 минут, пицца", "timer", TIMER_RING_S),
+        ("ring", "Будильник", "alarm", ALARM_RING_S),
+        ("run_command", "включи свет"),
+    ]
+    assert bedroom.calls == []
 
 
-def test_announce_drops_named_offline_client():
+def test_fire_drops_an_offline_device_unless_the_row_is_a_command():
     kitchen = _FakeClient("kitchen", online=False)
     mgr = _manager_with([kitchen])
 
-    asyncio.run(mgr.announce("kitchen", "молоко"))
-    assert kitchen.announced == []  # offline -> dropped, no announce
+    async def main():
+        for kind in ("reminder", "timer", "alarm", "command"):
+            await mgr.fire(_row(kind, "x"))
+
+    asyncio.run(main())
+    assert kitchen.calls == [("run_command", "x")]
 
 
-def test_announce_none_picks_first_online():
+def test_fire_without_a_device_picks_the_first_online():
     offline = _FakeClient("a", online=False)
     online = _FakeClient("b", online=True)
     mgr = _manager_with([offline, online])
 
-    asyncio.run(mgr.announce(None, "привет"))
-    assert online.announced == ["привет"]
-    assert offline.announced == []
+    asyncio.run(mgr.fire(_row(text="привет", device=None)))
+    assert online.calls == [("announce", "привет", "reminder")]
+    assert offline.calls == []
 
 
 # --- Spoken-phrase helpers ---------------------------------------------------
@@ -609,7 +754,7 @@ def test_format_ago_granularity():
 
 def test_format_reminder_speech_full_phrase_and_lowercased():
     now = time.time()
-    out = _format_reminder_speech("Вытащить стирку", created_ts=now - 60, now=now)
+    out = format_reminder_speech("Вытащить стирку", created_ts=now - 60, now=now)
     assert out == "минуту назад вы просили напомнить вам вытащить стирку"
     # The reminder body is lower-cased on its first letter.
     assert "вытащить" in out
@@ -617,7 +762,17 @@ def test_format_reminder_speech_full_phrase_and_lowercased():
 
 def test_format_reminder_speech_falls_back_when_created_ts_none():
     now = time.time()
-    assert _format_reminder_speech("что-то", created_ts=None, now=now) == "что-то"
+    assert format_reminder_speech("что-то", created_ts=None, now=now) == "что-то"
+
+
+def test_format_duration_and_the_timer_and_alarm_phrases():
+    assert [format_duration(s) for s in (60, 300, 3600, 5400, 90, 7322)] == [
+        "минуту", "5 минут", "час", "1 час 30 минут", "1 минуту 30 секунд",
+        "2 часа 2 минуты 2 секунды"]
+    assert format_timer_speech("пицца", 1300.4, 1000.0) == "Таймер на 5 минут, пицца"
+    assert format_timer_speech(None, 1021.0, 1000.0) == "Таймер на 21 секунду"
+    assert format_alarm_speech(None) == "Будильник"
+    assert format_alarm_speech("на работу") == "Будильник, на работу"
 
 
 # --- _format_due past-due / due-now ------------------------------------------

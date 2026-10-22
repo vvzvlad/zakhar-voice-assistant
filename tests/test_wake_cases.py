@@ -169,7 +169,7 @@ async def prepare(srv, device_id: str, state: str, dev: FakeDevice, channels: in
     if state in ("answering", "announcing"):
         srv.tts.clips.append(LONG_CLIP)
     if state == "announcing":
-        tasks.append(asyncio.create_task(srv.manager.announce(device_id, "объявление")))
+        tasks.append(asyncio.create_task(srv.manager.find(device_id).announce("объявление", "reminder")))
     if state in ("answering", "follow_up"):
         await dev.send(type="wake", session=1, word="Захар")
         phrase = np.full(ms_bytes(STAND_IN_MS, channels) // 2, 1000, "<i2").tobytes()

@@ -1308,17 +1308,17 @@ def _reset_fake_reminder_instances():
 
 
 def _reminders_runtime(*, enabled, scheduler, reminders_store):
-    """Runtime stub for _rebuild_reminders: core.reminders.enabled, a manager with an
-    announce coroutine, and swappable scheduler/reminders_store/hub. The reminders.db
+    """Runtime stub for _rebuild_reminders: core.reminders.enabled, a manager with a
+    fire coroutine, and swappable scheduler/reminders_store/hub. The schedule.db
     path now derives from the hardcoded config_store.DATA_DIR, not core.context.dir."""
-    async def _announce(device, text):  # the deliver callback the enable path wires
+    async def _fire(row):  # the deliver callback the enable path wires
         return None
 
     return types.SimpleNamespace(
         core=types.SimpleNamespace(
             reminders=types.SimpleNamespace(enabled=enabled),
         ),
-        manager=types.SimpleNamespace(announce=_announce),
+        manager=types.SimpleNamespace(fire=_fire),
         scheduler=scheduler,
         reminders_store=reminders_store,
         llm_backends={},
@@ -1328,11 +1328,11 @@ def _reminders_runtime(*, enabled, scheduler, reminders_store):
 @pytest.mark.asyncio
 async def test_apply_job_reminders_enable_starts_scheduler_and_rebuilds_tools(monkeypatch):
     # Enabling while scheduler is None: a store + scheduler are created, deliver is wired
-    # to manager.announce, both refs are published, start() is awaited, and the tool set
+    # to manager.fire, both refs are published, start() is awaited, and the tool set
     # is rebuilt (so build_sources can register the reminders source).
     monkeypatch.setattr("src.reminders.RemindersStore", _FakeRemindersStore)
     monkeypatch.setattr("src.reminders.ReminderScheduler", _FakeReminderScheduler)
-    # reminders.db lives under the hardcoded DATA_DIR; pin it so we can assert the path.
+    # schedule.db lives under the hardcoded DATA_DIR; pin it so we can assert the path.
     monkeypatch.setattr("src.config_store.DATA_DIR", "/tmp/zk-rem")
     rebuilt = []
 
@@ -1345,11 +1345,11 @@ async def test_apply_job_reminders_enable_starts_scheduler_and_rebuilds_tools(mo
 
     assert len(_FakeRemindersStore.instances) == 1
     store = _FakeRemindersStore.instances[0]
-    assert store.path == os.path.join("/tmp/zk-rem", "reminders.db")
+    assert store.path == os.path.join("/tmp/zk-rem", "schedule.db")
     assert len(_FakeReminderScheduler.instances) == 1
     scheduler = _FakeReminderScheduler.instances[0]
     assert scheduler.store is store
-    assert scheduler.deliver is rt.manager.announce   # delivery wired to the speaker route
+    assert scheduler.deliver is rt.manager.fire       # delivery wired to the speaker route
     assert rt.scheduler is scheduler                  # published for build_sources gating
     assert rt.reminders_store is store
     assert scheduler.started is True                  # start() awaited
@@ -1362,7 +1362,7 @@ async def test_apply_job_reminders_disable_stops_scheduler_and_closes_store(monk
     # the tools rebuild (so build_sources omits the source), tools rebuilt, store closed.
     monkeypatch.setattr("src.reminders.RemindersStore", _FakeRemindersStore)
     monkeypatch.setattr("src.reminders.ReminderScheduler", _FakeReminderScheduler)
-    existing_store = _FakeRemindersStore("/tmp/zk-rem/reminders.db")
+    existing_store = _FakeRemindersStore("/tmp/zk-rem/schedule.db")
     existing_sched = _FakeReminderScheduler(existing_store)
     seen_scheduler_at_rebuild = {}
 
@@ -1391,7 +1391,7 @@ async def test_apply_job_reminders_noop_when_already_enabled(monkeypatch):
     # the existing ones are left intact, no tools rebuild.
     monkeypatch.setattr("src.reminders.RemindersStore", _FakeRemindersStore)
     monkeypatch.setattr("src.reminders.ReminderScheduler", _FakeReminderScheduler)
-    existing_store = _FakeRemindersStore("/tmp/zk-rem/reminders.db")
+    existing_store = _FakeRemindersStore("/tmp/zk-rem/schedule.db")
     existing_sched = _FakeReminderScheduler(existing_store)
     _FakeRemindersStore.instances.clear()
     _FakeReminderScheduler.instances.clear()

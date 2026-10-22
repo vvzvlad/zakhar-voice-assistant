@@ -1,28 +1,37 @@
-"""Persistent store + scheduler for one-shot voice reminders.
+"""Persistent store + scheduler for what fires on a speaker at a set time.
 
-A reminder is a piece of text to speak on a specific speaker at a specific time.
-Reminders are one-shot: once fired they are deleted. The store is SQLite (mirroring
-src.runs_store conventions: a shared Connection opened with check_same_thread=False,
-all DB methods synchronous and serialized by a threading.Lock, WAL journaling).
+A row is one of four kinds, all bound to the speaker they were set on and to an
+absolute due time: a reminder (text to speak), a timer and an alarm (a phrase, then a
+ring until silenced; `text` is their optional label) and a deferred command (`text` is a
+request run through the assistant at its due time). An alarm may repeat on weekdays
+(`days`, ISO 1 = Monday .. 7 = Sunday): fired, it moves to its next occurrence; every
+other row is deleted once fired. The store is SQLite (mirroring src.runs_store
+conventions: a shared Connection opened with check_same_thread=False, all DB methods
+synchronous and serialized by a threading.Lock, WAL journaling).
 
 The scheduler drives delivery on the event loop with a single-timer + wakeup-event
 pattern: it sleeps until the earliest due time, fires everything then due, and wakes
-early whenever a reminder is added or cancelled. Missed reminders (due while the
-process was down) are dropped once at start().
+early whenever a row is added or cancelled. Rows that came due while the process was
+down are taken once at start() without firing: a repeating alarm moves on, the rest
+are dropped.
 """
 
 import asyncio
 import sqlite3
 import threading
 import time
+from datetime import datetime, timedelta
+from datetime import time as dtime
 
 from loguru import logger
 
 _CREATE_TABLE = """
 CREATE TABLE IF NOT EXISTS reminders (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
+  kind TEXT,
   text TEXT,
   due_ts REAL,
+  days TEXT,
   device TEXT,
   created_ts REAL
 );
@@ -31,7 +40,24 @@ CREATE TABLE IF NOT EXISTS reminders (
 _CREATE_INDEX = "CREATE INDEX IF NOT EXISTS idx_reminders_due_ts ON reminders(due_ts);"
 
 # Columns returned by the dict-returning methods, in select order.
-_COLS = ["id", "text", "due_ts", "device", "created_ts"]
+_COLS = ["id", "kind", "text", "due_ts", "days", "device", "created_ts"]
+
+
+def _row(r) -> dict:
+    """A selected row as a dict, its repeat days ("1,2,3", stored as text) as a list."""
+    row = dict(r)
+    row["days"] = [int(d) for d in row["days"].split(",")] if row["days"] else None
+    return row
+
+
+def next_occurrence(hour: int, minute: int, days: list[int] | None, after: float) -> float:
+    """The first local time hour:minute later than the timestamp `after`, on one of
+    `days` (ISO weekdays 1..7, 1 = Monday; at least one) or on any day when `days` is None."""
+    start = datetime.fromtimestamp(after).date()
+    for i in range(8):  # today, then a whole week: every weekday comes up once
+        at = datetime.combine(start + timedelta(days=i), dtime(hour, minute))
+        if (days is None or at.isoweekday() in days) and at.timestamp() > after:
+            return at.timestamp()
 
 
 def _plural_ru(n: int, one: str, few: str, many: str) -> str:
@@ -71,7 +97,7 @@ def _format_ago(elapsed_s: float) -> str:
     return f"{days} {_plural_ru(days, 'день', 'дня', 'дней')} назад"
 
 
-def _format_reminder_speech(text: str, created_ts, now: float) -> str:
+def format_reminder_speech(text: str, created_ts, now: float) -> str:
     """Build the spoken reminder phrase.
 
     "<duration> назад вы просили напомнить вам <text>", with the reminder text
@@ -85,8 +111,34 @@ def _format_reminder_speech(text: str, created_ts, now: float) -> str:
     return f"{ago} вы просили напомнить вам {body}"
 
 
+def format_duration(seconds: int) -> str:
+    """Render whole seconds as a Russian duration in the accusative ("на <duration>"):
+    its hours, minutes and seconds that are not zero; a lone one of a unit is the bare
+    word ("минуту", "час"), as in _format_ago."""
+    parts = []
+    for n, forms in ((seconds // 3600, ("час", "часа", "часов")),
+                     (seconds % 3600 // 60, ("минуту", "минуты", "минут")),
+                     (seconds % 60, ("секунду", "секунды", "секунд"))):
+        if n:
+            parts.append(f"{n} {_plural_ru(n, *forms)}")
+    if len(parts) == 1 and parts[0].startswith("1 "):
+        return parts[0][2:]
+    return " ".join(parts)
+
+
+def format_timer_speech(label, due_ts: float, created_ts: float) -> str:
+    """The phrase a timer fires with: "Таймер на <due - created>", then its label."""
+    phrase = f"Таймер на {format_duration(round(due_ts - created_ts))}"
+    return f"{phrase}, {label}" if label else phrase
+
+
+def format_alarm_speech(label) -> str:
+    """The phrase an alarm fires with: "Будильник", then its label."""
+    return f"Будильник, {label}" if label else "Будильник"
+
+
 class RemindersStore:
-    """One-shot reminder rows over a single SQLite file."""
+    """Reminder, timer, alarm and deferred command rows over a single SQLite file."""
 
     def __init__(self, path):
         self._lock = threading.Lock()
@@ -97,27 +149,29 @@ class RemindersStore:
         self._conn.execute(_CREATE_INDEX)
         self._conn.commit()
 
-    def insert(self, text, due_ts, device) -> int:
-        """Insert one reminder; stamps created_ts. Returns the new row id.
+    def insert(self, text, due_ts, device, kind="reminder", days=None) -> int:
+        """Insert one row of `kind`; stamps created_ts. Returns the new row id.
 
-        `device` may be None and is stored as-is.
+        `device` and `text` may be None and are stored as-is; `days` (an alarm's repeat
+        weekdays) None makes the row one-shot.
         """
         with self._lock:
             cur = self._conn.execute(
-                "INSERT INTO reminders (text, due_ts, device, created_ts) "
-                "VALUES (?, ?, ?, ?)",
-                (text, due_ts, device, time.time()),
+                "INSERT INTO reminders (kind, text, due_ts, days, device, created_ts) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (kind, text, due_ts, ",".join(map(str, days)) if days else None, device,
+                 time.time()),
             )
             self._conn.commit()
             return cur.lastrowid
 
     def list_pending(self) -> list[dict]:
-        """All reminders ordered by due_ts ascending, as dicts."""
+        """All rows ordered by due_ts ascending, as dicts."""
         with self._lock:
             rows = self._conn.execute(
                 f"SELECT {', '.join(_COLS)} FROM reminders ORDER BY due_ts ASC"
             ).fetchall()
-        return [dict(r) for r in rows]
+        return [_row(r) for r in rows]
 
     def next_due_ts(self) -> float | None:
         """MIN(due_ts) over all rows, or None when the table is empty."""
@@ -128,32 +182,28 @@ class RemindersStore:
         return row["m"] if row is not None else None
 
     def pop_due(self, now) -> list[dict]:
-        """Atomically take all reminders with due_ts <= now: select, delete, return.
-
-        One-shot semantics: a fired reminder is gone. The select and delete happen
+        """Atomically take all rows with due_ts <= now and return them as they were: a
+        repeating alarm moves to its next occurrence after `now` (at the local time of
+        its due time), every other row is deleted. The select and the writes happen
         under one lock so a concurrent insert can't slip a row in between.
         """
         with self._lock:
-            rows = self._conn.execute(
+            rows = [_row(r) for r in self._conn.execute(
                 f"SELECT {', '.join(_COLS)} FROM reminders WHERE due_ts <= ? "
                 "ORDER BY due_ts ASC",
                 (now,),
-            ).fetchall()
-            self._conn.execute("DELETE FROM reminders WHERE due_ts <= ?", (now,))
+            ).fetchall()]
+            for r in rows:
+                if r["days"]:
+                    at = datetime.fromtimestamp(r["due_ts"])
+                    self._conn.execute(
+                        "UPDATE reminders SET due_ts = ? WHERE id = ?",
+                        (next_occurrence(at.hour, at.minute, r["days"], now), r["id"]),
+                    )
+                else:
+                    self._conn.execute("DELETE FROM reminders WHERE id = ?", (r["id"],))
             self._conn.commit()
-        return [dict(r) for r in rows]
-
-    def drop_overdue(self, now) -> int:
-        """Delete all reminders with due_ts <= now; return the deleted count.
-
-        Used once at boot to drop reminders that came due while the process was down.
-        """
-        with self._lock:
-            cur = self._conn.execute(
-                "DELETE FROM reminders WHERE due_ts <= ?", (now,)
-            )
-            self._conn.commit()
-            return cur.rowcount
+        return rows
 
     def delete(self, reminder_id) -> bool:
         """Delete one reminder by id; return whether a row existed."""
@@ -169,25 +219,28 @@ class RemindersStore:
 
 
 class ReminderScheduler:
-    """Drives one-shot reminder delivery on the event loop.
+    """Drives the delivery of due rows on the event loop.
 
     Single-timer + wakeup-event loop: sleep until the earliest due time, fire
     everything then due, wake early on add()/cancel(). The `deliver` callback is an
-    async callable (device: str|None, text: str) -> None, assigned late by app.py
-    once the device manager exists.
+    async callable (row: dict) -> None taking the whole row (DeviceManager.fire),
+    assigned late by app.py once the device manager exists.
     """
 
     def __init__(self, store):
         self.store = store
-        # Async callable (device, text) -> None; assigned late from app.py.
+        # Async callable (row) -> None; assigned late from app.py.
         self.deliver = None
         self._wakeup = asyncio.Event()
         self._task = None
+        # Running deliveries: each fired row is its own task, so a ringing alarm (up to
+        # minutes) or a command's model call never delays the rows due after it.
+        self._deliveries: set[asyncio.Task] = set()
         self._stopped = False
 
-    def add(self, text, due_ts, device) -> int:
-        """Persist a reminder and wake the loop to re-evaluate the earliest due time."""
-        rid = self.store.insert(text=text, due_ts=due_ts, device=device)
+    def add(self, text, due_ts, device, kind="reminder", days=None) -> int:
+        """Persist a row and wake the loop to re-evaluate the earliest due time."""
+        rid = self.store.insert(text=text, due_ts=due_ts, device=device, kind=kind, days=days)
         self._wakeup.set()
         return rid
 
@@ -201,23 +254,39 @@ class ReminderScheduler:
         return self.store.list_pending()
 
     async def start(self) -> None:
-        """Drop missed reminders, then start the delivery loop."""
-        self.store.drop_overdue(time.time())
+        """Take the rows missed while down without firing them, then start the delivery
+        loop."""
+        self.store.pop_due(time.time())
         self._task = asyncio.create_task(self._loop())
 
     async def stop(self) -> None:
-        """Stop the delivery loop and await its task."""
+        """Stop the delivery loop and the running deliveries, and await their tasks."""
         self._stopped = True
         self._wakeup.set()
+        tasks = list(self._deliveries)
         if self._task is not None:
-            self._task.cancel()
-            try:
-                await self._task
-            except asyncio.CancelledError:
-                pass
+            tasks.append(self._task)
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+    async def _deliver(self, r: dict) -> None:
+        """Hand one fired row to the deliver callback; a failure is logged, never raised."""
+        if self.deliver is None:
+            logger.warning("reminder scheduler has no deliver callback; dropping")
+            return
+        try:
+            await self.deliver(r)
+        except Exception as e:
+            # The firing is lost (pop_due already deleted or moved the row), so log it
+            # so the drop is visible to an operator.
+            logger.error(
+                f"{r['kind']} delivery failed (device={r['device']!r}, "
+                f"text={r['text']!r}): {e}"
+            )
 
     async def _loop(self) -> None:
-        """Sleep until the earliest due time, fire due reminders, repeat."""
+        """Sleep until the earliest due time, fire due rows, repeat."""
         while not self._stopped:
             self._wakeup.clear()
             nxt = self.store.next_due_ts()
@@ -231,20 +300,7 @@ class ReminderScheduler:
                     continue  # woken by add()/cancel(): re-evaluate earliest
                 except asyncio.TimeoutError:
                     pass  # delay elapsed: fire everything now due
-            now = time.time()
-            for r in self.store.pop_due(now):
-                if self.deliver is None:
-                    logger.warning(
-                        "reminder scheduler has no deliver callback; dropping"
-                    )
-                    continue
-                speech = _format_reminder_speech(r["text"], r.get("created_ts"), now)
-                try:
-                    await self.deliver(r["device"], speech)
-                except Exception as e:
-                    # One-shot semantics: the row is already gone (pop_due deleted it),
-                    # so log what was lost so the drop is visible to an operator.
-                    logger.error(
-                        f"reminder delivery failed (device={r['device']!r}, "
-                        f"text={r['text']!r}): {e}"
-                    )
+            for r in self.store.pop_due(time.time()):
+                task = asyncio.create_task(self._deliver(r))
+                self._deliveries.add(task)
+                task.add_done_callback(self._deliveries.discard)

@@ -1,11 +1,40 @@
-"""Server-side ack chime assets: the synthesized two-tone clip and file-based clip
-loading. Not a TTS stage concern — the chime is a pipeline/device asset."""
+"""Server-side chime assets: the synthesized two-tone ack clip, file-based clip loading
+and the ring of a timer or an alarm. Not a TTS stage concern — they are pipeline/device
+assets."""
 
 import io
 import os
 import wave
 
+import numpy as np
 from loguru import logger
+
+# Sample rate of the synthesized ring (raw PCM, tts.pcm_mime(RING_RATE)).
+RING_RATE = 16000
+
+
+def _tone(freq: float, ms: int, sample_rate: int) -> np.ndarray:
+    """A sine tone of `ms` with a short attack/release envelope (no clicks)."""
+    n = int(sample_rate * ms / 1000)
+    if n <= 0:
+        return np.zeros(0, dtype=np.float32)
+    t = np.arange(n, dtype=np.float32) / sample_rate
+    wave_arr = np.sin(2 * np.pi * freq * t)
+    # Short raised-cosine attack/release so the tone fades in and out (no clicks).
+    # Clamp edge to n // 2 so the attack (env[:edge]) and release (env[-edge:])
+    # ramps never overlap for a very short tone (when 2*edge > n); the defaults
+    # (130 ms tone) are far above this bound, so they are unchanged.
+    edge = max(1, min(int(sample_rate * 0.008), n // 2))  # ~8 ms ramps
+    env = np.ones(n, dtype=np.float32)
+    ramp = np.linspace(0.0, 1.0, edge, dtype=np.float32)
+    env[:edge] = ramp
+    env[-edge:] = ramp[::-1]
+    return wave_arr * env
+
+
+def _pcm16(signal: np.ndarray, amplitude: float) -> bytes:
+    """A float signal scaled by `amplitude` as little-endian 16-bit PCM bytes."""
+    return (np.clip(signal * amplitude, -1.0, 1.0) * 32767.0).astype("<i2").tobytes()
 
 
 def make_ack_chime_wav(
@@ -23,36 +52,48 @@ def make_ack_chime_wav(
     caches the bytes (see SpeechMixin._ack_clip / _ack_clip_bytes in src/speech.py). numpy is
     already a dependency.
     """
-    import numpy as np
-
-    def _tone(freq: float, ms: int) -> "np.ndarray":
-        n = int(sample_rate * ms / 1000)
-        if n <= 0:
-            return np.zeros(0, dtype=np.float32)
-        t = np.arange(n, dtype=np.float32) / sample_rate
-        wave_arr = np.sin(2 * np.pi * freq * t)
-        # Short raised-cosine attack/release so the tone fades in and out (no clicks).
-        # Clamp edge to n // 2 so the attack (env[:edge]) and release (env[-edge:])
-        # ramps never overlap for a very short tone (when 2*edge > n); the defaults
-        # (130 ms tone) are far above this bound, so they are unchanged.
-        edge = max(1, min(int(sample_rate * 0.008), n // 2))  # ~8 ms ramps
-        env = np.ones(n, dtype=np.float32)
-        ramp = np.linspace(0.0, 1.0, edge, dtype=np.float32)
-        env[:edge] = ramp
-        env[-edge:] = ramp[::-1]
-        return wave_arr * env
-
     gap = np.zeros(int(sample_rate * gap_ms / 1000), dtype=np.float32)
-    signal = np.concatenate([_tone(tones_hz[0], tone_ms), gap, _tone(tones_hz[1], tone_ms)])
-    pcm16 = np.clip(signal * amplitude, -1.0, 1.0)
-    pcm16 = (pcm16 * 32767.0).astype("<i2")  # little-endian 16-bit PCM
+    signal = np.concatenate([_tone(tones_hz[0], tone_ms, sample_rate), gap,
+                             _tone(tones_hz[1], tone_ms, sample_rate)])
+    pcm16 = _pcm16(signal, amplitude)
     buf = io.BytesIO()
     with wave.open(buf, "wb") as wf:
         wf.setframerate(sample_rate)
         wf.setnchannels(1)
         wf.setsampwidth(2)
-        wf.writeframes(pcm16.tobytes())
+        wf.writeframes(pcm16)
     return buf.getvalue()
+
+
+def make_ring_period(
+    *,
+    sample_rate: int = RING_RATE,
+    tone_hz: float = 1500.0,
+    beeps: int = 4,
+    beep_ms: int = 120,
+    gap_ms: int = 130,
+    silence_ms: int = 2000,
+    amplitude: float = 0.5,
+) -> bytes:
+    """One period of the ring of a timer or an alarm as raw s16le mono PCM: `beeps`
+    short beeps over about a second, then `silence_ms` of silence, in which the device
+    can hear the wake word that stops the ring."""
+    gap = np.zeros(int(sample_rate * gap_ms / 1000), dtype=np.float32)
+    beep = np.concatenate([_tone(tone_hz, beep_ms, sample_rate), gap])
+    silence = np.zeros(int(sample_rate * silence_ms / 1000), dtype=np.float32)
+    return _pcm16(np.concatenate([np.tile(beep, beeps), silence]), amplitude)
+
+
+async def ring_audio(seconds: float, sample_rate: int = RING_RATE):
+    """The ring as one play stream: make_ring_period's periods back to back, cut at
+    `seconds`, as an async iterator of raw PCM (tts.pcm_mime(sample_rate)), one period
+    per chunk."""
+    period = make_ring_period(sample_rate=sample_rate)
+    left = int(seconds * sample_rate) * 2
+    while left > 0:
+        chunk = period[:left]
+        left -= len(chunk)
+        yield chunk
 
 
 def build_ack_clip(sound_path: str, *, name: str = "") -> tuple[str, bytes]:

@@ -105,10 +105,10 @@ export function statusMeta(r) {
   return RESULT_META[r && r.result] || { label: r && r.result, tone: "muted" };
 }
 
-// Speech the assistant made on its own (an agent's `say`, a reminder): such a run has
-// no request, so an empty request text is not silence.
+// Speech the assistant made on its own (an agent's `say`, a reminder, a timer, an alarm):
+// such a run has no request, so an empty request text is not silence.
 export function isAnnouncement(r) {
-  return !!r && (r.reason === "say" || r.reason === "reminder");
+  return !!r && ["say", "reminder", "timer", "alarm"].includes(r.reason);
 }
 
 // What a finished run with no request text shows in its place: why it has none.

@@ -9,6 +9,7 @@ device plays.
 """
 
 import asyncio
+import contextvars
 import io
 import itertools
 import json
@@ -26,13 +27,15 @@ from aiohttp import WSCloseCode, WSMsgType, web
 from loguru import logger
 
 from src import captures, config_store, context, device_logs, telemetry
-from src.chime import build_ack_clip
+from src.chime import RING_RATE, build_ack_clip, ring_audio
 from src.pipeline import Pipeline
 from src.pipeline_events import StageEvent
+from src.reminders import format_alarm_speech, format_reminder_speech, format_timer_speech
 from src.reply_compressor import ReplyCompressor
+from src.run_context import in_command
 from src.run_events import record_run
 from src.runs_store import new_record
-from src.tts import pcm_rate
+from src.tts import pcm_mime, pcm_rate
 from src.wake_arbiter import WakeArbiter
 
 # Binary frame kinds (first byte).
@@ -91,6 +94,9 @@ REBOOT_MARGIN_S = 10
 # A `stats` whose largest free block of internal RAM is under this many bytes is logged as a
 # warning: the speaker's link needs a 6 KB internal block for its WebSocket task at every connect.
 LOW_HEAP_BLOCK = 8192
+# The longest a fired timer's and alarm's ring lasts, seconds, unless silenced first.
+TIMER_RING_S = 60
+ALARM_RING_S = 300
 
 # StageEvents that map onto a plain `state` message; TTS_START, STT_END and ERROR
 # carry text and are handled in Device._send_event, the rest send nothing.
@@ -106,6 +112,10 @@ _STREAM_IDS = itertools.count(1)
 # Fire-and-forget tasks (closing a replaced or disabled connection), kept referenced
 # until they finish.
 _background: set[asyncio.Task] = set()
+
+# What Device.announce hands its speech's play stream (Connection.play `then`): set around
+# the speech, read by the pipeline's play hook (Device.play) in the same task.
+_after_speech: contextvars.ContextVar = contextvars.ContextVar("after_speech", default=None)
 
 
 def _spawn(coro) -> None:
@@ -427,11 +437,14 @@ class Connection:
             msg["session"] = stream.session
         return msg
 
-    async def play(self, mime: str, audio, compress: bool) -> dict:
+    async def play(self, mime: str, audio, compress: bool, then=None) -> dict:
         """Send one clip (bytes or an async chunk iterator) as a play stream, paced to
         the device's buffer, and return once the device reports it. Streams go out back
         to back in call order. The iterator is always closed. With `compress` the audio
-        goes through a ReplyCompressor.
+        goes through a ReplyCompressor. `then`, a callable, is called once the whole
+        stream is out (its play_end queued) and before the play lock is released, so a
+        play it starts takes the lock next, behind any play already waiting for it; not
+        for a stream dropped or failed before that.
 
         Returns {"outcome", "dry", "gap_ms"}: outcome "played" or "dropped"; dry how
         many times a played stream ran dry before its play_end and gap_ms the ms of
@@ -456,6 +469,8 @@ class Connection:
                 finally:
                     if stream.live:
                         self.send(self._stream_msg("play_end", stream), stream)
+                if then is not None and stream.live:
+                    then()
         finally:
             await _aclose(chunks)
         timeout = stream.sent_s + self.buffer_ms / 1000 + PLAYED_WAIT_MARGIN_S
@@ -591,13 +606,14 @@ class Device:
 
     async def play(self, mime: str, audio) -> dict:
         """The pipeline's play hook; returns what Connection.play does. The device's
-        compress_replies is read per stream, so a change applies from the next one."""
+        compress_replies is read per stream, so a change applies from the next one. The
+        speech of an announcement carries the announcement's `then` (_after_speech)."""
         conn = self.conn
         if conn is None or not conn.speaker:
             if not isinstance(audio, (bytes, bytearray)):
                 await _aclose(audio)
             raise RuntimeError(f"{self.name} cannot play: offline or no speaker")
-        return await conn.play(mime, audio, self.cfg.compress_replies)
+        return await conn.play(mime, audio, self.cfg.compress_replies, _after_speech.get())
 
     def _take_session(self, session) -> None:
         """The pipeline's take_session hook: the run of the `wake` that opened `session`
@@ -852,19 +868,22 @@ class Device:
             raise DeviceOfflineError(f"{self.name} is offline")
         await self.announce(text, "say")
 
-    async def announce(self, text: str, reason: str, request: str | None = None) -> None:
+    async def announce(self, text: str, reason: str, request: str | None = None,
+                       then=None) -> None:
         """Proactively say `text`: the text to the device as an announcement and, on
         a device with a speaker, the synthesized speech.
 
         Every announcement is a run in the run log: `reason` names who made the device
-        speak ("say", "reminder", "assistant"), `request` is the request text it answers
-        (if any), `text` is the reply, and a failure carries the error stage ("device"
-        when offline, "TTS" when the speech failed). An announcement that reached the
-        device also joins its conversation context as a note that it was spoken, so
-        a follow-up question can refer to it. The text is spoken as it is, without the
-        stress stage. Raises on failure, after the run is recorded."""
+        speak ("say", "reminder", "timer", "alarm", "assistant"), `request`
+        is the request text it answers (if any), `text` is the reply, and a failure
+        carries the error stage ("device" when offline, "TTS" when the speech failed). An
+        announcement that reached the device also joins its conversation context as a
+        note that it was spoken, so a follow-up question can refer to it. The text is
+        spoken as it is, without the stress stage. `then` goes to the speech's play
+        stream (Connection.play). Raises on failure, after the run is recorded."""
         t0 = time.perf_counter()
         record = new_record(self.name, reason, result="ok", stt_text=request, llm_text=text)
+        token = _after_speech.set(then)
         try:
             conn = self.conn
             if conn is None:
@@ -876,8 +895,47 @@ class Device:
             context.append_spoken(self.pipeline._context_path, text,
                                   max_turns=ctx.max_turns, ttl_seconds=ctx.ttl_seconds)
         finally:
+            _after_speech.reset(token)
             record["t_total"] = int((time.perf_counter() - t0) * 1000)
             await record_run(self.rt, record)
+
+    async def ring(self, text: str, reason: str, seconds: float) -> None:
+        """Announce `text` (a timer's or an alarm's phrase, run log `reason`), then ring
+        for at most `seconds`: the ring (chime.ring_audio) is one play stream started
+        the moment the phrase's stream is out, so it takes the play lock next (behind
+        only a play already waiting for it), the device plays them back to back and one
+        `play_stop` drops both. A phrase dropped before
+        it was all sent gets no ring. The ring ends when it is dropped (a wake over the
+        playback, the device's button) or at `seconds`."""
+        ring = None
+
+        def start_ring():
+            nonlocal ring
+            ring = asyncio.ensure_future(self.conn.play(
+                pcm_mime(RING_RATE), ring_audio(seconds), self.cfg.compress_replies))
+
+        try:
+            await self.announce(text, reason, then=start_ring)
+        except BaseException:
+            if ring is not None:
+                ring.cancel()
+                await asyncio.gather(ring, return_exceptions=True)
+            raise
+        if ring is not None:
+            await ring
+
+    async def run_command(self, text: str) -> None:
+        """Run a fired deferred command: `text` through this device's pipeline as a text
+        request (run log reason "command"), as if it were said to this speaker now: the
+        reply — the command done, a tool's failure, an answer — is spoken when the
+        speaker is online, and the command runs offline too, a text run needs no
+        device. Its tools see in_command, so it cannot defer itself again."""
+        token = in_command.set(True)
+        try:
+            await self.pipeline.run_text(
+                text, speak=self.online and self.pipeline.has_speaker, reason="command")
+        finally:
+            in_command.reset(token)
 
     def start_capture(self, seconds: int) -> captures.Capture:
         """Create a capture on disk and send `capture` for it. Raises DeviceOfflineError or
@@ -1045,16 +1103,30 @@ class DeviceManager:
             })
         return out
 
-    async def announce(self, device_name: str | None, text: str) -> None:
-        """Route a reminder to its originating device; drop if unavailable."""
+    async def fire(self, row: dict) -> None:
+        """The reminder scheduler's deliver: fire a due row (src/reminders.py) on the
+        device it was set on, or on the first online one when it names none. A reminder
+        is spoken, a timer or an alarm is announced and rings (Device.ring), a deferred
+        command runs on the device's pipeline (Device.run_command) online or not; any
+        other row whose device is not online is dropped, logged."""
+        device_name, kind = row["device"], row["kind"]
         if device_name is not None:
             target = next((c for c in self.clients if c.name == device_name), None)
         else:
             target = next((c for c in self.clients if c.online), None)
-        if target is None or not target.online:
-            logger.warning(f"reminder target {device_name!r} unavailable; dropping")
+        if target is None or (kind != "command" and not target.online):
+            logger.warning(f"{kind} target {device_name!r} unavailable; dropping")
             return
-        await target.announce(text, "reminder")
+        if kind == "command":
+            await target.run_command(row["text"])
+        elif kind == "timer":
+            await target.ring(format_timer_speech(row["text"], row["due_ts"], row["created_ts"]),
+                              "timer", TIMER_RING_S)
+        elif kind == "alarm":
+            await target.ring(format_alarm_speech(row["text"]), "alarm", ALARM_RING_S)
+        else:
+            await target.announce(
+                format_reminder_speech(row["text"], row["created_ts"], time.time()), "reminder")
 
     def capture_status(self, device_name: str) -> dict:
         """The device's running capture, else its newest one on disk, else idle."""

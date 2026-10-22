@@ -11,3 +11,7 @@ import contextvars
 current_device: contextvars.ContextVar[str | None] = contextvars.ContextVar(
     "current_device", default=None
 )
+
+# True while a fired deferred command runs (Device.run_command, src/device_server.py): a
+# command whose stored text kept its time must be performed, not deferred again.
+in_command: contextvars.ContextVar[bool] = contextvars.ContextVar("in_command", default=False)

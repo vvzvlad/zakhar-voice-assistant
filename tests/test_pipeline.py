@@ -2472,7 +2472,8 @@ async def test_run_text_llm_error_speaks_fallback_and_skips_context(tmp_path, mo
 
 
 async def test_run_text_speak_false_skips_tts(tmp_path, monkeypatch):
-    # speak=False: the LLM turn runs but nothing is synthesized or announced.
+    # speak=False (a fired deferred command, reason "command"): the LLM turn runs but
+    # nothing is synthesized or announced.
     patch_llm(monkeypatch, reply="готово")
     tts_calls = []
 
@@ -2486,13 +2487,14 @@ async def test_run_text_speak_false_skips_tts(tmp_path, monkeypatch):
         tmp_path, monkeypatch, tts_backend=SpyTts(), runs_store=store,
     )
 
-    result = await pipeline.run_text("включи свет", speak=False)
+    result = await pipeline.run_text("включи свет", speak=False, reason="command")
 
     assert result["result"] == "ok"
     assert result["reply"] == "готово"
     assert tts_calls == []
     assert pipeline.play.calls == []
     assert store.records[0]["t_tts"] == 0
+    assert store.records[0]["reason"] == "command"
     assert events == []
 
 

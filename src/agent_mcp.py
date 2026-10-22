@@ -64,8 +64,10 @@ def build_agent_mcp(rt) -> FastMCP:
         description=(
             "List recent voice interactions (newest first): what the user said "
             "(stt_text), what the assistant replied (llm_text), result and stage "
-            "timings. Rows with reason say/reminder/assistant are the assistant's own "
-            "speech: llm_text is what was spoken, stt_text the task text or empty. "
+            "timings. Rows with reason say/reminder/timer/alarm/assistant are the "
+            "assistant's own speech: llm_text is what was spoken, stt_text the task text "
+            "or empty. Reason command is a deferred command run when it came due, its "
+            "reply spoken as for any request. "
             "Optional filters: device (exact speaker name), search "
             "(substring match on request/reply text), limit (max rows)."
         ),

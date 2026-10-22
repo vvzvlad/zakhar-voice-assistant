@@ -292,8 +292,9 @@ class TelemetryConfig(BaseModel):
 
 
 class RemindersConfig(BaseModel):
-    # One-shot voice reminders (data/reminders.db). Disable to drop the subsystem.
-    enabled: bool = Field(True, title="Enabled", description="Off removes the reminder tools and pauses announcing reminders.")
+    # Reminders, timers, alarms and deferred commands (data/schedule.db). Disable to drop
+    # the subsystem.
+    enabled: bool = Field(True, title="Enabled", description="Off removes the tools of reminders, timers, alarms and deferred commands and stops firing them; what comes due while off is dropped (a repeating alarm moves to its next time).")
 
 
 class MemoryConfig(BaseModel):

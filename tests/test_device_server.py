@@ -26,8 +26,10 @@ from src.plugins.base import Deps
 from src.plugins.vad.webrtc import WebRtcVadBackend
 from src.prompt_store import PromptStore
 from src.reply_compressor import CEILING_DBFS
+from src.run_context import in_command
 from src.runs_store import RunsStore
 from src.runtime import Runtime
+from src.stage_errors import StageError
 from src.tts import TtsBackend, pcm_mime
 from src.voice_run import FOLLOWUP_SKIP_MS
 from src.wakeword import WakewordVerdict, WakewordVerifier
@@ -275,6 +277,13 @@ def state(session, value):
     return {"type": "state", "session": session, "value": value}
 
 
+def due_row(kind="reminder", text="молоко", device="kitchen", due_ts=1300.0, created_ts=None):
+    """A due row of the reminder scheduler; with no created_ts a reminder is spoken as
+    its text."""
+    return {"id": 1, "kind": kind, "text": text, "due_ts": due_ts, "days": None,
+            "device": device, "created_ts": created_ts}
+
+
 def session_msgs(session, *rest):
     """The wire messages of one voice session from `transcribing` on."""
     return [
@@ -482,7 +491,7 @@ async def test_wake_drops_an_announcement_already_on_the_wire(srv):
     # drops it on the device, and the announcement does not wait on it.
     dev = await srv.connect()
     await dev.recv()  # config
-    say = asyncio.create_task(srv.manager.announce("kitchen", "молоко"))
+    say = asyncio.create_task(srv.manager.fire(due_row()))
     assert await dev.recv() == {"type": "reply", "text": "молоко"}
     start = await dev.recv()
     assert start["type"] == "play_start" and "session" not in start
@@ -622,7 +631,7 @@ async def test_a_rejected_wake_over_an_announcement_ends_its_session(srv):
     srv.tts.clips.append(b"\x02\x00" * 16000)  # 1 s
     dev = await srv.connect(buffer_ms=1400)
     await dev.recv()  # config
-    say = asyncio.create_task(srv.manager.announce("kitchen", "молоко"))
+    say = asyncio.create_task(srv.manager.fire(due_row()))
     assert await dev.recv() == {"type": "reply", "text": "молоко"}
     start = await dev.recv()
     await wake_over(dev, 1)
@@ -796,7 +805,7 @@ async def test_a_reminder_is_a_run_and_a_line_of_the_dialog(srv, tmp_path):
     srv.rt.runs_store = RunsStore(str(tmp_path / "runs.db"))
     dev = await srv.connect()
     await dev.recv()  # config
-    say = asyncio.create_task(srv.manager.announce("kitchen", "молоко"))
+    say = asyncio.create_task(srv.manager.fire(due_row()))
     assert await dev.recv() == {"type": "reply", "text": "молоко"}
     start = await dev.recv()
     assert (await dev.recv())["type"] == "play_end"
@@ -841,6 +850,58 @@ async def test_announce_whose_speech_fails_is_a_tts_error_run(srv, tmp_path, mon
     assert not (tmp_path / "context_kitchen.txt").exists()
 
 
+async def test_a_timer_rings_right_behind_its_phrase_until_a_wake_stops_it(srv, tmp_path):
+    srv.rt.runs_store = RunsStore(str(tmp_path / "runs.db"))
+    dev = await srv.connect()
+    await dev.recv()  # config
+    fire = asyncio.create_task(srv.manager.fire(due_row("timer", "пицца", created_ts=1000.0)))
+    assert await dev.recv() == {"type": "reply", "text": "Таймер на 5 минут, пицца"}
+    phrase = await dev.recv()
+    assert (await dev.recv())["type"] == "play_end"
+    # The ring is on the wire before the device reports the phrase played: no gap between them.
+    ring = await dev.recv()
+    assert ring["type"] == "play_start" and ring["id"] != phrase["id"]
+    await dev.send(type="played", id=phrase["id"], dry=0, gap_ms=0)
+
+    await dev.send(type="wake", session=1, word="Захар")
+    assert await dev.recv() == {"type": "play_stop"}
+    assert await dev.recv() == state(1, "listening")
+    assert await dev.recv() == state(1, "idle")
+    await dev.send(type="played", id=ring["id"], dropped=True)
+    await asyncio.wait_for(fire, 2)
+    assert samples(dev.plays[ring["id"]][:3200]) != {0}  # it starts with a beep
+    assert [(r["reason"], r["llm_text"]) for r in srv.rt.runs_store.list() if r["reason"] == "timer"] == [
+        ("timer", "Таймер на 5 минут, пицца")]
+
+
+async def test_an_alarm_rings_to_its_limit_and_a_phrase_the_button_drops_gets_no_ring(srv, monkeypatch):
+    monkeypatch.setattr(device_server, "ALARM_RING_S", 0.5)
+    dev = await srv.connect(buffer_ms=1400)
+    await dev.recv()  # config
+    fire = asyncio.create_task(srv.manager.fire(due_row("alarm", None)))
+    assert await dev.recv() == {"type": "reply", "text": "Будильник"}
+    phrase = await dev.recv()
+    assert (await dev.recv())["type"] == "play_end"
+    ring = await dev.recv()
+    assert ring["type"] == "play_start"
+    assert await dev.recv() == {"type": "play_end", "id": ring["id"]}
+    assert len(dev.plays[ring["id"]]) == 16000  # 0.5 s at 16 kHz
+    for stream in (phrase, ring):
+        await dev.send(type="played", id=stream["id"], dry=0, gap_ms=0)
+    await asyncio.wait_for(fire, 2)
+
+    srv.tts.clips.append(b"\x02\x00" * 64000)  # 4 s, paced: still being sent at the button
+    fire = asyncio.create_task(srv.manager.fire(due_row("alarm", "на работу")))
+    assert await dev.recv() == {"type": "reply", "text": "Будильник, на работу"}
+    phrase = await dev.recv()
+    await dev.send(type="button")
+    assert await dev.recv() == {"type": "play_stop"}
+    await dev.send(type="played", id=phrase["id"], dropped=True)
+    await asyncio.wait_for(fire, 2)
+    with pytest.raises(asyncio.TimeoutError):
+        await dev.recv(timeout=0.3)
+
+
 async def test_the_button_stops_the_answer_and_ends_its_session_without_a_follow_up(srv):
     srv.rt.followup_backend = FakeGate(accepted=True)
     dev = await srv.connect(buffer_ms=1400, follow_up=True)
@@ -852,6 +913,41 @@ async def test_the_button_stops_the_answer_and_ends_its_session_without_a_follow
     await dev.send(type="button")  # nothing plays: nothing to stop
     with pytest.raises(asyncio.TimeoutError):
         await dev.recv(timeout=0.3)
+
+
+async def test_a_deferred_command_runs_offline_and_online_its_reply_is_spoken(
+        srv, tmp_path, monkeypatch):
+    srv.rt.runs_store = RunsStore(str(tmp_path / "runs.db"))
+    seen = []
+
+    class Answering:
+        def __init__(self, backend, hub, cfg):
+            pass
+
+        async def respond(self, req, *, on_filler=None, has_next=False):
+            seen.append((req.user_text, in_command.get()))
+            return make_llm_result("Не нашёл такой свет", tool_used=True)
+
+    monkeypatch.setattr("src.llm.LlmStage", Answering)
+    # Offline: the command runs on the device's pipeline; its reply is only in the run log.
+    await srv.manager.fire(due_row("command", "включи свет"))
+    assert seen == [("включи свет", True)]
+    [run] = srv.rt.runs_store.list()
+    assert (run["reason"], run["result"], run["stt_text"], run["llm_text"]) == (
+        "command", "tool", "включи свет", "Не нашёл такой свет")
+
+    # Online: the reply is spoken as for the phrase said to the speaker now, so a tool
+    # that failed is heard, not lost.
+    dev = await srv.connect()
+    await dev.recv()  # config
+    fire = asyncio.create_task(srv.manager.fire(due_row("command", "включи свет")))
+    start = await dev.recv()
+    assert start["type"] == "play_start"
+    assert (await dev.recv())["type"] == "play_end"
+    await dev.send(type="played", id=start["id"], dry=0, gap_ms=0)
+    await asyncio.wait_for(fire, 2)
+    assert [(r["reason"], r["result"]) for r in srv.rt.runs_store.list()] == [("command", "tool")] * 2
+    assert in_command.get() is False
 
 
 async def test_follow_up_listens_after_a_played_answer_only(srv):
@@ -1576,7 +1672,7 @@ async def test_text_only_device_gets_no_tts(srv):
     got = [await dev.recv() for _ in range(6)]
     assert got == session_msgs(5, {"type": "state", "session": 5, "value": "idle"})
 
-    await srv.manager.announce("panel", "молоко")
+    await srv.manager.fire(due_row(device="panel"))
     assert await dev.recv() == {"type": "reply", "text": "молоко"}
     assert srv.tts.calls == 0
     assert dev.plays == {}

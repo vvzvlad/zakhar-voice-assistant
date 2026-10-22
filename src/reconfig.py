@@ -457,10 +457,10 @@ class Reconfigurator:
             if core.reminders.enabled and self.rt.scheduler is None:
                 from src.reminders import ReminderScheduler, RemindersStore
                 store = await asyncio.to_thread(
-                    RemindersStore, os.path.join(config_store.DATA_DIR, "reminders.db")
+                    RemindersStore, os.path.join(config_store.DATA_DIR, "schedule.db")
                 )
                 scheduler = ReminderScheduler(store)
-                scheduler.deliver = self.rt.manager.announce
+                scheduler.deliver = self.rt.manager.fire
                 self.rt.reminders_store = store
                 self.rt.scheduler = scheduler
                 await scheduler.start()
