@@ -35,6 +35,37 @@ def test_two_appends_within_ttl_accumulate(tmp_path):
     ]
 
 
+def test_tool_calls_are_noted_after_the_answer(tmp_path):
+    # An answer that ran tools is followed by a third-person note naming them, so the
+    # history does not read as if saying «поставлено» was enough.
+    path = str(tmp_path / "context_living.txt")
+    calls = [{"name": "set_reminder",
+              "args": {"text": "помыть посуду", "in_minutes": 5, "at": None},
+              "result": "Напоминание поставлено (№3)."},
+             {"name": "list_reminders", "args": {}, "result": "..."}]
+    append_context(path, "напомни помыть посуду", "Напомню.", calls=calls)
+    assert load_context(path)[2:] == [{
+        "role": "user",
+        "content": "[Этот ответ ассистент дал, вызвав инструменты: "
+                   'set_reminder(text="помыть посуду", in_minutes=5); list_reminders()]',
+    }]
+
+
+def test_tool_notes_do_not_shrink_the_window(tmp_path):
+    # The window keeps max_turns exchanges however many of them called tools, and
+    # never opens with a note whose answer was cut off.
+    path = str(tmp_path / "context_living.txt")
+    calls = [{"name": "set_timer", "args": {"seconds": 60}}]
+    for i in range(4):
+        append_context(path, f"u{i}", f"a{i}", max_turns=2, calls=calls)
+    note = {"role": "user",
+            "content": "[Этот ответ ассистент дал, вызвав инструменты: set_timer(seconds=60)]"}
+    assert load_context(path, max_turns=2) == [
+        {"role": "user", "content": "u2"}, {"role": "assistant", "content": "a2"}, note,
+        {"role": "user", "content": "u3"}, {"role": "assistant", "content": "a3"}, note,
+    ]
+
+
 def test_trimming_drops_oldest(tmp_path):
     path = str(tmp_path / "context_living.txt")
     append_context(path, "u1", "a1", max_turns=2)

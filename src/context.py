@@ -5,9 +5,11 @@ The pipeline loads the recent window to feed it back to the model so it remember
 the last few turns, and appends the new exchange after each run. A conversation
 idle longer than ttl_seconds is considered finished and reset to empty, so an
 unrelated later request starts fresh. Only the last max_turns * 2 messages are
-kept: user+assistant exchanges, plus notes of what the device said unprompted
-(append_spoken), so two user-role messages may follow each other and the trimmed
-window may start with an assistant message.
+kept: user+assistant exchanges, plus user-role notes of what the device said
+unprompted (append_spoken), so two user-role messages may follow each other and the
+trimmed window may start with an assistant message. A note of the tools an answer
+called (append_context) rides along with that answer: it is not counted, and it is
+dropped with the answer.
 """
 
 import json
@@ -15,6 +17,25 @@ import os
 import time
 
 from loguru import logger
+
+# Opens the note append_context writes after an answer that called tools.
+_TOOL_NOTE = "[Этот ответ ассистент дал, вызвав инструменты: "
+
+
+def _trim(messages: list[dict], max_turns: int) -> list[dict]:
+    """The last max_turns * 2 messages, tool notes not counted; a tool note whose
+    answer was cut off is dropped too."""
+    kept, counted = [], 0
+    for msg in reversed(messages):
+        if not msg["content"].startswith(_TOOL_NOTE):
+            if counted == max_turns * 2:
+                break
+            counted += 1
+        kept.append(msg)
+    kept.reverse()
+    while kept and kept[0]["content"].startswith(_TOOL_NOTE):
+        kept.pop(0)
+    return kept
 
 
 def _is_stale(context_path: str, ttl_seconds: int) -> bool:
@@ -35,8 +56,8 @@ def load_context(context_path: str, max_turns: int = 5, ttl_seconds: int = 300) 
 
     Returns [] when the file is missing or stale (idle past the TTL). Blank lines
     and any line that is not a valid JSON message are skipped, which gracefully
-    ignores leftover legacy USER:/GLADOS: lines. The result is trimmed to the last
-    max_turns * 2 messages.
+    ignores leftover legacy USER:/GLADOS: lines. The result is trimmed by _trim: the
+    last max_turns * 2 messages, tool notes not counted.
     """
     if not os.path.exists(context_path) or _is_stale(context_path, ttl_seconds):
         return []
@@ -63,7 +84,7 @@ def load_context(context_path: str, max_turns: int = 5, ttl_seconds: int = 300) 
         return []
 
     # Defensive trim even if the file grew beyond the configured window.
-    return messages[-(max_turns * 2):]
+    return _trim(messages, max_turns)
 
 
 def append_context(
@@ -72,12 +93,27 @@ def append_context(
     assistant_text: str,
     max_turns: int = 5,
     ttl_seconds: int = 300,
+    calls: list[dict] | None = None,
 ) -> None:
-    """Append the user and assistant messages to the per-device context file.
-    Failures are logged and never raised; the pipeline relies on that."""
-    _append(context_path, [{"role": "user", "content": user_text},
-                           {"role": "assistant", "content": assistant_text}],
-            max_turns, ttl_seconds)
+    """Append the user and assistant messages to the per-device context file, and,
+    when the answer ran tools (`calls`: the rounds' {name, args, ...} dicts), a note
+    naming them. Failures are logged and never raised; the pipeline relies on that.
+
+    The history holds text only, so without the note an answer like «Напоминание
+    поставлено» reads as if saying it was enough, and after a few such turns the model
+    answers the next request in words without calling the tool. The note is a
+    user-role message in the third person, as append_spoken's, so the model does not
+    copy it into its replies."""
+    new = [{"role": "user", "content": user_text},
+           {"role": "assistant", "content": assistant_text}]
+    if calls:
+        made = "; ".join(
+            c["name"] + "(" + ", ".join(
+                f"{k}={json.dumps(v, ensure_ascii=False)}"
+                for k, v in (c.get("args") or {}).items() if v is not None) + ")"
+            for c in calls)
+        new.append({"role": "user", "content": f"{_TOOL_NOTE}{made}]"})
+    _append(context_path, new, max_turns, ttl_seconds)
 
 
 def append_spoken(context_path: str, text: str, max_turns: int = 5, ttl_seconds: int = 300) -> None:
@@ -94,12 +130,12 @@ def append_spoken(context_path: str, text: str, max_turns: int = 5, ttl_seconds:
 
 def _append(context_path: str, new: list[dict], max_turns: int, ttl_seconds: int) -> None:
     """Load the current window (which already returns [] when missing/stale/unreadable
-    and skips legacy lines), append `new`, trim to the last max_turns * 2 messages,
+    and skips legacy lines), append `new`, trim it with _trim,
     and rewrite the whole file as JSONL. The full rewrite is intentional: it applies
     trimming and the staleness reset in one place."""
     messages = load_context(context_path, max_turns=max_turns, ttl_seconds=ttl_seconds)
     messages.extend(new)
-    messages = messages[-(max_turns * 2):]
+    messages = _trim(messages, max_turns)
 
     try:
         os.makedirs(os.path.dirname(context_path) or ".", exist_ok=True)

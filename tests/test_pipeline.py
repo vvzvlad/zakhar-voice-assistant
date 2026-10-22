@@ -2443,6 +2443,32 @@ async def test_run_text_happy_path(tmp_path, monkeypatch):
     assert hub.broadcasts[0]["run"]["result"] == "ok"
 
 
+# One answered run that called a tool: the history notes the call after the answer.
+TOOL_RESULT = dict(rounds=[{"round": 1, "note": "tool call", "calls": [
+    {"name": "set_timer", "args": {"seconds": 300}, "result": "Таймер поставлен (№1)."}]},
+    {"round": 2, "note": "final answer", "calls": []}], tool_used=True)
+TOOL_NOTE = {"role": "user",
+             "content": "[Этот ответ ассистент дал, вызвав инструменты: set_timer(seconds=300)]"}
+
+
+async def test_voice_run_notes_tool_calls_in_context(tmp_path, monkeypatch):
+    from src import context
+    patch_llm(monkeypatch, result=make_llm_result("Поставил.", **TOOL_RESULT))
+    pipeline, _ = make_pipeline(tmp_path, monkeypatch, stt_text="таймер на пять минут")
+    await say(pipeline)
+    assert context.load_context(pipeline._context_path)[1:] == [
+        {"role": "assistant", "content": "Поставил."}, TOOL_NOTE]
+
+
+async def test_run_text_notes_tool_calls_in_context(tmp_path, monkeypatch):
+    from src import context
+    patch_llm(monkeypatch, result=make_llm_result("Поставил.", **TOOL_RESULT))
+    pipeline, _ = make_pipeline(tmp_path, monkeypatch)
+    await pipeline.run_text("таймер на пять минут")
+    assert context.load_context(pipeline._context_path)[1:] == [
+        {"role": "assistant", "content": "Поставил."}, TOOL_NOTE]
+
+
 async def test_run_text_llm_error_speaks_fallback_and_skips_context(tmp_path, monkeypatch):
     # An LLM StageError on a text run mirrors _run: the configured fallback
     # phrase is the reply, the run records error/LLM, and the failed turn is
