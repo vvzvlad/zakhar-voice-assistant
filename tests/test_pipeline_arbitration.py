@@ -25,7 +25,7 @@ from tests.test_pipeline import (
 )
 from src.wake_arbiter import COOLDOWN_MS, WakeArbiter
 from tests.test_pipeline_followup import TAIL, _answer, _make
-from tests.test_pipeline_wakeword_gate import HEAD_BYTES, WAKE, FakeWakewordVerifier
+from tests.test_pipeline_wakeword_gate import HEAD_BYTES, WAKE, FakeWakewordVerifier, _make_text_checked
 from tests.test_wake_arbiter import preroll
 
 
@@ -170,7 +170,7 @@ async def test_a_device_that_loses_by_its_own_confirmation_is_not_shown_listenin
     first.arbiter = second.arbiter = WakeArbiter(online_count=lambda: 2)
     verdicts = []
     ruled = second.arbitration_verdict
-    second.arbitration_verdict = lambda token, won: (verdicts.append(won), ruled(token, won))
+    second.arbitration_verdict = lambda token, won, **kw: (verdicts.append(won), ruled(token, won, **kw))
 
     for p in (first, second):
         p.on_wake("cid", WAKE, over_answer=True)
@@ -460,3 +460,32 @@ async def test_a_wake_over_the_playing_answer_stops_it_inside_another_devices_co
     await speaker.on_audio(PHRASE[HEAD_BYTES:])
     await settle(speaker)
     assert (store.records[-1]["result"], store.records[-1]["reason"]) == ("ok", "wake_stop")
+
+
+@pytest.mark.parametrize("together,playing,runs", [
+    (True, False, True), (False, False, False), (True, True, False)])
+async def test_a_winner_another_device_woke_with_needs_no_wake_word_in_its_transcript(
+        tmp_path, monkeypatch, together, playing, runs):
+    # Run 4527: the speaker kept the phrase, but its transcript lost «Захар», which both
+    # panels' transcripts carried. A winner of a group in which another device woke too is
+    # confirmed by that, so its phrase runs; a wake alone in its group still needs the word,
+    # and so does one ruled while a device plays (run 4480: the panels heard the speaker's
+    # answer ahead of «Захар, стоп»).
+    monkeypatch.setattr("src.wake_arbiter.WINDOW_MS", 50)
+    speaker, _, store = _make_text_checked(tmp_path, monkeypatch, "сколько времени")
+    panel, _ = make_pipeline(tmp_path, monkeypatch, name="panel")
+    panel.has_speaker = False
+    install_phrase_vad(panel)
+    speaker.arbiter = panel.arbiter = WakeArbiter(online_count=lambda: 2,
+                                                  any_playing=lambda: playing)
+
+    devices = (speaker, panel) if together else (speaker,)
+    for p in devices:
+        p.on_wake("cid", WAKE)
+    for p in devices:
+        await p.on_audio(PHRASE)
+    await asyncio.sleep(0.15)  # the window runs out: the group is ruled
+    for p in devices:
+        await settle(p)
+    rec = store.records[-1]
+    assert (rec["result"], rec["llm_text"]) == (("ok", "готово") if runs else ("rejected", ""))

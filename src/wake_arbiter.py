@@ -30,7 +30,8 @@ candidates — its pre-roll is in or WINDOW_MS has passed since its own wake (it
 SNR is then taken on what it has): the pre-roll streams in only after the `wake`.
 Only a wake over the device's running answer waits for the verifier; any other has
 its verdict at its wake, and its phrase is checked for the wake word only after the
-ruling (Pipeline._run). So the winner is a wake the verifier did not reject — a false
+ruling (Pipeline._run) — not at all when it won together with another candidate while no
+online device plays a stream (`together`). So the winner is a wake the verifier did not reject — a false
 wake not over an answer can win and start the cooldown — and a group whose candidates
 all dropped out leaves no cooldown. The group is ruled once every candidate is ready
 and either every online device has woken or the group's window has run out. A
@@ -40,7 +41,7 @@ reject ends its run there and then (logged as wakeword_reject, untranscribed), n
 at its end-point as a duplicate; either way it is shown the winner's answer.
 
 Everything here is synchronous on the event loop. The group is re-checked, and a
-verdict delivered by calling `pipeline.arbitration_verdict(token, won)`, from
+verdict delivered by calling `pipeline.arbitration_verdict(token, won, together=...)`, from
 inside `register()` (a pipeline's on_wake), `preroll_in()` (a pipeline's on_audio,
 or the candidate's own window timer), `run_changed()` (a pipeline whose verifier
 ruled, or whose run stopped waiting) or the group's window timer — so a verdict for
@@ -98,11 +99,15 @@ class WakeArbiter:
 
     def __init__(self, online_count: Callable[[], int],
                  online_pipelines: Callable[[], list] = lambda: [],
-                 send_reply: Callable | None = None):
+                 send_reply: Callable | None = None,
+                 any_playing: Callable[[], bool] = lambda: False):
         self._online_count = online_count
         # The online devices' pipelines: one whose follow-up window already hears the
         # phrase keeps it over the group (_close).
         self._online_pipelines = online_pipelines
+        # Whether an online device plays a stream now: a group ruled then does not
+        # spare its winner the wake word in its transcript (_close).
+        self._any_playing = any_playing
         # send_reply(pipeline, text) shows text on that pipeline's device as an
         # announcement; the winner's answer goes to the speakerless devices that lost
         # its phrase (run_event).
@@ -124,7 +129,7 @@ class WakeArbiter:
 
     def register(self, pipeline, token) -> None:
         """Take a wake run of `pipeline` into arbitration. Its verdict arrives as
-        pipeline.arbitration_verdict(token, won), possibly before this returns."""
+        pipeline.arbitration_verdict(token, won, together=...), possibly before this returns."""
         loop = asyncio.get_running_loop()
         if not self._open:
             now = time.monotonic()
@@ -262,5 +267,10 @@ class WakeArbiter:
             )
             + f" -> {kept}"
         )
+        # Several devices woke on one phrase: the wake is real, so the winner's phrase
+        # needs no wake word in its own transcript. Not while a device plays: the phrases
+        # then carry its answer's voice — one saying «Захар» itself, or ahead of the
+        # owner's «Захар, стоп» — and the transcript check is what drops them.
+        together = len(scored) > 1 and not self._any_playing()
         for _, p, token in scored:
-            p.arbitration_verdict(token, p is winner)
+            p.arbitration_verdict(token, p is winner, together=together)

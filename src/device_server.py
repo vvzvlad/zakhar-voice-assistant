@@ -996,7 +996,8 @@ class DeviceManager:
         self.arbiter = WakeArbiter(
             online_count=lambda: sum(1 for d in self.clients if d.online),
             online_pipelines=lambda: [d.pipeline for d in self.clients if d.online],
-            send_reply=self._send_reply)
+            send_reply=self._send_reply,
+            any_playing=lambda: any(d.conn.playing for d in self.clients if d.online))
 
     def _device(self, name: str) -> Device:
         device = self._devices.get(name)

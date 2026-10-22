@@ -182,7 +182,9 @@ device                                   server
   its end. A lost link drops a proposal. The run log shows the rejected wake as `rejected`, reason
   `wakeword_reject` (`wakeword_error` when the check timed out or failed and its policy rejects).
 - A wake taken at once is confirmed by the wake word in its recognised phrase (when the second
-  wake-word check is off, it is not checked): one of the first
+  wake-word check is off, it is not checked; a wake that keeps a phrase another device's wake
+  was ruled on with, while no device plays a stream, is confirmed by that wake and not checked
+  either): one of the first
   three words of the transcript must start with the `word` of the `wake`, so a wake word fused
   with the next one («захаркоторый час») counts. A phrase without it gets no `transcript` and no
   answer — `state transcribing`, then `state idle` — and the run log shows it as `rejected`,
@@ -194,7 +196,8 @@ device                                   server
   each of them has its pre-roll in, or 500 ms after that device's own `wake`, and, for a `wake`
   over a running answer, the server's second wake-word check has ruled on it; a wake that check
   rejects takes no part. Any other wake takes part as it is and its phrase is checked for the
-  wake word only once it has won, so a false one can win its group and start the cooldown. Once
+  wake word only once it has won (not at all when another wake took part and nothing plays), so
+  a false one can win its group and start the cooldown. Once
   a device with a speaker is ready, a device without one is not waited for: it cannot win. A
   `wake` over a running answer (above) joins at its `wake` like any other, unless a stream is
   playing on that device: such a wake only stops it, so it neither joins a group nor loses in the

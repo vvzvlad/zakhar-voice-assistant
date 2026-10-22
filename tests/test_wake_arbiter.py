@@ -37,7 +37,7 @@ class FakePipeline:
     def awaits_arbitration(self, token):
         return token == self.token and self.waiting
 
-    def arbitration_verdict(self, token, won):
+    def arbitration_verdict(self, token, won, together=False):
         self.verdicts.append(won)
         self.waiting = False
 

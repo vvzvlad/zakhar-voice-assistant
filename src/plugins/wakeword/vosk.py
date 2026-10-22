@@ -177,7 +177,7 @@ class VoskWakewordConfig(BaseModel):
     enabled: bool = Field(
         True,
         title="Wake word verify",
-        description="Checks wakes on the server: one over the device's running answer with offline recognition before the request runs (one over its playing answer only stops it), any other by the wake word in its recognised phrase. Off — every wake passes.",
+        description="Checks wakes on the server: one over the device's running answer with offline recognition before the request runs (one over its playing answer only stops it), any other by the wake word in its recognised phrase, unless another device woke on it too while nothing plays. Off — every wake passes.",
     )
     model_path: str = Field(
         "models/vosk-model-small-ru-0.22",
@@ -191,7 +191,7 @@ class VoskWakewordConfig(BaseModel):
     keywords: list[str] = Field(
         default_factory=lambda: ["захар"],
         title="Keywords",
-        description="Wake words the check over a running answer accepts; empty accepts every such wake. Any other wake is checked for the device's wake word in its phrase.",
+        description="Wake words the check over a running answer accepts; empty accepts every such wake. Any other wake is checked for the device's wake word in its phrase, unless another device woke on it too while nothing plays.",
         json_schema_extra=PHRASE_FIELD_EXTRA,
     )
 

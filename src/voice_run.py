@@ -81,6 +81,10 @@ class Run:
         # (on_audio) or it was closed (_close_followup). None until then.
         self.speech_at: float | None = None
         self.ended_at: float | None = None
+        # Set by the arbiter's verdict when this run won a group in which another device
+        # woke on the same phrase: that confirms the wake, so its transcript needs no wake
+        # word (Pipeline._run).
+        self.woken_together = False
         # Logging only: "receiving audio" once per run; the missing second channel
         # warned once per run.
         self.audio_logged = False

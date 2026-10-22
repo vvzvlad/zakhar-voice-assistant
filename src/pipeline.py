@@ -221,7 +221,8 @@ class Pipeline(SpeechMixin):
         nothing shown on the device, the current run going on untouched — until the
         quick wake-word check confirms it, when it is taken (_take), or rejects it, when
         it ends held (_end_held). Any other wake is taken at once and confirmed later by
-        the wake word in its recognised phrase (_run). A taken run is released (_release)
+        the wake word in its recognised phrase (_run), or by another device's wake ruled
+        on with it while nothing plays (arbitration_verdict). A taken run is released (_release)
         once the arbitration lets it through; one that loses ends held. A released wake
         over the device's playing stream (`over_playback`), checked or not, only stops
         it (_stop_answer). A newer wake replaces a proposal silently."""
@@ -730,7 +731,7 @@ class Pipeline(SpeechMixin):
         run = self._run_of(token)
         return run is not None and run.arbitrating and not run.finalized
 
-    def arbitration_verdict(self, token: int, won: bool) -> None:
+    def arbitration_verdict(self, token: int, won: bool, together: bool = False) -> None:
         """The cross-device arbiter's verdict on the run registered under `token`.
 
         Synchronous, and possibly called inside a call this or another pipeline made
@@ -739,13 +740,16 @@ class Pipeline(SpeechMixin):
         Lost: the run stays held — its device streams the rest of the phrase on,
         keeping the `listening` a taken run was already shown — until its VAD
         end-point, when it ends as a duplicate; a run not taken by then is never taken.
-        Won: the run is released once its wake-word check confirms it (_advance).
+        Won: the run is released once its wake-word check confirms it (_advance);
+        `together` — another device woke in its group — spares its transcript the wake
+        word.
         """
         if not self.awaits_arbitration(token):
             return
         run = self._run_of(token)
         run.arbitrating = False
         run.lost = not won
+        run.woken_together = won and together
         self._advance(run)
 
     async def _record_held(self, run: Run, reason: str, pcm: bytes, pcm2: bytes,
@@ -912,7 +916,9 @@ class Pipeline(SpeechMixin):
         # check on, its wake is confirmed by the wake word in its transcript
         # (has_wake_word, in _gate below). The same switch as the quick check, so with
         # it off a wake on a model of another word (Okay Nabu, Hey Jarvis) still passes.
-        text_checked = (followup is None and not run.over_answer
+        # A wake another device woke with is confirmed by that: one STT drops the wake
+        # word that the other devices' recordings carry.
+        text_checked = (followup is None and not run.over_answer and not run.woken_together
                         and self.gates_wake(run.word))
         pending_run = None
         try:
