@@ -43,9 +43,14 @@ function useAutoGrow(value) {
   const autoGrow = useCallback(() => {
     const el = ref.current;
     if (!el) return;
+    // The "auto" reset shortens the page for a moment, and the page's scroller clamps its
+    // position to the shorter content: put the position back once the height is set.
+    const scroller = el.closest(".z-scroll");
+    const top = scroller?.scrollTop;
     el.style.height = "auto";
     const border = el.offsetHeight - el.clientHeight; // top+bottom borders (no scrollbar with overflow hidden)
     el.style.height = `${el.scrollHeight + border}px`;
+    if (scroller) scroller.scrollTop = top;
   }, []);
   useLayoutEffect(() => { autoGrow(); }, [value, autoGrow]);
   useEffect(() => {
