@@ -32,8 +32,10 @@ RUN mkdir -p data
 COPY src/ src/
 COPY templates/ templates/
 # Every wake-word model (picked per device in the panel) and the VAD model, sent to the speaker at
-# every connection (src/device_server.py). .dockerignore lets only the .tflite files under
-# microWakeWord/ and the ESPHome models' LICENSE/NOTICE into the build context.
+# every connection (src/device_server.py), and the wake-word models' manifests, whose wake word
+# the LLM prompt names (device_server.wake_word_of). .dockerignore lets only the .tflite files
+# under microWakeWord/, those manifests and the ESPHome models' LICENSE/NOTICE into the build
+# context.
 COPY microWakeWord/ microWakeWord/
 COPY main.py .
 

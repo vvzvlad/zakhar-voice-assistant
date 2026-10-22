@@ -84,7 +84,8 @@ describe("Prompt — syntax reference", () => {
     expect(summary.tagName).toBe("SUMMARY");
     const details = summary.closest("details");
     expect(details.open).toBe(false);
-    for (const t of ["The date/time variable", "Preferred voice", "Notation"]) expect(within(details).getByText(t)).toBeInTheDocument();
+    for (const t of ["The date/time variable", "The wake-word variable", "Preferred voice"]) expect(within(details).getByText(t)).toBeInTheDocument();
+    expect(screen.queryByText("Notation")).toBeNull();
     expect(screen.queryByText("Dialog context")).toBeNull();
   });
 });
@@ -156,6 +157,42 @@ describe("one Save per page", () => {
     fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
     await waitFor(() => expect(updatePromptProfile).toHaveBeenCalledWith(1, { text: "hello" }));
     await waitFor(() => expect(screen.queryByTestId("save-bar")).toBeNull());
+    confirm.mockRestore();
+  });
+
+  it("Prompt: the same Save sends an edited system prompt to the config, and the profile's text to its store", async () => {
+    const data = appData({ prompt: { system: "rules" } });
+    // The real patch() refreshes the catalog with the stored value.
+    data.patch.mockImplementation(async (p) => { data.catalog.core.values.prompt.system = p.core.prompt.system; });
+    useAppData.mockReturnValue(data);
+    getPromptProfile.mockResolvedValue({ id: 1, name: "default", text: "hi" });
+    render(<Prompt />);
+    fireEvent.change(await screen.findByDisplayValue("rules"), { target: { value: "new rules" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(data.patch).toHaveBeenCalledWith({ core: { prompt: { system: "new rules" } } }));
+    expect(updatePromptProfile).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.queryByTestId("save-bar")).toBeNull());
+    fireEvent.change(screen.getByDisplayValue("hi"), { target: { value: "hello" } });
+    fireEvent.change(screen.getByDisplayValue("new rules"), { target: { value: "newer rules" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(updatePromptProfile).toHaveBeenCalledWith(1, { text: "hello" }));
+    expect(data.patch).toHaveBeenLastCalledWith({ core: { prompt: { system: "newer rules" } } });
+    await waitFor(() => expect(screen.queryByTestId("save-bar")).toBeNull());
+  });
+
+  it("Prompt: Reload drops an unsaved system prompt edit back to the stored text", async () => {
+    const data = appData({ prompt: { system: "rules" } });
+    useAppData.mockReturnValue(data);
+    getPromptProfile.mockResolvedValue({ id: 1, name: "default", text: "hi" });
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    render(<Prompt />);
+    fireEvent.change(await screen.findByDisplayValue("rules"), { target: { value: "new rules" } });
+    fireEvent.click(screen.getByRole("button", { name: "Reload" }));
+    expect(confirm).toHaveBeenCalledWith("Discard unsaved changes?");
+    expect(await screen.findByDisplayValue("rules")).toBeInTheDocument();
+    expect(data.reload).toHaveBeenCalled();
+    await waitFor(() => expect(screen.queryByTestId("save-bar")).toBeNull());
+    expect(data.patch).not.toHaveBeenCalled();
     confirm.mockRestore();
   });
 });

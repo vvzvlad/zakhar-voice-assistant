@@ -11,9 +11,12 @@ tests/
 .DS_Store
 frontend/node_modules/
 frontend/dist/
-# Only the wake-word and VAD models from the training tree go into the image, with the licenses
-# the ESPHome models are redistributed under.
+# Only the wake-word and VAD models from the training tree go into the image, with the wake-word
+# models' manifests (every one is a zakhar.json under v*/ or sits in esphome/; the other .json
+# files there are training data) and the licenses the ESPHome models are redistributed under.
 microWakeWord/**
 !microWakeWord/**/*.tflite
+!microWakeWord/**/zakhar.json
+!microWakeWord/esphome/*.json
 !microWakeWord/esphome/LICENSE
 !microWakeWord/esphome/NOTICE

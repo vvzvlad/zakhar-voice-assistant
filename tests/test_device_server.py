@@ -18,6 +18,7 @@ import soxr
 
 from src import captures, context, device_server
 from src.config_service import ConfigService
+from src.core_config import DeviceConfig
 from src.device_server import (
     CAPTURE_AUDIO, MIC, MODEL, PLAY, CaptureBusyError, DeviceManager, DeviceOfflineError, NoCaptureError,
 )
@@ -394,6 +395,27 @@ def test_an_uploaded_wake_model_is_named_by_its_stem(tmp_path, monkeypatch):
 
 def test_the_release_wake_model_is_a_model_of_the_repo():
     assert device_server.RELEASE_WAKE_MODEL in device_server.wake_model_files()
+
+
+def test_the_wake_word_is_read_from_the_manifest_next_to_the_model(tmp_path):
+    model = tmp_path / "alexa.tflite"
+    model.write_bytes(b"")
+    cfg = DeviceConfig(name="kitchen", wake_model=str(model))
+    assert device_server.wake_word_of(cfg) is None  # no manifest
+    (tmp_path / "alexa.json").write_text(json.dumps({"type": "micro", "wake_word": "Alexa"}))
+    assert device_server.wake_word_of(cfg) == "Alexa"
+    assert device_server.wake_word_of(None) is None
+    # The release default resolves through the repo's own model.
+    assert device_server.wake_word_of(DeviceConfig(name="kitchen")) == "Захар"
+
+
+async def test_a_devices_pipeline_names_the_wake_word_of_its_current_model(srv, tmp_path):
+    pipeline = srv.device().pipeline
+    assert pipeline.wake_word() is None  # the fixture's release model has no manifest
+    (tmp_path / "alexa.tflite").write_bytes(b"")
+    (tmp_path / "alexa.json").write_text(json.dumps({"wake_word": "Alexa"}))
+    srv.svc.apply({"core": {"devices": [{"name": "kitchen", "wake_model": str(tmp_path / "alexa.tflite")}]}})
+    assert pipeline.wake_word() == "Alexa"
 
 
 async def test_wake_session_end_to_end(srv, tmp_path):

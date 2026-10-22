@@ -2240,6 +2240,18 @@ async def test_llm_request_carries_assembled_prompt_and_device(tmp_path, monkeyp
     assert req.user_text == "включи свет"
 
 
+def test_llm_request_names_the_wake_word_of_the_model_else_the_wake(tmp_path, monkeypatch):
+    # The model's wake word (the device server's wake_word hook) goes into the prompt;
+    # a model without a manifest falls back to the word the device reported in its wake.
+    pipeline, _ = make_pipeline(tmp_path, monkeypatch)
+    pipeline.rt.core.prompt.system = "WAKE «<<<<<WAKE_WORD>>>>>»"
+    pipeline.on_wake("cid", "Алекса")
+    pipeline.wake_word = lambda: "Екатерина"
+    assert pipeline._llm_request("x").system_prompt.startswith("WAKE «Екатерина»\n\n")
+    pipeline.wake_word = lambda: None
+    assert pipeline._llm_request("x").system_prompt.startswith("WAKE «Алекса»\n\n")
+
+
 async def test_llm_backend_hot_swap_applies_on_next_run(tmp_path, monkeypatch):
     # The pipeline constructs a fresh LlmStage per run from rt.llm_backends, so
     # swapping the backend on the runtime (what the reconfigurator does on an

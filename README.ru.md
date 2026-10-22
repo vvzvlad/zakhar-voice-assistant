@@ -221,7 +221,9 @@ docker compose pull && docker compose up -d
   `http://<host>:8201/api/assistant-tasks/reply`, там ответ сохраняется и звучит на колонке,
   с которой пришла задача),
   `prompt.system_prompt_path` (только legacy-сид — промпты теперь живут как
-  именованные профили в `data/prompts.db`), `agent_mcp` (enabled — обращённый к
+  именованные профили в `data/prompts.db`), `prompt.system` (системный слой перед
+  каждым профилем; `<<<<<WAKE_WORD>>>>>` / `<<<<<TDW>>>>>` заменяются словом активации
+  модели устройства и датой/временем), `agent_mcp` (enabled — обращённый к
   агенту MCP-эндпоинт, отдаваемый панелью на `/mcp`), `runs` (enabled /
   retention_days), `reminders` (enabled), `capture` (enabled / dir — сохранять
   каждую реплику в WAV), `ack` (enabled / sound_path — звук конца фразы), `commands`

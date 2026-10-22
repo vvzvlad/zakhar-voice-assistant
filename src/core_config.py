@@ -255,6 +255,9 @@ class DeviceConfig(BaseModel):
 
 class PromptConfig(BaseModel):
     system_prompt_path: str = "data/system_prompt.md"
+    # The system layer of the LLM prompt, the same for every profile: build_system_prompt
+    # puts it before the active profile.
+    system: str = Field("", json_schema_extra={"widget": "textarea"})
 
 
 class RunsConfig(BaseModel):

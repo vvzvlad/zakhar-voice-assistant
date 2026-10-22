@@ -117,7 +117,8 @@ class Pipeline(SpeechMixin):
         # runs every wake unarbitrated. take_session(cid) and end_wake(cid) (sync): the
         # run of the wake that proposed session `cid` is taken (the session starts, the
         # playback is dropped) or ends without being taken (the device is refused that
-        # number; the running session goes on).
+        # number; the running session goes on). wake_word() (sync): the wake word of the
+        # model the device runs, from the model's manifest; None when it is unknown.
         self.send_event = None
         self.play = None
         self.has_speaker = False
@@ -125,6 +126,7 @@ class Pipeline(SpeechMixin):
         self.arbiter = None
         self.take_session = lambda cid: None
         self.end_wake = lambda cid: None
+        self.wake_word = lambda: None
 
         self._init_speech()
 
@@ -792,9 +794,12 @@ class Pipeline(SpeechMixin):
 
     def _llm_request(self, text: str) -> llm.LlmRequest:
         """A handler's input for `text`: the assembled system prompt (a SQLite read
-        of the active profile), the context history and the originating device."""
+        of the active profile), the context history and the originating device. The
+        prompt's wake word is the device model's, else the word the device reported in
+        its latest wake (an uploaded model has no manifest)."""
+        wake_word = self.wake_word() or (self._current.word if self._current is not None else None)
         return llm.LlmRequest(
-            system_prompt=build_system_prompt(self.core, self.prompt_store),
+            system_prompt=build_system_prompt(self.core, self.prompt_store, wake_word),
             history=context.load_context(
                 self._context_path,
                 max_turns=self.core.context.max_turns,

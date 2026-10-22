@@ -29,7 +29,16 @@ function ProfileNameModal({ title, initial, onSave, onClose, busyErr }) {
   </Modal>;
 }
 
+// The prompt editors' textarea: grown to its content by Prompt's autoGrow.
+const EDITOR_STYLE = { width: "100%", minHeight: 560, resize: "none", overflow: "hidden", boxSizing: "border-box", border: "1px solid var(--line)", borderRadius: 8, padding: "13px 15px", fontFamily: "var(--mono)", fontSize: 12.5, lineHeight: 1.65, color: "var(--ink)", outline: "none", background: "var(--panel2)" };
+
 export function Prompt() {
+  const { catalog, reload, patch } = useAppData();
+  // The system prompt (core.prompt.system), the same for every profile: `sysText` is
+  // its unsaved edit, null while it equals the stored value.
+  const sysStored = catalog.core.values.prompt?.system ?? "";
+  const [sysText, setSysText] = useState(null);
+  const sysDraft = sysText ?? sysStored;
   // Named prompt profiles: the list (summaries + active_id) drives the selector;
   // `selected` is the full profile whose text sits in the editor. The ACTIVE
   // profile is what the pipeline uses — selecting/editing never switches it,
@@ -75,44 +84,68 @@ export function Prompt() {
   }, [refreshProfiles, openProfile]);
   useEffect(() => { load(); }, [load]);
 
-  // Resize the editor textarea to fit its content so the whole prompt is visible
+  // Resize the editor textareas to fit their content so the whole prompt is visible
   // without an inner scrollbar. Reset to "auto" first so scrollHeight reflects the
   // content height, not the current box; then add the vertical border so border-box
   // sizing leaves no clipped or overflowing pixels.
   const taRef = useRef(null);
+  const sysRef = useRef(null);
   const autoGrow = useCallback(() => {
-    const el = taRef.current;
-    if (!el) return;
-    el.style.height = "auto";
-    const border = el.offsetHeight - el.clientHeight; // top+bottom borders (no scrollbar with overflow hidden)
-    el.style.height = `${el.scrollHeight + border}px`;
+    for (const el of [taRef.current, sysRef.current]) {
+      if (!el) continue;
+      el.style.height = "auto";
+      const border = el.offsetHeight - el.clientHeight; // top+bottom borders (no scrollbar with overflow hidden)
+      el.style.height = `${el.scrollHeight + border}px`;
+    }
   }, []);
-  // Recompute height whenever text changes (initial load and every edit) and on
+  // Recompute height whenever a text changes (initial load and every edit) and on
   // window resize, since wrapping (and thus height) depends on the textarea width.
-  useLayoutEffect(() => { autoGrow(); }, [text, autoGrow]);
+  useLayoutEffect(() => { autoGrow(); }, [text, sysDraft, autoGrow]);
   useEffect(() => {
     window.addEventListener("resize", autoGrow);
     return () => window.removeEventListener("resize", autoGrow);
   }, [autoGrow]);
 
-  const dirty = text != null && text !== loaded;
-  // Save persists the SELECTED profile's text (not necessarily the active one),
-  // then refreshes the list so the char counts stay current.
+  const textDirty = text != null && text !== loaded;
+  const sysDirty = sysText != null && sysText !== sysStored;
+  const dirty = textDirty || sysDirty;
+  // Save persists whichever text is dirty: the system prompt through the config, the
+  // SELECTED profile's text (not necessarily the active one) through the prompt store,
+  // then refreshes the list so the char counts stay current. A failed save leaves its
+  // text dirty; the save bar shows the last failure.
   const save = async () => {
-    if (!selected) return;
     setSaving(true); setSaveErr(null);
-    try {
-      await updatePromptProfile(selected.id, { text });
-      setLoaded(text);
-      await refreshProfiles();
-    } catch (e) { setSaveErr(e); }
-    finally { setSaving(false); }
+    if (sysDirty) {
+      try {
+        await patch({ core: { prompt: { system: sysText } } });
+        setSysText(null);
+      } catch (e) { setSaveErr(e); }
+    }
+    if (textDirty && selected) {
+      try {
+        await updatePromptProfile(selected.id, { text });
+        setLoaded(text);
+        await refreshProfiles();
+      } catch (e) { setSaveErr(e); }
+    }
+    setSaving(false);
+  };
+
+  // Reload drops both unsaved texts: the profiles from the prompt store, the system
+  // prompt from a fresh catalog.
+  const reloadAll = async () => {
+    if (!confirmDiscard(dirty)) return;
+    setSysText(null);
+    load(selected?.id);
+    try { await reload(); } catch (e) { setErr(e); }
   };
 
   // --- profile bar actions ---------------------------------------------------
+  // Switching or creating a profile replaces only the profile's text: the system
+  // prompt's edit stays.
   const selectProfile = async (id) => {
     if (!selected || id === selected.id) return;
-    if (!confirmDiscard(dirty)) return;
+    if (!confirmDiscard(textDirty)) return;
     try { await openProfile(id); setErr(null); }
     catch (e) { setErr(e); }
   };
@@ -174,8 +207,6 @@ export function Prompt() {
   };
 
   // All hooks must run before the early-return below to satisfy the rules of hooks.
-  const { catalog, reload } = useAppData();
-
   // Preferred voice parsed from the SELECTED profile's last-saved text (`loaded`),
   // the TTS provider it names and the one speaking now (first enabled variant).
   const voice = parseVoiceMarker(loaded);
@@ -204,7 +235,7 @@ export function Prompt() {
     return () => { alive = false; };
   }, [lookup, vProvider, vField, vId]);
 
-  // The page's one Save persists the prompt text; save() keeps its own error, so it never rejects.
+  // The page's one Save persists both texts; save() keeps its own error, so it never rejects.
   const form = { dirty, saving, save };
 
   if (text == null || profiles == null) {
@@ -230,8 +261,17 @@ export function Prompt() {
 
   return <FormPage form={form} narrow errors={errorLines(saveErr)}>
     <PageHeader title="System Prompt"
-      desc="Zakhar's character, rules and answer format. Keep several named profiles and activate the one the assistant should use. The placeholder is replaced with live date/time at request time."
-      actions={<button className="z-btn g" onClick={() => { if (confirmDiscard(dirty)) load(selected?.id); }}>Reload</button>} />
+      desc="The system prompt comes first and is the same for every profile: the rules of any character. The profile adds Zakhar's character; keep several named profiles and activate the one the assistant should use. In both texts the placeholders are replaced at request time with the live date/time and the wake word."
+      actions={<button className="z-btn g" onClick={reloadAll}>Reload</button>} />
+    {/* The system prompt, put before the active profile in every request. */}
+    <div style={{ marginBottom: 14 }}>
+      <Card title="System prompt (every profile)">
+        <div style={{ padding: "8px 0" }}>
+          <textarea ref={sysRef} value={sysDraft} onChange={(e) => setSysText(e.target.value)} spellCheck={false}
+            style={{ ...EDITOR_STYLE, minHeight: 160 }} />
+        </div>
+      </Card>
+    </div>
     {/* Profile bar: pick a profile to edit; Activate switches what the pipeline uses.
         The profile's voice switch sits on its own line under the buttons. */}
     <div className="z-card" style={{ marginBottom: 14 }}>
@@ -241,7 +281,7 @@ export function Prompt() {
           <button className="z-btn p" disabled={isActive || profileBusy} onClick={doActivate}
             title={isActive ? "This profile is already active" : "Make this profile the one the assistant uses"}>Activate</button>
           <div style={{ display: "flex", gap: 6, marginLeft: "auto" }}>
-            <button className="z-btn g" onClick={() => { if (confirmDiscard(dirty)) { setModalErr(null); setModal({ mode: "new" }); } }}><Ic n="add" w={14} />New</button>
+            <button className="z-btn g" onClick={() => { if (confirmDiscard(textDirty)) { setModalErr(null); setModal({ mode: "new" }); } }}><Ic n="add" w={14} />New</button>
             <button className="z-btn g" onClick={() => { setModalErr(null); setModal({ mode: "rename" }); }}>Rename</button>
             <button className="z-btn d" disabled={isActive || profileBusy} onClick={doDelete}
               title={isActive ? "The active profile cannot be deleted" : ""}>Delete</button>
@@ -255,7 +295,7 @@ export function Prompt() {
         </div>}
       </div>
     </div>
-    {/* The prompt syntax reference, collapsed: the date/time variable, the voice marker, stress marks. */}
+    {/* The prompt syntax reference, collapsed: the date/time and wake-word variables, the voice marker. */}
     <div className="z-card" style={{ marginBottom: 14 }}><div className="z-card-b">
       <details>
         <summary className="z-disclosure">Syntax</summary>
@@ -266,6 +306,12 @@ export function Prompt() {
           </div>
         </div>
         <div className="z-f">
+          <div className="z-fl"><b>The wake-word variable</b></div>
+          <div className="z-info">
+            <span className="z-paramtag" style={{ fontSize: 11 }}>{"<<<<<WAKE_WORD>>>>>"}</span> is substituted at request time with the <b>wake word</b> of the device's wake-word model, from the model's manifest; for a model without one, the word the device reported.
+          </div>
+        </div>
+        <div className="z-f">
           <div className="z-fl"><b>Preferred voice</b></div>
           <div className="z-info">
             A single line <span className="z-paramtag" style={{ fontSize: 11 }}>{"<<<<<VOICE provider=… field=value>>>>>"}</span> records a preferred TTS voice for this profile.
@@ -273,17 +319,13 @@ export function Prompt() {
             When you activate the profile with the toggle on, this voice is applied to the TTS config. The marker is <b>stripped</b> from the prompt sent to the model.
           </div>
         </div>
-        <div className="z-f">
-          <div className="z-fl"><b>Notation</b></div>
-          <div className="z-info">Stress marks use <b>«+»</b> before the stressed vowel (e.g. «з+амок»).</div>
-        </div>
       </details>
     </div></div>
     <Card right={<span className="sub" style={{ marginLeft: "auto" }}>{selected?.name} · {text.length} chars</span>} title="Editor"
       foot={err ? <div className="z-foot"><span className="z-dirty" style={{ color: "#b91c1c" }}>{errorLines(err).join(" · ")}</span></div> : undefined}>
       <div style={{ padding: "8px 0" }}>
         <textarea ref={taRef} value={text} onChange={(e) => setText(e.target.value)} spellCheck={false}
-          style={{ width: "100%", minHeight: 560, resize: "none", overflow: "hidden", boxSizing: "border-box", border: "1px solid var(--line)", borderRadius: 8, padding: "13px 15px", fontFamily: "var(--mono)", fontSize: 12.5, lineHeight: 1.65, color: "var(--ink)", outline: "none", background: "var(--panel2)" }} />
+          style={EDITOR_STYLE} />
       </div>
     </Card>
     {modal?.mode === "new" && <ProfileNameModal title="New profile (copy of the active prompt)"

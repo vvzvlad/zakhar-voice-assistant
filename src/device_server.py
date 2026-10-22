@@ -138,6 +138,22 @@ def _model_paths(cfg) -> dict[str, tuple[str, str]]:
     return {"wake": (wake, wake_model_files().get(wake, wake)), "vad": (vad, vad)}
 
 
+def wake_word_of(cfg) -> str | None:
+    """The wake word of the model a device runs: the `wake_word` of the model's manifest,
+    the .json with the model file's stem next to it (the ESPHome micro-wake-word format).
+    None without a device config or a readable manifest naming the word. Read on every
+    call: the configured model changes at runtime."""
+    if cfg is None:
+        return None
+    try:
+        path = Path(_model_paths(cfg)["wake"][1]).with_suffix(".json")
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    word = manifest.get("wake_word") if isinstance(manifest, dict) else None
+    return word if isinstance(word, str) else None
+
+
 def uploaded_wake_models_dir() -> Path:
     """Where the panel saves uploaded wake-word models: under DATA_DIR, the docker volume, so
     they survive image updates. DATA_DIR is read at call time so tests can monkeypatch it."""
@@ -513,6 +529,7 @@ class Device:
         self.pipeline.play = self.play
         self.pipeline.take_session = self._take_session
         self.pipeline.end_wake = self._end_wake
+        self.pipeline.wake_word = lambda: wake_word_of(self.cfg)
         self.capture: captures.Capture | None = None
         self._capture_watchdog: asyncio.TimerHandle | None = None
         # The device log could not be written last time: warned once until a write succeeds.

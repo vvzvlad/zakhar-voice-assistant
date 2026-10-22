@@ -6,15 +6,18 @@ from src.core_config import CoreConfig
 from src.voice_marker import strip_voice_marker
 
 
-def build_system_prompt(core: CoreConfig, prompt_store) -> str:
-    """Prefix the active profile's text with the current time-of-day and date.
+def build_system_prompt(core: CoreConfig, prompt_store, wake_word: str | None = None) -> str:
+    """The system layer (core.prompt.system), then the active profile's text, then the
+    tool sources' prompts.
 
-    The prompt body is the active profile of `prompt_store` (src.prompt_store
-    .PromptStore over data/prompts.db). Weather DATA is an on-demand MCP tool (see
-    src.builtin_mcp.openweathermap), so the prompt makes no network call and is
-    sync. What we optionally append here is each tool source's descriptive
-    `prompt` block — external MCP servers plus the built-in weather/calendar
-    sources — same as for external MCP servers.
+    The profile is the active one of `prompt_store` (src.prompt_store.PromptStore over
+    data/prompts.db). In both the system layer and the profile <<<<<TDW>>>>> becomes the
+    current date and time and <<<<<WAKE_WORD>>>>> becomes `wake_word` (empty when it is
+    unknown). An empty system layer leaves the profile as the prompt's start. Weather
+    DATA is an on-demand MCP tool (see src.builtin_mcp.openweathermap), so the prompt
+    makes no network call and is sync. What we optionally append here is each tool
+    source's descriptive `prompt` block — external MCP servers plus the built-in
+    weather/calendar sources — same as for external MCP servers.
     """
     now = datetime.now()
     date_time_text = now.strftime("%Y-%m-%d, %H:%M")  # 2025-09-18, 14:05
@@ -22,10 +25,15 @@ def build_system_prompt(core: CoreConfig, prompt_store) -> str:
     day_time = now.strftime("%p")
     prefix = f"Сейчас (дата и время): {date_time_text}, {day_time}, {week_day}.\n"
 
-    system_prompt = prompt_store.active_text()
-    system_prompt = system_prompt.replace("<<<<<TDW>>>>>", prefix)
+    def expand(text: str) -> str:
+        return text.replace("<<<<<TDW>>>>>", prefix).replace("<<<<<WAKE_WORD>>>>>", wake_word or "")
+
+    system_prompt = expand(prompt_store.active_text())
     # Drop the per-profile preferred-voice marker so it never reaches the model.
     system_prompt = strip_voice_marker(system_prompt)
+    system = expand(core.prompt.system).strip()
+    if system:
+        system_prompt = system + "\n\n" + system_prompt
 
     # Append each tool source's non-empty prompt so the model learns what those
     # tools do (one block per source, blank-line separated): external MCP servers

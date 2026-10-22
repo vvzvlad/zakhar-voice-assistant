@@ -4,6 +4,7 @@ from src.core_config import (
     CoreConfig,
     McpServerConfig,
     OpenWeatherMapConfig,
+    PromptConfig,
 )
 from src.prompt import build_system_prompt
 from src.prompt_store import PromptStore
@@ -146,4 +147,27 @@ def test_build_system_prompt_uses_active_profile_not_seed_file(tmp_path):
 
     assert "NEW BODY" in out
     assert "OLD BODY" not in out
+    store.close()
+
+
+def test_build_system_prompt_puts_the_system_layer_before_the_profile(tmp_path):
+    # The system layer opens the prompt, a blank line before the profile; both get the
+    # date/time and the wake word substituted.
+    store = _store(tmp_path, "PROFILE <<<<<WAKE_WORD>>>>> <<<<<TDW>>>>>")
+    core = CoreConfig(prompt=PromptConfig(system="SYSTEM «<<<<<WAKE_WORD>>>>>» <<<<<TDW>>>>>\n"))
+
+    out = build_system_prompt(core, store, "Захар")
+
+    system, profile = out.split("\n\n", 1)
+    assert system.startswith("SYSTEM «Захар» Сейчас (дата и время):")
+    assert profile.startswith("PROFILE Захар Сейчас (дата и время):")
+    assert "<<<<<" not in out
+    store.close()
+
+
+def test_build_system_prompt_an_unknown_wake_word_is_empty(tmp_path):
+    store = _store(tmp_path, "PROFILE «<<<<<WAKE_WORD>>>>>»")
+    core = CoreConfig(prompt=PromptConfig(system="SYSTEM «<<<<<WAKE_WORD>>>>>»"))
+
+    assert build_system_prompt(core, store) == "SYSTEM «»\n\nPROFILE «»"
     store.close()

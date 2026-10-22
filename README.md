@@ -216,7 +216,9 @@ Shape (see `templates/default_config.json` for the full default):
   secret / task_suffix / prompt — long jobs handed to a ZeroClaw assistant through
   its webhook channel; its `send_url` must point at `http://<host>:8201/api/assistant-tasks/reply`,
   where each reply is stored and spoken on the speaker the job came from), `prompt.system_prompt_path`
-  (legacy seed only — prompts now live as named profiles in `data/prompts.db`),
+  (legacy seed only — prompts now live as named profiles in `data/prompts.db`), `prompt.system`
+  (the system layer put before every profile; `<<<<<WAKE_WORD>>>>>` / `<<<<<TDW>>>>>` are
+  replaced with the device model's wake word and the date/time),
   `agent_mcp` (enabled — the agent-facing MCP endpoint served by the panel at `/mcp`),
   `runs` (enabled / retention_days),
   `reminders` (enabled), `capture` (enabled / dir — save every utterance as WAV),
