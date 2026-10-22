@@ -437,3 +437,26 @@ async def test_a_window_whose_device_woke_in_the_group_does_not_keep_the_phrase(
         await settle(p)
     rec = store.records[-1]
     assert (rec["result"], rec["reason"]) == ("ok", "endpoint")
+
+
+async def test_a_wake_over_the_playing_answer_stops_it_inside_another_devices_cooldown(
+        tmp_path, monkeypatch):
+    # The panel's lone wake has just won its group; the speaker's wake over its own playing
+    # answer arrives inside that group's cooldown. It keeps no phrase, so it takes no part
+    # in the arbitration: once its check confirms it, it stops the answer.
+    patch_llm(monkeypatch)
+    store = FakeRunsStore()
+    speaker, _ = make_pipeline(tmp_path, monkeypatch, name="speaker", runs_store=store)
+    panel, _ = make_pipeline(tmp_path, monkeypatch, name="panel")
+    panel.has_speaker = False
+    speaker.rt.wakeword_backend = FakeWakewordVerifier(accepted=True, window_ms=100)
+    speaker.arbiter = panel.arbiter = WakeArbiter(online_count=lambda: 1)
+    install_phrase_vad(speaker)
+
+    panel.on_wake("cid", WAKE)
+    speaker.on_wake("cid", WAKE, over_answer=True, over_playback=True)
+    await speaker.on_audio(PHRASE[:HEAD_BYTES])
+    await settle(speaker)
+    await speaker.on_audio(PHRASE[HEAD_BYTES:])
+    await settle(speaker)
+    assert (store.records[-1]["result"], store.records[-1]["reason"]) == ("ok", "wake_stop")

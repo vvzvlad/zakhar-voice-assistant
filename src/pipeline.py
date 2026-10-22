@@ -212,7 +212,10 @@ class Pipeline(SpeechMixin):
     def on_wake(self, cid, word, over_answer: bool = False, over_playback: bool = False) -> None:
         """A wake of the device: propose its run (docs/device-protocol.md, "Voice session").
 
-        Synchronous. The run registers with the cross-device arbitration at once. A
+        Synchronous. The run registers with the cross-device arbitration at once,
+        unless it is over the device's playing stream (`over_playback`): such a wake
+        only stops that stream and keeps no phrase, so no other device's wake competes
+        with it and it never loses as a duplicate. A
         wake over the device's own answer or open session (`over_answer`, which the
         check is told) may be the device's own voice: it is held — its audio buffered,
         nothing shown on the device, the current run going on untouched — until the
@@ -235,7 +238,7 @@ class Pipeline(SpeechMixin):
             # Not checked here (not over an answer, check disabled/None/passthrough, no
             # wake word): its verdict is in.
             run.verdict = True
-        if word and self.arbiter is not None:
+        if word and self.arbiter is not None and not over_playback:
             self._arbitration_token += 1
             run.token = self._arbitration_token
             run.arbitrating = True
