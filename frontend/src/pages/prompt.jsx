@@ -1,7 +1,7 @@
 import React, { useEffect, useLayoutEffect, useState, useCallback, useRef } from "react";
 import { Ic } from "../components/icons.jsx";
 import {
-  Card, Field, PageHeader, FormPage, Pill, Modal, Loading, Select, Toggle,
+  Card, Field, PageHeader, FormPage, Pill, Modal, Loading,
 } from "../components/primitives.jsx";
 import { parseVoiceMarker, voiceField, voiceName, differsFromVoice } from "../voiceMarker.js";
 import { useAppData } from "../appData.jsx";
@@ -27,6 +27,34 @@ function ProfileNameModal({ title, initial, onSave, onClose, busyErr }) {
       {busyErr && <div className="z-fh" style={{ color: "#b91c1c" }}>{errorLines(busyErr).join(" · ")}</div>}
     </Field>
   </Modal>;
+}
+
+// The editor header's "⋯" button and its menu of `items` ({label, onClick, danger,
+// disabled}); the menu closes on a click outside it, when focus leaves it, on Escape
+// (focus goes back to the button) and once an item is picked. A mousedown in the menu
+// keeps the focus where it is, so a browser that does not focus a clicked button
+// (Safari) does not blur the menu away before the click lands.
+function MoreMenu({ items }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+  const btnRef = useRef(null);
+  useEffect(() => {
+    if (!open) return undefined;
+    const outside = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    const escape = (e) => { if (e.key === "Escape") { setOpen(false); btnRef.current?.focus(); } };
+    document.addEventListener("pointerdown", outside);
+    document.addEventListener("keydown", escape);
+    return () => { document.removeEventListener("pointerdown", outside); document.removeEventListener("keydown", escape); };
+  }, [open]);
+  return <div className="z-menuwrap" ref={ref}
+    onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) setOpen(false); }}>
+    <button ref={btnRef} type="button" className="z-btn g sm" aria-label="More actions" aria-haspopup="menu" aria-expanded={open}
+      onClick={() => setOpen((o) => !o)}>⋯</button>
+    {open && <div className="z-menu" role="menu" onMouseDown={(e) => e.preventDefault()}>
+      {items.map((it) => <button key={it.label} type="button" role="menuitem" className={it.danger ? "d" : undefined}
+        disabled={it.disabled} onClick={() => { setOpen(false); it.onClick(); }}>{it.label}</button>)}
+    </div>}
+  </div>;
 }
 
 // The prompt editors' textarea: grown to its content by useAutoGrow.
@@ -139,10 +167,10 @@ export function SystemPrompt() {
 // The character prompt: named profiles of Zakhar's character, one of them active.
 export function Prompt() {
   const { catalog, reload } = useAppData();
-  // Named prompt profiles: the list (summaries + active_id) drives the selector;
+  // Named prompt profiles: the list (summaries + active_id) drives the profiles column;
   // `selected` is the full profile whose text sits in the editor. The ACTIVE
   // profile is what the pipeline uses — selecting/editing never switches it,
-  // only the explicit Activate button does.
+  // only the explicit Make active button does.
   const [profiles, setProfiles] = useState(null);  // null = loading
   const [activeId, setActiveId] = useState(null);
   const [selected, setSelected] = useState(null);  // {id,name,...} of the editor's profile
@@ -154,8 +182,8 @@ export function Prompt() {
   const [modal, setModal] = useState(null);        // {mode:'new'|'rename'} | null
   const [modalErr, setModalErr] = useState(null);
   const [profileBusy, setProfileBusy] = useState(false);
-  // Default ON when a marker is present: activating that profile then also applies
-  // its preferred voice (convenient). Hidden entirely when no marker exists.
+  // The "with voice" box next to Make active, checked by default: activating the
+  // profile then also applies its preferred voice. Absent when the profile has no marker.
   const [applyVoice, setApplyVoice] = useState(true);
 
   const refreshProfiles = useCallback(async () => {
@@ -200,7 +228,7 @@ export function Prompt() {
     finally { setSaving(false); }
   };
 
-  // --- profile bar actions ---------------------------------------------------
+  // --- profile actions --------------------------------------------------------
   const selectProfile = async (id) => {
     if (!selected || id === selected.id) return;
     if (!confirmDiscard(dirty)) return;
@@ -265,33 +293,40 @@ export function Prompt() {
   };
 
   // All hooks must run before the early-return below to satisfy the rules of hooks.
-  // Preferred voice parsed from the SELECTED profile's last-saved text (`loaded`),
-  // the TTS provider it names and the one speaking now (first enabled variant).
+  // Preferred voice parsed from the SELECTED profile's last-saved text (`loaded`)
+  // and the TTS provider speaking now (first enabled variant).
   const voice = parseVoiceMarker(loaded);
   const ttsCat = catalog.categories?.find((c) => c.id === "tts");
   const ttsProv = (id) => ttsCat?.providers.find((p) => p.id === id);
-  const markerProv = voice && ttsProv(voice.provider);
   const current = ttsCat?.variants?.find((v) => v.enabled)?.provider;
-  // An opaque voice id (one whose name the TTS form keeps in "<field>_label") that
-  // is not the provider's current voice is named by the options the form picks it from.
-  const vField = voiceField(voice);
-  const vId = vField ? voice.fields[vField] : "";
-  const vValues = markerProv?.values || {};
-  const lookup = !!(vField && markerProv?.schema?.properties?.[`${vField}_label`])
-    && !(vValues[vField] === vId && vValues[`${vField}_label`]);
-  const vProvider = voice?.provider;
-  const [found, setFound] = useState(null);   // {id, name} from the options endpoint
+  // Each row names its profile's voice (the list carries every profile's parsed marker).
+  // An opaque voice id (one whose name the TTS form keeps in "<field>_label") that is not
+  // its provider's current voice is named by the options the form picks it from, fetched
+  // once per provider and field.
+  const lookupKey = (v) => `${v.provider}/${voiceField(v)}`;
+  const needsLookup = (v) => {
+    const f = voiceField(v);
+    const prov = f && ttsProv(v.provider);
+    const values = prov?.values || {};
+    return !!prov?.schema?.properties?.[`${f}_label`] && !(values[f] === v.fields[f] && values[`${f}_label`]);
+  };
+  // The distinct keys as one string, so the effect runs again only when the set changes.
+  const lookups = [...new Set((profiles || []).map((p) => p.voice).filter(needsLookup).map(lookupKey))].sort().join(" ");
+  const [names, setNames] = useState({});   // lookupKey -> {voice id: name} from the options endpoint
   useEffect(() => {
-    if (!lookup) return undefined;
+    if (!lookups) return undefined;
     let alive = true;
-    getOptions("tts", vProvider, vField)
-      .then((r) => {
-        const hit = (r.options || []).find((o) => o && o.value === vId);
-        if (alive && hit) setFound({ id: vId, name: hit.label });
-      })
-      .catch(() => { /* named by its id */ });
+    for (const key of lookups.split(" ")) {
+      const [provider, field] = key.split("/");
+      getOptions("tts", provider, field)
+        .then((r) => {
+          const byId = Object.fromEntries((r.options || []).filter(Boolean).map((o) => [o.value, o.label]));
+          if (alive) setNames((n) => ({ ...n, [key]: byId }));
+        })
+        .catch(() => { /* named by its id */ });
+    }
     return () => { alive = false; };
-  }, [lookup, vProvider, vField, vId]);
+  }, [lookups]);
 
   // The page's one Save persists the prompt text; save() keeps its own error, so it never rejects.
   const form = { dirty, saving, save };
@@ -307,61 +342,82 @@ export function Prompt() {
     return <div className="z-page"><div className="z-card"><Loading /></div></div>;
   }
 
-  // Selector options: the active profile is visibly marked.
   const isActive = selected?.id === activeId;
-  const profileOptions = profiles.map((p) => ({
-    value: p.id,
-    label: p.id === activeId ? `● ${p.name} (active)` : p.name,
-  }));
-  const voiceText = voice && [markerProv?.label || voice.provider,
-    voiceName(voice, vValues, found?.id === vId ? found.name : undefined)].join(" · ");
+  // A profile's voice for its row: `text` is "<provider label> · <voice name>", the way the
+  // TTS form names it; a voice named only by a long id shows its first 8 characters, and
+  // `longId` holds the whole id for the row's title.
+  const voiceOf = (v) => {
+    const prov = ttsProv(v.provider);
+    const f = voiceField(v);
+    const name = voiceName(v, prov?.values || {}, names[lookupKey(v)]?.[v.fields[f]]);
+    const longId = f && name === v.fields[f] && name.length > 12 ? name : undefined;
+    return { text: [prov?.label || v.provider, longId ? `${name.slice(0, 8)}…` : name].join(" · "), longId };
+  };
   const voiceDiffers = differsFromVoice(voice, current, ttsProv(current)?.values);
+  const menuItems = [{ label: "Rename…", onClick: () => { setModalErr(null); setModal({ mode: "rename" }); } }];
+  if (!isActive) menuItems.push({ label: "Delete", danger: true, disabled: profileBusy, onClick: doDelete });
 
-  return <FormPage form={form} narrow errors={errorLines(saveErr)}>
+  return <FormPage form={form} errors={errorLines(saveErr)}>
     <PageHeader title="Character Prompt"
       desc="Zakhar's character, added after the system prompt. Keep several named profiles and activate the one the assistant should use. The placeholders are replaced at request time with the live date/time, the wake word and the assistant's memory."
       actions={<button className="z-btn g" onClick={() => { if (confirmDiscard(dirty)) load(selected?.id); }}>Reload</button>} />
-    {/* Profile bar: pick a profile to edit; Activate switches what the pipeline uses.
-        The profile's voice switch sits on its own line under the buttons. */}
-    <div className="z-card" style={{ marginBottom: 14 }}>
-      <div className="z-card-b" style={{ display: "flex", flexDirection: "column", gap: 10, padding: "10px 14px" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-          <Select w={260} value={selected?.id} options={profileOptions} onChange={selectProfile} />
-          <button className="z-btn p" disabled={isActive || profileBusy} onClick={doActivate}
-            title={isActive ? "This profile is already active" : "Make this profile the one the assistant uses"}>Activate</button>
-          <div style={{ display: "flex", gap: 6, marginLeft: "auto" }}>
-            <button className="z-btn g" onClick={() => { if (confirmDiscard(dirty)) { setModalErr(null); setModal({ mode: "new" }); } }}><Ic n="add" w={14} />New</button>
-            <button className="z-btn g" onClick={() => { setModalErr(null); setModal({ mode: "rename" }); }}>Rename</button>
-            <button className="z-btn d" disabled={isActive || profileBusy} onClick={doDelete}
-              title={isActive ? "The active profile cannot be deleted" : ""}>Delete</button>
-          </div>
+    {/* The profiles column: a row opens its profile in the editor on the right. */}
+    <div className="z-prompt">
+      <div className="z-card z-profiles">
+        <div className="z-profiles-h">Profiles
+          <button type="button" className="z-btn g sm" aria-label="New profile"
+            onClick={() => { if (confirmDiscard(dirty)) { setModalErr(null); setModal({ mode: "new" }); } }}><Ic n="add" w={13} /></button>
         </div>
-        {voice && <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}
-          title="Apply this profile's preferred TTS voice when activating">
-          <Toggle on={applyVoice} onChange={setApplyVoice} sm />
-          <span className="sub" data-testid="marker-voice">Apply voice on activate: {voiceText}</span>
-          {voiceDiffers && <Pill tone="warn">differs from current TTS voice</Pill>}
-        </div>}
+        {profiles.map((p) => {
+          const pv = p.voice && voiceOf(p.voice);
+          return <button key={p.id} type="button" className={"z-prof" + (p.id === selected?.id ? " on" : "")}
+            aria-current={p.id === selected?.id ? "true" : undefined} title={pv?.longId} onClick={() => selectProfile(p.id)}>
+            <span className="n">{p.name}{p.id === activeId && <Pill tone="good">Active</Pill>}</span>
+            <span className="v">{[pv?.text, `${p.chars} chars`].filter(Boolean).join(" · ")}</span>
+          </button>;
+        })}
+      </div>
+      <div style={{ minWidth: 0 }}>
+        {/* The syntax reference: the variables, then the profile's voice marker. */}
+        <SyntaxCard>
+          <div className="z-f">
+            <div className="z-fl"><b>Preferred voice</b></div>
+            <div className="z-info">
+              A single line <span className="z-paramtag" style={{ fontSize: 11 }}>{"<<<<<VOICE provider=… field=value>>>>>"}</span> records a preferred TTS voice for this profile.
+              The first pair <b>provider=</b> picks the TTS provider; the rest map to its fields (e.g. <span className="z-paramtag" style={{ fontSize: 11 }}>{"<<<<<VOICE provider=yandex voice=zahar>>>>>"}</span>).
+              When you activate the profile with "with voice" checked, this voice is applied to the TTS config. The marker is <b>stripped</b> from the prompt sent to the model.
+            </div>
+          </div>
+        </SyntaxCard>
+        {/* The editor's header holds the selected profile's state and actions; on a narrow
+            card the actions drop under the name. */}
+        <div className="z-card">
+          <div className="z-card-h" style={{ flexWrap: "wrap" }}>
+            <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 8, minWidth: 0 }}>
+              <b style={{ overflowWrap: "anywhere" }}>{selected?.name}</b>
+              {isActive && <Pill tone="good">Active</Pill>}
+              {voiceDiffers && <Pill tone="warn">differs from current TTS voice</Pill>}
+            </div>
+            <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 8, marginLeft: "auto" }}>
+              <span className="sub">{text.length} chars</span>
+              {!isActive && <button type="button" className="z-btn p sm" disabled={profileBusy} onClick={doActivate}
+                title="Make this profile the one the assistant uses">Make active</button>}
+              {!isActive && voice && <label className="z-check" title="Apply this profile's preferred TTS voice when activating">
+                <input type="checkbox" checked={applyVoice} onChange={(e) => setApplyVoice(e.target.checked)} />with voice
+              </label>}
+              <MoreMenu items={menuItems} />
+            </div>
+          </div>
+          <div className="z-card-b">
+            <div style={{ padding: "8px 0" }}>
+              <textarea ref={taRef} value={text} onChange={(e) => setText(e.target.value)} spellCheck={false}
+                style={EDITOR_STYLE} />
+            </div>
+          </div>
+          {err && <div className="z-foot"><span className="z-dirty" style={{ color: "#b91c1c" }}>{errorLines(err).join(" · ")}</span></div>}
+        </div>
       </div>
     </div>
-    {/* The syntax reference: the variables, then the profile's voice marker. */}
-    <SyntaxCard>
-      <div className="z-f">
-        <div className="z-fl"><b>Preferred voice</b></div>
-        <div className="z-info">
-          A single line <span className="z-paramtag" style={{ fontSize: 11 }}>{"<<<<<VOICE provider=… field=value>>>>>"}</span> records a preferred TTS voice for this profile.
-          The first pair <b>provider=</b> picks the TTS provider; the rest map to its fields (e.g. <span className="z-paramtag" style={{ fontSize: 11 }}>{"<<<<<VOICE provider=yandex voice=zahar>>>>>"}</span>).
-          When you activate the profile with the toggle on, this voice is applied to the TTS config. The marker is <b>stripped</b> from the prompt sent to the model.
-        </div>
-      </div>
-    </SyntaxCard>
-    <Card right={<span className="sub" style={{ marginLeft: "auto" }}>{selected?.name} · {text.length} chars</span>} title="Editor"
-      foot={err ? <div className="z-foot"><span className="z-dirty" style={{ color: "#b91c1c" }}>{errorLines(err).join(" · ")}</span></div> : undefined}>
-      <div style={{ padding: "8px 0" }}>
-        <textarea ref={taRef} value={text} onChange={(e) => setText(e.target.value)} spellCheck={false}
-          style={EDITOR_STYLE} />
-      </div>
-    </Card>
     {modal?.mode === "new" && <ProfileNameModal title="New profile (copy of the active prompt)"
       onSave={doCreate} onClose={() => setModal(null)} busyErr={modalErr} />}
     {modal?.mode === "rename" && <ProfileNameModal title="Rename profile" initial={selected?.name}

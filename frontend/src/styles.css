@@ -400,6 +400,30 @@ details.z-card[open]>summary .z-chev{transform:none;}
 .z-cols{display:grid;grid-template-columns:1fr 320px;gap:18px;align-items:start;}
 .z-cols.even{grid-template-columns:1fr 1fr;}
 @media (max-width:1180px){.z-cols,.z-cols.even{grid-template-columns:1fr;}}
+/* Character Prompt: the profiles column beside the syntax and editor cards. Below 1000px
+   (the sidebar keeps its 212px down to 820px) the profiles stack above them, so the
+   editor never narrows to a strip. */
+.z-prompt{display:grid;grid-template-columns:250px minmax(0,1fr);gap:14px;align-items:start;}
+.z-profiles{display:flex;flex-direction:column;padding:6px;}
+.z-profiles-h{display:flex;align-items:center;justify-content:space-between;padding:6px 8px 8px;font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--mut2);}
+.z-prof{display:flex;flex-direction:column;gap:2px;width:100%;padding:8px 10px;border:none;border-radius:7px;background:none;font:inherit;color:var(--ink);text-align:left;cursor:pointer;}
+.z-prof:hover{background:var(--panel2);}
+.z-prof.on{background:var(--acc-bg);}
+.z-prof .n{display:flex;align-items:center;gap:6px;font-weight:600;overflow-wrap:anywhere;}
+.z-prof.on .n{color:var(--acc-ink);}
+.z-prof .n .z-pill{margin-left:auto;padding:2px 8px;font-size:10.5px;}
+.z-prof .v{color:var(--mut);font-size:11.5px;overflow-wrap:anywhere;}
+@media (max-width:1000px){.z-prompt{grid-template-columns:minmax(0,1fr);}}
+/* A "with voice"-style checkbox beside a button. */
+.z-check{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--ink2);cursor:pointer;white-space:nowrap;}
+.z-check input{margin:0;accent-color:var(--acc);}
+/* A "⋯" button's menu of actions, under the button's right edge. */
+.z-menuwrap{position:relative;}
+.z-menu{position:absolute;right:0;top:calc(100% + 4px);z-index:20;min-width:150px;display:flex;flex-direction:column;padding:4px;background:var(--panel);border:1px solid var(--line);border-radius:8px;box-shadow:0 8px 24px rgba(16,24,40,.12);}
+.z-menu button{padding:7px 10px;border:none;border-radius:5px;background:none;font:inherit;font-weight:500;color:var(--ink2);text-align:left;cursor:pointer;}
+.z-menu button:hover:not(:disabled){background:var(--panel2);}
+.z-menu button.d{color:var(--bad);}
+.z-menu button:disabled{opacity:.45;cursor:default;}
 .z-info{font-size:12px;color:var(--ink2);line-height:1.6;}
 .z-info b{font-weight:600;}
 .z-diagram{background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:13px;}

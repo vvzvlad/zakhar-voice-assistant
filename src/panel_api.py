@@ -683,8 +683,9 @@ class PanelServer:
         except ValueError:
             return {"voice_error": f"unknown TTS provider {parsed['provider']!r}"}
         allowed = set(prov.ConfigModel.model_fields)
-        variants = self.svc.document()["tts"]["variants"]
-        patch = build_voice_patch(parsed["provider"], parsed["fields"], allowed, variants)
+        tts = self.svc.document()["tts"]
+        patch = build_voice_patch(parsed["provider"], parsed["fields"], allowed, tts["variants"],
+                                  current=tts["instances"].get(parsed["provider"], {}))
         try:
             self.svc.apply(patch)
         except (ValidationError, ValueError) as e:
