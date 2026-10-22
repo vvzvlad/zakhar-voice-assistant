@@ -13,7 +13,12 @@ winner's answer as an announcement, a `reply` without `session` (run_event).
 A group of wakes is collected for WINDOW_MS (less
 once every online device has woken; a lone online device is not held) and ruled on:
 a device with a speaker over one without, between equals the higher signal-to-noise
-ratio of the pre-roll, then the earlier wake. For COOLDOWN_MS
+ratio of the pre-roll, then the earlier wake. An online device that is no candidate
+but whose follow-up window already hears speech — its VAD heard it at most COOLDOWN_MS
+before the group's first wake, and the window's phrase had not ended by that wake —
+keeps the phrase instead (a device sends no wake
+inside its own phrase): every candidate loses to it as to a winner, and the
+speakerless ones are shown its answer. For COOLDOWN_MS
 after the group's first wake, a wake of any device but the group's winner loses at
 once.
 
@@ -58,7 +63,8 @@ _SNR_WINDOW = SAMPLE_RATE // 10
 # How long a group of wakes waits for the wakes of the other online devices (ms).
 WINDOW_MS = 500
 # For this long after a group's first wake, a wake of any device but the group's
-# winner loses as a duplicate (ms).
+# winner loses as a duplicate (ms). It also bounds how long before the group's first
+# wake a follow-up window's speech may have started for the window to keep the phrase.
 COOLDOWN_MS = 2000
 
 
@@ -90,8 +96,12 @@ class WakeArbiter:
     """Decides which of the devices that woke on one phrase keeps its session."""
 
     def __init__(self, online_count: Callable[[], int],
+                 online_pipelines: Callable[[], list] = lambda: [],
                  send_reply: Callable | None = None):
         self._online_count = online_count
+        # The online devices' pipelines: one whose follow-up window already hears the
+        # phrase keeps it over the group (_close).
+        self._online_pipelines = online_pipelines
         # send_reply(pipeline, text) shows text on that pipeline's device as an
         # announcement; the winner's answer goes to the speakerless devices that lost
         # its phrase (run_event).
@@ -195,9 +205,26 @@ class WakeArbiter:
         if can_rule and (n >= self._online_count() or self._window_fired):
             self._close()
 
+    def _followup_keeper(self, candidates):
+        """(pipeline, its speech's monotonic start) of an online device, not a
+        candidate of the group, whose follow-up window already hears speech that
+        started at most COOLDOWN_MS before the group's first wake and was still going
+        at that wake (a phrase that ends between the first wake and the ruling still
+        counts); None when there is none."""
+        since = self._group_start - COOLDOWN_MS / 1000
+        for p in self._online_pipelines():
+            heard = p.followup_speech()
+            if p in candidates or heard is None:
+                continue
+            speech_at, ended_at = heard
+            if speech_at >= since and (ended_at is None or ended_at >= self._group_start):
+                return p, speech_at
+        return None
+
     def _close(self) -> None:
         """Rule on the open group: of the candidates still waiting for this verdict,
-        the best keeps its session and the rest lose."""
+        the best keeps its session and the rest lose — all of them lose to a device
+        whose follow-up window already hears the phrase."""
         if self._timer is not None:
             self._timer.cancel()
             self._timer = None
@@ -214,7 +241,15 @@ class WakeArbiter:
             # Nobody kept the phrase, so no cooldown: the next wake opens a new group.
             self._group_start = None
             return
-        _, winner, _ = max(scored, key=lambda s: s[0])
+        keeper = self._followup_keeper(candidates)
+        if keeper is not None:
+            winner, speech_at = keeper
+            lead = self._group_start - speech_at
+            kept = (f"{winner.name}'s follow-up window keeps the phrase (speech "
+                    f"{abs(lead):.1f} s {'before' if lead >= 0 else 'after'} the first wake)")
+        else:
+            _, winner, _ = max(scored, key=lambda s: s[0])
+            kept = f"{winner.name} keeps the phrase"
         self._winner = winner
         self._awaiting_answer = True
         self._answer_to = [p for _, p, _ in scored if p is not winner and not p.has_speaker]
@@ -224,7 +259,7 @@ class WakeArbiter:
                 f"{p.name} (speaker {'yes' if key[0] else 'no'}, SNR {key[1]:.1f} dB)"
                 for key, p, _ in scored
             )
-            + f" -> {winner.name} keeps the phrase"
+            + f" -> {kept}"
         )
         for _, p, token in scored:
             p.arbitration_verdict(token, p is winner)
