@@ -18,6 +18,7 @@ import src.plugins  # noqa: F401  register all providers
 from src.config_service import ConfigService
 from src.plugins.base import REGISTRY, Deps
 from src.plugins.wakeword.vosk import (
+    ANSWER_SOUND_ALIKES,
     VoskWakewordConfig,
     VoskWakewordProvider,
     VoskWakewordVerifier,
@@ -127,10 +128,10 @@ async def test_verify_matches_case_insensitively():
     assert verdict.score == pytest.approx(0.77)
 
 
-async def test_config_sound_alikes_reach_the_grammar_of_a_wake_over_an_answer(monkeypatch):
-    # The speaker's own "завтра" over its answer: the configured sound-alikes (normalized
-    # like the keywords) go into the recognizer's grammar, so it decodes as itself and
-    # the wake is rejected; a wake outside an answer keeps the keyword-only grammar.
+async def test_sound_alikes_reach_the_grammar_of_a_wake_over_an_answer(monkeypatch):
+    # The speaker's own "завтра" over its answer: the sound-alikes go into the
+    # recognizer's grammar, so it decodes as itself and the wake is rejected; a wake
+    # outside an answer keeps the keyword-only grammar.
     import sys
     import types
 
@@ -154,12 +155,11 @@ async def test_config_sound_alikes_reach_the_grammar_of_a_wake_over_an_answer(mo
     fake.Model = lambda path: object()
     fake.SetLogLevel = lambda level: None
     monkeypatch.setitem(sys.modules, "vosk", fake)
-    cfg = VoskWakewordConfig(answer_sound_alikes=[" Завтра ", "сахар", ""])
-    v = VoskWakewordProvider().create(cfg, None)
+    v = VoskWakewordProvider().create(VoskWakewordConfig(), None)
 
     grammars.clear()
     assert (await v.verify(b"pcmbytes", over_answer=True)).accepted is False
-    assert grammars[0] == ["захар", "завтра", "сахар", "[unk]"]
+    assert grammars[0] == ["захар", *ANSWER_SOUND_ALIKES, "[unk]"]
     grammars.clear()
     await v.verify(b"pcmbytes")
     assert grammars[0] == ["захар", "[unk]"]

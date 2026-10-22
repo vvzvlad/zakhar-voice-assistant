@@ -2,8 +2,8 @@
 
 Second-stage wake-word gate. The pre-roll PCM captured around the on-device wake
 trigger is decoded by a Vosk recognizer constrained to a tiny grammar (the wake
-keywords plus "[unk]"; for a wake over the device's own answer also the configured
-sound-alike words). Grammar mode keeps the decode fast (one decode of the
+keywords plus "[unk]"; for a wake over the device's own answer also the fixed
+sound-alike words, ANSWER_SOUND_ALIKES). Grammar mode keeps the decode fast (one decode of the
 default 2.5 s window takes ~45 ms in production), so it is required. The verdict
 gates the rest of the pipeline.
 """
@@ -24,6 +24,12 @@ from src.wakeword import PassthroughVerifier, WakewordVerdict, WakewordVerifier
 _ALIGNMENT_SHIFTS_BYTES = (0, 320, 640)
 
 
+# Words that sound like the wake word, added to the grammar for a wake over the
+# device's own answer: there a grammar of only the keywords and "[unk]" turns the
+# speaker's own "завтра" into "захар". A wake decoded as one of them is rejected.
+ANSWER_SOUND_ALIKES = ("завтра", "сахар", "захват", "заход", "захочет")
+
+
 class VoskWakewordVerifier(WakewordVerifier):
     """In-process Vosk verifier built on a grammar-restricted KaldiRecognizer.
 
@@ -33,8 +39,7 @@ class VoskWakewordVerifier(WakewordVerifier):
     verdict so the pipeline's gate stays well-defined.
     """
 
-    def __init__(self, *, model_path, keywords, window_ms, timeout_ms, on_error,
-                 sound_alikes=(), model=None):
+    def __init__(self, *, model_path, keywords, window_ms, timeout_ms, on_error, model=None):
         # The model is injectable for testing. When None (production path), it is
         # loaded lazily so the heavy dependency/model are only required when the
         # Vosk wakeword backend is actually selected at runtime (never in tests/CI).
@@ -53,10 +58,7 @@ class VoskWakewordVerifier(WakewordVerifier):
         # Defensive: the config field_validator already normalizes; this also covers
         # direct instantiation (e.g. in tests) that bypasses the config layer.
         self._keywords = [kw.strip().lower() for kw in keywords if kw.strip()]
-        # Words that sound like a keyword, added to the grammar for a wake over the
-        # device's own answer: there a grammar of only the keywords and "[unk]" turns
-        # the speaker's own "завтра" into "захар".
-        self._sound_alikes = [w.strip().lower() for w in sound_alikes if w.strip()]
+        self._sound_alikes = list(ANSWER_SOUND_ALIKES)
         self._window_ms = window_ms
         # Read by the pipeline to size the pre-roll head it hands to verify()
         # (the config field flows in via the provider's create()).
@@ -66,9 +68,8 @@ class VoskWakewordVerifier(WakewordVerifier):
         self.fail_open = (on_error == "open")
         # One-time grammar probe (production path only): build a single throwaway
         # grammar recognizer now, inside the fd-2 capture window, so Kaldi's
-        # "Ignoring word missing in vocabulary" WARN for a misconfigured keyword or
-        # sound-alike is
-        # surfaced to loguru ONCE here at creation/config-reload instead of being
+        # "Ignoring word missing in vocabulary" WARN for a keyword or sound-alike the
+        # model lacks is surfaced to loguru ONCE here at creation/config-reload instead of being
         # emitted (and swallowed) per decode. Guarded so it never runs for an empty
         # keyword set, and wrapped defensively: a probe failure (e.g. a missing
         # native dependency when a sentinel model is injected) must NEVER break
@@ -194,17 +195,7 @@ class VoskWakewordConfig(BaseModel):
         json_schema_extra=PHRASE_FIELD_EXTRA,
     )
 
-    # Added to the grammar for a wake heard while the device answers: its own voice then
-    # reaches the check, and a grammar of only the keywords turns e.g. its 'завтра' into
-    # 'захар'. A wake decoded as one of these words is rejected.
-    answer_sound_alikes: list[str] = Field(
-        default_factory=lambda: ["завтра", "сахар", "захват", "заход", "захочет"],
-        title="Sound-alikes rejected during a reply",
-        description="Words like the wake word, rejected when heard while the device answers.",
-        json_schema_extra=PHRASE_FIELD_EXTRA,
-    )
-
-    @field_validator("keywords", "answer_sound_alikes")
+    @field_validator("keywords")
     @classmethod
     def _normalize_words(cls, v: list[str]) -> list[str]:
         # Force the words to stripped lowercase at the CONFIG layer so the stored
@@ -244,7 +235,7 @@ class VoskWakewordConfig(BaseModel):
 class VoskWakewordProvider(Provider):
     category = "wakeword"
     id = "vosk"
-    label = "Vosk (keyword)"
+    label = "Wake check over an answer"
     ConfigModel = VoskWakewordConfig
 
     def create(self, cfg: VoskWakewordConfig, deps: Deps):
@@ -257,7 +248,6 @@ class VoskWakewordProvider(Provider):
             window_ms=cfg.window_ms,
             timeout_ms=cfg.timeout_ms,
             on_error=cfg.on_error,
-            sound_alikes=cfg.answer_sound_alikes,
         )
 
     def describe(self, cfg: VoskWakewordConfig) -> str:
