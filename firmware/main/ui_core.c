@@ -82,18 +82,19 @@ int dial_volume(int volume, int counts)
     return v < 0 ? 0 : v > 100 ? 100 : v;
 }
 
-bool hold_step(hold_t *h, bool pressed, uint32_t now_ms)
+button_event_t button_step(button_t *b, bool pressed, uint32_t now_ms)
 {
     if (!pressed) {
-        h->down = false;
-        return false;
+        const bool short_press = b->down && !b->fired;
+        b->down = false;
+        return short_press ? BUTTON_SHORT : BUTTON_NONE;
     }
-    if (!h->down) {
-        h->down = true;
-        h->fired = false;
-        h->since = now_ms;
+    if (!b->down) {
+        b->down = true;
+        b->fired = false;
+        b->since = now_ms;
     }
-    if (h->fired || now_ms - h->since < FORGET_HOLD_MS) return false;
-    h->fired = true;
-    return true;
+    if (b->fired || now_ms - b->since < FORGET_HOLD_MS) return BUTTON_NONE;
+    b->fired = true;
+    return BUTTON_HOLD;
 }

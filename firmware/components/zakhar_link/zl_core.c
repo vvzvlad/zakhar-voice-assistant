@@ -322,6 +322,12 @@ char *zl_encode_ambient(double dbfs)
     return finish(o, o != NULL && cJSON_AddNumberToObject(o, "value", dbfs) != NULL);
 }
 
+char *zl_encode_button(void)
+{
+    cJSON *o = message("button");
+    return finish(o, o != NULL);
+}
+
 char *zl_encode_stats(const zl_stats_t *st)
 {
     static const char *const CPU[] = {"cpu0", "cpu1"};

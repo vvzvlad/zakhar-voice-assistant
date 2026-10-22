@@ -1,7 +1,7 @@
 // The dial is decoded on every edge of A or B (ui_core's dial_edge, the stock decoder). The stock
 // control_volume script steps the volume per count, restarting on a count that comes within
 // 16 ms; here the counts of one 16 ms tick make one step in their direction (dial_volume). The
-// mute switch is read every tick. The center button is polled on a task of its own (hold_step):
+// mute switch is read every tick. The center button is polled on a task of its own (button_step):
 // the controls task starts only once the board and zakhar_link are up, the button must work before.
 #include "controls.h"
 
@@ -28,6 +28,7 @@ static _Atomic int s_request = -1;  // a set_volume not applied yet
 #define NO_BOOST INT_MIN            // s_boost holds nothing: a boost is -100..100
 static _Atomic int s_boost = NO_BOOST;  // a volume_boost not applied yet
 static void (*s_on_hold)(void);     // set before the button task starts
+static void (*s_on_short)(void);    // set before the button task starts
 
 static void dial_isr(void *arg)
 {
@@ -87,14 +88,23 @@ void controls_request_boost(int points)
 static void button_task(void *arg)
 {
     (void)arg;
-    hold_t hold = {0};
+    button_t button = {0};
     for (;;) {
         vTaskDelay(pdMS_TO_TICKS(BUTTON_TICK_MS));
-        if (hold_step(&hold, gpio_get_level(PIN_BUTTON) == 0, pdTICKS_TO_MS(xTaskGetTickCount()))) s_on_hold();
+        switch (button_step(&button, gpio_get_level(PIN_BUTTON) == 0, pdTICKS_TO_MS(xTaskGetTickCount()))) {
+        case BUTTON_SHORT:
+            s_on_short();
+            break;
+        case BUTTON_HOLD:
+            s_on_hold();
+            break;
+        case BUTTON_NONE:
+            break;
+        }
     }
 }
 
-esp_err_t controls_button_start(void (*on_hold)(void))
+esp_err_t controls_button_start(void (*on_hold)(void), void (*on_short)(void))
 {
     // The stock config reads GPIO0 with the internal pull-up off (the strapping pin is pulled up on
     // the board); here it is on as well, harmlessly.
@@ -106,6 +116,7 @@ esp_err_t controls_button_start(void (*on_hold)(void))
     const esp_err_t err = gpio_config(&button);
     if (err != ESP_OK) return err;
     s_on_hold = on_hold;
+    s_on_short = on_short;
     if (xTaskCreate(button_task, "button", 3 * 1024, NULL, 1, NULL) != pdPASS) {
         ESP_LOGE(TAG, "button task create failed");
         return ESP_ERR_NO_MEM;

@@ -271,6 +271,10 @@ the answer, so the next phrase needs no wake word:
   true}` for each stream it dropped. A new `wake` flushes nothing on the device, and the server
   sends `play_stop` once it takes the wake (see [Voice session](#voice-session)). `0x02` frames and `play_end` of a
   dropped stream that are still on the way are discarded.
+- `button` (device → server, `{"type": "button"}`): a short press of the center button, released
+  before the hold that forgets the Wi-Fi network. The server drops the device's playback as for a
+  taken wake — `play_stop`, an alarm's ring and an answer included; with nothing playing it does
+  nothing. Sent only while connected: a press while offline is lost.
 - The server stops waiting for `played` of a stream after its duration plus `buffer_ms` plus 5 s
   and treats it as dropped.
 - Pacing: the server keeps at most `buffer_ms − play_prime_ms − 500` ms of audio ahead of the

@@ -114,6 +114,10 @@ void zl_report_volume(int percent);
 // task after zl_start().
 void zl_report_ambient(double dbfs);
 
+// A short press of the device's button, sent as `button` while online (dropped offline). Only
+// notifies the component task; safe from any task, before zl_start() and after a failed one too.
+void zl_report_button(void);
+
 // Whether the microphone is in use: a wake awaits the server's ruling, a voice session is open (from
 // its `listening` to its idle or error) or a capture is held; false before zl_start(). Takes the
 // component's lock briefly.

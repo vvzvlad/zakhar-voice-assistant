@@ -841,6 +841,19 @@ async def test_announce_whose_speech_fails_is_a_tts_error_run(srv, tmp_path, mon
     assert not (tmp_path / "context_kitchen.txt").exists()
 
 
+async def test_the_button_stops_the_answer_and_ends_its_session_without_a_follow_up(srv):
+    srv.rt.followup_backend = FakeGate(accepted=True)
+    dev = await srv.connect(buffer_ms=1400, follow_up=True)
+    old = await answer_playing(srv, dev, 2)
+    await dev.send(type="button")
+    assert await dev.recv() == {"type": "play_stop"}
+    assert await dev.recv() == state(1, "idle")
+    await dev.send(type="played", id=old, dropped=True)
+    await dev.send(type="button")  # nothing plays: nothing to stop
+    with pytest.raises(asyncio.TimeoutError):
+        await dev.recv(timeout=0.3)
+
+
 async def test_follow_up_listens_after_a_played_answer_only(srv):
     srv.rt.followup_backend = FakeGate(accepted=False, probability=0.1)
     dev = await srv.connect(follow_up=True)

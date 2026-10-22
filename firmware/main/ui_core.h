@@ -1,6 +1,6 @@
 // The pure decisions of the Voice PE's indication and controls: no ESP headers, host-tested
 // (make fw-voicepe-host-test). Which indication the LED ring shows, the dial and the center
-// button's hold.
+// button's short press and hold.
 #pragma once
 
 #include <stdbool.h>
@@ -77,11 +77,19 @@ int dial_volume(int volume, int counts);
 
 #define FORGET_HOLD_MS 10000  // a hold this long forgets the stored Wi-Fi network
 
+typedef enum {
+    BUTTON_NONE,
+    BUTTON_SHORT,  // a press released before its hold
+    BUTTON_HOLD,   // a press held FORGET_HOLD_MS
+} button_event_t;
+
 typedef struct {
     bool down;
     bool fired;
     uint32_t since;  // ms, when the press began
-} hold_t;  // zero-initialised
+} button_t;  // zero-initialised
 
-// One look at the button at now_ms: true once per press, when it has been held FORGET_HOLD_MS.
-bool hold_step(hold_t *h, bool pressed, uint32_t now_ms);
+// One look at the button at now_ms: BUTTON_HOLD once per press, when it has been held
+// FORGET_HOLD_MS; BUTTON_SHORT at the release of a press that did not get there. A held press
+// gives nothing at its release.
+button_event_t button_step(button_t *b, bool pressed, uint32_t now_ms);

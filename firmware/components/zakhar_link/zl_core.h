@@ -82,6 +82,7 @@ char *zl_encode_model_loaded(zl_model_t kind, const char *name, bool ok);
 char *zl_encode_log(const char *text, size_t len);
 // The room's noise level, dBFS, as the caller rounded it.
 char *zl_encode_ambient(double dbfs);
+char *zl_encode_button(void);
 
 // The device's health for `stats`. A field whose has_ flag is false is left out.
 typedef struct {

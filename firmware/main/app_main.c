@@ -271,7 +271,7 @@ void app_main(void)
     volume_init();
     leds_start();
     wifi_start();
-    if (controls_button_start(forget_wifi) != ESP_OK) ESP_LOGE(TAG, "the center button is not watched");
+    if (controls_button_start(forget_wifi, zl_report_button) != ESP_OK) ESP_LOGE(TAG, "the center button is not watched");
 
     // POST /ota and the network log come up with the first IP, before the board: nothing below
     // aborts, a failed bring-up step is logged and ends app_main, leaving Wi-Fi, POST /ota and the

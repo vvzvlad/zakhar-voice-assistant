@@ -1,7 +1,7 @@
 // Host test of the Voice PE firmware's pure indication, dial and button decisions (ui_core.c): the
 // stock control_leds priority under a firmware update, the error hold, the update's fill of the
-// ring, the stock dial decoder with one volume step per tick, and the center button's hold that
-// forgets the Wi-Fi network.
+// ring, the stock dial decoder with one volume step per tick, and the center button's short press
+// and the hold that forgets the Wi-Fi network.
 // `make fw-voicepe-host-test` builds it.
 #include <assert.h>
 #include <stdint.h>
@@ -130,29 +130,38 @@ static void test_dial(void)
     assert(dial_volume(3, -1) == 0 && dial_volume(0, -2) == 0);
 }
 
-static void test_hold(void)
+static void test_button(void)
 {
-    // A press fires once, when it has lasted FORGET_HOLD_MS.
-    hold_t h = {0};
-    assert(!hold_step(&h, false, 0));
-    assert(!hold_step(&h, true, 1000));
-    assert(!hold_step(&h, true, 1000 + FORGET_HOLD_MS - 1));
-    assert(hold_step(&h, true, 1000 + FORGET_HOLD_MS));
-    assert(!hold_step(&h, true, 1000 + 2 * FORGET_HOLD_MS));
+    // A press gives the hold once, when it has lasted FORGET_HOLD_MS, and nothing at its release.
+    button_t b = {0};
+    assert(button_step(&b, false, 0) == BUTTON_NONE);
+    assert(button_step(&b, true, 1000) == BUTTON_NONE);
+    assert(button_step(&b, true, 1000 + FORGET_HOLD_MS - 1) == BUTTON_NONE);
+    assert(button_step(&b, true, 1000 + FORGET_HOLD_MS) == BUTTON_HOLD);
+    assert(button_step(&b, true, 1000 + 2 * FORGET_HOLD_MS) == BUTTON_NONE);
+    assert(button_step(&b, false, 30000) == BUTTON_NONE);
 
-    // A release starts the count again, and the next long press fires again.
-    assert(!hold_step(&h, false, 30000));
-    assert(!hold_step(&h, true, 30050));
-    assert(!hold_step(&h, false, 30050 + FORGET_HOLD_MS));
-    assert(!hold_step(&h, true, 50000));
-    assert(!hold_step(&h, true, 50000 + FORGET_HOLD_MS - 1));
-    assert(hold_step(&h, true, 50000 + FORGET_HOLD_MS));
+    // A short press, once, at its release.
+    assert(button_step(&b, true, 30050) == BUTTON_NONE);
+    assert(button_step(&b, true, 30100) == BUTTON_NONE);
+    assert(button_step(&b, false, 30150) == BUTTON_SHORT);
+    assert(button_step(&b, false, 30200) == BUTTON_NONE);
+
+    // Across the hold boundary: last seen down a millisecond short of it, a short press; seen down
+    // at it, the hold. The release starts the count again.
+    assert(button_step(&b, true, 40000) == BUTTON_NONE);
+    assert(button_step(&b, true, 40000 + FORGET_HOLD_MS - 1) == BUTTON_NONE);
+    assert(button_step(&b, false, 40000 + FORGET_HOLD_MS) == BUTTON_SHORT);
+    assert(button_step(&b, true, 60000) == BUTTON_NONE);
+    assert(button_step(&b, true, 60000 + FORGET_HOLD_MS - 1) == BUTTON_NONE);
+    assert(button_step(&b, true, 60000 + FORGET_HOLD_MS) == BUTTON_HOLD);
+    assert(button_step(&b, false, 60000 + FORGET_HOLD_MS + 50) == BUTTON_NONE);
 
     // Across the wrap of the millisecond clock.
-    h = (hold_t){0};
-    assert(!hold_step(&h, true, UINT32_MAX - 100));
-    assert(!hold_step(&h, true, FORGET_HOLD_MS - 102));
-    assert(hold_step(&h, true, FORGET_HOLD_MS - 101));
+    b = (button_t){0};
+    assert(button_step(&b, true, UINT32_MAX - 100) == BUTTON_NONE);
+    assert(button_step(&b, true, FORGET_HOLD_MS - 102) == BUTTON_NONE);
+    assert(button_step(&b, true, FORGET_HOLD_MS - 101) == BUTTON_HOLD);
 }
 
 int main(void)
@@ -161,7 +170,7 @@ int main(void)
     test_error_hold();
     test_fill();
     test_dial();
-    test_hold();
+    test_button();
     printf("ui_core: all tests passed\n");
     return 0;
 }

@@ -627,6 +627,10 @@ class Device:
                                         "over_answer": over_answer})
             self.pipeline.on_wake(msg["session"], msg.get("word"), over_answer=over_answer,
                                   over_playback=conn.playing)
+        elif kind == "button":
+            # The device's button stops what plays (a ring, an answer) as `play_stop` does.
+            if conn.playing:
+                conn.drop_playback()
         elif kind == "played":
             if msg.get("dropped"):
                 self.publish_event("played", {"dropped": True})

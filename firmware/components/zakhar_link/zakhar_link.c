@@ -4,11 +4,11 @@
 // Two tasks. The component task owns the client: it creates it, and when the link is lost
 // destroys it and connects a new one after the backoff. It sends everything the device starts:
 // the wake, the session's and the capture's mic frames, audio_end, wake_peak once a second,
-// `played` of finished streams, `volume`, `ambient`, `stats` after each hello and every 30 s and,
-// while the server asks for it, the device log in `log` messages. It also owns the microphone
-// position, so a `capture`, a `capture_resume` and a `capture_stop` are handed to it; only a
-// follow-up `listening` sets the position on the client's task, under the mutex, together with
-// turning the mic on. A capture outlives a lost link: the next hello names it, and a
+// `played` of finished streams, `volume`, `ambient`, `button`, `stats` after each hello and every
+// 30 s and, while the server asks for it, the device log in `log` messages. It also owns the
+// microphone position, so a `capture`, a `capture_resume` and a `capture_stop` are handed to it;
+// only a follow-up `listening` sets the position on the client's task, under the mutex, together
+// with turning the mic on. A capture outlives a lost link: the next hello names it, and a
 // `capture_resume` sends it on from the frame the server asks for. The client's own task runs the
 // event handler: the hello on connect and every received frame in arrival order, so a play_start,
 // its 0x02 frames and its play_end reach the playback queue in the order sent; a model is
@@ -70,6 +70,7 @@ static const char *TAG = "zakhar_link";
 #define EV_AMBIENT (1u << 7)
 #define EV_STATS (1u << 8)  // a hello went out: the connection's first stats
 #define EV_CAPTURE_STOP (1u << 9)
+#define EV_BUTTON (1u << 10)
 
 static zl_config_t s_cfg;
 static zl_callbacks_t s_cb;
@@ -835,6 +836,14 @@ static void send_ambient(void)
     if (online) send_json(s_ws, zl_encode_ambient(dbfs));
 }
 
+static void send_button(void)
+{
+    lock();
+    const bool online = s_online;
+    unlock();
+    if (online) send_json(s_ws, zl_encode_button());
+}
+
 // The device log while the server asks for it: up to LOG_CHUNK bytes of whole lines a pass, in
 // one `log`. Not through send_json: its failure line carries the message, which would feed the
 // log into itself; a failure here logs only a fixed line.
@@ -951,6 +960,7 @@ static void link_task(void *arg)
         if (ev & EV_PLAYED) send_played();
         if (ev & EV_VOLUME) send_volume();
         if (ev & EV_AMBIENT) send_ambient();
+        if (ev & EV_BUTTON) send_button();
         mic_poll();
         capture_poll();
         if (now - peak_at >= pdMS_TO_TICKS(PEAK_MS)) {
@@ -1033,6 +1043,12 @@ void zl_report_ambient(double dbfs)
     s_ambient = dbfs;
     unlock();
     notify(EV_AMBIENT);
+}
+
+void zl_report_button(void)
+{
+    if (s_task == NULL) return;
+    notify(EV_BUTTON);
 }
 
 bool zl_mic_busy(void)

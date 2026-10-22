@@ -208,6 +208,7 @@ static void test_encode(void)
     encoded_is(zl_encode_wake_peak(42), "{\"type\":\"wake_peak\",\"value\":42}");
     encoded_is(zl_encode_ambient(-63.4), "{\"type\":\"ambient\",\"value\":-63.4}");
     encoded_is(zl_encode_ambient(-120), "{\"type\":\"ambient\",\"value\":-120}");
+    encoded_is(zl_encode_button(), "{\"type\":\"button\"}");
     encoded_is(zl_encode_audio_end("busy", 7), "{\"type\":\"audio_end\",\"reason\":\"busy\",\"id\":7}");
     encoded_is(zl_encode_audio_end("capture", 4294967295u),
                "{\"type\":\"audio_end\",\"reason\":\"capture\",\"id\":4294967295}");
