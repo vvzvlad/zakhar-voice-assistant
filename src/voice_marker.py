@@ -46,7 +46,7 @@ def strip_voice_marker(text):
     return re.sub(r"[ \t]*<<<<<VOICE\b[^\n]*?>>>>>[ \t]*\n?", "", text)
 
 
-def build_voice_patch(provider, fields, allowed_fields, variants):
+def build_voice_patch(provider, fields, allowed_fields, variants, current=None):
     """Config patch making `provider` the first TTS variant and overriding the given
     voice fields.
 
@@ -57,13 +57,20 @@ def build_voice_patch(provider, fields, allowed_fields, variants):
     not in it OR in SECRET_FIELDS is dropped (so a typo or a pasted secret never
     reaches the config). Hidden `*_label` display-companion fields are dropped too:
     they are UI metadata (the chosen voice/model's human name), not voice identity,
-    and are never applied from a marker. Provider-only (no safe fields) is valid,
-    e.g. piper. Returns {"tts": {"variants": [...], "instances": {provider: {...}}}}
-    or None when provider is empty."""
+    and are never applied from a marker. Instead, an applied field with a `*_label`
+    companion empties it when the value differs from `current` (the provider's
+    instance config now): the config update merges, so the old voice's name would
+    otherwise stay beside the new id, and the panel would show it. An unchanged
+    value keeps its name. Provider-only (no safe fields) is valid, e.g. piper.
+    Returns {"tts": {"variants": [...], "instances": {provider: {...}}}} or None
+    when provider is empty."""
     if not provider:
         return None
     safe = {k: v for k, v in fields.items()
             if k in allowed_fields and k not in SECRET_FIELDS and not k.endswith("_label")}
+    cur = current or {}
+    safe.update({f"{k}_label": "" for k in list(safe)
+                 if f"{k}_label" in allowed_fields and str(cur.get(k, "")) != str(safe[k])})
     order = [{"provider": provider, "enabled": True}]
     order += [v for v in variants if v["provider"] != provider]
     return {"tts": {"variants": order, "instances": {provider: safe}}}

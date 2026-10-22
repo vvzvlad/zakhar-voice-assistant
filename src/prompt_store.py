@@ -22,6 +22,8 @@ import time
 
 from loguru import logger
 
+from src.voice_marker import parse_voice_marker
+
 DEFAULT_PROMPT_PATH = "templates/default_prompt.md"
 
 _CREATE_TABLE = """
@@ -95,13 +97,19 @@ class PromptStore:
             logger.info(f"prompt store seeded with 'default' profile from {source}")
 
     def list_profiles(self) -> list[dict]:
-        """All profiles ordered by name, WITHOUT the full text (chars = LENGTH(text))."""
+        """All profiles ordered by name, WITHOUT the full text: chars = LENGTH(text),
+        voice = the text's preferred-voice marker (parse_voice_marker), None without one."""
         with self._lock:
             rows = self._conn.execute(
                 "SELECT id, name, is_active, created_ts, updated_ts, "
-                "LENGTH(text) AS chars FROM prompt_profiles ORDER BY name ASC"
+                "LENGTH(text) AS chars, text FROM prompt_profiles ORDER BY name ASC"
             ).fetchall()
-        return [_to_dict(r) for r in rows]
+        out = []
+        for r in rows:
+            rec = _to_dict(r)
+            rec["voice"] = parse_voice_marker(rec.pop("text"))
+            out.append(rec)
+        return out
 
     def get(self, profile_id) -> dict | None:
         """Full row (incl. text) for one profile, or None when not found."""

@@ -646,6 +646,22 @@ async def test_prompt_profiles_list(tmp_path):
         store.close()
 
 
+async def test_prompt_profiles_list_carries_each_profiles_voice(tmp_path):
+    # The panel names every profile's voice from the list, without fetching each text.
+    store = _prompt_store(tmp_path)
+    store.create("fish", "be brief\n<<<<<VOICE provider=fishaudio reference_id=abc speed=0.9>>>>>\n")
+    client, _svc_ = await _client(tmp_path, prompt_store=store)
+    try:
+        body = await (await client.get("/api/prompt/profiles")).json()
+        by_name = {p["name"]: p for p in body["profiles"]}
+        assert by_name["fish"]["voice"] == {"provider": "fishaudio", "fields": {"reference_id": "abc", "speed": "0.9"}}
+        assert by_name["default"]["voice"] is None
+        assert all("text" not in p for p in body["profiles"])
+    finally:
+        await client.close()
+        store.close()
+
+
 async def test_prompt_profile_create_with_text_and_get(tmp_path):
     store = _prompt_store(tmp_path)
     client, _svc_ = await _client(tmp_path, prompt_store=store)
@@ -803,6 +819,28 @@ async def test_prompt_profile_activate_apply_voice_sets_tts(tmp_path):
         doc = svc.document()
         assert doc["tts"]["variants"] == [{"provider": "piper", "enabled": True}] + YANDEX_ONLY
         assert doc["tts"]["instances"]["piper"]["voice_path"] == "models/x.onnx"
+    finally:
+        await client.close()
+        store.close()
+
+
+@pytest.mark.parametrize("voice,label", [("bbbb", ""), ("aaaa", "Anna")])
+async def test_prompt_profile_activate_apply_voice_keeps_a_name_only_for_the_same_voice(tmp_path, voice, label):
+    # The panel names a voice by its "<field>_label" when the id matches: applying another
+    # voice empties the label, so the old voice's name never sticks to the new id, while
+    # re-applying the current voice keeps its name.
+    store = _prompt_store(tmp_path)
+    client, svc = await _client(tmp_path, prompt_store=store)
+    try:
+        svc.apply({"tts": {"instances": {"fishaudio": {"reference_id": "aaaa", "reference_id_label": "Anna"}}}})
+        created = await (await client.post(
+            "/api/prompt/profiles",
+            json={"name": "fish", "text": f"<<<<<VOICE provider=fishaudio reference_id={voice}>>>>>"},
+        )).json()
+        resp = await client.post(f"/api/prompt/profiles/{created['id']}/activate", json={"apply_voice": True})
+        assert resp.status == 200
+        fish = svc.document()["tts"]["instances"]["fishaudio"]
+        assert (fish["reference_id"], fish["reference_id_label"]) == (voice, label)
     finally:
         await client.close()
         store.close()

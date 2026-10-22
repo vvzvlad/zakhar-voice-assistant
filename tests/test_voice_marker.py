@@ -147,11 +147,12 @@ def test_build_patch_puts_the_marker_provider_first():
 
 def test_build_patch_drops_label_companion_fields():
     # A hidden "*_label" companion (the chosen voice's human name) is display
-    # metadata, not voice identity, so it is dropped even when allowed.
+    # metadata, not voice identity: the marker's value is dropped even when allowed,
+    # and the applied field's companion is emptied instead.
     patch = build_voice_patch(
         "fishaudio",
         {"reference_id": "abc", "reference_id_label": "Nice Voice"},
         allowed_fields={"reference_id", "reference_id_label"},
         variants=[],
     )
-    assert patch["tts"]["instances"] == {"fishaudio": {"reference_id": "abc"}}
+    assert patch["tts"]["instances"] == {"fishaudio": {"reference_id": "abc", "reference_id_label": ""}}

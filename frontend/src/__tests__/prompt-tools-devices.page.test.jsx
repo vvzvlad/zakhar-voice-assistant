@@ -1,7 +1,12 @@
 // @vitest-environment jsdom
 // Render-level tests for the Character Prompt, System Prompt, Tools and Devices pages:
-// the profile's preferred voice is shown by name and flagged when it is not the voice
-// speaking now, the prompt syntax reference is one collapsed disclosure, each page saves
+// the Character Prompt's profiles column lists every profile with its voice (named
+// through the options once per provider field, a long bare id cut short) and size, the
+// active one marked, and a click on a row opens it; the selected profile's voice is
+// flagged when it is not the voice speaking now; Make active applies the voice only with
+// the "with voice" box checked, which a profile without a marker lacks; the active
+// profile has neither Make active nor Delete in its ⋯ menu, which closes on Escape and
+// when focus leaves it; the prompt syntax reference is one collapsed disclosure, each page saves
 // with one Save (the Tools page's server edits included), typing in the System Prompt
 // editor keeps the page's scroll position, deleting an MCP server
 // asks first, the built-in sources start folded and say "built-in" once, the Tools
@@ -9,19 +14,20 @@
 // switched-off server keeps its controls unfaded and a switched-off speaker fades.
 import React from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, cleanup, fireEvent, waitFor, within } from "@testing-library/react";
+import { render, screen, cleanup, fireEvent, waitFor, within, act } from "@testing-library/react";
 import { MCP } from "../pages/tools.jsx";
 import { Prompt, SystemPrompt } from "../pages/prompt.jsx";
 import { Devices } from "../pages/devices.jsx";
 import { useAppData } from "../appData.jsx";
-import { getOptions, getPromptProfile, updatePromptProfile, getTools, getMemory, putMemory } from "../api.js";
+import { getOptions, getPromptProfiles, getPromptProfile, updatePromptProfile, activatePromptProfile, getTools, getMemory, putMemory } from "../api.js";
 import { faded } from "./faded.js";
 
 vi.mock("../appData.jsx", () => ({ useAppData: vi.fn() }));
 vi.mock("../api.js", () => ({
-  getPromptProfiles: vi.fn(async () => ({ profiles: [{ id: 1, name: "default" }], active_id: 1 })),
+  getPromptProfiles: vi.fn(async () => ({ profiles: [{ id: 1, name: "default", chars: 2, voice: null }], active_id: 1 })),
   getPromptProfile: vi.fn(),
   updatePromptProfile: vi.fn(async () => ({})),
+  activatePromptProfile: vi.fn(async () => ({ ok: true })),
   getOptions: vi.fn(async () => ({ options: [{ value: "bbbb", label: "Boris" }] })),
   getTools: vi.fn(async () => ({ sources: [] })),
   getMemory: vi.fn(async () => ({ facts: [] })),
@@ -57,25 +63,103 @@ function appData(core = {}) {
   };
 }
 
-const withMarker = (marker) => getPromptProfile.mockResolvedValue({ id: 1, name: "default", text: `hi ${marker}` });
+const fishVoice = (id) => ({ provider: "fishaudio", fields: { reference_id: id, model: "s2-pro" } });
+const marker = (id) => `<<<<<VOICE provider=fishaudio reference_id=${id} model=s2-pro>>>>>`;
 
-describe("Prompt — preferred voice", () => {
-  it("names another fishaudio voice through the field's options and flags it as not the current one", async () => {
+describe("Prompt — profiles", () => {
+  // "default" is active and its voice is another fishaudio voice than the current one,
+  // "work" names a voice the options do not know, "plain" has no voice marker.
+  const WORK_ID = "cccccccc11112222";
+  const TEXTS = { 1: `hi ${marker("bbbb")}`, 2: `work ${marker(WORK_ID)}`, 3: "plain" };
+  const withProfiles = (defaultVoice = "bbbb") => {
+    getPromptProfiles.mockResolvedValue({ active_id: 1, profiles: [
+      { id: 1, name: "default", chars: 5, voice: fishVoice(defaultVoice) },
+      { id: 2, name: "work", chars: 7, voice: fishVoice(WORK_ID) },
+      { id: 3, name: "plain", chars: 5, voice: null },
+    ] });
+    getPromptProfile.mockImplementation(async (id) => ({ id, name: "p" + id, text: id === 1 ? `hi ${marker(defaultVoice)}` : TEXTS[id] }));
+  };
+  const row = (name) => within(screen.getByText("Profiles").closest(".z-card")).getByRole("button", { name: new RegExp(`^${name}`) });
+  afterEach(() => getPromptProfiles.mockRestore());
+
+  it("lists every profile with its voice and size, the active one marked; voices are looked up once per provider field", async () => {
     useAppData.mockReturnValue(appData());
-    withMarker("<<<<<VOICE provider=fishaudio reference_id=bbbb model=s2-pro>>>>>");
+    withProfiles();
     render(<Prompt />);
-    await waitFor(() => expect(screen.getByTestId("marker-voice").textContent).toBe("Apply voice on activate: Fish Audio · Boris"));
+    await waitFor(() => expect(within(row("default")).getByText("Fish Audio · Boris · 5 chars")).toBeInTheDocument());
+    expect(within(row("default")).getByText("Active")).toBeInTheDocument();
+    expect(within(row("work")).getByText("Fish Audio · cccccccc… · 7 chars")).toBeInTheDocument();
+    expect(row("work")).toHaveAttribute("title", WORK_ID);
+    expect(within(row("work")).queryByText("Active")).toBeNull();
+    expect(within(row("plain")).getByText("5 chars")).toBeInTheDocument();
+    expect(getOptions).toHaveBeenCalledTimes(1);
     expect(getOptions).toHaveBeenCalledWith("tts", "fishaudio", "reference_id");
     expect(screen.getByText("differs from current TTS voice")).toBeInTheDocument();
   });
 
   it("names the current voice from the TTS settings without a lookup", async () => {
     useAppData.mockReturnValue(appData());
-    withMarker("<<<<<VOICE provider=fishaudio reference_id=aaaa model=s2-pro>>>>>");
+    withProfiles("aaaa");
+    getPromptProfiles.mockResolvedValue({ active_id: 1, profiles: [{ id: 1, name: "default", chars: 5, voice: fishVoice("aaaa") }] });
     render(<Prompt />);
-    expect((await screen.findByTestId("marker-voice")).textContent).toBe("Apply voice on activate: Fish Audio · Anna");
+    await waitFor(() => expect(within(row("default")).getByText("Fish Audio · Anna · 5 chars")).toBeInTheDocument());
     expect(getOptions).not.toHaveBeenCalled();
     expect(screen.queryByText("differs from current TTS voice")).not.toBeInTheDocument();
+  });
+
+  it("a click on a row opens that profile; one without a voice marker offers Make active without the box", async () => {
+    useAppData.mockReturnValue(appData());
+    withProfiles();
+    render(<Prompt />);
+    await screen.findByDisplayValue(TEXTS[1]);
+    fireEvent.click(row("plain"));
+    expect(await screen.findByDisplayValue("plain")).toBeInTheDocument();
+    expect(getPromptProfile).toHaveBeenLastCalledWith(3);
+    expect(row("plain")).toHaveAttribute("aria-current", "true");
+    expect(row("default")).not.toHaveAttribute("aria-current");
+    expect(screen.getByRole("button", { name: "Make active" })).toBeInTheDocument();
+    expect(screen.queryByRole("checkbox")).toBeNull();
+  });
+
+  it("Make active applies the voice with the box checked and not with it unchecked", async () => {
+    useAppData.mockReturnValue(appData());
+    withProfiles();
+    render(<Prompt />);
+    await screen.findByDisplayValue(TEXTS[1]);
+    fireEvent.click(row("work"));
+    await screen.findByDisplayValue(TEXTS[2]);
+    const box = screen.getByRole("checkbox", { name: "with voice" });
+    expect(box.checked).toBe(true);
+    const activate = () => screen.getByRole("button", { name: "Make active" });
+    fireEvent.click(activate());
+    await waitFor(() => expect(activatePromptProfile).toHaveBeenCalledWith(2, { applyVoice: true }));
+    await waitFor(() => expect(activate()).not.toBeDisabled());
+    fireEvent.click(box);
+    fireEvent.click(activate());
+    await waitFor(() => expect(activatePromptProfile).toHaveBeenLastCalledWith(2, { applyVoice: false }));
+  });
+
+  it("the active profile has no Make active and no Delete in its ⋯ menu; another profile's menu has Delete", async () => {
+    useAppData.mockReturnValue(appData());
+    withProfiles();
+    render(<Prompt />);
+    await screen.findByDisplayValue(TEXTS[1]);
+    expect(screen.queryByRole("button", { name: "Make active" })).toBeNull();
+    expect(screen.queryByRole("checkbox")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "More actions" }));
+    expect(screen.getByRole("menuitem", { name: "Rename…" })).toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "Delete" })).toBeNull();
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.queryByRole("menu")).toBeNull();
+    const more = screen.getByRole("button", { name: "More actions" });
+    expect(document.activeElement).toBe(more);
+    fireEvent.click(more);
+    act(() => row("plain").focus());
+    expect(screen.queryByRole("menu")).toBeNull();
+    fireEvent.click(row("work"));
+    await screen.findByDisplayValue(TEXTS[2]);
+    fireEvent.click(screen.getByRole("button", { name: "More actions" }));
+    expect(screen.getByRole("menuitem", { name: "Delete" })).toBeInTheDocument();
   });
 });
 
