@@ -199,7 +199,7 @@ function Drawer({ r, loading, error, onClose }) {
   const providerLabel = useProviderLabel();
   const m = statusMeta(r);
   const device = deviceLabel(useDeviceList(), r && r.device);
-  // The copy button's label for a moment after a click: "Copied" or "Copy failed".
+  // The copy icon's state for a moment after a click: "Copied" or "Copy failed".
   const [copied, setCopied] = useState(null);
   const copyTimer = useRef(null);
   useEffect(() => () => clearTimeout(copyTimer.current), []);
@@ -237,10 +237,11 @@ function Drawer({ r, loading, error, onClose }) {
       <div className="z-drawer-h">
         <div>
           <h2>{device || "Run"} {r && <span style={{ color: "var(--mut2)", fontWeight: 500, fontFamily: "var(--mono)", fontSize: 13 }}>· {r.stamp}</span>}</h2>
-          {r && <div style={{ fontSize: 11.5, color: "var(--mut)", marginTop: 2, fontFamily: "var(--mono)" }}>id {r.id} · {REASONS[r.reason] || r.reason || "—"}</div>}
+          {r && <div style={{ fontSize: 11.5, color: "var(--mut)", marginTop: 2, fontFamily: "var(--mono)" }}>id {r.id} · {REASONS[r.reason] || r.reason || "—"}
+            <button className={"z-copy" + (copied === "Copy failed" ? " bad" : "")} onClick={copy} aria-label={copied || "Copy"}
+              title="Copy id, time, device and the run's link, to paste to an agent"><Ic n={copied === "Copied" ? "copied" : "copy"} w={13} /></button></div>}
         </div>
         {r && <span className={"z-pill " + m.tone} style={{ marginLeft: 12 }}><span className={"z-dot " + (m.tone === "good" ? "ok" : m.tone === "bad" ? "error" : "off")} />{m.label}</span>}
-        {r && <button className="z-btn g sm" onClick={copy} title="Device, time, id and the run's link, to paste to an agent">{copied || "Copy"}</button>}
         <button className="z-x" aria-label="Close" onClick={onClose}><svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" /></svg></button>
       </div>
       <div className="z-drawer-b">

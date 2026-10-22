@@ -31,6 +31,7 @@ export const ICONS = {
   bolt: "M13 2L4 14h7l-1 8 9-12h-7z",
   hash: "M9 3L7 21M17 3l-2 18M4 8h16M3 16h16",
   check: "M3 8l3.5 3.5L13 4",
+  copy: "M9 9h10v10H9zM5 15V5h10", copied: "M5 12l5 5 9-10",
 };
 
 export function Ic({ n, w = 16 }) {
