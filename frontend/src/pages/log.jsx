@@ -5,7 +5,7 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import { Ic } from "../components/icons.jsx";
 import { PageHeader, Waterfall, KV, Loading, ErrorBox, Select, fillerMarkerPct } from "../components/primitives.jsx";
-import { getRuns, getRun, openRunsStream, runAudioUrl, downloadRunAudio, runTtsAudioUrl, downloadRunTtsAudio } from "../api.js";
+import { getRuns, getRun, runLink, openRunsStream, runAudioUrl, downloadRunAudio, runTtsAudioUrl, downloadRunTtsAudio } from "../api.js";
 import { STAGE_COLOR, fmtSec, fmtTime, mapRun, totalMs, statusMeta, isAnnouncement, emptyRequestText, applyStreamedRun, pageWindow } from "../runsModel.js";
 import { FILLER_COLOR } from "../stageMeta.js";
 import { matchesFilters } from "../runsFilters.js";
@@ -175,11 +175,41 @@ function modelText(model, providerLabel) {
   return label + (name && name !== "none" ? ` · ${name}` : "");
 }
 
+// Puts `text` on the clipboard and resolves to whether it got there. navigator.clipboard
+// exists only in a secure context, and the panel is opened over plain http on the LAN,
+// so the fallback copies a hidden textarea's selection the legacy way.
+async function copyText(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    const el = document.createElement("textarea");
+    el.value = text;
+    el.style.position = "fixed";
+    el.style.opacity = "0";
+    document.body.appendChild(el);
+    el.focus();
+    el.select();
+    try { return document.execCommand("copy"); } catch { return false; } finally { el.remove(); }
+  }
+}
+
 // Right-side drawer with the full run detail. `r` is the mapped detail row.
 function Drawer({ r, loading, error, onClose }) {
   const providerLabel = useProviderLabel();
   const m = statusMeta(r);
   const device = deviceLabel(useDeviceList(), r && r.device);
+  // The copy button's label for a moment after a click: "Copied" or "Copy failed".
+  const [copied, setCopied] = useState(null);
+  const copyTimer = useRef(null);
+  useEffect(() => () => clearTimeout(copyTimer.current), []);
+  // The run's id, time and device, and the link an agent fetches it by; not the end reason.
+  const copy = async () => {
+    const ok = await copyText(`id ${r.id}, ${r.stamp}\ndevice ${device}, ${runLink(r.id)}`);
+    setCopied(ok ? "Copied" : "Copy failed");
+    clearTimeout(copyTimer.current);
+    copyTimer.current = setTimeout(() => setCopied(null), 1500);
+  };
   // Another device heard the same phrase and kept it; the verifier did not reject it.
   const duplicate = !!r && r.result === "rejected" && r.reason === "duplicate";
   // The LLM block: its header carries the model and the tokens.
@@ -210,6 +240,7 @@ function Drawer({ r, loading, error, onClose }) {
           {r && <div style={{ fontSize: 11.5, color: "var(--mut)", marginTop: 2, fontFamily: "var(--mono)" }}>id {r.id} · {REASONS[r.reason] || r.reason || "—"}</div>}
         </div>
         {r && <span className={"z-pill " + m.tone} style={{ marginLeft: 12 }}><span className={"z-dot " + (m.tone === "good" ? "ok" : m.tone === "bad" ? "error" : "off")} />{m.label}</span>}
+        {r && <button className="z-btn g sm" onClick={copy} title="Device, time, id and the run's link, to paste to an agent">{copied || "Copy"}</button>}
         <button className="z-x" aria-label="Close" onClick={onClose}><svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" /></svg></button>
       </div>
       <div className="z-drawer-b">

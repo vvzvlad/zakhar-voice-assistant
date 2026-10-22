@@ -5,12 +5,13 @@
 // Also the device column, which shows a device's label and filters by it from a
 // dropdown, the Result dropdown, the request of an announcement, which is no request
 // rather than silence, the detail of a duplicate, which is no verifier reject, and the
-// detail's dated header, its Metadata and what its Total spans.
+// detail's dated header, its copy button, its Metadata and what its Total spans.
 import React from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, cleanup, waitFor, within } from "@testing-library/react";
 import Log from "../pages/log.jsx";
 import { getRuns, getRun } from "../api.js";
+import { fmtTime } from "../runsModel.js";
 
 vi.mock("../appData.jsx", () => ({
   useDeviceList: () => [{ name: "kitchen", label: "Кухня" }],
@@ -20,6 +21,7 @@ vi.mock("../appData.jsx", () => ({
 vi.mock("../api.js", () => ({
   getRuns: vi.fn(),
   getRun: vi.fn(),
+  runLink: vi.fn((id) => `http://panel:8201/api/runs/${id}`),
   openRunsStream: vi.fn(() => () => {}),
   runAudioUrl: vi.fn(() => ""),
   downloadRunAudio: vi.fn(),
@@ -109,6 +111,35 @@ describe("Request log — chains", () => {
     await screen.findByText("Metadata");
     expect(screen.getByText("Simple NLU (no LLM) · 0 tokens")).toBeInTheDocument();
     expect(screen.getByText("id 7 · end of phrase")).toBeInTheDocument();
+  });
+
+  it("copies the device, time, id and the run's link, without how the run ended", async () => {
+    const writeText = vi.fn().mockResolvedValue();
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    getRun.mockResolvedValue({ ...ROW, reason: "endpoint" });
+    render(<Log />);
+    fireEvent.click((await screen.findAllByText("Солнечно"))[0]);
+    fireEvent.click(await screen.findByRole("button", { name: "Copy" }));
+    await screen.findByRole("button", { name: "Copied" });
+    expect(writeText).toHaveBeenCalledWith(`id 7, ${fmtTime(0, true)}\ndevice Кухня, http://panel:8201/api/runs/7`);
+  });
+
+  it("copies through a hidden text field over plain http, where the browser has no Clipboard API", async () => {
+    Object.defineProperty(navigator, "clipboard", { value: undefined, configurable: true });
+    let copied;
+    document.execCommand = vi.fn(() => { copied = document.activeElement.value; return true; });
+    try {
+      getRun.mockResolvedValue({ ...ROW, reason: "endpoint" });
+      render(<Log />);
+      fireEvent.click((await screen.findAllByText("Солнечно"))[0]);
+      fireEvent.click(await screen.findByRole("button", { name: "Copy" }));
+      await screen.findByRole("button", { name: "Copied" });
+      expect(document.execCommand).toHaveBeenCalledWith("copy");
+      expect(copied).toBe(`id 7, ${fmtTime(0, true)}\ndevice Кухня, http://panel:8201/api/runs/7`);
+      expect(document.querySelector("textarea")).toBeNull();
+    } finally {
+      delete document.execCommand;
+    }
   });
 
   it("names the failed stage with a capital letter", async () => {

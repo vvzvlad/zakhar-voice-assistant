@@ -224,6 +224,10 @@ export const getRuns = (params = {}) => {
 };
 export const getRun = (id) => request(`/api/runs/${encodeURIComponent(id)}`);
 
+// The run's JSON as a full address on the server this panel talks to: the Request Log's
+// copy button hands it to agents, who fetch it with curl.
+export const runLink = (id) => new URL(`${BASE}/api/runs/${encodeURIComponent(id)}`, window.location.href).href;
+
 // Absolute URL of a run's stored utterance WAV (for an <audio> src). BASE is "" in
 // prod (same origin) or an absolute base in dev. Optional channel ("stt" | "raw")
 // asks the backend to split that channel out of a stereo recording as mono.

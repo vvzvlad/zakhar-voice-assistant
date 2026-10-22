@@ -2,7 +2,7 @@
 // so it is exercised through the exported `getCatalog` GET wrapper; `getRuns` is
 // tested directly for its query-string builder. global.fetch is stubbed per test.
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { ApiError, getCatalog, getRuns, runAudioUrl, uploadWakeModel } from "../api.js";
+import { ApiError, getCatalog, getRuns, runAudioUrl, runLink, uploadWakeModel } from "../api.js";
 
 // Build a minimal Response-like stub for the request() body-reading path.
 function mockResponse({ ok = true, status = 200, text = "" }) {
@@ -135,5 +135,14 @@ describe("runAudioUrl", () => {
   it("appends ?channel= for the per-channel players", () => {
     expect(runAudioUrl(7, "stt")).toBe("/api/runs/7/audio?channel=stt");
     expect(runAudioUrl(7, "raw")).toBe("/api/runs/7/audio?channel=raw");
+  });
+});
+
+describe("runLink", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("is the run's full address on the server the panel was opened from", () => {
+    vi.stubGlobal("window", { location: { href: "http://10.31.41.59:8201/log" } });
+    expect(runLink(4397)).toBe("http://10.31.41.59:8201/api/runs/4397");
   });
 });
