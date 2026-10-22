@@ -794,12 +794,13 @@ class Pipeline(SpeechMixin):
 
     def _llm_request(self, text: str) -> llm.LlmRequest:
         """A handler's input for `text`: the assembled system prompt (a SQLite read
-        of the active profile), the context history and the originating device. The
-        prompt's wake word is the device model's, else the word the device reported in
-        its latest wake (an uploaded model has no manifest)."""
+        of the active profile, a read of the memory file), the context history and the
+        originating device. The prompt's wake word is the device model's, else the word
+        the device reported in its latest wake (an uploaded model has no manifest)."""
         wake_word = self.wake_word() or (self._current.word if self._current is not None else None)
+        memory = self.rt.memory.facts() if self.rt.memory is not None else None
         return llm.LlmRequest(
-            system_prompt=build_system_prompt(self.core, self.prompt_store, wake_word),
+            system_prompt=build_system_prompt(self.core, self.prompt_store, wake_word, memory),
             history=context.load_context(
                 self._context_path,
                 max_turns=self.core.context.max_turns,

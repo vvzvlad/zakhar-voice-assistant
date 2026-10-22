@@ -10,7 +10,7 @@ from src.mcp_client import McpToolHub
 from src.tool_hub import BuiltinMcpSource, HttpMcpSource
 
 
-def build_sources(core, http_cloud, scheduler, assistant_tasks, get_manager):
+def build_sources(core, http_cloud, scheduler, assistant_tasks, get_manager, memory):
     """Return the list of ToolSources for `core`.
 
     `http_cloud` is the proxied client the OpenWeatherMap built-in uses; `scheduler`
@@ -18,7 +18,8 @@ def build_sources(core, http_cloud, scheduler, assistant_tasks, get_manager):
     `assistant_tasks` (an AssistantTasks or None) backs the assistant_tasks source,
     which also needs core.assistant_tasks enabled with a url and a secret;
     `get_manager` (a zero-arg callable returning the DeviceManager) backs the volume
-    source, which is always present."""
+    source, which is always present; `memory` (a MemoryStore or None) backs the memory
+    source — None omits it."""
     sources = []
     for srv in core.mcp_servers:
         if srv.enabled and srv.url and srv.name:
@@ -50,4 +51,8 @@ def build_sources(core, http_cloud, scheduler, assistant_tasks, get_manager):
                                         slow=False))
     # One message to the speaker: fast, no filler.
     sources.append(BuiltinMcpSource("volume", build_volume_server(get_manager), slow=False))
+    if memory is not None:
+        from src.builtin_mcp.memory import build_memory_server
+        # Memory is an in-process file: fast, no filler.
+        sources.append(BuiltinMcpSource("memory", build_memory_server(memory), slow=False))
     return sources

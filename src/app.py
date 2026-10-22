@@ -17,6 +17,7 @@ from src.chains import referenced_instances
 from src.config_service import ConfigDoc, ConfigService
 from src.device_server import DeviceManager
 from src.mdns_advert import MdnsAdvert
+from src.memory import MemoryStore
 from src.panel_api import PanelServer
 from src.plugins.base import Deps
 from src.prompt_store import PromptStore
@@ -108,6 +109,9 @@ async def main() -> None:
         os.path.join(config_store.DATA_DIR, "prompts.db"),
         seed_path=core.prompt.system_prompt_path,
     )
+    # The facts the assistant saved with its memory tool; the system prompt carries
+    # them at every request (<<<<<MEMORY>>>>>). Starts empty: no file until the first fact.
+    memory = MemoryStore(os.path.join(config_store.DATA_DIR, "memory.json"))
 
     # Live run stream: a broadcast hub shared by the pipeline (producer) and the
     # panel WebSocket endpoint (consumers). Cheap; always created.
@@ -151,6 +155,7 @@ async def main() -> None:
         hub=hub,
         runs_store=runs_store, run_events=run_events,
         prompt_store=prompt_store,
+        memory=memory,
     )
     assistant_tasks.rt = rt
     rt.assistant_tasks = assistant_tasks

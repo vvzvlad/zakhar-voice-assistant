@@ -222,8 +222,9 @@ docker compose pull && docker compose up -d
   с которой пришла задача),
   `prompt.system_prompt_path` (только legacy-сид — промпты теперь живут как
   именованные профили в `data/prompts.db`), `prompt.system` (системный слой перед
-  каждым профилем; `<<<<<WAKE_WORD>>>>>` / `<<<<<TDW>>>>>` заменяются словом активации
-  модели устройства и датой/временем), `agent_mcp` (enabled — обращённый к
+  каждым профилем; `<<<<<WAKE_WORD>>>>>` / `<<<<<TDW>>>>>` / `<<<<<MEMORY>>>>>` заменяются
+  словом активации модели устройства, датой/временем и фактами, которые ассистент сохранил
+  инструментом памяти), `agent_mcp` (enabled — обращённый к
   агенту MCP-эндпоинт, отдаваемый панелью на `/mcp`), `runs` (enabled /
   retention_days), `reminders` (enabled), `capture` (enabled / dir — сохранять
   каждую реплику в WAV), `ack` (enabled / sound_path — звук конца фразы), `commands`
@@ -343,7 +344,7 @@ make fw-host-test fw-voicepe-host-test  # хост-тесты чистых яд�
 | `docs/device-protocol.md` | Протокол поверх WebSocket между сервером и устройствами. |
 | `firmware/` | Прошивка колонки Voice PE (ESP-IDF, C) и общий компонент `zakhar_link`. |
 | `microWakeWord/` | Обучение модели wake-word и развёрнутые модели. |
-| `data/` | Изменяемое состояние: `config.json`, контекст по устройствам, `prompts.db` (именованные профили системных промптов). В gitignore, монтируется как том. |
+| `data/` | Изменяемое состояние: `config.json`, контекст по устройствам, `prompts.db` (именованные промпты персонажей), `memory.json` (факты, которые ассистент сохранил инструментом памяти). В gitignore, монтируется как том. |
 | `models/` | Файлы офлайн-моделей (Vosk / Piper / Silero), скачиваются `make models`. В gitignore; не вшиты в Docker-образ. |
 | `templates/` | Закоммиченные эталонные ассеты (`default_prompt.md`, `default_config.json`), засеваются в `data/` при первом запуске. |
 | `Dockerfile` | Двухстадийная сборка: node-стадия собирает панель, python-стадия несёт только её `dist`; зависимости кешируются до кода; без `EXPOSE`. |

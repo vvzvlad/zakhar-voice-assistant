@@ -12,7 +12,7 @@ class Runtime:
     def __init__(self, svc, *, vad_backend, stt_backends, llm_backends, tts_backends,
                  hub, runs_store=None, run_events=None,
                  prompt_store=None, stress_backend=None, wakeword_backend=None,
-                 followup_backend=None):
+                 followup_backend=None, memory=None):
         self.svc = svc
         # Swappable runtime objects (rebuilt by the reconfigurator in later tiers).
         self.vad_backend = vad_backend
@@ -41,6 +41,10 @@ class Runtime:
         self.runs_store = runs_store
         self.run_events = run_events
         self.prompt_store = prompt_store  # PromptStore (system-prompt profiles)
+        # MemoryStore (the facts the assistant saved; backs the memory tool source and the
+        # prompt's <<<<<MEMORY>>>>>). Defaults to None so test fixtures that don't pass it
+        # keep working (no memory source, the placeholder reads «(пусто)»).
+        self.memory = memory
         # Set post-construction in app.py; mutated by the Reconfigurator on hot-reload.
         self.manager = None         # DeviceManager (device server; device rebuild + rebind)
         self.advert = None          # MdnsAdvert (the device server's mDNS record; restarted on a rebind)

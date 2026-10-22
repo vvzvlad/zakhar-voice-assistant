@@ -46,7 +46,7 @@ configured under `core.mcp_servers` in `data/config.json`.
   git dependency pinned to a commit of this repo, so a protocol change reaches the panel by
   moving that pin.
 - `microWakeWord/` — wake-word model training research and the deployed models.
-- `data/` — runtime state: `config.json`, per-device context files, `prompts.db` (SQLite store of named system-prompt profiles), `captures/` and `datasets/` (device recordings, `src/captures.py`), `device_logs/` (the speakers' own logs, `src/device_logs.py`) (gitignored, docker volume)
+- `data/` — runtime state: `config.json`, per-device context files, `prompts.db` (SQLite store of named character prompts), `memory.json` (facts the assistant saved with its memory tool, `src/memory.py`), `captures/` and `datasets/` (device recordings, `src/captures.py`), `device_logs/` (the speakers' own logs, `src/device_logs.py`) (gitignored, docker volume)
 - `templates/` — committed reference assets seeded into `data/` on first boot (`default_prompt.md`, `default_config.json`)
 - `main.py` — thin entry point over `src/`
 

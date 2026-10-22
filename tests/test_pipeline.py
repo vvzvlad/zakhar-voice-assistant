@@ -23,6 +23,7 @@ from src.core_config import (
 from src.llm import LlmResult
 from src.pipeline import SAMPLE_RATE, Pipeline
 from src.llm_text import clean_llm_output
+from src.memory import MemoryStore
 from src.pipeline_events import StageEvent
 from src.plugins.llm.base import LlmConfig
 from src.plugins.vad.webrtc import WebRtcVadBackend
@@ -2250,6 +2251,17 @@ def test_llm_request_names_the_wake_word_of_the_model_else_the_wake(tmp_path, mo
     assert pipeline._llm_request("x").system_prompt.startswith("WAKE «Екатерина»\n\n")
     pipeline.wake_word = lambda: None
     assert pipeline._llm_request("x").system_prompt.startswith("WAKE «Алекса»\n\n")
+
+
+def test_llm_request_carries_the_facts_of_the_memory_store(tmp_path, monkeypatch):
+    # Every request reads the runtime's MemoryStore anew; without a store the
+    # placeholder reads «(пусто)».
+    pipeline, _ = make_pipeline(tmp_path, monkeypatch)
+    pipeline.rt.core.prompt.system = "MEMORY <<<<<MEMORY>>>>>"
+    assert pipeline._llm_request("x").system_prompt.startswith("MEMORY (пусто)\n\n")
+    pipeline.rt.memory = MemoryStore(str(tmp_path / "memory.json"))
+    pipeline.rt.memory.add("Пользователь — мужчина")
+    assert pipeline._llm_request("x").system_prompt.startswith("MEMORY - Пользователь — мужчина\n\n")
 
 
 async def test_llm_backend_hot_swap_applies_on_next_run(tmp_path, monkeypatch):

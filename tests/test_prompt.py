@@ -171,3 +171,24 @@ def test_build_system_prompt_an_unknown_wake_word_is_empty(tmp_path):
 
     assert build_system_prompt(core, store) == "SYSTEM «»\n\nPROFILE «»"
     store.close()
+
+
+def test_build_system_prompt_lists_the_memory_facts(tmp_path):
+    # In both texts <<<<<MEMORY>>>>> becomes one «- fact» line per saved fact.
+    store = _store(tmp_path, "PROFILE\n<<<<<MEMORY>>>>>")
+    core = CoreConfig(prompt=PromptConfig(system="SYSTEM\n<<<<<MEMORY>>>>>"))
+
+    out = build_system_prompt(core, store, memory=["Пользователь — мужчина", "Кота зовут Барсик"])
+
+    facts = "- Пользователь — мужчина\n- Кота зовут Барсик"
+    assert out == f"SYSTEM\n{facts}\n\nPROFILE\n{facts}"
+    store.close()
+
+
+def test_build_system_prompt_no_memory_reads_empty(tmp_path):
+    store = _store(tmp_path, "PROFILE <<<<<MEMORY>>>>>")
+    core = CoreConfig()
+
+    assert build_system_prompt(core, store, memory=[]) == "PROFILE (пусто)"
+    assert build_system_prompt(core, store) == "PROFILE (пусто)"
+    store.close()

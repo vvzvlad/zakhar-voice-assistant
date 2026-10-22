@@ -217,8 +217,9 @@ Shape (see `templates/default_config.json` for the full default):
   its webhook channel; its `send_url` must point at `http://<host>:8201/api/assistant-tasks/reply`,
   where each reply is stored and spoken on the speaker the job came from), `prompt.system_prompt_path`
   (legacy seed only — prompts now live as named profiles in `data/prompts.db`), `prompt.system`
-  (the system layer put before every profile; `<<<<<WAKE_WORD>>>>>` / `<<<<<TDW>>>>>` are
-  replaced with the device model's wake word and the date/time),
+  (the system layer put before every profile; `<<<<<WAKE_WORD>>>>>` / `<<<<<TDW>>>>>` /
+  `<<<<<MEMORY>>>>>` are replaced with the device model's wake word, the date/time and the
+  facts the assistant saved with its memory tool),
   `agent_mcp` (enabled — the agent-facing MCP endpoint served by the panel at `/mcp`),
   `runs` (enabled / retention_days),
   `reminders` (enabled), `capture` (enabled / dir — save every utterance as WAV),
@@ -339,7 +340,7 @@ make fw-host-test fw-voicepe-host-test  # host tests of the pure C cores
 | `docs/device-protocol.md` | The WebSocket protocol between the server and the devices. |
 | `firmware/` | Voice PE speaker firmware (ESP-IDF C) and the shared `zakhar_link` component. |
 | `microWakeWord/` | Wake-word model training and the deployed models. |
-| `data/` | Runtime state: `config.json`, per-device context, `prompts.db` (named system-prompt profiles). Gitignored, mounted as a volume. |
+| `data/` | Runtime state: `config.json`, per-device context, `prompts.db` (named character prompts), `memory.json` (facts the assistant saved with its memory tool). Gitignored, mounted as a volume. |
 | `models/` | Offline model files (Vosk / Piper / Silero), fetched by `make models`. Gitignored; not bundled in the Docker image. |
 | `templates/` | Committed reference assets (`default_prompt.md`, `default_config.json`) seeded into `data/` on first boot. |
 | `Dockerfile` | Two-stage build: a node stage builds the panel, the python stage carries only its `dist`; deps cached before code; no `EXPOSE`. |
