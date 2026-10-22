@@ -236,7 +236,8 @@ the answer, so the next phrase needs no wake word:
   device streams live audio from the moment the `listening` arrives, no pre-roll, in the frames of
   a wake. While a proposed wake's audio is streaming, the follow-up goes on in that stream from
   where it is.
-- The server waits `followup` window for speech to start. Silence ends the session with
+- The server drops the first 300 ms of the window's audio, in which the end of the answer still
+  sounds in the room, then waits `followup` window for speech to start. Silence ends the session with
   `state idle`, without a sound. A phrase that is «стоп» ends it the same way without asking jev. Any other phrase goes to the jev decision model with the assistant's name
   (the `word` of the session's `wake`), the last request and answer; one it does not take for a
   continuation of the dialog also ends the session with `state idle`, without a sound and without

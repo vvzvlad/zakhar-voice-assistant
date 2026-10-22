@@ -28,6 +28,7 @@ from tests.test_pipeline import (
     settle,
     types_of,
 )
+from src.voice_run import FOLLOWUP_SKIP_BYTES
 from tests.test_pipeline_wakeword_gate import FakeWakewordVerifier
 
 ANSWERED = [
@@ -79,9 +80,15 @@ async def _answer(pipeline):
     await settle(pipeline)
 
 
+# The start of a follow-up window the pipeline drops: the end of the answer in the room.
+TAIL = b"\x05\x00" * (FOLLOWUP_SKIP_BYTES // 2)
+
+
 async def _say(pipeline, text):
-    """A phrase in the open follow-up window, ended by the server's VAD."""
+    """A phrase in the open follow-up window after its dropped start, ended by the
+    server's VAD."""
     pipeline.rt.stt_backends["fake"].text = text
+    await pipeline.on_audio(TAIL)
     await pipeline.on_audio(PHRASE)
     await settle(pipeline)
 
@@ -127,8 +134,9 @@ async def test_silence_in_the_window_ends_the_session_unrecorded(tmp_path, monke
     await _answer(pipeline)
     events.clear()
 
-    # 240 ms of silence past the 200 ms window: the VAD ends the run with no_speech.
-    await pipeline.on_audio(FRAME * 12)
+    # After the dropped start, 240 ms of silence past the 200 ms window: the VAD ends
+    # the run with no_speech.
+    await pipeline.on_audio(TAIL + FRAME * 12)
     await settle(pipeline)
     assert events == [(StageEvent.STT_END, {"text": ""}), (StageEvent.RUN_END, {})]
     assert len(store.records) == 1          # the answered run only
@@ -277,11 +285,34 @@ async def test_the_stop_word_as_a_phrase_ends_the_session_silently(tmp_path, mon
     assert pipeline.rt.followup_backend.calls == []
 
 
-async def test_a_follow_up_phrase_keeps_its_start(tmp_path, monkeypatch):
-    # trim_start_ms cuts a wake word's tail; a follow-up phrase has none to cut.
+async def test_a_follow_up_window_drops_the_answers_end_and_keeps_the_phrase(tmp_path, monkeypatch):
+    # The window's first FOLLOWUP_SKIP_MS (the end of the answer still in the room) reach
+    # nothing; the phrase after them keeps its start: trim_start_ms cuts a wake word's
+    # tail, and a follow-up phrase has none. The dropped part may arrive split across
+    # chunks.
     pipeline, _ = _make(tmp_path, monkeypatch)
     pipeline.rt.core.vad.trim_start_ms = 10
     await _answer(pipeline)
+    heard = []
+    pipeline.rt.stt_backends["fake"].transcribe = lambda pcm: heard.append(pcm) or _text()
+    await pipeline.on_audio(TAIL[:1000])
+    await pipeline.on_audio(TAIL[1000:] + PHRASE)
+    await settle(pipeline)
+    assert heard == [PHRASE]
+
+
+async def test_a_wake_held_in_the_window_uses_up_its_dropped_start(tmp_path, monkeypatch):
+    # A wake over the open window is held: the device's stream goes to it. Once the
+    # check rejects it, the window hears the stream from where it is: what the wake
+    # took counts against the dropped start.
+    pipeline, _ = _make(tmp_path, monkeypatch)
+    pipeline.rt.wakeword_backend = FakeWakewordVerifier(accepted=False, window_ms=2000)
+    pipeline.end_wake = lambda cid: None
+    await _answer(pipeline)
+    pipeline.on_wake("s2", "Захар", over_answer=True)
+    await pipeline.on_audio(TAIL)
+    await pipeline.on_audio(bytes(64000))  # past the check's window: rejected
+    await settle(pipeline)
     heard = []
     pipeline.rt.stt_backends["fake"].transcribe = lambda pcm: heard.append(pcm) or _text()
     await pipeline.on_audio(PHRASE)

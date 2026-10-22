@@ -41,7 +41,7 @@ from src.prompt import build_system_prompt
 from src.runs_store import live_row, new_record, summary_row
 from src.followup import NoFollowup
 from src.speech import SpeechMixin
-from src.voice_run import PREROLL_BYTES, PREROLL_MS, Run
+from src.voice_run import FOLLOWUP_SKIP_BYTES, PREROLL_BYTES, PREROLL_MS, Run
 from src.wakeword import PassthroughVerifier
 from src.vad import SAMPLE_RATE, EndpointPolicy
 
@@ -397,12 +397,13 @@ class Pipeline(SpeechMixin):
         released at once: it cancels nothing (it is armed inside the answering run),
         keeps the session wake's word for the follow-up check, has no pre-roll and no
         wake-word check, and the VAD ends it with no_speech when speech does not start
-        within the stage's window."""
+        within the stage's window, counted after the FOLLOWUP_SKIP_MS it drops."""
         window_ms = self.rt.followup_backend.window_ms
         run = self._current = self._new_run(
             answered.cid, answered.word, preroll_ms=0, no_speech_timeout_ms=window_ms,
             followup=(answered.word, request, reply), taken=True)
         run.verdict = True
+        run.skip_bytes = FOLLOWUP_SKIP_BYTES
         logger.info(f"{self.name}: 👂 listening for a follow-up ({window_ms} ms)")
         self._emit(StageEvent.STT_VAD_START, {})
         self._release(run)
@@ -512,6 +513,21 @@ class Pipeline(SpeechMixin):
                 )
         else:
             other = data2  # may be None when the device streams a single channel
+
+        # A follow-up window's start carries the end of the device's own answer: no VAD,
+        # STT or stored audio of the window hears it. It is counted on the device's
+        # stream, so the part a proposed wake took (the window opened while it was held)
+        # counts too.
+        window = self._current
+        if window is not None and window.skip_bytes:
+            cut = min(window.skip_bytes, len(data))
+            window.skip_bytes -= cut
+            if run is window:
+                data = data[cut:]
+                if other:
+                    other = other[cut:]
+                if not data:
+                    return
 
         # Held (not released): the wake-word check or the cross-device arbitration
         # hasn't ruled yet, or the run lost the arbitration. Keep accumulating the
