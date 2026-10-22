@@ -11,7 +11,7 @@ synchronous and serialized by a threading.Lock, WAL journaling).
 
 The scheduler drives delivery on the event loop with a single-timer + wakeup-event
 pattern: it sleeps until the earliest due time, fires everything then due, and wakes
-early whenever a row is added or cancelled. Rows that came due while the process was
+early whenever a row is added, changed or cancelled. Rows that came due while the process was
 down are taken once at start() without firing: a repeating alarm moves on, the rest
 are dropped.
 """
@@ -206,6 +206,31 @@ class RemindersStore:
             self._conn.commit()
         return rows
 
+    def update(self, reminder_id, **fields) -> dict | None:
+        """Change one row's text, due_ts and/or days (the keywords given; days None makes
+        an alarm one-shot) and return the row as stored, or None when no row has that id.
+        When due_ts or days changes on a row left with repeat days, its due time becomes
+        the next occurrence of its local hour:minute on those days after now, so a
+        repeating alarm always sits on one of its days. Read and write happen under one
+        lock so pop_due can't fire or move the row in between."""
+        with self._lock:
+            r = self._conn.execute(
+                f"SELECT {', '.join(_COLS)} FROM reminders WHERE id = ?", (reminder_id,)
+            ).fetchone()
+            if r is None:
+                return None
+            row = {**_row(r), **fields}
+            if row["days"] and ("due_ts" in fields or "days" in fields):
+                at = datetime.fromtimestamp(row["due_ts"])
+                row["due_ts"] = next_occurrence(at.hour, at.minute, row["days"], time.time())
+            self._conn.execute(
+                "UPDATE reminders SET text = ?, due_ts = ?, days = ? WHERE id = ?",
+                (row["text"], row["due_ts"],
+                 ",".join(map(str, row["days"])) if row["days"] else None, reminder_id),
+            )
+            self._conn.commit()
+        return row
+
     def delete(self, reminder_id) -> bool:
         """Delete one reminder by id; return whether a row existed."""
         with self._lock:
@@ -223,7 +248,7 @@ class ReminderScheduler:
     """Drives the delivery of due rows on the event loop.
 
     Single-timer + wakeup-event loop: sleep until the earliest due time, fire
-    everything then due, wake early on add()/cancel(). The `deliver` callback is an
+    everything then due, wake early on add()/update()/cancel(). The `deliver` callback is an
     async callable (row: dict) -> None taking the whole row (DeviceManager.fire),
     assigned late by app.py once the device manager exists.
     """
@@ -250,6 +275,13 @@ class ReminderScheduler:
         ok = self.store.delete(reminder_id)
         self._wakeup.set()
         return ok
+
+    def update(self, reminder_id, **fields) -> dict | None:
+        """Change a pending row (RemindersStore.update); wake the loop to re-evaluate the
+        earliest due time. Return the row as stored, or None when it does not exist."""
+        row = self.store.update(reminder_id, **fields)
+        self._wakeup.set()
+        return row
 
     def pending(self) -> list[dict]:
         return self.store.list_pending()
@@ -298,7 +330,7 @@ class ReminderScheduler:
             if delay > 0:
                 try:
                     await asyncio.wait_for(self._wakeup.wait(), timeout=delay)
-                    continue  # woken by add()/cancel(): re-evaluate earliest
+                    continue  # woken by add()/update()/cancel(): re-evaluate earliest
                 except asyncio.TimeoutError:
                     pass  # delay elapsed: fire everything now due
             for r in self.store.pop_due(time.time()):

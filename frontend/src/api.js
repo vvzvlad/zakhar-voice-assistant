@@ -100,6 +100,15 @@ export const activatePromptProfile = (id, { applyVoice = false } = {}) =>
 // replaces them and returns {facts} as stored (normalized, empty lines and repeats dropped).
 export const getMemory = () => request("/api/memory");
 export const putMemory = (facts) => request("/api/memory", { method: "PUT", body: { facts } });
+// The reminder scheduler's pending rows (reminders, timers, alarms, deferred commands):
+// GET returns {items: [{id, kind, text, due_ts, days, device, created_ts}]}, soonest first;
+// PATCH changes any of text, due_ts (epoch seconds) and days (an alarm's ISO weekdays,
+// null = one-shot) and returns the row as stored; DELETE cancels the row.
+export const getReminders = () => request("/api/reminders");
+export const patchReminder = (id, body) =>
+  request(`/api/reminders/${encodeURIComponent(id)}`, { method: "PATCH", body });
+export const deleteReminder = (id) =>
+  request(`/api/reminders/${encodeURIComponent(id)}`, { method: "DELETE" });
 export const getSystem = () => request("/api/system");
 export const getDevices = () => request("/api/devices");
 

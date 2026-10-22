@@ -2,10 +2,11 @@
 
 Layers covered:
   * RemindersStore (sync SQLite): insert/list ordering, next_due_ts, pop_due (a
-    repeating alarm moves on, the rest is deleted), delete, NULL device.
+    repeating alarm moves on, the rest is deleted), update (a repeating alarm stays on
+    its days), delete, NULL device.
   * next_occurrence and the spoken phrases of reminders, timers and alarms.
   * ReminderScheduler (async): fires the row after due, takes overdue rows on start
-    without firing, cancel.
+    without firing, cancel, an update to an earlier time wakes the loop.
   * Built-in reminders MCP server driven through BuiltinMcpSource.call_tool:
     set_reminder reads current_device, the timer/alarm/command tools, list/cancel text
     output.
@@ -126,6 +127,26 @@ def test_delete_returns_true_false(tmp_path):
     store.close()
 
 
+def test_update_changes_one_row_and_keeps_a_repeating_alarm_on_its_days(tmp_path):
+    store = _store(tmp_path)
+    due = time.time() + 3600
+    rid = store.insert("молоко", due, "kitchen")
+    alarm = store.insert(None, due + 60, "kitchen", kind="alarm")
+    assert store.update(99999, text="x") is None
+    row = store.update(rid, text="хлеб", due_ts=due + 7200)
+    assert (row["text"], row["due_ts"], row["days"]) == ("хлеб", due + 7200, None)
+    # Given days, the alarm moves to the next occurrence of its local time on them.
+    at = datetime.fromtimestamp(due + 60)
+    moved = store.update(alarm, days=[3, 6])
+    assert moved["days"] == [3, 6]
+    assert moved["due_ts"] == next_occurrence(at.hour, at.minute, [3, 6], time.time())
+    # Without days it rings once, at the time it has.
+    assert store.update(alarm, days=None)["due_ts"] == moved["due_ts"]
+    assert {r["id"]: (r["text"], r["due_ts"], r["days"]) for r in store.list_pending()} == {
+        rid: ("хлеб", due + 7200, None), alarm: (None, moved["due_ts"], None)}
+    store.close()
+
+
 def test_device_stored_and_returned_including_none(tmp_path):
     store = _store(tmp_path)
     store.insert("named", time.time() + 10, "kitchen")
@@ -210,6 +231,27 @@ def test_scheduler_cancel_prevents_fire(tmp_path):
 
     asyncio.run(main())
     assert captured == []
+    store.close()
+
+
+def test_scheduler_update_wakes_the_loop_for_an_earlier_due_time(tmp_path):
+    store = _store(tmp_path)
+    fired = asyncio.Event()
+
+    async def fake_deliver(row):
+        fired.set()
+
+    async def main():
+        sched = ReminderScheduler(store)
+        sched.deliver = fake_deliver
+        await sched.start()
+        rid = sched.add("молоко", time.time() + 3600, "kitchen")
+        await asyncio.sleep(0.05)  # the loop now sleeps toward the hour-away due time
+        sched.update(rid, due_ts=time.time() + 0.05)
+        await asyncio.wait_for(fired.wait(), timeout=2.0)
+        await sched.stop()
+
+    asyncio.run(main())
     store.close()
 
 

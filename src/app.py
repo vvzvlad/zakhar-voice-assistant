@@ -219,6 +219,7 @@ async def main() -> None:
             run_events=run_events,
             prompt_store=prompt_store,
             memory=memory,
+            reminders=lambda: rt.scheduler,
             agent_mcp=agent_mcp,
             assistant_task_reply=assistant_tasks.on_reply,
             reload_status=reconf.reloading,

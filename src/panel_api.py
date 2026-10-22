@@ -199,8 +199,8 @@ class PanelServer:
     def __init__(self, svc, host, port, *, version, started_at,
                  devices=None,
                  static_dir=None, runs_store=None, tool_sources=None,
-                 run_events=None, prompt_store=None, memory=None, agent_mcp=None,
-                 assistant_task_reply=None,
+                 run_events=None, prompt_store=None, memory=None, reminders=None,
+                 agent_mcp=None, assistant_task_reply=None,
                  heartbeat_interval: float = 1.0, reload_status=None):
         # svc: ConfigService; started_at: float (time.time())
         # devices: optional DeviceManager behind the device endpoints (status, controls, wake
@@ -215,6 +215,9 @@ class PanelServer:
         #   every /api/prompt* endpoint returns 503
         # memory: optional MemoryStore (the facts the assistant saved with its memory
         #   tool); None -> /api/memory returns 503
+        # reminders: optional zero-arg callable -> the live ReminderScheduler, or None while
+        #   the reminders subsystem is off; called per request, since the hot reminders
+        #   toggle swaps the scheduler. None (or a None result) -> /api/reminders* return 503
         # agent_mcp: optional AgentMcpEndpoint (the agent-facing MCP server bridged
         #   at /mcp); None -> /mcp returns 503 (API-only / boot-failure tolerant,
         #   mirroring runs_store=None). Its start/stop lifecycle is owned by this
@@ -236,6 +239,7 @@ class PanelServer:
         self.run_events = run_events
         self.prompt_store = prompt_store
         self.memory = memory
+        self.reminders = reminders
         self.agent_mcp = agent_mcp
         # assistant_task_reply: optional async callable (payload) -> (status, body) that
         #   takes one reply of the ZeroClaw assistant (AssistantTasks.on_reply). None ->
@@ -712,6 +716,91 @@ class PanelServer:
             )
         stored = await asyncio.to_thread(self.memory.replace, facts)
         return web.json_response({"facts": stored})
+
+    # --- scheduled rows (reminders, timers, alarms, deferred commands) ---------------
+    # The scheduler is called on the event loop, not in a thread: its update() and
+    # cancel() set an asyncio.Event, which is not thread-safe.
+    def _scheduler(self):
+        """The live ReminderScheduler, or None while the reminders subsystem is off."""
+        return self.reminders() if self.reminders is not None else None
+
+    async def _get_reminders(self, request: web.Request) -> web.Response:
+        """Every pending row of the scheduler, soonest first, as {"items": [...]}."""
+        scheduler = self._scheduler()
+        if scheduler is None:
+            return web.json_response({"error": "reminders not available"}, status=503)
+        return web.json_response({"items": scheduler.pending()})
+
+    async def _patch_reminder(self, request: web.Request) -> web.Response:
+        """Change one row. Body: any of {"text": a string, non-empty for a reminder or a
+        command (a timer's or an alarm's label may be empty), "due_ts": epoch seconds, in
+        the future unless the row is or becomes a repeating alarm, "days": an alarm's
+        repeat weekdays (distinct ISO 1..7) or null for one-shot}. Answers the row as
+        stored: a repeating alarm's due time is moved onto the next of its days
+        (RemindersStore.update)."""
+        scheduler = self._scheduler()
+        if scheduler is None:
+            return web.json_response({"error": "reminders not available"}, status=503)
+        rid = self._profile_id(request)
+        if rid is None:
+            return web.json_response({"error": "invalid id"}, status=400)
+        body = await _read_json(request)
+        if not isinstance(body, dict):
+            return web.json_response({"error": "body must be a JSON object"}, status=400)
+        fields = {k: body[k] for k in ("text", "due_ts", "days") if k in body}
+        if not fields:
+            return web.json_response(
+                {"error": 'at least one of "text" / "due_ts" / "days" is required'}, status=400
+            )
+        row = next((r for r in scheduler.pending() if r["id"] == rid), None)
+        if row is None:
+            return web.json_response({"error": "not found"}, status=404)
+        if "text" in fields:
+            # A timer's or an alarm's text is its optional label; a reminder and a
+            # command are their text.
+            labelled = row["kind"] in ("timer", "alarm")
+            if not isinstance(fields["text"], str) or not (fields["text"].strip() or labelled):
+                return web.json_response(
+                    {"error": 'field "text" must be a non-empty string'}, status=400
+                )
+            fields["text"] = fields["text"].strip()
+        # A repeating alarm's due time only carries its hour:minute: the store moves it
+        # onto the next of its days, so a time already past today is fine.
+        repeating = row["kind"] == "alarm" and bool(fields.get("days", row["days"]))
+        if "due_ts" in fields:
+            due = fields["due_ts"]
+            if (isinstance(due, bool) or not isinstance(due, (int, float))
+                    or (due <= time.time() and not repeating)):
+                return web.json_response(
+                    {"error": 'field "due_ts" must be a time in the future (epoch seconds)'},
+                    status=400,
+                )
+        if "days" in fields:
+            days = fields["days"]
+            if row["kind"] != "alarm":
+                return web.json_response({"error": 'only an alarm has "days"'}, status=400)
+            if days is not None and not (
+                isinstance(days, list) and days and len(set(days)) == len(days)
+                and all(type(d) is int and 1 <= d <= 7 for d in days)
+            ):
+                return web.json_response(
+                    {"error": 'field "days" must be null or a non-empty list of '
+                              'distinct weekdays 1..7'}, status=400,
+                )
+        # No await since the lookup: the row is still there.
+        return web.json_response(scheduler.update(rid, **fields))
+
+    async def _delete_reminder(self, request: web.Request) -> web.Response:
+        """Cancel one row by id."""
+        scheduler = self._scheduler()
+        if scheduler is None:
+            return web.json_response({"error": "reminders not available"}, status=503)
+        rid = self._profile_id(request)
+        if rid is None:
+            return web.json_response({"error": "invalid id"}, status=400)
+        if not scheduler.cancel(rid):
+            return web.json_response({"error": "not found"}, status=404)
+        return web.json_response({"ok": True})
 
     def _system_snapshot(self) -> dict:
         # Lightweight system/liveness payload shared by /api/system and the WS
@@ -1468,6 +1557,9 @@ class PanelServer:
             web.post("/api/prompt/profiles/{id}/activate", self._activate_prompt_profile),
             web.get("/api/memory", self._get_memory),
             web.put("/api/memory", self._put_memory),
+            web.get("/api/reminders", self._get_reminders),
+            web.patch("/api/reminders/{id}", self._patch_reminder),
+            web.delete("/api/reminders/{id}", self._delete_reminder),
             web.get("/api/system", self._get_system),
             web.get("/api/devices", self._get_devices),
             web.get("/api/device/controls", self._get_device_controls),

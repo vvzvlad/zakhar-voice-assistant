@@ -10,7 +10,8 @@
 // with one Save (the Tools page's server edits included), typing in the System Prompt
 // editor keeps the page's scroll position, deleting an MCP server
 // asks first, the built-in sources start folded and say "built-in" once, the Tools
-// page's Memory card edits the saved facts under the same Save, a
+// page's Memory card edits the saved facts under the same Save, its Reminders card lists
+// the scheduled rows and edits and deletes them under the same Save, a
 // switched-off server keeps its controls unfaded and a switched-off speaker fades.
 import React from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
@@ -19,7 +20,7 @@ import { MCP } from "../pages/tools.jsx";
 import { Prompt, SystemPrompt } from "../pages/prompt.jsx";
 import { Devices } from "../pages/devices.jsx";
 import { useAppData } from "../appData.jsx";
-import { getOptions, getPromptProfiles, getPromptProfile, updatePromptProfile, activatePromptProfile, getTools, getMemory, putMemory } from "../api.js";
+import { getOptions, getPromptProfiles, getPromptProfile, updatePromptProfile, activatePromptProfile, getTools, getMemory, putMemory, getReminders, patchReminder, deleteReminder } from "../api.js";
 import { faded } from "./faded.js";
 
 vi.mock("../appData.jsx", () => ({ useAppData: vi.fn() }));
@@ -32,6 +33,9 @@ vi.mock("../api.js", () => ({
   getTools: vi.fn(async () => ({ sources: [] })),
   getMemory: vi.fn(async () => ({ facts: [] })),
   putMemory: vi.fn(async (facts) => ({ facts })),
+  getReminders: vi.fn(async () => ({ items: [] })),
+  patchReminder: vi.fn(async () => ({})),
+  deleteReminder: vi.fn(async () => ({ ok: true })),
   getConfig: vi.fn(async () => ({ core: { devices: [{ name: "kitchen" }] } })),
 }));
 
@@ -406,6 +410,81 @@ describe("Tools — memory", () => {
     fireEvent.change(await screen.findByLabelText("Memory facts"), { target: { value: "a\nd" } });
     fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
     await waitFor(() => expect(putMemory).toHaveBeenCalledWith(["a", "c", "d"]));
+  });
+});
+
+describe("Tools — reminders", () => {
+  // Epoch seconds of a local date-time.
+  const ts = (...a) => new Date(...a).getTime() / 1000;
+  const row = (id, kind, text, due_ts, extra = {}) => ({ id, kind, text, due_ts, days: null, device: "kitchen", created_ts: 0, ...extra });
+  const rows = async () => {
+    const list = await screen.findAllByTestId("scheduled-row");
+    return list.map((r) => within(r));
+  };
+
+  it("lists each row with its kind, speaker, text and due time, a timer's time left and an alarm's days", async () => {
+    useAppData.mockReturnValue(appData({ devices: [{ name: "kitchen", label: "Kitchen" }] }));
+    getReminders.mockResolvedValueOnce({ items: [
+      row(1, "reminder", "купить молоко", ts(2030, 0, 15, 7, 30, 15)),
+      row(2, "timer", "пицца", Date.now() / 1000 + 270.4, { device: "bedroom" }),
+      row(3, "alarm", null, ts(2030, 0, 16, 7, 0, 0), { days: [1, 5] }),
+      row(4, "command", "выключи свет", ts(2030, 0, 17, 22, 0, 0)),
+    ] });
+    render(<MCP />);
+    const [reminder, timer, alarm, command] = await rows();
+    expect(reminder.getByText("Reminder")).toBeInTheDocument();
+    expect(reminder.getByText("Kitchen")).toBeInTheDocument();
+    expect(reminder.getByLabelText("Text").value).toBe("купить молоко");
+    // jsdom normalizes the input's value ("…T07:30:15.000"), so compare the time it holds.
+    expect(new Date(reminder.getByLabelText("Due time").value).getTime() / 1000).toBe(ts(2030, 0, 15, 7, 30, 15));
+    expect(timer.getByText("bedroom")).toBeInTheDocument();
+    expect(timer.getByText("4m 30s left at load")).toBeInTheDocument();
+    expect(alarm.getByText("Alarm")).toBeInTheDocument();
+    expect(alarm.getAllByRole("button", { pressed: true }).map((b) => b.textContent)).toEqual(["Mon", "Fri"]);
+    expect(alarm.getByText("Repeats on these days")).toBeInTheDocument();
+    expect(command.getByText("Command")).toBeInTheDocument();
+    expect(command.queryByRole("button", { name: "Mon" })).toBeNull();
+    expect(screen.getByText("Reminders").closest("details")).toContainElement(screen.getAllByTestId("scheduled-row")[0]);
+  });
+
+  it("Save sends a PATCH per edited row and a DELETE per deleted one, then reloads the list", async () => {
+    const data = appData();
+    useAppData.mockReturnValue(data);
+    getReminders.mockResolvedValueOnce({ items: [
+      row(1, "reminder", "a", ts(2030, 0, 15, 7, 30, 15)),
+      row(2, "alarm", null, ts(2030, 0, 16, 7, 0, 0), { days: [1] }),
+      row(3, "command", "выключи свет", ts(2030, 0, 17, 22, 0, 0)),
+      row(4, "timer", null, ts(2030, 0, 18, 9, 0, 0)),
+    ] });
+    render(<MCP />);
+    const [reminder, alarm, command] = await rows();
+    fireEvent.change(reminder.getByLabelText("Text"), { target: { value: "b" } });
+    fireEvent.change(reminder.getByLabelText("Due time"), { target: { value: "2030-01-16T08:00:05" } });
+    fireEvent.click(alarm.getByRole("button", { name: "Mon" }));
+    expect(alarm.getByText("Rings once")).toBeInTheDocument();
+    fireEvent.click(command.getByRole("button", { name: "Delete" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(screen.queryByTestId("save-bar")).toBeNull());
+    expect(patchReminder.mock.calls).toEqual([[1, { text: "b", due_ts: ts(2030, 0, 16, 8, 0, 5) }], [2, { days: null }]]);
+    expect(deleteReminder.mock.calls).toEqual([[3]]);
+    expect(getReminders).toHaveBeenCalledTimes(2);
+    expect(data.patch).not.toHaveBeenCalled();
+  });
+
+  it("an edit put back and a Delete undone leave the page clean; an empty list says so", async () => {
+    useAppData.mockReturnValue(appData());
+    getReminders.mockResolvedValueOnce({ items: [row(1, "reminder", "a", ts(2030, 0, 15, 7, 30, 15))] });
+    render(<MCP />);
+    const [reminder] = await rows();
+    fireEvent.change(reminder.getByLabelText("Text"), { target: { value: "b" } });
+    fireEvent.click(reminder.getByRole("button", { name: "Delete" }));
+    expect(screen.getByTestId("save-bar")).toBeInTheDocument();
+    fireEvent.change(reminder.getByLabelText("Text"), { target: { value: "a" } });
+    fireEvent.click(reminder.getByRole("button", { name: "Undo" }));
+    expect(screen.queryByTestId("save-bar")).toBeNull();
+    cleanup();
+    render(<MCP />);
+    expect(await screen.findByText("Nothing is scheduled.")).toBeInTheDocument();
   });
 });
 

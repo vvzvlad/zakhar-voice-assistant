@@ -9,7 +9,8 @@ import { errorLines } from "../useStageForm.js";
 import { usePageForm } from "../usePageForm.js";
 import { deref } from "../schema.js";
 import { BUILTIN_SOURCES } from "../toolSources.js";
-import { getTools, getMemory, putMemory } from "../api.js";
+import { deviceLabel } from "../format.js";
+import { getTools, getMemory, putMemory, getReminders, patchReminder, deleteReminder } from "../api.js";
 
 // ── Tool sources (multi-source view of the ToolHub) ───────────────────────
 // Integration cards driven by CONFIG (so each shows even before it is
@@ -124,6 +125,124 @@ function MemoryFacts({ text, onChange, loadErr }) {
       : loadErr
         ? <div className="z-fh" style={{ color: "#b91c1c" }}>{errorLines(loadErr).join(" · ")}</div>
         : <Loading />}
+  </div>;
+}
+
+const KINDS = { reminder: "Reminder", timer: "Timer", alarm: "Alarm", command: "Command" };
+// An alarm's repeat day buttons, ISO weekdays 1 (Mon) .. 7 (Sun).
+const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+const pad2 = (n) => String(n).padStart(2, "0");
+// Epoch seconds <-> the local "YYYY-MM-DDTHH:MM:SS" of a datetime-local input, in whole
+// seconds; a value the input left empty or half-typed reads as NaN.
+const toLocalInput = (ts) => {
+  const d = new Date(ts * 1000);
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}T${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`;
+};
+const fromLocalInput = (s) => new Date(s).getTime() / 1000;
+// Seconds as "1h 02m 05s" / "4m 30s" / "12s".
+const fmtLeft = (sec) => {
+  const s = Math.max(0, Math.round(sec)), h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
+  return h ? `${h}h ${pad2(m)}m ${pad2(s % 60)}s` : m ? `${m}m ${pad2(s % 60)}s` : `${s}s`;
+};
+
+// The PATCH body of the owner's edit of a scheduled row: only the fields that differ
+// from the row as loaded ({} = nothing changed). `edit` holds what the inputs show:
+// text, due (the datetime-local value) and days (sorted; [] = one-shot).
+function rowChanges(row, edit = {}) {
+  const out = {};
+  if (edit.text !== undefined && edit.text !== (row.text ?? "")) out.text = edit.text;
+  if (edit.due !== undefined && fromLocalInput(edit.due) !== Math.floor(row.due_ts)) out.due_ts = fromLocalInput(edit.due);
+  if (edit.days !== undefined && edit.days.join() !== (row.days || []).join()) out.days = edit.days.length ? edit.days : null;
+  return out;
+}
+
+// The reminders card's draft: the scheduler's pending rows, loaded on mount with the
+// time they were loaded at, and the owner's edits to them by row id ({text, due, days,
+// deleted}, each once touched). save() sends a DELETE or a PATCH per changed row, drops
+// the edits that went through, then loads the rows again; it keeps its own error (the
+// first failure), so it never rejects.
+function useRemindersDraft() {
+  const [list, setList] = useState(null);       // {items, at}; null until loaded
+  const [loadErr, setLoadErr] = useState(null);
+  const [edits, setEdits] = useState({});
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState(null);
+  const load = () => getReminders()
+    .then((r) => { setList({ items: r.items, at: Date.now() / 1000 }); setLoadErr(null); })
+    .catch(setLoadErr);
+  useEffect(() => { load(); }, []);
+  const edit = (id, change) => setEdits((e) => ({ ...e, [id]: { ...e[id], ...change } }));
+  const changed = (list?.items || []).filter((r) => edits[r.id]?.deleted || Object.keys(rowChanges(r, edits[r.id])).length);
+  const save = async () => {
+    setSaving(true); setErr(null);
+    const left = { ...edits };
+    let first = null;
+    for (const r of changed) {
+      try {
+        if (edits[r.id].deleted) await deleteReminder(r.id);
+        else await patchReminder(r.id, rowChanges(r, edits[r.id]));
+        delete left[r.id];
+      } catch (e) { first ??= e; }
+    }
+    setEdits(left); setErr(first);
+    await load();
+    setSaving(false);
+  };
+  return { items: list?.items ?? null, at: list?.at, loadErr, edits, edit, err, saving, save, load, dirty: changed.length > 0 };
+}
+
+// One scheduled row: its kind, speaker, a timer's time left as of loading and Delete
+// (Undo while marked), then its text and due time, and an alarm's repeat days.
+function ScheduledRow({ row, edit, onEdit, device, left }) {
+  const days = edit.days ?? row.days ?? [];
+  const toggleDay = (d) => onEdit({ days: days.includes(d) ? days.filter((x) => x !== d) : [...days, d].sort((a, b) => a - b) });
+  const dim = edit.deleted ? "z-dim" : "";
+  return <div data-testid="scheduled-row" style={{ borderTop: "1px solid var(--line2)", padding: "10px 0" }}>
+    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+      <div className={dim} style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 8, minWidth: 0, flex: 1 }}>
+        <Pill tone="muted">{KINDS[row.kind] || row.kind}</Pill>
+        <span style={{ fontSize: 12, color: "var(--mut)" }}>{device ?? "—"}</span>
+        {row.kind === "timer" && <span className="mono" style={{ fontSize: 11.5, color: "var(--mut)" }}>{fmtLeft(left)} left at load</span>}
+      </div>
+      <button className={"z-btn sm " + (edit.deleted ? "g" : "d")} onClick={() => onEdit({ deleted: !edit.deleted })}>
+        {edit.deleted ? "Undo" : "Delete"}
+      </button>
+    </div>
+    <div className={dim} style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 8 }}>
+      <div className="z-inp sm" style={{ flex: "1 1 220px" }}>
+        <input aria-label="Text" value={edit.text ?? row.text ?? ""} onChange={(e) => onEdit({ text: e.target.value })} />
+      </div>
+      <div className="z-inp sm mono">
+        <input type="datetime-local" step="1" aria-label="Due time" value={edit.due ?? toLocalInput(row.due_ts)}
+          onChange={(e) => onEdit({ due: e.target.value })} />
+      </div>
+    </div>
+    {row.kind === "alarm" && <div className={dim} style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 10, marginTop: 8 }}>
+      <div className="z-seg wrap">
+        {WEEKDAYS.map((name, i) => <button key={name} type="button" className={days.includes(i + 1) ? "on" : ""}
+          aria-pressed={days.includes(i + 1)} onClick={() => toggleDay(i + 1)}>{name}</button>)}
+      </div>
+      <span className="z-fh">{days.length ? "Repeats on these days" : "Rings once"}</span>
+    </div>}
+  </div>;
+}
+
+// The reminders source's list of what its scheduler holds (data/schedule.db, not the
+// config), inside its card. The edits belong to the page, saved with the page's one Save.
+function ScheduledItems({ draft, devices }) {
+  const { items, at, loadErr, edits, edit } = draft;
+  return <div className="z-f">
+    <div className="z-fh" style={{ marginBottom: 8 }}>
+      Reminders, timers, alarms and deferred commands waiting to fire, soonest first. Edit or delete one and Save.
+    </div>
+    {items == null
+      ? loadErr
+        ? <div className="z-fh" style={{ color: "#b91c1c" }}>{errorLines(loadErr).join(" · ")}</div>
+        : <Loading />
+      : items.length === 0
+        ? <div className="z-fh">Nothing is scheduled.</div>
+        : items.map((r) => <ScheduledRow key={r.id} row={r} edit={edits[r.id] || {}} onEdit={(c) => edit(r.id, c)}
+            device={deviceLabel(devices, r.device)} left={r.due_ts - at} />)}
   </div>;
 }
 
@@ -264,13 +383,17 @@ export function MCP() {
   ], patchAndRefresh);
   const servers = form.draftOf("mcp_servers").mcp_servers;   // [{enabled,name,url,token,transport,prompt,slow}]
   const setServers = (list) => form.onChangeOf("mcp_servers")("mcp_servers", list);
-  // The saved facts live outside the config: the page's one Save sends the config patch
-  // and the facts, each only when dirty; the save bar shows the errors of both.
+  // The saved facts and the scheduled rows live outside the config: the page's one Save
+  // sends the config patch, the facts and the rows' edits, each only when dirty; the save
+  // bar shows the errors of all three.
   const memory = useMemoryDraft();
+  const reminders = useRemindersDraft();
   const page = {
-    dirty: form.dirty || memory.dirty,
-    saving: form.saving || memory.saving,
-    save: () => Promise.all([form.dirty && form.save(), memory.dirty && memory.save()]),
+    dirty: form.dirty || memory.dirty || reminders.dirty,
+    saving: form.saving || memory.saving || reminders.saving,
+    // A config save may switch the reminders source on or off: the rows are read again.
+    save: () => Promise.all([form.dirty && form.save().then(reminders.load), memory.dirty && memory.save(),
+      reminders.dirty && reminders.save()]),
   };
 
   const [modal, setModal] = useState(null); // { mode:'add'|'edit', index }
@@ -284,7 +407,7 @@ export function MCP() {
   // server is dropped from the ToolHub and its prompt block.
   const onServerChange = (i) => (field, value) => setServers(servers.map((x, idx) => (idx === i ? { ...x, [field]: value } : x)));
 
-  return <FormPage form={page} narrow errors={[...(form.dirty ? errorLines(form.err) : []), ...(memory.dirty ? errorLines(memory.err) : [])]}>
+  return <FormPage form={page} narrow errors={[...(form.dirty ? errorLines(form.err) : []), ...(memory.dirty ? errorLines(memory.err) : []), ...(reminders.dirty ? errorLines(reminders.err) : [])]}>
     <PageHeader title="Tools" desc="Tool sources the model calls: external smart-home MCP servers and built-in weather/calendar/reminders/assistant tasks/memory, plus the always-on device volume tool. Sources are applied live — rebuilt on save, no restart needed."
       actions={<button className="z-btn p" onClick={() => setModal({ mode: "add" })}><Ic n="add" w={14} />Add server</button>} />
     {toolsErr && <div className="z-banner warn" style={{ margin: "0 0 14px" }}>
@@ -305,6 +428,7 @@ export function MCP() {
         {BUILTIN_SOURCES.map((s) => <SourceCard key={s.id} name={s.name} sub={s.sub} schema={sub(s.id)} root={coreSchema}
           draft={form.draftOf(s.id)} onChange={form.onChangeOf(s.id)} configured={s.configured} live={liveOf(s.id)}>
           {s.id === "memory" && <MemoryFacts text={memory.text} onChange={memory.setText} loadErr={memory.loadErr} />}
+          {s.id === "reminders" && <ScheduledItems draft={reminders} devices={coreValues.devices} />}
         </SourceCard>)}
       </>}
     {modal?.mode === "add" && <McpServerModal title="Add MCP server" onSave={onAdd} onClose={() => setModal(null)}

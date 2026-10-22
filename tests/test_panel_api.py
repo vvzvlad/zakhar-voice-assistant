@@ -11,6 +11,7 @@ import io
 import json
 import time
 import wave
+from datetime import datetime
 from types import SimpleNamespace
 
 import aiohttp
@@ -28,6 +29,7 @@ from src.panel_api import PanelServer
 from src.plugins.base import Deps
 from src.plugins.tts.fishaudio import FISH_TTS_URL
 from src.prompt_store import PromptStore
+from src.reminders import ReminderScheduler, RemindersStore, next_occurrence
 from src.run_events import RunEventsHub
 from src.runs_store import RunsStore
 
@@ -949,6 +951,107 @@ async def test_memory_without_store_returns_503(tmp_path):
     try:
         assert (await client.get("/api/memory")).status == 503
         assert (await client.put("/api/memory", json={"facts": []})).status == 503
+    finally:
+        await client.close()
+
+
+# --- reminders (the scheduler's pending rows) -------------------------------------
+
+def _scheduler(tmp_path):
+    return ReminderScheduler(RemindersStore(str(tmp_path / "schedule.db")))
+
+
+async def test_reminders_list_patch_and_delete(tmp_path):
+    scheduler = _scheduler(tmp_path)
+    due = time.time() + 3600
+    rid = scheduler.add("молоко", due, "kitchen")
+    timer = scheduler.add(None, due + 60, "bedroom", kind="timer")
+    client, _svc_ = await _client(tmp_path, reminders=lambda: scheduler)
+    try:
+        items = (await (await client.get("/api/reminders")).json())["items"]
+        assert [(r["id"], r["kind"], r["text"], r["due_ts"], r["days"], r["device"]) for r in items] == [
+            (rid, "reminder", "молоко", due, None, "kitchen"),
+            (timer, "timer", None, due + 60, None, "bedroom")]
+        resp = await client.patch(f"/api/reminders/{rid}", json={"text": " хлеб ", "due_ts": due + 7200})
+        assert resp.status == 200
+        row = await resp.json()
+        assert (row["text"], row["due_ts"]) == ("хлеб", due + 7200)
+        assert scheduler.pending()[1] == row
+        assert (await client.delete(f"/api/reminders/{timer}")).status == 200
+        assert [r["id"] for r in scheduler.pending()] == [rid]
+        # The row is gone: 404 for both.
+        assert (await client.delete(f"/api/reminders/{timer}")).status == 404
+        assert (await client.patch(f"/api/reminders/{timer}", json={"text": "x"})).status == 404
+    finally:
+        await client.close()
+        scheduler.store.close()
+
+
+async def test_reminders_patch_keeps_a_repeating_alarm_on_its_days(tmp_path):
+    scheduler = _scheduler(tmp_path)
+    due = time.time() + 3600
+    alarm = scheduler.add(None, due, "kitchen", kind="alarm")
+    client, _svc_ = await _client(tmp_path, reminders=lambda: scheduler)
+
+    async def patch(body):
+        resp = await client.patch(f"/api/reminders/{alarm}", json=body)
+        assert resp.status == 200
+        return await resp.json()
+
+    def next_on(ts, days):
+        at = datetime.fromtimestamp(ts)
+        return next_occurrence(at.hour, at.minute, days, time.time())
+
+    try:
+        row = await patch({"days": [2, 7]})
+        assert (row["days"], row["due_ts"]) == ([2, 7], next_on(due, [2, 7]))
+        # A new due time on a repeating alarm: its hour:minute on its days.
+        row = await patch({"due_ts": due + 1800})
+        assert (row["days"], row["due_ts"]) == ([2, 7], next_on(due + 1800, [2, 7]))
+        # A time already past today: the next of its days, not refused.
+        past = time.time() - 600
+        row = await patch({"due_ts": past})
+        assert (row["days"], row["due_ts"]) == ([2, 7], next_on(past, [2, 7]))
+        # Its label can be cleared: a timer's or an alarm's text is optional.
+        assert (await patch({"text": ""}))["text"] == ""
+        # null days: one-shot, at the time it has.
+        assert await patch({"days": None}) == {**row, "text": "", "days": None}
+        assert scheduler.pending() == [{**row, "text": "", "days": None}]
+        # One-shot again: a past time is refused.
+        assert (await client.patch(f"/api/reminders/{alarm}", json={"due_ts": past})).status == 400
+    finally:
+        await client.close()
+        scheduler.store.close()
+
+
+async def test_reminders_patch_rejects_invalid_input(tmp_path):
+    scheduler = _scheduler(tmp_path)
+    rid = scheduler.add("молоко", time.time() + 3600, "kitchen")
+    alarm = scheduler.add(None, time.time() + 7200, "kitchen", kind="alarm")
+    before = scheduler.pending()
+    client, _svc_ = await _client(tmp_path, reminders=lambda: scheduler)
+    try:
+        for body in ([], {}, {"other": 1}, {"text": ""}, {"text": "  "}, {"text": 5},
+                     {"due_ts": time.time() - 1}, {"due_ts": "soon"}, {"due_ts": True},
+                     {"days": [1]}):
+            assert (await client.patch(f"/api/reminders/{rid}", json=body)).status == 400, body
+        for days in ([], [0], [8], [1, 1], [1.0], [True], "1"):
+            assert (await client.patch(f"/api/reminders/{alarm}", json={"days": days})).status == 400, days
+        assert (await client.patch("/api/reminders/abc", json={"text": "x"})).status == 400
+        assert (await client.delete("/api/reminders/abc")).status == 400
+        assert scheduler.pending() == before
+    finally:
+        await client.close()
+        scheduler.store.close()
+
+
+@pytest.mark.parametrize("reminders", [None, lambda: None])
+async def test_reminders_without_scheduler_return_503(tmp_path, reminders):
+    client, _svc_ = await _client(tmp_path, reminders=reminders)
+    try:
+        assert (await client.get("/api/reminders")).status == 503
+        assert (await client.patch("/api/reminders/1", json={"text": "x"})).status == 503
+        assert (await client.delete("/api/reminders/1")).status == 503
     finally:
         await client.close()
 
