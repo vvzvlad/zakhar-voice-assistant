@@ -172,9 +172,9 @@ device                                   server
   playback, a stream the server started before it saw the `wake` included, then `state listening`
   with the proposed `session`, which makes it the device's current session; the audio held
   meanwhile goes to its run. A wake over a playing stream goes no further than stopping it: its
-  audio carries the device's own voice, so once the arbitration lets it through (below) its
-  session ends with `state idle` — no transcript, no answer — and the run log shows it as `ok`,
-  reason `wake_stop`; a command takes a new wake. A wake the check rejects gets `state idle` with the proposed
+  audio carries the device's own voice, so it takes no part in the arbitration (below) and keeps
+  no phrase: once confirmed, its session ends with `state idle` — no transcript, no answer — and
+  the run log shows it as `ok`, reason `wake_stop`; a command takes a new wake. A wake the check rejects gets `state idle` with the proposed
   `session` (any `state` of that number other than `listening` refuses it): the device drops the
   proposal without showing it, and its microphone stops unless the current session listens for a
   follow-up (the older run opened its follow-up window while the wake was held), which keeps it
@@ -196,7 +196,9 @@ device                                   server
   rejects takes no part. Any other wake takes part as it is and its phrase is checked for the
   wake word only once it has won, so a false one can win its group and start the cooldown. Once
   a device with a speaker is ready, a device without one is not waited for: it cannot win. A
-  `wake` over a running answer (above) joins at its `wake` like any other.
+  `wake` over a running answer (above) joins at its `wake` like any other, unless a stream is
+  playing on that device: such a wake only stops it, so it neither joins a group nor loses in the
+  cooldown.
   The server keeps one session — a device with a speaker over one without, between equals the
   higher signal-to-noise ratio of the pre-roll, then the earlier wake. A device whose follow-up
   window already hears speech, started at most 2000 ms before the first of those wakes, keeps the
