@@ -1,0 +1,529 @@
+{
+  "case": "Колонка потеряла «Захар» в своём тексте, панели — нет",
+  "status": "closed",
+  "doc": "docs/wake-cases.md",
+  "time": "server clock, Moscow time, 2026-10-22",
+  "run_fields": {
+    "recording": "the run's stored audio from /api/runs/<id>; the speaker's is stereo and channel 0 is what the server recognises, the panels' is mono; a wake run's recording starts with the device's 2 s pre-roll",
+    "stt_text": "the text the server recognised (run record)",
+    "was": "[result, reason] of the run record",
+    "record_ts": "the run record's ts: when its phrase was end-pointed",
+    "expected": "[result, reason] the run must end with",
+    "shown_answer_of": "the device whose answer this speakerless device must be shown"
+  },
+  "devices": {
+    "20f83b0a332d": {
+      "name": "main_room_voicepe (Voice PE)",
+      "speaker": true,
+      "follow_up": true,
+      "mic_channels": 2
+    },
+    "fc012cd1e5ec": {
+      "name": "circle_espanel",
+      "speaker": false,
+      "follow_up": false,
+      "mic_channels": 1
+    },
+    "80f1b2d12c91": {
+      "name": "rectangular panel",
+      "speaker": false,
+      "follow_up": false,
+      "mic_channels": 1
+    }
+  },
+  "groups": [
+    {
+      "name": "07:22:27",
+      "online": [
+        "20f83b0a332d",
+        "fc012cd1e5ec",
+        "80f1b2d12c91"
+      ],
+      "before": {
+        "20f83b0a332d": {
+          "state": "idle"
+        },
+        "fc012cd1e5ec": {
+          "state": "idle"
+        },
+        "80f1b2d12c91": {
+          "state": "idle"
+        }
+      },
+      "timeline": [
+        {
+          "at_ms": 0,
+          "device": "fc012cd1e5ec",
+          "event": "wake",
+          "run": 4509,
+          "source": "not logged"
+        },
+        {
+          "at_ms": 0,
+          "device": "80f1b2d12c91",
+          "event": "wake",
+          "run": 4510,
+          "source": "not logged"
+        },
+        {
+          "at_ms": 0,
+          "device": "20f83b0a332d",
+          "event": "wake",
+          "run": 4511,
+          "source": "not logged"
+        }
+      ],
+      "runs": {
+        "4509": {
+          "device": "fc012cd1e5ec",
+          "recording": "run-4509.wav",
+          "stt_text": "захар сколько времени",
+          "was": [
+            "rejected",
+            "duplicate"
+          ],
+          "record_ts": "07:22:28.250",
+          "expected": [
+            "rejected",
+            "duplicate"
+          ],
+          "shown_answer_of": "20f83b0a332d"
+        },
+        "4510": {
+          "device": "80f1b2d12c91",
+          "recording": "run-4510.wav",
+          "stt_text": "захар сколько времени",
+          "was": [
+            "rejected",
+            "duplicate"
+          ],
+          "record_ts": "07:22:28.658",
+          "expected": [
+            "rejected",
+            "duplicate"
+          ],
+          "shown_answer_of": "20f83b0a332d"
+        },
+        "4511": {
+          "device": "20f83b0a332d",
+          "recording": "run-4511.wav",
+          "stt_text": "сколько времени",
+          "was": [
+            "rejected",
+            "wakeword_reject"
+          ],
+          "record_ts": "07:22:28.814",
+          "expected": [
+            "ok",
+            "endpoint"
+          ]
+        }
+      },
+      "assumptions": [
+        "No server log for this minute: whether the panels were in the speaker's group or came in its cooldown is not known (docs/wake-cases.md, «Не проверено»). The replay sends the three wakes back to back, in run-id order, in one group. The records allow two orders: the speaker kept the phrase, so no panel's group was ruled before its wake; a panel in its cooldown instead would leave the speaker alone and its transcript checked, which the fix does not change.",
+        "The speaker was idle: its last session had gone idle before the wake (device log)."
+      ],
+      "log": [],
+      "device_log": [
+        "07:22:15.264 I (9542813) zakhar_link: session 29: listening",
+        "07:22:20.595 I (9548159) zakhar_link: session 29: idle",
+        "07:22:27.159 I (9554614) wake_word: \"Zakhar\" detected",
+        "07:22:27.159 I (9554615) zakhar_link: wake word \"Захар\": session 30 proposed",
+        "07:22:27.461 I (9554637) zakhar_link: session 30: listening",
+        "07:22:28.881 I (9556427) zakhar_link: session 30: transcribing",
+        "07:22:29.755 I (9557332) zakhar_link: session 30: idle"
+      ]
+    },
+    {
+      "name": "07:23:13",
+      "online": [
+        "20f83b0a332d",
+        "fc012cd1e5ec",
+        "80f1b2d12c91"
+      ],
+      "before": {
+        "20f83b0a332d": {
+          "state": "idle"
+        },
+        "fc012cd1e5ec": {
+          "state": "idle"
+        },
+        "80f1b2d12c91": {
+          "state": "idle"
+        }
+      },
+      "timeline": [
+        {
+          "at_ms": 0,
+          "device": "fc012cd1e5ec",
+          "event": "wake",
+          "run": 4515,
+          "source": "not logged"
+        },
+        {
+          "at_ms": 0,
+          "device": "80f1b2d12c91",
+          "event": "wake",
+          "run": 4516,
+          "source": "not logged"
+        },
+        {
+          "at_ms": 0,
+          "device": "20f83b0a332d",
+          "event": "wake",
+          "run": 4517,
+          "source": "not logged"
+        }
+      ],
+      "runs": {
+        "4515": {
+          "device": "fc012cd1e5ec",
+          "recording": "run-4515.wav",
+          "stt_text": "захар сколько времени",
+          "was": [
+            "rejected",
+            "duplicate"
+          ],
+          "record_ts": "07:23:15.286",
+          "expected": [
+            "rejected",
+            "duplicate"
+          ],
+          "shown_answer_of": "20f83b0a332d"
+        },
+        "4516": {
+          "device": "80f1b2d12c91",
+          "recording": "run-4516.wav",
+          "stt_text": "захар сколько времени",
+          "was": [
+            "rejected",
+            "duplicate"
+          ],
+          "record_ts": "07:23:15.333",
+          "expected": [
+            "rejected",
+            "duplicate"
+          ],
+          "shown_answer_of": "20f83b0a332d"
+        },
+        "4517": {
+          "device": "20f83b0a332d",
+          "recording": "run-4517.wav",
+          "stt_text": "джахар сколько времени",
+          "was": [
+            "rejected",
+            "wakeword_reject"
+          ],
+          "record_ts": "07:23:15.404",
+          "expected": [
+            "ok",
+            "endpoint"
+          ]
+        }
+      },
+      "assumptions": [
+        "No server log for this minute: whether the panels were in the speaker's group or came in its cooldown is not known (docs/wake-cases.md, «Не проверено»). The replay sends the three wakes back to back, in run-id order, in one group. The records allow two orders: the speaker kept the phrase, so no panel's group was ruled before its wake; a panel in its cooldown instead would leave the speaker alone and its transcript checked, which the fix does not change.",
+        "The speaker was idle: its last session had gone idle before the wake (device log)."
+      ],
+      "log": [],
+      "device_log": [
+        "07:23:07.003 I (9594581) zakhar_link: session 31: listening",
+        "07:23:12.392 I (9599936) zakhar_link: session 31: idle",
+        "07:23:13.971 I (9601332) wake_word: \"Zakhar\" detected",
+        "07:23:13.971 I (9601332) zakhar_link: wake word \"Захар\": session 32 proposed",
+        "07:23:14.076 I (9601355) zakhar_link: session 32: listening",
+        "07:23:15.556 I (9603017) zakhar_link: session 32: transcribing",
+        "07:23:16.457 I (9604044) zakhar_link: session 32: idle"
+      ]
+    },
+    {
+      "name": "07:24:42",
+      "online": [
+        "20f83b0a332d",
+        "fc012cd1e5ec",
+        "80f1b2d12c91"
+      ],
+      "before": {
+        "20f83b0a332d": {
+          "state": "idle"
+        },
+        "fc012cd1e5ec": {
+          "state": "idle"
+        },
+        "80f1b2d12c91": {
+          "state": "idle"
+        }
+      },
+      "timeline": [
+        {
+          "at_ms": 0,
+          "device": "fc012cd1e5ec",
+          "event": "wake",
+          "run": 4525,
+          "source": "not logged"
+        },
+        {
+          "at_ms": 0,
+          "device": "80f1b2d12c91",
+          "event": "wake",
+          "run": 4526,
+          "source": "not logged"
+        },
+        {
+          "at_ms": 0,
+          "device": "20f83b0a332d",
+          "event": "wake",
+          "run": 4527,
+          "source": "not logged"
+        }
+      ],
+      "runs": {
+        "4525": {
+          "device": "fc012cd1e5ec",
+          "recording": "run-4525.wav",
+          "stt_text": "захар сколько времени",
+          "was": [
+            "rejected",
+            "duplicate"
+          ],
+          "record_ts": "07:24:43.440",
+          "expected": [
+            "rejected",
+            "duplicate"
+          ],
+          "shown_answer_of": "20f83b0a332d"
+        },
+        "4526": {
+          "device": "80f1b2d12c91",
+          "recording": "run-4526.wav",
+          "stt_text": "захар сколько времени",
+          "was": [
+            "rejected",
+            "duplicate"
+          ],
+          "record_ts": "07:24:43.636",
+          "expected": [
+            "rejected",
+            "duplicate"
+          ],
+          "shown_answer_of": "20f83b0a332d"
+        },
+        "4527": {
+          "device": "20f83b0a332d",
+          "recording": "run-4527.wav",
+          "stt_text": "сколько времени",
+          "was": [
+            "rejected",
+            "wakeword_reject"
+          ],
+          "record_ts": "07:24:43.904",
+          "expected": [
+            "ok",
+            "endpoint"
+          ]
+        }
+      },
+      "assumptions": [
+        "No server log for this minute: whether the panels were in the speaker's group or came in its cooldown is not known (docs/wake-cases.md, «Не проверено»). The replay sends the three wakes back to back, in run-id order, in one group. The records allow two orders: the speaker kept the phrase, so no panel's group was ruled before its wake; a panel in its cooldown instead would leave the speaker alone and its transcript checked, which the fix does not change.",
+        "The speaker was idle: its last session had gone idle before the wake (device log)."
+      ],
+      "log": [],
+      "device_log": [
+        "07:24:26.214 I (9673777) zakhar_link: session 34: listening",
+        "07:24:31.578 I (9679140) zakhar_link: session 34: idle",
+        "07:24:42.330 I (9689426) wake_word: \"Zakhar\" detected",
+        "07:24:42.330 I (9689426) zakhar_link: wake word \"Захар\": session 35 proposed",
+        "07:24:42.345 I (9689452) zakhar_link: session 35: listening",
+        "07:24:43.956 I (9691518) zakhar_link: session 35: transcribing",
+        "07:24:45.404 I (9692993) zakhar_link: session 35: idle"
+      ]
+    },
+    {
+      "name": "06:59:55",
+      "online": [
+        "20f83b0a332d",
+        "fc012cd1e5ec",
+        "80f1b2d12c91"
+      ],
+      "before": {
+        "20f83b0a332d": {
+          "state": "idle"
+        },
+        "fc012cd1e5ec": {
+          "state": "idle"
+        },
+        "80f1b2d12c91": {
+          "state": "idle"
+        }
+      },
+      "timeline": [
+        {
+          "at_ms": 0,
+          "device": "80f1b2d12c91",
+          "event": "wake",
+          "run": 4465,
+          "source": "not logged"
+        },
+        {
+          "at_ms": 0,
+          "device": "fc012cd1e5ec",
+          "event": "wake",
+          "run": 4466,
+          "source": "not logged"
+        },
+        {
+          "at_ms": 0,
+          "device": "20f83b0a332d",
+          "event": "wake",
+          "run": 4467,
+          "source": "not logged"
+        }
+      ],
+      "runs": {
+        "4465": {
+          "device": "80f1b2d12c91",
+          "recording": "run-4465.wav",
+          "stt_text": "захар ладно я передумал я снова мужчина",
+          "was": [
+            "rejected",
+            "duplicate"
+          ],
+          "record_ts": "06:59:58.029",
+          "expected": [
+            "rejected",
+            "duplicate"
+          ],
+          "shown_answer_of": "20f83b0a332d"
+        },
+        "4466": {
+          "device": "fc012cd1e5ec",
+          "recording": "run-4466.wav",
+          "stt_text": "захар ладно я передумал я снова мужчина",
+          "was": [
+            "rejected",
+            "duplicate"
+          ],
+          "record_ts": "06:59:58.113",
+          "expected": [
+            "rejected",
+            "duplicate"
+          ],
+          "shown_answer_of": "20f83b0a332d"
+        },
+        "4467": {
+          "device": "20f83b0a332d",
+          "recording": "run-4467.wav",
+          "stt_text": "ладно я передумала я стал мужчина",
+          "was": [
+            "rejected",
+            "wakeword_reject"
+          ],
+          "record_ts": "06:59:58.265",
+          "expected": [
+            "ok",
+            "endpoint"
+          ]
+        }
+      },
+      "assumptions": [
+        "No server log for this minute: whether the panels were in the speaker's group or came in its cooldown is not known (docs/wake-cases.md, «Не проверено»). The replay sends the three wakes back to back, in run-id order, in one group. The records allow two orders: the speaker kept the phrase, so no panel's group was ruled before its wake; a panel in its cooldown instead would leave the speaker alone and its transcript checked, which the fix does not change.",
+        "The speaker was idle: its last session had gone idle before the wake (device log)."
+      ],
+      "log": [],
+      "device_log": [
+        "06:59:15.629 I (8163223) zakhar_link: session 16: listening",
+        "06:59:20.975 I (8168559) zakhar_link: session 16: idle",
+        "06:59:55.036 I (8202564) wake_word: \"Zakhar\" detected",
+        "06:59:55.036 I (8202564) zakhar_link: wake word \"Захар\": session 17 proposed",
+        "06:59:55.036 I (8202582) zakhar_link: session 17: listening",
+        "06:59:58.311 I (8205896) zakhar_link: session 17: transcribing",
+        "06:59:59.686 I (8207307) zakhar_link: session 17: idle"
+      ]
+    }
+  ],
+  "not_replayed": {
+    "04:20 (4384, 4385, 4386)": {
+      "why": "Not this case. The speaker's session 31 woke at 04:20:10.665, recognised «захар сколько времени» and answered (device log); the panels' 4384 and 4385 were its duplicates. Run 4386 (empty text, wakeword_score 0.0) is the speaker's next wake, session 32 at 04:20:15.152 over its thinking session 31, which the wake-word check rejected («session 32 not taken: idle» at 04:20:15.994). Its own recording and record of session 31 are not saved.",
+      "device_log": [
+        "04:20:10.665 I (11303212) wake_word: \"Zakhar\" detected",
+        "04:20:10.665 I (11303212) zakhar_link: wake word \"Захар\": session 31 proposed",
+        "04:20:10.791 I (11303247) zakhar_link: session 31: listening",
+        "04:20:12.484 I (11305066) zakhar_link: session 31: transcribing",
+        "04:20:14.055 I (11306588) zakhar_link: transcript: захар сколько времени",
+        "04:20:14.056 I (11306592) zakhar_link: session 31: thinking",
+        "04:20:15.152 I (11307694) wake_word: \"Zakhar\" detected",
+        "04:20:15.152 I (11307694) zakhar_link: wake word \"Захар\": session 32 proposed",
+        "04:20:15.994 I (11308529) zakhar_link: session 32 not taken: idle",
+        "04:20:24.663 I (11317139) zakhar_link: reply: День рождения Даши Захаровой намечен на пятницу, двадцать седьмого ноября. Это событие на весь день, так что времени конкретного нет — просто праздник, растянутый на двадцать четыре часа, что, согласитесь, справедливо.",
+        "04:20:24.663 I (11317168) zakhar_link: session 31: speaking",
+        "04:20:26.298 I (11318830) wake_word: \"Zakhar\" detected",
+        "04:20:26.298 I (11318830) zakhar_link: wake word \"Захар\": session 33 proposed",
+        "04:20:27.053 I (11319601) zakhar_link: session 33 not taken: idle",
+        "04:20:39.470 I (11332031) zakhar_link: session 31: listening",
+        "04:20:42.039 I (11334606) wake_word: \"Zakhar\" detected",
+        "04:20:42.039 I (11334606) zakhar_link: wake word ignored: the session still hears its phrase",
+        "04:20:44.981 I (11337526) zakhar_link: session 31: transcribing",
+        "04:20:46.932 I (11339497) zakhar_link: transcript: захар сейчас сколько времени дурак",
+        "04:20:46.932 I (11339500) zakhar_link: session 31: thinking",
+        "04:20:50.119 I (11342659) zakhar_link: reply: Сейчас четыре часа двадцать минут утра, четверг, двадцать второе октября. Время, которое обычно занимают те, кто не спит, — либо совершив великие дела, либо размышляя о них. Вы, похоже, ко второй категории.",
+        "04:20:50.119 I (11342686) zakhar_link: session 31: speaking"
+      ]
+    },
+    "07:03 (4481, 4482, 4483, 4485)": {
+      "why": "fc012cd1e5ec kept the phrase with «сахар а почему ты не запомнил что я в москве» (4482); 80f1b2d12c91 (4481) and the speaker (4483) were duplicates, 80f1b2d12c91's next phrase answered (4485). The speaker's wake reached the server 3.22 s late (device log), after the ruling. Replayed in one group with whole pre-rolls, 80f1b2d12c91 (27.6 dB) would outrank fc012cd1e5ec (24.3 dB), which the records contradict: either 80f1b2d12c91 came after the ruling, and then fc012cd1e5ec's phrase was checked alone and today's code still drops «сахар...», or fc012cd1e5ec's SNR was taken on a partial pre-roll. No server log tells which.",
+      "runs": {
+        "4481": {
+          "device": "80f1b2d12c91",
+          "recording": "run-4481.wav",
+          "stt_text": "захар а почему ты не запомнил что я в москве",
+          "was": [
+            "rejected",
+            "duplicate"
+          ],
+          "record_ts": "07:02:59.794",
+          "expected": null
+        },
+        "4482": {
+          "device": "fc012cd1e5ec",
+          "recording": "run-4482.wav",
+          "stt_text": "сахар а почему ты не запомнил что я в москве",
+          "was": [
+            "rejected",
+            "wakeword_reject"
+          ],
+          "record_ts": "07:03:00.128",
+          "expected": null
+        },
+        "4483": {
+          "device": "20f83b0a332d",
+          "recording": "run-4483.wav",
+          "stt_text": "захар а почему ты не запомнил что я в москве",
+          "was": [
+            "rejected",
+            "duplicate"
+          ],
+          "record_ts": "07:03:01.429",
+          "expected": null
+        },
+        "4485": {
+          "device": "80f1b2d12c91",
+          "recording": "run-4485.wav",
+          "stt_text": "захар а почему ты не запомнил что я в москве",
+          "was": [
+            "tool",
+            "endpoint"
+          ],
+          "record_ts": "07:03:03.867",
+          "expected": null
+        }
+      },
+      "device_log": [
+        "07:03:00.177 I (8384576) wake_word: \"Zakhar\" detected",
+        "07:03:00.177 I (8384577) zakhar_link: wake word \"Захар\": session 21 proposed",
+        "07:03:01.265 I (8388708) wake_word: \"Zakhar\" detected",
+        "07:03:01.351 I (8388817) zakhar_link: wake word ignored: the session still hears its phrase",
+        "07:03:01.511 I (8389058) zakhar_link: session 21 not taken: idle"
+      ]
+    }
+  }
+}

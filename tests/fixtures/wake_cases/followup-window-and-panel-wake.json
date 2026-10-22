@@ -1,0 +1,237 @@
+{
+  "case": "Окно дослушивания колонки и пробуждение панели",
+  "status": "closed",
+  "doc": "docs/wake-cases.md",
+  "time": "server clock, Moscow time, 2026-10-22",
+  "run_fields": {
+    "recording": "the run's stored audio from /api/runs/<id>; the speaker's is stereo and channel 0 is what the server recognises, the panels' is mono; a wake run's recording starts with the device's 2 s pre-roll",
+    "stt_text": "the text the server recognised (run record)",
+    "was": "[result, reason] of the run record",
+    "record_ts": "the run record's ts: when its phrase was end-pointed",
+    "expected": "[result, reason] the run must end with",
+    "shown_answer_of": "the device whose answer this speakerless device must be shown",
+    "speech_from_ms": "where the follow-up window's VAD first hears speech in the recording; silence is sent before it"
+  },
+  "devices": {
+    "20f83b0a332d": {
+      "name": "main_room_voicepe (Voice PE)",
+      "speaker": true,
+      "follow_up": true,
+      "mic_channels": 2
+    },
+    "fc012cd1e5ec": {
+      "name": "circle_espanel",
+      "speaker": false,
+      "follow_up": false,
+      "mic_channels": 1
+    },
+    "80f1b2d12c91": {
+      "name": "rectangular panel",
+      "speaker": false,
+      "follow_up": false,
+      "mic_channels": 1
+    }
+  },
+  "groups": [
+    {
+      "name": "06:10:24",
+      "online": [
+        "20f83b0a332d",
+        "fc012cd1e5ec"
+      ],
+      "before": {
+        "20f83b0a332d": {
+          "state": "follow_up",
+          "source": "06:10:21.629 the answer to «я в трусах хочу выйти» played out and the follow-up window opened (server log); the device's own wake at 06:10:24.598 was ignored: «the session still hears its phrase» (device log)"
+        },
+        "fc012cd1e5ec": {
+          "state": "idle"
+        }
+      },
+      "timeline": [
+        {
+          "at_ms": -2767,
+          "device": "20f83b0a332d",
+          "event": "follow_up_window",
+          "run": 4439,
+          "source": "06:10:21.629 listening for a follow-up (5000 ms)"
+        },
+        {
+          "at_ms": 0,
+          "device": "fc012cd1e5ec",
+          "event": "wake",
+          "run": 4438,
+          "source": "06:10:24.396 fc012cd1e5ec: run started (cid=6)"
+        },
+        {
+          "at_ms": 502,
+          "event": "ruled",
+          "source": "06:10:24.898 wake arbitration: fc012cd1e5ec (speaker no, SNR 27.4 dB) -> fc012cd1e5ec keeps the phrase"
+        }
+      ],
+      "runs": {
+        "4439": {
+          "device": "20f83b0a332d",
+          "recording": "run-4439.wav",
+          "stt_text": "захар как тебя зовут",
+          "was": [
+            "ok",
+            "endpoint"
+          ],
+          "record_ts": "06:10:26.272",
+          "expected": [
+            "ok",
+            "endpoint"
+          ],
+          "speech_from_ms": 2000
+        },
+        "4438": {
+          "device": "fc012cd1e5ec",
+          "recording": "run-4438.wav",
+          "stt_text": "захар как тебя зовут",
+          "was": [
+            "ok",
+            "endpoint"
+          ],
+          "record_ts": "06:10:26.665",
+          "expected": [
+            "rejected",
+            "duplicate"
+          ],
+          "shown_answer_of": "20f83b0a332d"
+        }
+      },
+      "assumptions": [
+        "Whether 80f1b2d12c91 was online is not in any log, and it has no run here; the replay connects the two devices that woke. The group is ruled at its window's end either way: not every online device woke.",
+        "The window's audio is the 300 ms the window drops (FOLLOWUP_SKIP_MS) and then run-4439.wav, streamed from the window's opening: the recording starts 0.303 s after it (06:10:26.272 end-point minus its 4.340 s).",
+        "speech_from_ms: the window's VAD hears speech from 2.0 s of run-4439.wav, where its channel-0 RMS per 100 ms goes from 445-1057 (one 2379/1881 click at 0.5-0.7 s) to 6199; that is about 0.46 s before the panel's wake (2.46 s into the recording). The production VAD's own start of speech in the window was not logged. The replay sends digital silence before that point.",
+        "The session's earlier phrases (06:09:33 «захар какая погода», 06:10:01 «я в трусах хочу выйти») are not replayed: one stand-in phrase and its played answer open the window."
+      ],
+      "log": [
+        "2026-10-22 06:09:32.497 | INFO     | src.pipeline:_take:325 - fc012cd1e5ec: ▶️ run started (cid=5)",
+        "2026-10-22 06:09:32.498 | INFO     | src.pipeline:on_audio:548 - fc012cd1e5ec: 🎤 receiving audio (held)...",
+        "2026-10-22 06:09:32.631 | INFO     | src.pipeline:_take:325 - 20f83b0a332d: ▶️ run started (cid=10)",
+        "2026-10-22 06:09:32.637 | INFO     | src.pipeline:on_audio:548 - 20f83b0a332d: 🎤 receiving audio (held)...",
+        "2026-10-22 06:09:33.133 | INFO     | src.wake_arbiter:_close:221 - wake arbitration: fc012cd1e5ec (speaker no, SNR 24.2 dB), 20f83b0a332d (speaker yes, SNR 9.9 dB) -> 20f83b0a332d keeps the phrase",
+        "2026-10-22 06:09:33.829 | INFO     | src.pipeline:_end_held:384 - fc012cd1e5ec: 🚫 wake dropped as a duplicate of another device's wake",
+        "2026-10-22 06:09:34.556 | INFO     | src.pipeline:_run:902 - 20f83b0a332d: 🎙️ captured 119808 bytes (~3.7s), reason=endpoint, vad=ten",
+        "2026-10-22 06:09:35.054 | INFO     | src.chains:run:200 - 20f83b0a332d: 📝 STT [gigaam/gigaam-v3-rnnt] chain 'Команды' (0.50s): 'захар какая погода'",
+        "2026-10-22 06:09:35.054 | INFO     | src.chains:run:222 - 20f83b0a332d: 🤖 → LLM [simple-nlu] chain 'Команды': 'захар какая погода'",
+        "2026-10-22 06:09:35.067 | INFO     | src.chains:run:200 - 20f83b0a332d: 📝 STT [gigaam/gigaam-v3-rnnt] chain 'Jev' (0.00s): 'захар какая погода'",
+        "2026-10-22 06:09:35.067 | INFO     | src.chains:run:222 - 20f83b0a332d: 🤖 → LLM [jev/typesafe/jev-1.14] chain 'Jev': 'захар какая погода'",
+        "2026-10-22 06:09:35.067 | INFO     | src.chains:run:235 - 20f83b0a332d: ↪️ chain 'Команды' declined: 'Не понял команду.'",
+        "2026-10-22 06:09:35.072 | INFO     | src.speech:_play_ack:365 - 20f83b0a332d: 🔔 end-of-phrase ack",
+        "2026-10-22 06:09:35.978 | INFO     | src.plugins.llm.jev:_decide:332 - jev decision: kind=other (other 100%; confidence 100%), target=none (none 100%; confidence 100%), action=none (none 99%, on 1%; confidence 99%), compound=8%, delayed=7%",
+        "2026-10-22 06:09:35.979 | INFO     | src.chains:run:200 - 20f83b0a332d: 📝 STT [gigaam/gigaam-v3-rnnt] chain 'LLM' (0.00s): 'захар какая погода'",
+        "2026-10-22 06:09:35.979 | INFO     | src.chains:run:222 - 20f83b0a332d: 🤖 → LLM [openrouter/anthropic/claude-haiku-4.5] chain 'LLM': 'захар какая погода'",
+        "2026-10-22 06:09:35.979 | INFO     | src.chains:run:235 - 20f83b0a332d: ↪️ chain 'Jev' declined: 'Не понял команду, повтори.'",
+        "2026-10-22 06:09:38.353 | INFO     | src.llm:respond:160 - LLM response: model=anthropic/claude-haiku-4.5 total_tokens=18847 content=None tool_calls=1",
+        "2026-10-22 06:09:38.938 | INFO     | src.llm:respond:220 - tool get_current_weather({}) -> '6 градусов, пасмурно, ветер 2 метров в секунду'",
+        "2026-10-22 06:09:38.938 | INFO     | src.openweathermap:get_weather_summary:24 - OpenWeatherMap response status for city 'Moscow': 200",
+        "2026-10-22 06:09:41.659 | INFO     | src.llm:respond:160 - LLM response: model=anthropic/claude-haiku-4.5 total_tokens=18961 content='Погода, как и минут двадцать назад, не торопится меняться: шесть градусов, пасмурно, ветер два метра в секунду. Если вы собирались на прогулку, верхнее платье остаётся обязательным.' tool_calls=0",
+        "2026-10-22 06:09:41.660 | INFO     | src.chains:run:252 - 20f83b0a332d: 💬 LLM reply chain 'LLM' (5.68s): 'Погода, как и минут двадцать назад, не торопится меняться: шесть градусов, пасмурно, ветер два метра в секунду. Если вы собирались на прогулку, верхнее платье остаётся обязательным.'",
+        "2026-10-22 06:09:41.660 | INFO     | src.speech:speak_reply:209 - 20f83b0a332d: ✒️ Accent [ruaccent/off] (0.00s): 'Погода, как и минут двадцать назад, не торопится меняться: шесть градусов, пасмурно, ветер два метра в секунду. Если вы собирались на прогулку, верхнее платье остаётся обязательным.'",
+        "2026-10-22 06:09:42.302 | INFO     | src.speech:_voice:276 - 20f83b0a332d: 🔊 TTS [fishaudio/s2-pro/9b64e083ed7943e5bda2193fd783ee5d] stream start (0.64s): 'Погода, как и минут двадцать назад, не торопится меняться: шесть градусов, пасмурно, ветер два метра в секунду. Если вы собирались на прогулку, верхнее платье остаётся обязательным.'",
+        "2026-10-22 06:09:54.439 | INFO     | src.pipeline:_run:1128 - 20f83b0a332d: ✅ run complete in 19.88s",
+        "2026-10-22 06:09:54.439 | INFO     | src.speech:_voice:287 - 20f83b0a332d: 🔊 TTS played (12.78s total, 1054774 bytes)",
+        "2026-10-22 06:09:54.440 | INFO     | src.pipeline:_arm_followup:409 - 20f83b0a332d: 👂 listening for a follow-up (5000 ms)",
+        "2026-10-22 06:09:54.803 | INFO     | src.pipeline:on_audio:580 - 20f83b0a332d: 🎤 receiving audio...",
+        "2026-10-22 06:10:01.793 | INFO     | src.pipeline:_run:902 - 20f83b0a332d: 🎙️ captured 223872 bytes (~7.0s), reason=endpoint, vad=ten",
+        "2026-10-22 06:10:02.587 | INFO     | src.chains:run:200 - 20f83b0a332d: 📝 STT [gigaam/gigaam-v3-rnnt] chain 'Команды' (0.79s): 'я в трусах хочу выйти'",
+        "2026-10-22 06:10:03.461 | INFO     | src.plugins.followup.jev:check:102 - jev follow-up: continuation=82% -> accept: 'я в трусах хочу выйти'",
+        "2026-10-22 06:10:03.462 | INFO     | src.chains:run:222 - 20f83b0a332d: 🤖 → LLM [simple-nlu] chain 'Команды': 'я в трусах хочу выйти'",
+        "2026-10-22 06:10:03.468 | INFO     | src.chains:run:200 - 20f83b0a332d: 📝 STT [gigaam/gigaam-v3-rnnt] chain 'Jev' (0.00s): 'я в трусах хочу выйти'",
+        "2026-10-22 06:10:03.468 | INFO     | src.chains:run:222 - 20f83b0a332d: 🤖 → LLM [jev/typesafe/jev-1.14] chain 'Jev': 'я в трусах хочу выйти'",
+        "2026-10-22 06:10:03.468 | INFO     | src.chains:run:235 - 20f83b0a332d: ↪️ chain 'Команды' declined: 'Не понял команду.'",
+        "2026-10-22 06:10:03.472 | INFO     | src.speech:_play_ack:365 - 20f83b0a332d: 🔔 end-of-phrase ack",
+        "2026-10-22 06:10:03.972 | INFO     | src.chains:run:235 - 20f83b0a332d: ↪️ chain 'Jev' declined: 'Не понял команду, повтори.'",
+        "2026-10-22 06:10:03.972 | INFO     | src.plugins.llm.jev:_decide:332 - jev decision: kind=other (other 86%, device_command 14%; confidence 72%), target=none (none 82%, set_light.device_id=bathroom_light 4%, set_light.device_id=corridor_light 3%, set_lock.device_id=main_lock 3%, set_dimmer.device_id=night_light 2%, set_scene.scene=morning 2%, set_light.device_id=bright_room_light 1%, set_light.device_id=low_room_light 1%, set_light.device_id=toilet_light 1%, set_scene.scene=night 1%; confidence 80%), action=none (none 81%, lock 8%, unlock 5%, off 4%, on 2%; confidence 76%), compound=12%, delayed=9%",
+        "2026-10-22 06:10:03.973 | INFO     | src.chains:run:200 - 20f83b0a332d: 📝 STT [gigaam/gigaam-v3-rnnt] chain 'LLM' (0.00s): 'я в трусах хочу выйти'",
+        "2026-10-22 06:10:03.973 | INFO     | src.chains:run:222 - 20f83b0a332d: 🤖 → LLM [openrouter/anthropic/claude-haiku-4.5] chain 'LLM': 'я в трусах хочу выйти'",
+        "2026-10-22 06:10:06.666 | INFO     | src.llm:respond:160 - LLM response: model=anthropic/claude-haiku-4.5 total_tokens=18987 content='Смею предположить, что это решение вы примете иначе, когда ознакомитесь с термометром. Шесть градусов — температура, при которой организм начинает настаивать на более основательном облачении. Здоровье, как известно, дороже любых принципов.' tool_calls=0",
+        "2026-10-22 06:10:06.667 | INFO     | src.chains:run:252 - 20f83b0a332d: 💬 LLM reply chain 'LLM' (2.69s): 'Смею предположить, что это решение вы примете иначе, когда ознакомитесь с термометром. Шесть градусов — температура, при которой организм начинает настаивать на более основательном облачении. Здоровье, как известно, дороже любых принципов.'",
+        "2026-10-22 06:10:06.668 | INFO     | src.speech:speak_reply:209 - 20f83b0a332d: ✒️ Accent [ruaccent/off] (0.00s): 'Смею предположить, что это решение вы примете иначе, когда ознакомитесь с термометром. Шесть градусов — температура, при которой организм начинает настаивать на более основательном облачении. Здоровье, как известно, дороже любых принципов.'",
+        "2026-10-22 06:10:07.215 | INFO     | src.speech:_voice:276 - 20f83b0a332d: 🔊 TTS [fishaudio/s2-pro/9b64e083ed7943e5bda2193fd783ee5d] stream start (0.55s): 'Смею предположить, что это решение вы примете иначе, когда ознакомитесь с термометром. Шесть градусов — температура, при которой организм начинает настаивать на более основательном облачении. Здоровье, как известно, дороже любых принципов.'",
+        "2026-10-22 06:10:21.627 | INFO     | src.speech:_voice:287 - 20f83b0a332d: 🔊 TTS played (14.96s total, 1249462 bytes)",
+        "2026-10-22 06:10:21.628 | INFO     | src.pipeline:_run:1128 - 20f83b0a332d: ✅ run complete in 19.84s",
+        "2026-10-22 06:10:21.629 | INFO     | src.pipeline:_arm_followup:409 - 20f83b0a332d: 👂 listening for a follow-up (5000 ms)",
+        "2026-10-22 06:10:21.972 | INFO     | src.pipeline:on_audio:580 - 20f83b0a332d: 🎤 receiving audio...",
+        "2026-10-22 06:10:24.396 | INFO     | src.pipeline:_take:325 - fc012cd1e5ec: ▶️ run started (cid=6)",
+        "2026-10-22 06:10:24.397 | INFO     | src.pipeline:on_audio:548 - fc012cd1e5ec: 🎤 receiving audio (held)...",
+        "2026-10-22 06:10:24.898 | INFO     | src.wake_arbiter:_close:221 - wake arbitration: fc012cd1e5ec (speaker no, SNR 27.4 dB) -> fc012cd1e5ec keeps the phrase",
+        "2026-10-22 06:10:26.272 | INFO     | src.pipeline:_run:902 - 20f83b0a332d: 🎙️ captured 138880 bytes (~4.3s), reason=endpoint, vad=ten",
+        "2026-10-22 06:10:26.664 | INFO     | src.pipeline:_run:902 - fc012cd1e5ec: 🎙️ captured 134144 bytes (~4.2s), reason=endpoint, vad=ten",
+        "2026-10-22 06:10:27.147 | INFO     | src.chains:run:200 - 20f83b0a332d: 📝 STT [gigaam/gigaam-v3-rnnt] chain 'Команды' (0.87s): 'захар как тебя зовут'",
+        "2026-10-22 06:10:27.520 | INFO     | src.chains:run:200 - fc012cd1e5ec: 📝 STT [gigaam/gigaam-v3-rnnt] chain 'Команды' (0.85s): 'захар как тебя зовут'",
+        "2026-10-22 06:10:27.520 | INFO     | src.chains:run:222 - fc012cd1e5ec: 🤖 → LLM [simple-nlu] chain 'Команды': 'захар как тебя зовут'",
+        "2026-10-22 06:10:27.530 | INFO     | src.chains:run:200 - fc012cd1e5ec: 📝 STT [gigaam/gigaam-v3-rnnt] chain 'Jev' (0.00s): 'захар как тебя зовут'",
+        "2026-10-22 06:10:27.530 | INFO     | src.chains:run:235 - fc012cd1e5ec: ↪️ chain 'Команды' declined: 'Не понял команду.'",
+        "2026-10-22 06:10:27.531 | INFO     | src.chains:run:222 - fc012cd1e5ec: 🤖 → LLM [jev/typesafe/jev-1.14] chain 'Jev': 'захар как тебя зовут'",
+        "2026-10-22 06:10:27.721 | INFO     | src.plugins.followup.jev:check:102 - jev follow-up: continuation=93% -> accept: 'захар как тебя зовут'",
+        "2026-10-22 06:10:27.725 | INFO     | src.chains:run:222 - 20f83b0a332d: 🤖 → LLM [simple-nlu] chain 'Команды': 'захар как тебя зовут'",
+        "2026-10-22 06:10:27.766 | INFO     | src.chains:run:235 - 20f83b0a332d: ↪️ chain 'Команды' declined: 'Не понял команду.'",
+        "2026-10-22 06:10:27.769 | INFO     | src.chains:run:200 - 20f83b0a332d: 📝 STT [gigaam/gigaam-v3-rnnt] chain 'Jev' (0.00s): 'захар как тебя зовут'",
+        "2026-10-22 06:10:27.771 | INFO     | src.chains:run:222 - 20f83b0a332d: 🤖 → LLM [jev/typesafe/jev-1.14] chain 'Jev': 'захар как тебя зовут'",
+        "2026-10-22 06:10:27.806 | INFO     | src.speech:_play_ack:365 - 20f83b0a332d: 🔔 end-of-phrase ack",
+        "2026-10-22 06:10:28.250 | INFO     | src.chains:run:235 - fc012cd1e5ec: ↪️ chain 'Jev' declined: 'Не понял команду, повтори.'",
+        "2026-10-22 06:10:28.250 | INFO     | src.plugins.llm.jev:_decide:332 - jev decision: kind=other (other 100%; confidence 100%), target=none (none 100%; confidence 100%), action=none (none 100%; confidence 100%), compound=8%, delayed=4%",
+        "2026-10-22 06:10:28.251 | INFO     | src.chains:run:200 - fc012cd1e5ec: 📝 STT [gigaam/gigaam-v3-rnnt] chain 'LLM' (0.00s): 'захар как тебя зовут'",
+        "2026-10-22 06:10:28.251 | INFO     | src.chains:run:222 - fc012cd1e5ec: 🤖 → LLM [openrouter/anthropic/claude-haiku-4.5] chain 'LLM': 'захар как тебя зовут'",
+        "2026-10-22 06:10:28.381 | INFO     | src.chains:run:235 - 20f83b0a332d: ↪️ chain 'Jev' declined: 'Не понял команду, повтори.'",
+        "2026-10-22 06:10:28.381 | INFO     | src.plugins.llm.jev:_decide:332 - jev decision: kind=other (other 100%; confidence 100%), target=none (none 100%; confidence 100%), action=none (none 100%; confidence 100%), compound=7%, delayed=4%",
+        "2026-10-22 06:10:28.382 | INFO     | src.chains:run:200 - 20f83b0a332d: 📝 STT [gigaam/gigaam-v3-rnnt] chain 'LLM' (0.00s): 'захар как тебя зовут'",
+        "2026-10-22 06:10:28.382 | INFO     | src.chains:run:222 - 20f83b0a332d: 🤖 → LLM [openrouter/anthropic/claude-haiku-4.5] chain 'LLM': 'захар как тебя зовут'",
+        "2026-10-22 06:10:31.154 | INFO     | src.chains:run:252 - 20f83b0a332d: 💬 LLM reply chain 'LLM' (2.77s): 'Екатерина, если угодно. Голосовой ассистент, нештатный лектор вашего умного дома и, в некотором роде, совесть его электрических цепей. К вашим услугам.'",
+        "2026-10-22 06:10:31.154 | INFO     | src.llm:respond:160 - LLM response: model=anthropic/claude-haiku-4.5 total_tokens=19065 content='Екатерина, если угодно. Голосовой ассистент, нештатный лектор вашего умного дома и, в некотором роде, совесть его электрических цепей. К вашим услугам.' tool_calls=0",
+        "2026-10-22 06:10:31.155 | INFO     | src.speech:speak_reply:209 - 20f83b0a332d: ✒️ Accent [ruaccent/off] (0.00s): 'Екатерина, если угодно. Голосовой ассистент, нештатный лектор вашего умного дома и, в некотором роде, совесть его электрических цепей. К вашим услугам.'",
+        "2026-10-22 06:10:31.317 | INFO     | src.llm:respond:160 - LLM response: model=anthropic/claude-haiku-4.5 total_tokens=18582 content='Екатерина Шульман, к вашим услугам. Хотя в контексте голосового ассистента умного дома это, строго говоря, больше условность, чем реальность — я здесь, чтобы управлять вашим домом и отвечать на вопросы, а имя, как нам говорит философия, лишь ярлык для удобства.' tool_calls=0",
+        "2026-10-22 06:10:31.318 | INFO     | src.chains:run:252 - fc012cd1e5ec: 💬 LLM reply chain 'LLM' (3.07s): 'Екатерина Шульман, к вашим услугам. Хотя в контексте голосового ассистента умного дома это, строго говоря, больше условность, чем реальность — я здесь, чтобы управлять вашим домом и отвечать на вопросы, а имя, как нам говорит философия, лишь ярлык для удобства.'",
+        "2026-10-22 06:10:31.318 | INFO     | src.pipeline:_run:1128 - fc012cd1e5ec: ✅ run complete in 4.65s",
+        "2026-10-22 06:10:31.318 | INFO     | src.speech:speak_reply:209 - fc012cd1e5ec: ✒️ Accent [ruaccent/off] (0.00s): 'Екатерина Шульман, к вашим услугам. Хотя в контексте голосового ассистента умного дома это, строго говоря, больше условность, чем реальность — я здесь, чтобы управлять вашим домом и отвечать на вопросы, а имя, как нам говорит философия, лишь ярлык для удобства.'",
+        "2026-10-22 06:10:31.712 | INFO     | src.speech:_voice:276 - 20f83b0a332d: 🔊 TTS [fishaudio/s2-pro/9b64e083ed7943e5bda2193fd783ee5d] stream start (0.56s): 'Екатерина, если угодно. Голосовой ассистент, нештатный лектор вашего умного дома и, в некотором роде, совесть его электрических цепей. К вашим услугам.'",
+        "2026-10-22 06:10:42.756 | INFO     | src.speech:_voice:287 - 20f83b0a332d: 🔊 TTS played (11.60s total, 951928 bytes)",
+        "2026-10-22 06:10:42.757 | INFO     | src.pipeline:_run:1128 - 20f83b0a332d: ✅ run complete in 16.49s",
+        "2026-10-22 06:10:42.758 | INFO     | src.pipeline:_arm_followup:409 - 20f83b0a332d: 👂 listening for a follow-up (5000 ms)",
+        "2026-10-22 06:10:43.143 | INFO     | src.pipeline:on_audio:580 - 20f83b0a332d: 🎤 receiving audio...",
+        "2026-10-22 06:10:49.571 | INFO     | src.pipeline:_run:902 - 20f83b0a332d: 🎙️ captured 207488 bytes (~6.5s), reason=endpoint, vad=ten"
+      ],
+      "device_log": [
+        "06:09:07.550 I (5155172) wake_word: \"Zakhar\" detected",
+        "06:09:07.550 I (5155172) zakhar_link: wake word \"Захар\": session 9 proposed",
+        "06:09:07.597 I (5155204) zakhar_link: session 9: listening",
+        "06:09:09.202 I (5156826) zakhar_link: session 9: transcribing",
+        "06:09:09.694 I (5157344) zakhar_link: session 9: idle",
+        "06:09:33.104 I (5180290) wake_word: \"Zakhar\" detected",
+        "06:09:33.104 I (5180291) zakhar_link: wake word \"Захар\": session 10 proposed",
+        "06:09:33.104 I (5180312) zakhar_link: session 10: listening",
+        "06:09:34.571 I (5182229) zakhar_link: session 10: transcribing",
+        "06:09:35.134 I (5182750) zakhar_link: transcript: захар какая погода",
+        "06:09:35.134 I (5182752) zakhar_link: session 10: thinking",
+        "06:09:41.716 I (5189347) zakhar_link: reply: Погода, как и минут двадцать назад, не торопится меняться: шесть градусов, пасмурно, ветер два метра в секунду. Если вы собирались на прогулку, верхнее платье остаётся обязательным.",
+        "06:09:41.716 I (5189370) zakhar_link: session 10: speaking",
+        "06:09:54.499 I (5202116) zakhar_link: session 10: listening",
+        "06:10:01.849 I (5209467) zakhar_link: session 10: transcribing",
+        "06:10:03.500 I (5211146) zakhar_link: transcript: я в трусах хочу выйти",
+        "06:10:03.500 I (5211150) zakhar_link: session 10: thinking",
+        "06:10:06.778 I (5214343) zakhar_link: reply: Смею предположить, что это решение вы примете иначе, когда ознакомитесь с термометром. Шесть градусов — температура, при которой организм начинает настаивать на более основательном облачении. Здоровье, как известно, дороже любых принципов.",
+        "06:10:06.778 I (5214376) zakhar_link: session 10: speaking",
+        "06:10:21.668 I (5229301) zakhar_link: session 10: listening",
+        "06:10:24.598 I (5232162) wake_word: \"Zakhar\" detected",
+        "06:10:24.598 I (5232163) zakhar_link: wake word ignored: the session still hears its phrase",
+        "06:10:27.676 I (5233976) zakhar_link: session 10: transcribing",
+        "06:10:27.854 I (5235487) zakhar_link: transcript: захар как тебя зовут",
+        "06:10:27.854 I (5235491) zakhar_link: session 10: thinking",
+        "06:10:31.203 I (5238834) zakhar_link: reply: Екатерина, если угодно. Голосовой ассистент, нештатный лектор вашего умного дома и, в некотором роде, совесть его электрических цепей. К вашим услугам.",
+        "06:10:31.203 I (5238852) zakhar_link: session 10: speaking",
+        "06:10:42.827 I (5250430) zakhar_link: session 10: listening",
+        "06:10:49.630 I (5257243) zakhar_link: session 10: transcribing",
+        "06:10:51.003 I (5258643) zakhar_link: transcript: да",
+        "06:10:51.003 I (5258645) zakhar_link: session 10: thinking",
+        "06:10:54.104 I (5261765) zakhar_link: reply: Извольте. Чем я могу быть вам полезна?",
+        "06:10:54.104 I (5261767) zakhar_link: session 10: speaking",
+        "06:10:57.901 I (5265511) zakhar_link: session 10: listening",
+        "06:10:59.822 I (5267476) zakhar_link: session 10: transcribing"
+      ]
+    }
+  ]
+}

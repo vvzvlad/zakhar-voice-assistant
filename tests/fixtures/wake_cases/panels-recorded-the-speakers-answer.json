@@ -1,0 +1,186 @@
+{
+  "case": "Панели записали ответ колонки вокруг «Захар»",
+  "status": "closed",
+  "doc": "docs/wake-cases.md",
+  "time": "server clock, Moscow time, 2026-10-22",
+  "run_fields": {
+    "recording": "the run's stored audio from /api/runs/<id>; the speaker's is stereo and channel 0 is what the server recognises, the panels' is mono; a wake run's recording starts with the device's 2 s pre-roll",
+    "stt_text": "the text the server recognised (run record)",
+    "was": "[result, reason] of the run record",
+    "record_ts": "the run record's ts: when its phrase was end-pointed",
+    "expected": "[result, reason] the run must end with",
+    "shown_answer_of": "the device whose answer this speakerless device must be shown"
+  },
+  "devices": {
+    "20f83b0a332d": {
+      "name": "main_room_voicepe (Voice PE)",
+      "speaker": true,
+      "follow_up": true,
+      "mic_channels": 2
+    },
+    "fc012cd1e5ec": {
+      "name": "circle_espanel",
+      "speaker": false,
+      "follow_up": false,
+      "mic_channels": 1
+    },
+    "80f1b2d12c91": {
+      "name": "rectangular panel",
+      "speaker": false,
+      "follow_up": false,
+      "mic_channels": 1
+    }
+  },
+  "replayed_elsewhere": {
+    "4480": "late-wake-over-the-playing-answer.json replays 80f1b2d12c91's run 4480 at 07:01:24 and expects it rejected with wakeword_reject"
+  },
+  "log_4480": [
+    "2026-10-22 07:01:24.107 | INFO     | src.pipeline:_take:325 - 80f1b2d12c91: ▶️ run started (cid=13)",
+    "2026-10-22 07:01:24.107 | INFO     | src.pipeline:on_audio:548 - 80f1b2d12c91: 🎤 receiving audio (held)...",
+    "2026-10-22 07:01:24.599 | INFO     | src.wake_arbiter:_close:256 - wake arbitration: fc012cd1e5ec (speaker no, SNR 6.1 dB), 80f1b2d12c91 (speaker no, SNR 22.2 dB) -> 80f1b2d12c91 keeps the phrase",
+    "2026-10-22 07:01:27.985 | INFO     | src.pipeline:_run:919 - 80f1b2d12c91: 🎙️ captured 150528 bytes (~4.7s), reason=endpoint, vad=ten",
+    "2026-10-22 07:01:29.108 | INFO     | src.chains:run:200 - 80f1b2d12c91: 📝 STT [gigaam/gigaam-v3-rnnt] chain 'Команды' (1.12s): 'и еще что то привязанная захар стоп я буду знать где вас искать'",
+    "2026-10-22 07:01:29.108 | INFO     | src.pipeline:_end_silently:890 - 80f1b2d12c91: 🚫 no wake word in 'и еще что то привязанная захар стоп я буду знать где вас искать', wake dropped"
+  ],
+  "groups": [
+    {
+      "name": "02:22",
+      "online": [
+        "20f83b0a332d",
+        "fc012cd1e5ec",
+        "80f1b2d12c91"
+      ],
+      "before": {
+        "20f83b0a332d": {
+          "state": "announcing",
+          "source": "02:21:40.433 announcement: Свет в зале выключен. Темнота, как известно, способствует сосредоточенности... (device log); both panels' recordings carry its words"
+        },
+        "fc012cd1e5ec": {
+          "state": "idle"
+        },
+        "80f1b2d12c91": {
+          "state": "idle"
+        }
+      },
+      "timeline": [
+        {
+          "at_ms": 0,
+          "device": "fc012cd1e5ec",
+          "event": "wake",
+          "run": 4321,
+          "source": "not logged: no server log for 02:21-02:23"
+        },
+        {
+          "at_ms": 0,
+          "device": "80f1b2d12c91",
+          "event": "wake",
+          "run": 4322,
+          "source": "not logged: no server log for 02:21-02:23"
+        }
+      ],
+      "runs": {
+        "4321": {
+          "device": "fc012cd1e5ec",
+          "recording": "run-4321.wav",
+          "stt_text": "того что мы все захар свет в зале выключен захар темнота как известно способствует сосредоточенности захар напротив совершенно захар не способствует все",
+          "was": [
+            "rejected",
+            "wakeword_reject"
+          ],
+          "record_ts": "02:22:00.167",
+          "expected": [
+            "rejected",
+            "wakeword_reject"
+          ]
+        },
+        "4322": {
+          "device": "80f1b2d12c91",
+          "recording": "run-4322.wav",
+          "stt_text": "того что мы все захар свет в зале выключен захар темнота как известно способствует сосредоточенности захар или напротив совершенно захару не способствует все",
+          "was": [
+            "rejected",
+            "duplicate"
+          ],
+          "record_ts": "02:22:00.222",
+          "expected": [
+            "rejected",
+            "duplicate"
+          ]
+        }
+      },
+      "assumptions": [
+        "There is no server log for 02:21-02:23, so no wake time is known. The replay sends both panels' wakes back to back in one group. Their records end 55 ms apart (02:22:00.167, 02:22:00.222) with recordings of 12.544 s and 12.576 s. If 80f1b2d12c91 had come after the ruling instead, it would lose in the cooldown and fc012cd1e5ec's phrase would be checked alone: the same outcome.",
+        "fc012cd1e5ec keeps the phrase in the replay by its pre-roll SNR (26.1 dB against 25.7 dB), as the records say it did (4321 ran to the transcript check, 4322 is a duplicate).",
+        "The speaker plays a stream through the group: the panels recorded its answer and announcement. The replay plays a stand-in announcement.",
+        "The speaker's own wake (run 4319, «session 5 proposed» at 02:21:46.627 in the device log, over its playing answer, ended by maxlen with an empty transcript under the code of that time) is not replayed: today a confirmed wake over the playing stream stops it (wake_stop), so the panels would not have recorded the announcement."
+      ],
+      "log": [],
+      "device_log": [
+        "02:21:22.972 I (4175591) zakhar_link: announcement: Политолог отличается от экономиста тем, что ошибается с большей уверенностью. Юмор, согласитесь, строится на признании собственного несовершенства.",
+        "02:21:31.607 I (4184248) wake_word: \"Zakhar\" detected",
+        "02:21:31.607 I (4184249) zakhar_link: wake word \"Захар\": session 4 proposed",
+        "02:21:32.359 I (4184995) zakhar_link: session 4: listening",
+        "02:21:34.038 I (4186661) zakhar_link: session 4: transcribing",
+        "02:21:34.479 I (4187156) zakhar_link: transcript: юра согласитесь",
+        "02:21:34.479 I (4187158) zakhar_link: session 4: thinking",
+        "02:21:40.002 I (4192626) zakhar_link: reply: Вы правы — согласиться есть с чем. Юмор действительно питается именно этим: признанием того, что мы все — и политологи, и экономисты, и вообще — ошибаемся систематически, но с разной степенью самокритичности. Кто-то ошибается и мучается, кто-то ошибается и не зам",
+        "02:21:40.002 I (4192674) zakhar_link: session 4: speaking",
+        "02:21:40.433 I (4193052) zakhar_link: announcement: Свет в зале выключен. Темнота, как известно, способствует сосредоточенности — или, напротив, совершенно ей не способствует, всё зависит от обстоятельств.",
+        "02:21:46.627 I (4199256) wake_word: \"Zakhar\" detected",
+        "02:21:46.627 I (4199257) zakhar_link: wake word \"Захар\": session 5 proposed",
+        "02:21:49.053 I (4201685) zakhar_link: session 5: listening",
+        "02:21:49.773 I (4202296) wake_word: \"Zakhar\" detected",
+        "02:21:49.810 I (4202320) zakhar_link: wake word ignored: the session still hears its phrase",
+        "02:21:52.439 I (4205080) wake_word: \"Zakhar\" detected",
+        "02:21:52.439 I (4205080) zakhar_link: wake word ignored: the session still hears its phrase",
+        "02:21:56.342 I (4208984) wake_word: \"Zakhar\" detected",
+        "02:21:56.342 I (4208984) zakhar_link: wake word ignored: the session still hears its phrase",
+        "02:21:57.737 I (4210345) zakhar_link: session 5: transcribing",
+        "02:21:58.182 I (4210776) wake_word: \"Zakhar\" detected",
+        "02:21:58.182 I (4210776) zakhar_link: wake word \"Захар\": session 6 proposed",
+        "02:21:59.085 I (4211650) zakhar_link: session 6: listening",
+        "02:22:00.358 I (4213031) zakhar_link: session 6: transcribing",
+        "02:22:01.891 I (4214522) zakhar_link: transcript: напротив совершенно хорош способствует",
+        "02:22:01.891 I (4214524) zakhar_link: session 6: thinking",
+        "02:22:07.071 I (4219736) zakhar_link: announcement: Шестнадцать часов шестнадцать минут, понедельник, девятнадцатое октября. Время, как известно, движется в одну сторону и никогда не останавливается.",
+        "02:22:09.742 I (4222380) zakhar_link: reply: Свет в зале теперь горит. Что касается света и сосредоточенности — тут, как мы с вами понимаем, всё зависит от типа задачи: для чтения нужна яркость, для размышления иногда помогает полутень, а для дремы во время лекции подойдёт и полная темнота.",
+        "02:22:09.742 I (4222413) zakhar_link: session 6: speaking",
+        "02:22:16.560 I (4229176) wake_word: \"Zakhar\" detected",
+        "02:22:16.560 I (4229176) zakhar_link: wake word \"Захар\": session 7 proposed",
+        "02:22:17.389 I (4229907) zakhar_link: session 7: listening",
+        "02:22:18.577 I (4231208) zakhar_link: session 7: transcribing",
+        "02:22:19.895 I (4232579) zakhar_link: transcript: движется по сторону захорство",
+        "02:22:19.920 I (4232583) zakhar_link: session 7: thinking",
+        "02:22:23.666 I (4236268) zakhar_link: reply: Время действительно движется в одну сторону — это не иллюзия, а фундаментальное свойство нашей вселенной, второе начало термодинамики и всё такое. Останавливаться оно не будет, что, согласитесь, обнадёживает: если бы время застыло, мы бы с вами застыли вместе с ",
+        "02:22:23.666 I (4236305) zakhar_link: session 7: speaking",
+        "02:22:25.319 I (4237964) zakhar_link: announcement: Сейчас девятнадцать часов двенадцать минут, вторник, двадцатое октября. Время, когда большинство людей уже подумывает о ужине, но работа ещё не отпустила их окончательно.",
+        "02:22:30.106 I (4242743) wake_word: \"Zakhar\" detected",
+        "02:22:30.106 I (4242743) zakhar_link: wake word \"Захар\": session 8 proposed",
+        "02:22:31.000 I (4243461) zakhar_link: session 8: listening",
+        "02:22:32.748 I (4245373) zakhar_link: session 8: transcribing",
+        "02:22:32.877 I (4245530) zakhar_link: transcript: фундаментальное свойства захарсто",
+        "02:22:32.877 I (4245533) zakhar_link: session 8: thinking",
+        "02:22:36.381 I (4248961) zakhar_link: reply: Фундаментальное свойство — это, собственно, то, что лежит в основе всего остального, на чём всё держится. В случае времени это означает, что его однонаправленность не просто наблюдение, а глубокая черта самого устройства мира, из которой вытекают все остальные с",
+        "02:22:36.381 I (4249013) zakhar_link: session 8: speaking",
+        "02:22:36.999 I (4249593) wake_word: \"Zakhar\" detected",
+        "02:22:36.999 I (4249594) zakhar_link: wake word \"Захар\": session 9 proposed",
+        "02:22:37.587 I (4250268) zakhar_link: session 9: listening",
+        "02:22:39.156 I (4251781) zakhar_link: session 9: transcribing",
+        "02:22:39.231 W (4251867) zakhar_link: stream 12: 526 samples did not fit the buffer",
+        "02:22:39.699 I (4252346) zakhar_link: transcript: вторник захар сто",
+        "02:22:39.699 I (4252348) zakhar_link: session 9: thinking",
+        "02:22:43.999 I (4256591) zakhar_link: reply: Вторник — день, когда энергия недели ещё не растрачена, но уже начинает давать трещины. Время между работой и ужином, между обязательствами и отдыхом — это, что называется, классический переходный момент, когда организм колеблется между двумя состояниями и ещё ",
+        "02:22:43.999 I (4256633) zakhar_link: session 9: speaking",
+        "02:22:45.708 I (4258335) zakhar_link: announcement: Извольте: три социолога смотрят на стакан воды. Первый говорит: «Это институционализированная форма гидратации». Второй возражает: «Нет, это социальный конструкт, зависящий от контекста потребления». Третий молчит и пьёт. Смешное здесь, как водится, ровно п",
+        "02:22:45.882 I (4258519) wake_word: \"Zakhar\" detected",
+        "02:22:45.882 I (4258519) zakhar_link: wake word \"Захар\": session 10 proposed",
+        "02:22:46.616 I (4259282) zakhar_link: session 10 not taken: idle",
+        "02:22:51.073 I (4263576) wake_word: \"Zakhar\" detected",
+        "02:22:51.073 I (4263576) zakhar_link: wake word \"Захар\": session 11 proposed",
+        "02:22:52.118 I (4264777) zakhar_link: session 11: listening",
+        "02:22:59.646 I (4272311) wake_word: \"Zakhar\" detected",
+        "02:22:59.646 I (4272311) zakhar_link: wake word ignored: the session still hears its phrase"
+      ]
+    }
+  ]
+}

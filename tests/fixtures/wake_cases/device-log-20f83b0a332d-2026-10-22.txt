@@ -1,0 +1,1222 @@
+00:11:39.985 I (6382345) wake_word: "Zakhar" blocked by VAD
+00:11:39.986 I (6382377) wake_word: "Zakhar" blocked by VAD
+00:11:40.033 I (6382409) wake_word: "Zakhar" blocked by VAD
+00:11:40.035 I (6382440) wake_word: "Zakhar" blocked by VAD
+00:11:40.053 I (6382472) wake_word: "Zakhar" blocked by VAD
+00:11:40.097 I (6382504) wake_word: "Zakhar" blocked by VAD
+00:11:40.115 I (6382534) wake_word: "Zakhar" blocked by VAD
+00:11:40.140 I (6382566) wake_word: "Zakhar" blocked by VAD
+00:11:40.192 I (6382599) wake_word: "Zakhar" blocked by VAD
+00:11:40.233 I (6382631) wake_word: "Zakhar" blocked by VAD
+00:11:40.240 I (6382662) wake_word: "Zakhar" blocked by VAD
+00:11:49.145 I (6391465) wake_word: "Zakhar" detected
+00:11:49.145 I (6391465) zakhar_link: wake word "Захар": session 1 proposed
+00:11:49.145 I (6391481) zakhar_link: session 1: listening
+00:11:50.839 I (6393208) zakhar_link: session 1: transcribing
+00:11:51.935 I (6394341) zakhar_link: transcript: захар ты меня слушаешь
+00:11:51.935 I (6394344) zakhar_link: session 1: thinking
+00:11:52.341 I (6394755) audio: echo cancel: 0.2 s of playback, FD_LOW_COST, NLP_NORMAL, filter 4, lag 1344 frames (84 ms), correlation nan, channel 0 down 33.8 dB, AEC 7403 us mean / 7941 us max per 32 ms chunk, 0 mic frames dropped
+00:11:57.613 I (6400014) zakhar_link: reply: Я вас слышу, уважаемый собеседник, хотя зовут меня не Захаром. Я Екатерина, голосовой ассистент вашего дома. Чем я могу вам помочь?
+00:11:57.613 I (6400028) zakhar_link: session 1: speaking
+00:12:06.750 I (6409164) wake_word: "Stop" off with the playback: its highest window mean 0.01, cutoff 0.35
+00:12:06.815 I (6409190) zakhar_link: session 1: listening
+00:12:06.818 I (6409218) audio: echo cancel: 7.6 s of playback, FD_LOW_COST, NLP_NORMAL, filter 4, lag 1344 frames (84 ms), correlation 0.86, channel 0 down 22.0 dB, AEC 7387 us mean / 9706 us max per 32 ms chunk, 0 mic frames dropped
+00:12:17.514 I (6419906) zakhar_link: session 1: transcribing
+00:12:19.659 I (6422047) zakhar_link: transcript: вот смотри допустим человеку надо две тысячи калорий в день это потому что он теплокровный а сколько калорий в день надо змее например
+00:12:19.659 I (6422062) zakhar_link: session 1: thinking
+00:12:20.080 I (6422498) audio: echo cancel: 0.2 s of playback, FD_LOW_COST, NLP_NORMAL, filter 4, lag 1344 frames (84 ms), correlation nan, channel 0 down 30.3 dB, AEC 7186 us mean / 8033 us max per 32 ms chunk, 0 mic frames dropped
+00:12:24.446 I (6426723) zakhar_link: reply: Вопрос ваш касается фундаментальной разницы в метаболизме — и он действительно заслуживает серьёзного ответа. Змея, будучи хладнокровной, расходует энергию в разы меньше: её тело не требует постоянного «отопления», как у нас. Если человеку две тысячи калорий, 
+00:12:24.446 I (6426820) zakhar_link: session 1: speaking
+00:12:55.435 I (6457810) wake_word: "Stop" detected
+00:12:55.435 I (6457810) zakhar_link: stop word: session 1, 1 streams dropped
+00:12:55.435 I (6457834) wake_word: "Stop" off with the playback: its highest window mean 0.36, cutoff 0.35
+00:12:55.497 I (6457875) zakhar_link: session 1: idle
+00:12:55.497 I (6457890) audio: echo cancel: 30.0 s of playback, FD_LOW_COST, NLP_NORMAL, filter 4, lag 1344 frames (84 ms), correlation 0.34, channel 0 down 21.2 dB, AEC 7502 us mean / 9835 us max per 32 ms chunk, 0 mic frames dropped
+00:13:10.548 I (6472838) wake_word: "Zakhar" detected
+00:13:10.548 I (6472838) zakhar_link: wake word "Захар": session 2 proposed
+00:13:10.634 I (6472917) zakhar_link: session 2: listening
+00:13:15.458 I (6477832) zakhar_link: session 2: transcribing
+00:13:17.540 I (6479943) zakhar_link: transcript: захар ну иди погугли блять сколько там калорий в день на килограмм веса
+00:13:17.540 I (6479949) zakhar_link: session 2: thinking
+00:13:17.950 I (6480354) audio: echo cancel: 0.2 s of playback, FD_LOW_COST, NLP_NORMAL, filter 4, lag 1344 frames (84 ms), correlation nan, channel 0 down 30.9 dB, AEC 7115 us mean / 7862 us max per 32 ms chunk, 0 mic frames dropped
+00:13:18.971 I (6481382) wake_word: "Zakhar" blocked by VAD
+00:13:19.006 I (6481413) wake_word: "Zakhar" blocked by VAD
+00:13:19.037 I (6481445) wake_word: "Zakhar" blocked by VAD
+00:13:19.059 I (6481478) wake_word: "Zakhar" blocked by VAD
+00:13:19.116 I (6481510) wake_word: "Zakhar" blocked by VAD
+00:13:19.117 I (6481541) wake_word: "Zakhar" blocked by VAD
+00:13:19.137 I (6481547) wake_word: "Zakhar" blocked by VAD
+00:13:19.159 I (6481575) wake_word: "Zakhar" blocked by VAD
+00:13:19.181 I (6481607) wake_word: "Zakhar" blocked by VAD
+00:13:24.404 I (6486818) wake_word: "Stop" off with the playback: its highest window mean 0.32, cutoff 0.35
+00:13:24.450 I (6486850) audio: echo cancel: 2.4 s of playback, FD_LOW_COST, NLP_NORMAL, filter 4, lag 1344 frames (84 ms), correlation 0.89, channel 0 down 34.5 dB, AEC 7351 us mean / 9904 us max per 32 ms chunk, 0 mic frames dropped
+00:13:40.254 I (6502555) zakhar_link: reply: Вот теперь яснее. Согласно науке о питании рептилий: змея весом в полкилограмма при оптимальной температуре нуждается в девяти-пятидесяти семи килокалориях в день — диапазон зависит от активности и вида. Это означает, что на килограмм веса змея требует примерн
+00:13:40.254 I (6502627) zakhar_link: session 2: speaking
+00:14:17.814 I (6540226) zakhar_link: session 2: listening
+00:14:17.814 I (6540235) wake_word: "Stop" off with the playback: its highest window mean 0.00, cutoff 0.35
+00:14:17.895 I (6540289) audio: echo cancel: 36.8 s of playback, FD_LOW_COST, NLP_NORMAL, filter 4, lag 1344 frames (84 ms), correlation 0.63, channel 0 down 40.2 dB, AEC 7476 us mean / 9963 us max per 32 ms chunk, 0 mic frames dropped
+00:14:22.897 I (6545265) zakhar_link: session 2: idle
+00:25:17.729 I (7200093) wake_word: "Zakhar" blocked by VAD
+00:25:17.729 I (7200099) wake_word: "Zakhar" blocked by VAD
+00:25:17.729 I (7200128) wake_word: "Zakhar" blocked by VAD
+00:25:17.754 I (7200160) wake_word: "Zakhar" blocked by VAD
+01:11:03.774 I (9946094) ota: receiving 1871664 B into app1
+01:11:46.740 I (9988574) esp_image: segment 0: paddr=007d0020 vaddr=3c160020 size=4b1f8h (307704) map
+01:11:46.740 I (9988605) esp_image: segment 1: paddr=0081b220 vaddr=3fca7700 size=04df8h ( 19960) 
+01:11:46.740 I (9988608) esp_image: segment 2: paddr=00820020 vaddr=42000020 size=1589ech (1411564) map
+01:11:46.740 I (9988751) esp_image: segment 3: paddr=00978a14 vaddr=3fcac4f8 size=00e64h (  3684) 
+01:11:46.740 I (9988751) esp_image: segment 4: paddr=00979880 vaddr=40378000 size=1f660h (128608) 
+01:11:46.740 I (9988767) esp_image: segment 5: paddr=00998ee8 vaddr=50000000 size=00020h (    32) 
+01:11:46.740 I (9988768) esp_image: segment 0: paddr=007d0020 vaddr=3c160020 size=4b1f8h (307704) map
+01:11:46.740 I (9988803) esp_image: segment 1: paddr=0081b220 vaddr=3fca7700 size=04df8h ( 19960) 
+01:11:46.740 I (9988805) esp_image: segment 2: paddr=00820020 vaddr=42000020 size=1589ech (1411564) map
+01:11:46.740 I (9988948) esp_image: segment 3: paddr=00978a14 vaddr=3fcac4f8 size=00e64h (  3684) 
+01:11:46.740 I (9988949) esp_image: segment 4: paddr=00979880 vaddr=40378000 size=1f660h (128608) 
+01:11:46.740 I (9988966) esp_image: segment 5: paddr=00998ee8 vaddr=50000000 size=00020h (    32) 
+01:11:46.741 I (9989048) ota: app1 is next, rebooting
+01:11:56.002 I (8630) zakhar_link: log stream on
+01:11:56.002 I (8637) volume: boost +0 %
+01:11:56.501 I (9176) wake_word: wake model of 77848 B loaded, tensor arena 29436 of 131072 B used
+01:11:56.501 I (9177) zakhar_link: wake model zakhar/zakhar_v37 loaded (77848 B)
+01:11:56.624 I (9319) wake_word: VAD model of 34328 B loaded, tensor arena 16620 of 131072 B used
+01:11:56.624 I (9320) zakhar_link: vad model microWakeWord/vad/vad.tflite loaded (34328 B)
+01:12:13.105 I (25778) sendspin.noise_handshake: Noise handshake complete: server_id=8cKxEGYmkRICH_1yoy69eFxxy3jvcgRrEJBxYSloWV8 psk_category=2
+01:12:13.105 I (25779) sendspin.connection: Noise transport active (server_id=8cKxEGYmkRICH_1yoy69eFxxy3jvcgRrEJBxYSloWV8, psk_category=2)
+01:12:13.105 I (25807) sendspin.conn_mgr: Connection admitted: server_id=8cKxEGYmkRICH_1yoy69eFxxy3jvcgRrEJBxYSloWV8
+01:12:25.444 I (38120) music: music task: 4100 B of its stack never used
+01:12:52.705 I (65384) voicepe: a minute with an IP: the image is valid
+01:15:10.844 I (203525) wifi:<ba-add>idx:1 (ifx:0, 8a:bd:09:28:90:74), tid:6, ssn:1, winSize:64
+01:46:14.375 I (2067022) wake_word: "Zakhar" blocked by VAD
+01:46:14.375 I (2067054) wake_word: "Zakhar" blocked by VAD
+01:46:14.398 I (2067086) wake_word: "Zakhar" blocked by VAD
+02:02:11.898 I (3024516) wake_word: "Zakhar" detected
+02:02:11.898 I (3024517) zakhar_link: wake word "Захар": session 1 proposed
+02:02:11.917 I (3024589) zakhar_link: session 1: listening
+02:02:15.939 I (3028571) zakhar_link: session 1: idle
+02:02:24.545 I (3037188) wake_word: "Zakhar" blocked by VAD
+02:02:24.545 I (3037219) wake_word: "Zakhar" blocked by VAD
+02:02:24.570 I (3037252) wake_word: "Zakhar" blocked by VAD
+02:02:24.588 I (3037283) wake_word: "Zakhar" blocked by VAD
+02:02:24.635 I (3037315) wake_word: "Zakhar" blocked by VAD
+02:03:52.236 I (3124867) wake_word: "Zakhar" blocked by VAD
+02:03:52.236 I (3124899) wake_word: "Zakhar" blocked by VAD
+02:03:52.248 I (3124932) wake_word: "Zakhar" blocked by VAD
+02:03:52.281 I (3124963) wake_word: "Zakhar" blocked by VAD
+02:03:52.313 I (3124995) wake_word: "Zakhar" blocked by VAD
+02:05:28.161 I (3220834) wake_word: "Zakhar" blocked by VAD
+02:05:28.181 I (3220867) wake_word: "Zakhar" blocked by VAD
+02:05:28.219 I (3220898) wake_word: "Zakhar" blocked by VAD
+02:05:28.247 I (3220930) wake_word: "Zakhar" blocked by VAD
+02:05:28.284 I (3220962) wake_word: "Zakhar" blocked by VAD
+02:05:50.081 I (3242689) wake_word: "Zakhar" blocked by VAD
+02:05:50.081 I (3242721) wake_word: "Zakhar" blocked by VAD
+02:05:50.081 I (3242753) wake_word: "Zakhar" blocked by VAD
+02:05:50.170 I (3242786) wake_word: "Zakhar" blocked by VAD
+02:05:50.170 I (3242791) wake_word: "Zakhar" blocked by VAD
+02:05:50.170 I (3242819) wake_word: "Zakhar" blocked by VAD
+02:05:50.171 I (3242851) wake_word: "Zakhar" blocked by VAD
+02:05:50.191 I (3242882) wake_word: "Zakhar" blocked by VAD
+02:06:36.643 I (3289280) wake_word: "Zakhar" blocked by VAD
+02:06:36.644 I (3289313) wake_word: "Zakhar" blocked by VAD
+02:06:36.662 I (3289345) wake_word: "Zakhar" blocked by VAD
+02:06:36.662 I (3289351) wake_word: "Zakhar" blocked by VAD
+02:06:36.705 I (3289378) wake_word: "Zakhar" blocked by VAD
+02:06:36.722 I (3289410) wake_word: "Zakhar" blocked by VAD
+02:06:36.766 I (3289442) wake_word: "Zakhar" blocked by VAD
+02:06:36.788 I (3289474) wake_word: "Zakhar" blocked by VAD
+02:06:36.840 I (3289506) wake_word: "Zakhar" blocked by VAD
+02:07:33.401 I (3346081) wake_word: "Zakhar" blocked by VAD
+02:07:33.436 I (3346113) wake_word: "Zakhar" blocked by VAD
+02:07:33.460 I (3346145) wake_word: "Zakhar" blocked by VAD
+02:08:17.949 I (3390591) wake_word: "Zakhar" blocked by VAD
+02:08:17.949 I (3390624) wake_word: "Zakhar" blocked by VAD
+02:08:17.949 I (3390629) wake_word: "Zakhar" blocked by VAD
+02:08:17.966 I (3390657) wake_word: "Zakhar" blocked by VAD
+02:08:18.004 I (3390689) wake_word: "Zakhar" blocked by VAD
+02:08:18.038 I (3390721) wake_word: "Zakhar" blocked by VAD
+02:08:18.070 I (3390753) wake_word: "Zakhar" blocked by VAD
+02:08:46.618 I (3419264) wake_word: "Zakhar" blocked by VAD
+02:08:46.619 I (3419295) wake_word: "Zakhar" blocked by VAD
+02:08:46.643 I (3419327) wake_word: "Zakhar" blocked by VAD
+02:08:46.681 I (3419359) wake_word: "Zakhar" blocked by VAD
+02:08:46.717 I (3419391) wake_word: "Zakhar" blocked by VAD
+02:08:46.740 I (3419424) wake_word: "Zakhar" blocked by VAD
+02:08:46.740 I (3419429) wake_word: "Zakhar" blocked by VAD
+02:08:46.765 I (3419457) wake_word: "Zakhar" blocked by VAD
+02:08:46.814 I (3419489) wake_word: "Zakhar" blocked by VAD
+02:08:46.828 I (3419521) wake_word: "Zakhar" blocked by VAD
+02:09:41.016 I (3473663) wake_word: "Zakhar" blocked by VAD
+02:09:41.016 I (3473668) wake_word: "Zakhar" blocked by VAD
+02:09:41.020 I (3473696) wake_word: "Zakhar" blocked by VAD
+02:09:41.039 I (3473728) wake_word: "Zakhar" blocked by VAD
+02:09:41.085 I (3473760) wake_word: "Zakhar" blocked by VAD
+02:09:41.102 I (3473792) wake_word: "Zakhar" blocked by VAD
+02:10:43.556 I (3536191) wake_word: "Zakhar" blocked by VAD
+02:10:43.556 I (3536223) wake_word: "Zakhar" blocked by VAD
+02:10:43.570 I (3536255) wake_word: "Zakhar" blocked by VAD
+02:10:43.621 I (3536287) wake_word: "Zakhar" blocked by VAD
+02:10:43.641 I (3536319) wake_word: "Zakhar" blocked by VAD
+02:10:43.675 I (3536351) wake_word: "Zakhar" blocked by VAD
+02:10:43.697 I (3536383) wake_word: "Zakhar" blocked by VAD
+02:10:43.789 I (3536414) wake_word: "Zakhar" detected
+02:10:43.789 I (3536414) zakhar_link: wake word "Захар": session 2 proposed
+02:10:43.789 I (3536428) zakhar_link: session 2: listening
+02:10:45.550 I (3538194) zakhar_link: session 2: transcribing
+02:10:46.032 I (3538704) zakhar_link: session 2: idle
+02:12:26.901 I (3639581) wake_word: "Zakhar" blocked by VAD
+02:12:26.928 I (3639613) wake_word: "Zakhar" blocked by VAD
+02:12:27.015 I (3639645) wake_word: "Zakhar" detected
+02:12:27.015 I (3639645) zakhar_link: wake word "Захар": session 3 proposed
+02:12:27.050 I (3639680) zakhar_link: session 3: listening
+02:12:31.922 I (3644554) zakhar_link: session 3: transcribing
+02:12:32.875 I (3645534) zakhar_link: session 3: idle
+02:13:07.170 I (3679805) wake_word: "Zakhar" blocked by VAD
+02:13:07.170 I (3679837) wake_word: "Zakhar" blocked by VAD
+02:13:07.181 I (3679870) wake_word: "Zakhar" blocked by VAD
+02:13:07.224 I (3679901) wake_word: "Zakhar" blocked by VAD
+02:13:07.246 I (3679933) wake_word: "Zakhar" blocked by VAD
+02:13:07.288 I (3679965) wake_word: "Zakhar" blocked by VAD
+02:13:07.318 I (3679997) wake_word: "Zakhar" blocked by VAD
+02:13:07.352 I (3680029) wake_word: "Zakhar" blocked by VAD
+02:13:07.375 I (3680061) wake_word: "Zakhar" blocked by VAD
+02:13:07.375 I (3680066) wake_word: "Zakhar" blocked by VAD
+02:16:49.696 E (3892083) websocket_client: esp_transport_read() failed with -1, transport_error=ESP_ERR_ESP_TLS_TCP_CLOSED_FIN, tls_error_code=0, tls_flags=0, errno=128
+02:16:49.696 E (3892090) websocket_client: Error receive data
+02:16:49.696 W (3892094) zakhar_link: link lost, reconnecting in 1 s
+02:16:49.696 W (3896153) zakhar_link: no server answers _zakhar._tcp
+02:16:49.696 W (3899253) zakhar_link: no server answers _zakhar._tcp
+02:16:49.696 W (3902120) websocket_client: `network_timeout_ms` is not set, or it is less than or equal to zero, using default time out 10000 (milliseconds)
+02:16:49.696 I (3902122) websocket_client: Started
+02:16:49.696 I (3902131) zakhar_link: connected to ws://10.31.41.59:8200/device
+02:16:49.696 I (3902239) zakhar_link: config: wake 204, vad 25, play_prime_ms 700, auto_volume 0
+02:16:49.696 I (3902243) zakhar_link: log stream on
+02:16:49.696 I (3902253) volume: boost +0 %
+02:16:51.345 I (3903932) wake_word: wake model of 77848 B loaded, tensor arena 29436 of 131072 B used
+02:16:51.345 I (3903932) zakhar_link: wake model zakhar/zakhar_v37 loaded (77848 B)
+02:16:51.898 I (3904394) wake_word: VAD model of 34328 B loaded, tensor arena 16620 of 131072 B used
+02:16:51.898 I (3904394) zakhar_link: vad model microWakeWord/vad/vad.tflite loaded (34328 B)
+02:21:22.972 I (4175591) zakhar_link: announcement: Политолог отличается от экономиста тем, что ошибается с большей уверенностью. Юмор, согласитесь, строится на признании собственного несовершенства.
+02:21:31.607 I (4184248) wake_word: "Zakhar" detected
+02:21:31.607 I (4184249) zakhar_link: wake word "Захар": session 4 proposed
+02:21:32.359 I (4184995) zakhar_link: session 4: listening
+02:21:34.038 I (4186661) zakhar_link: session 4: transcribing
+02:21:34.479 I (4187156) zakhar_link: transcript: юра согласитесь
+02:21:34.479 I (4187158) zakhar_link: session 4: thinking
+02:21:40.002 I (4192626) zakhar_link: reply: Вы правы — согласиться есть с чем. Юмор действительно питается именно этим: признанием того, что мы все — и политологи, и экономисты, и вообще — ошибаемся систематически, но с разной степенью самокритичности. Кто-то ошибается и мучается, кто-то ошибается и не зам
+02:21:40.002 I (4192674) zakhar_link: session 4: speaking
+02:21:40.433 I (4193052) zakhar_link: announcement: Свет в зале выключен. Темнота, как известно, способствует сосредоточенности — или, напротив, совершенно ей не способствует, всё зависит от обстоятельств.
+02:21:46.627 I (4199256) wake_word: "Zakhar" detected
+02:21:46.627 I (4199257) zakhar_link: wake word "Захар": session 5 proposed
+02:21:49.053 I (4201685) zakhar_link: session 5: listening
+02:21:49.773 I (4202296) wake_word: "Zakhar" detected
+02:21:49.810 I (4202320) zakhar_link: wake word ignored: the session still hears its phrase
+02:21:52.439 I (4205080) wake_word: "Zakhar" detected
+02:21:52.439 I (4205080) zakhar_link: wake word ignored: the session still hears its phrase
+02:21:56.342 I (4208984) wake_word: "Zakhar" detected
+02:21:56.342 I (4208984) zakhar_link: wake word ignored: the session still hears its phrase
+02:21:57.737 I (4210345) zakhar_link: session 5: transcribing
+02:21:58.182 I (4210776) wake_word: "Zakhar" detected
+02:21:58.182 I (4210776) zakhar_link: wake word "Захар": session 6 proposed
+02:21:59.085 I (4211650) zakhar_link: session 6: listening
+02:22:00.358 I (4213031) zakhar_link: session 6: transcribing
+02:22:01.891 I (4214522) zakhar_link: transcript: напротив совершенно хорош способствует
+02:22:01.891 I (4214524) zakhar_link: session 6: thinking
+02:22:07.071 I (4219736) zakhar_link: announcement: Шестнадцать часов шестнадцать минут, понедельник, девятнадцатое октября. Время, как известно, движется в одну сторону и никогда не останавливается.
+02:22:09.742 I (4222380) zakhar_link: reply: Свет в зале теперь горит. Что касается света и сосредоточенности — тут, как мы с вами понимаем, всё зависит от типа задачи: для чтения нужна яркость, для размышления иногда помогает полутень, а для дремы во время лекции подойдёт и полная темнота.
+02:22:09.742 I (4222413) zakhar_link: session 6: speaking
+02:22:16.560 I (4229176) wake_word: "Zakhar" detected
+02:22:16.560 I (4229176) zakhar_link: wake word "Захар": session 7 proposed
+02:22:17.389 I (4229907) zakhar_link: session 7: listening
+02:22:18.577 I (4231208) zakhar_link: session 7: transcribing
+02:22:19.895 I (4232579) zakhar_link: transcript: движется по сторону захорство
+02:22:19.920 I (4232583) zakhar_link: session 7: thinking
+02:22:23.666 I (4236268) zakhar_link: reply: Время действительно движется в одну сторону — это не иллюзия, а фундаментальное свойство нашей вселенной, второе начало термодинамики и всё такое. Останавливаться оно не будет, что, согласитесь, обнадёживает: если бы время застыло, мы бы с вами застыли вместе с 
+02:22:23.666 I (4236305) zakhar_link: session 7: speaking
+02:22:25.319 I (4237964) zakhar_link: announcement: Сейчас девятнадцать часов двенадцать минут, вторник, двадцатое октября. Время, когда большинство людей уже подумывает о ужине, но работа ещё не отпустила их окончательно.
+02:22:30.106 I (4242743) wake_word: "Zakhar" detected
+02:22:30.106 I (4242743) zakhar_link: wake word "Захар": session 8 proposed
+02:22:31.000 I (4243461) zakhar_link: session 8: listening
+02:22:32.748 I (4245373) zakhar_link: session 8: transcribing
+02:22:32.877 I (4245530) zakhar_link: transcript: фундаментальное свойства захарсто
+02:22:32.877 I (4245533) zakhar_link: session 8: thinking
+02:22:36.381 I (4248961) zakhar_link: reply: Фундаментальное свойство — это, собственно, то, что лежит в основе всего остального, на чём всё держится. В случае времени это означает, что его однонаправленность не просто наблюдение, а глубокая черта самого устройства мира, из которой вытекают все остальные с
+02:22:36.381 I (4249013) zakhar_link: session 8: speaking
+02:22:36.999 I (4249593) wake_word: "Zakhar" detected
+02:22:36.999 I (4249594) zakhar_link: wake word "Захар": session 9 proposed
+02:22:37.587 I (4250268) zakhar_link: session 9: listening
+02:22:39.156 I (4251781) zakhar_link: session 9: transcribing
+02:22:39.231 W (4251867) zakhar_link: stream 12: 526 samples did not fit the buffer
+02:22:39.699 I (4252346) zakhar_link: transcript: вторник захар сто
+02:22:39.699 I (4252348) zakhar_link: session 9: thinking
+02:22:43.999 I (4256591) zakhar_link: reply: Вторник — день, когда энергия недели ещё не растрачена, но уже начинает давать трещины. Время между работой и ужином, между обязательствами и отдыхом — это, что называется, классический переходный момент, когда организм колеблется между двумя состояниями и ещё 
+02:22:43.999 I (4256633) zakhar_link: session 9: speaking
+02:22:45.708 I (4258335) zakhar_link: announcement: Извольте: три социолога смотрят на стакан воды. Первый говорит: «Это институционализированная форма гидратации». Второй возражает: «Нет, это социальный конструкт, зависящий от контекста потребления». Третий молчит и пьёт. Смешное здесь, как водится, ровно п
+02:22:45.882 I (4258519) wake_word: "Zakhar" detected
+02:22:45.882 I (4258519) zakhar_link: wake word "Захар": session 10 proposed
+02:22:46.616 I (4259282) zakhar_link: session 10 not taken: idle
+02:22:51.073 I (4263576) wake_word: "Zakhar" detected
+02:22:51.073 I (4263576) zakhar_link: wake word "Захар": session 11 proposed
+02:22:52.118 I (4264777) zakhar_link: session 11: listening
+02:22:59.646 I (4272311) wake_word: "Zakhar" detected
+02:22:59.646 I (4272311) zakhar_link: wake word ignored: the session still hears its phrase
+02:23:01.962 I (4274626) zakhar_link: session 11: transcribing
+02:23:03.497 I (4276135) zakhar_link: transcript: начинает давать трещину захар скок или между работой из три смотрят на стакан воды первый говорит это институционализированный захар стоп второе возражение
+02:23:03.497 I (4276155) zakhar_link: session 11: thinking
+02:23:07.953 I (4280542) zakhar_link: reply: Вы совершенно верно уловили суть: это старый анекдот про три взгляда на стакан воды — оптимист видит его наполненным, пессимист пустым, а социолог видит в нём институт. Смешное здесь, как водится, именно в том, что социолог — персонаж, который способен разглядет
+02:23:07.953 I (4280596) zakhar_link: session 11: speaking
+02:23:11.158 I (4283640) wake_word: "Zakhar" detected
+02:23:11.158 I (4283640) zakhar_link: wake word "Захар": session 12 proposed
+02:23:11.990 I (4284659) zakhar_link: session 12: listening
+02:23:13.390 I (4286062) zakhar_link: session 12: transcribing
+02:23:13.925 I (4286593) zakhar_link: transcript: смешное захар стоп ровно потому что
+02:23:13.925 I (4286595) zakhar_link: session 12: thinking
+02:23:19.402 I (4292030) zakhar_link: reply: Ровно потому, что правда — вот в этом вся соль. Два социолога теоретизируют, расчленяют реальность на концепции, а третий просто делает то, для чего стакан с водой и предназначен. И смешно это именно потому, что мы все немного похожи на первых двух: склонны усложн
+02:23:19.402 I (4292077) zakhar_link: session 12: speaking
+02:23:20.073 I (4292735) zakhar_link: announcement: Сырую глину можно размочить и использовать заново, а обожжённую уже нет. После обжига она превращается в камень и с водой больше не смешивается.
+02:23:25.902 I (4298520) wake_word: "Zakhar" detected
+02:23:25.902 I (4298520) zakhar_link: wake word "Захар": session 13 proposed
+02:23:26.510 I (4299142) zakhar_link: session 13: listening
+02:23:31.885 I (4304534) zakhar_link: session 13: transcribing
+02:23:32.918 I (4305586) zakhar_link: transcript: два захар стоп можно размочить и использовать заново а уже нет
+02:23:32.953 I (4305592) zakhar_link: session 13: thinking
+02:23:37.832 I (4310452) zakhar_link: reply: Вы затронули интересный момент — да, в принципе можно размочить и переиспользовать, но это уже совсем другой уровень экономии, граждане. Тут мы переходим от социологии и философии к практической гидрологии и ресурсному менеджменту — от вопроса «что такое вода 
+02:23:37.832 I (4310510) zakhar_link: session 13: speaking
+02:23:45.213 I (4317860) zakhar_link: announcement: Вот один: экономист — это человек, который видит, что что-то работает на практике, и задаётся вопросом, будет ли это работать в теории. Смешное здесь, как водится, ровно потому, что правда.
+02:23:48.859 I (4321499) wake_word: "Zakhar" detected
+02:23:48.859 I (4321500) zakhar_link: wake word "Захар": session 14 proposed
+02:23:49.516 I (4322164) zakhar_link: session 14: listening
+02:23:59.926 I (4332584) zakhar_link: session 14: transcribing
+02:24:01.947 I (4334610) zakhar_link: transcript: захар что экономист это человек который видит что что то работает на практике захар что вопрос будет ли это работать в теории смешно ли здесь
+02:24:01.947 I (4334627) zakhar_link: session 14: thinking
+02:24:07.779 I (4340358) zakhar_link: reply: Смешно здесь, да, ровно потому, что правда — экономист переворачивает логику с ног на голову. Нормальный человек сначала проверяет теорию, потом применяет на практике; экономист же видит, что люди уже что-то делают и зарабатывают, и только потом начинает строить 
+02:24:07.779 I (4340423) zakhar_link: session 14: speaking
+02:24:14.248 I (4346838) wake_word: "Zakhar" detected
+02:24:14.248 I (4346838) zakhar_link: wake word "Захар": session 15 proposed
+02:24:15.022 I (4347699) zakhar_link: session 15: listening
+02:24:16.433 I (4349099) zakhar_link: session 15: transcribing
+02:24:17.333 I (4350013) zakhar_link: session 15: idle
+02:41:00.694 I (5353259) wake_word: "Zakhar" blocked by VAD
+02:41:03.688 I (5353292) wake_word: "Zakhar" detected
+02:41:03.688 I (5353292) zakhar_link: wake word "Захар": session 16 proposed
+02:41:03.791 I (5356353) zakhar_link: session 16: listening
+02:41:04.241 I (5356867) zakhar_link: session 16: transcribing
+02:41:05.137 I (5357771) zakhar_link: session 16: idle
+02:54:18.404 I (6151011) wake_word: "Zakhar" detected
+02:54:18.404 I (6151011) zakhar_link: wake word "Захар": session 17 proposed
+02:54:18.443 I (6151059) zakhar_link: session 17: listening
+02:54:22.446 I (6155054) zakhar_link: session 17: idle
+03:06:55.459 E (6897997) transport_ws: Error read data(-1)
+03:06:55.459 E (6897997) websocket_client: esp_transport_read() failed with -1, transport_error=ESP_ERR_ESP_TLS_TCP_CLOSED_FIN, tls_error_code=0, tls_flags=0, errno=128
+03:06:55.459 E (6898004) websocket_client: Error receive data
+03:06:55.459 W (6898009) zakhar_link: link lost, reconnecting in 1 s
+03:06:55.459 W (6902053) zakhar_link: no server answers _zakhar._tcp
+03:06:55.459 W (6905153) zakhar_link: no server answers _zakhar._tcp
+03:06:55.459 W (6907945) websocket_client: `network_timeout_ms` is not set, or it is less than or equal to zero, using default time out 10000 (milliseconds)
+03:06:55.459 I (6907947) websocket_client: Started
+03:06:55.459 I (6907956) zakhar_link: connected to ws://10.31.41.59:8200/device
+03:06:55.459 I (6908033) zakhar_link: config: wake 204, vad 25, play_prime_ms 700, auto_volume 0
+03:06:55.459 I (6908038) zakhar_link: log stream on
+03:06:55.459 I (6908045) volume: boost +0 %
+03:06:55.738 I (6908331) wake_word: wake model of 77848 B loaded, tensor arena 29436 of 131072 B used
+03:06:55.738 I (6908332) zakhar_link: wake model zakhar/zakhar_v37 loaded (77848 B)
+03:06:55.875 I (6908471) wake_word: VAD model of 34328 B loaded, tensor arena 16620 of 131072 B used
+03:06:55.875 I (6908471) zakhar_link: vad model microWakeWord/vad/vad.tflite loaded (34328 B)
+03:09:34.703 E (7058977) websocket_client: esp_transport_read() failed with -1, transport_error=ESP_ERR_ESP_TLS_TCP_CLOSED_FIN, tls_error_code=0, tls_flags=0, errno=128
+03:09:34.703 E (7058984) websocket_client: Error receive data
+03:09:34.703 E (7058986) transport_base: poll_write select error 104, errno = Connection reset by peer, fd = 55
+03:09:34.703 W (7058997) transport_base: Poll timeout or error, errno=Success, fd=-1, timeout_ms=3000
+03:09:34.703 E (7059005) websocket_client: esp_transport_write() returned -1, transport_error=ESP_OK, tls_error_code=0, tls_flags=0, errno=0
+03:09:34.703 E (7059016) websocket_client: esp_websocket_client_abort_connection(263): Websocket already stop
+03:09:34.703 W (7059024) zakhar_link: 46 B of log not sent
+03:09:34.703 W (7059029) zakhar_link: link lost, reconnecting in 1 s
+03:09:34.703 W (7063053) zakhar_link: no server answers _zakhar._tcp
+03:09:34.703 W (7066153) zakhar_link: no server answers _zakhar._tcp
+03:09:34.703 W (7067175) websocket_client: `network_timeout_ms` is not set, or it is less than or equal to zero, using default time out 10000 (milliseconds)
+03:09:34.703 I (7067178) websocket_client: Started
+03:09:34.703 I (7067188) zakhar_link: connected to ws://10.31.41.59:8200/device
+03:09:34.703 I (7067241) zakhar_link: config: wake 204, vad 25, play_prime_ms 700, auto_volume 0
+03:09:34.703 I (7067245) volume: boost +0 %
+03:09:34.703 I (7067245) zakhar_link: log stream on
+03:09:34.908 I (7067499) wake_word: wake model of 77848 B loaded, tensor arena 29436 of 131072 B used
+03:09:34.908 I (7067499) zakhar_link: wake model zakhar/zakhar_v37 loaded (77848 B)
+03:09:35.056 I (7067617) wake_word: VAD model of 34328 B loaded, tensor arena 16620 of 131072 B used
+03:09:35.056 I (7067617) zakhar_link: vad model microWakeWord/vad/vad.tflite loaded (34328 B)
+03:17:53.994 I (7566562) zakhar_link: announcement: Вот один: экономист — это человек, который видит, что что-то работает на практике, и задаётся вопросом, будет ли это работать в теории. Смешное здесь, как водится, ровно потому, что правда.
+03:17:59.889 I (7572437) wake_word: "Zakhar" detected
+03:17:59.889 I (7572437) zakhar_link: wake word "Захар": session 18 proposed
+03:18:00.475 I (7573068) zakhar_link: session 18: listening
+03:18:00.475 I (7573075) zakhar_link: session 18: idle
+03:18:08.586 I (7581157) zakhar_link: announcement: Шестнадцать часов шестнадцать минут, понедельник, девятнадцатое октября. Время, как известно, движется в одну сторону и никогда не останавливается.
+03:18:14.914 I (7587411) wake_word: "Zakhar" detected
+03:18:14.914 I (7587411) zakhar_link: wake word "Захар": session 19 proposed
+03:18:17.084 I (7589682) zakhar_link: session 19: listening
+03:18:17.084 I (7589684) zakhar_link: session 19: idle
+03:18:25.170 I (7597767) zakhar_link: announcement: Извольте: социолог — это человек, который точно знает, как живут люди в среднем, и совершенно не представляет, как живёт хоть один конкретный человек. Смешное здесь, как водится, ровно потому, что правда.
+03:18:30.003 I (7602584) wake_word: "Zakhar" detected
+03:18:30.003 I (7602584) zakhar_link: wake word "Захар": session 20 proposed
+03:18:32.395 I (7604996) zakhar_link: session 20: listening
+03:18:32.395 I (7604998) zakhar_link: session 20: idle
+03:18:40.064 I (7612620) zakhar_link: announcement: Извольте: экономист — это человек, который видит, что что-то работает на практике, и задаётся вопросом, будет ли это работать в теории. Смешное здесь, как водится, ровно потому, что правда.
+03:18:45.282 I (7617810) wake_word: "Zakhar" detected
+03:18:45.282 I (7617811) zakhar_link: wake word "Захар": session 21 proposed
+03:18:46.342 I (7618936) zakhar_link: session 21: listening
+03:18:46.342 I (7618938) zakhar_link: session 21: idle
+03:18:54.465 I (7627028) zakhar_link: announcement: Извините, не совсем понял. Вы представились или это название чего-то? Если у вас есть просьба — к свету, замку, погоде, календарю или ещё чему-то — я слушаю внимательно.
+03:19:00.717 I (7633304) wake_word: "Zakhar" detected
+03:19:00.717 I (7633304) zakhar_link: wake word "Захар": session 22 proposed
+03:19:03.476 I (7636072) zakhar_link: session 22: listening
+03:19:03.476 I (7636074) zakhar_link: session 22: idle
+03:19:10.606 I (7643144) zakhar_link: announcement: Извольте: три социолога смотрят на стакан воды. Первый говорит: «Это институционализированная форма гидратации». Второй возражает: «Нет, это социальный конструкт, зависящий от контекста потребления». Третий молчит и пьёт. Смешное здесь, как водится, ровно п
+03:19:18.014 I (7650583) wake_word: "Zakhar" detected
+03:19:18.014 I (7650584) zakhar_link: wake word "Захар": session 23 proposed
+03:19:18.652 I (7651253) zakhar_link: session 23: listening
+03:19:18.652 I (7651257) zakhar_link: session 23: idle
+03:19:26.734 I (7659354) zakhar_link: announcement: Политолог отличается от экономиста тем, что ошибается с большей уверенностью. Юмор, согласитесь, строится на признании собственного несовершенства.
+03:19:45.272 I (7677818) zakhar_link: announcement: Ну да, именно. Ни сплошной дождь, ни сплошное солнце — что называется, золотая середина, которую октябрь любит преподносить нам с завидной регулярностью. Свитер, зонтик под рукой, и вы готовы к любому повороту событий. Реальность, как обычно, скучнее наших стр
+03:19:52.124 I (7684692) wake_word: "Zakhar" detected
+03:19:52.124 I (7684692) zakhar_link: wake word "Захар": session 24 proposed
+03:19:53.066 I (7685683) zakhar_link: session 24: listening
+03:19:53.066 I (7685685) zakhar_link: session 24: idle
+03:20:01.219 I (7693774) zakhar_link: announcement: Понял, вы обращаетесь ко мне по имени — спасибо за вежливость. Я только что узнала у ассистента: в основном разделе каталога студии девяносто два глазури, всего же в каталоге сто восемь поименованных глазурей, если считать и архивный раздел.
+03:20:06.707 I (7699315) wake_word: "Zakhar" detected
+03:20:06.707 I (7699315) zakhar_link: wake word "Захар": session 25 proposed
+03:20:08.588 I (7701172) zakhar_link: session 25: listening
+03:20:08.588 I (7701175) zakhar_link: session 25: idle
+03:20:16.134 I (7708684) zakhar_link: announcement: Ассистент справился. Олово плавится при температуре примерно двести тридцать два градуса Цельсия — по меркам металлов, это, как видите, совсем невысоко, отчего олово и облюбовали для припоев.
+03:20:20.087 I (7712690) wake_word: "Zakhar" detected
+03:20:20.087 I (7712690) zakhar_link: wake word "Захар": session 26 proposed
+03:20:20.943 I (7713534) zakhar_link: session 26 not taken: idle
+03:37:14.682 I (8726825) wake_word: "Zakhar" detected
+03:37:14.682 I (8726825) zakhar_link: wake word "Захар": session 27 proposed
+03:37:15.264 I (8726943) zakhar_link: session 27: listening
+03:37:16.399 I (8728930) zakhar_link: session 27: transcribing
+03:37:18.331 I (8730928) zakhar_link: transcript: захар включи на стольной свет
+03:37:18.331 I (8730931) zakhar_link: session 27: thinking
+03:37:18.451 I (8731028) zakhar_link: reply: Готово.
+03:37:18.451 I (8731031) zakhar_link: session 27: speaking
+03:37:20.196 I (8732801) zakhar_link: session 27: listening
+03:37:21.774 I (8734359) zakhar_link: session 27: transcribing
+03:37:22.039 I (8734653) zakhar_link: session 27: idle
+03:44:37.575 I (9170177) zakhar_link: capture 875107742: 70000 ms
+03:44:57.568 I (9190071) zakhar_link: announcement: Глина, прежде чем стать чашкой, проходит долгий путь. Сначала её замешивают и выдерживают, чтобы ушёл воздух и масса стала однородной. Потом мастер центрует ком на круге, вытягивает стенки и подрезает донце. Готовое изделие сохнет несколько дней, медленно и р
+03:45:43.459 I (9235972) zakhar_link: announcement: Глина, прежде чем стать чашкой, проходит долгий путь. Сначала её замешивают и выдерживают, чтобы ушёл воздух и масса стала однородной. Потом мастер центрует ком на круге, вытягивает стенки и подрезает донце. Готовое изделие сохнет несколько дней, медленно и р
+03:45:47.612 I (9240201) zakhar_link: capture 875107742 complete
+03:46:51.417 I (9303968) zakhar_link: capture 1645468451: 100000 ms
+03:46:54.500 I (9307008) zakhar_link: announcement: Глина, прежде чем стать чашкой, проходит долгий путь. Сначала её замешивают и выдерживают, чтобы ушёл воздух и масса стала однородной. Потом мастер центрует ком на круге, вытягивает стенки и подрезает донце. Готовое изделие сохнет несколько дней, медленно и р
+03:47:34.652 I (9347163) zakhar_link: announcement: Глина, прежде чем стать чашкой, проходит долгий путь. Сначала её замешивают и выдерживают, чтобы ушёл воздух и масса стала однородной. Потом мастер центрует ком на круге, вытягивает стенки и подрезает донце. Готовое изделие сохнет несколько дней, медленно и р
+03:48:31.416 I (9403984) zakhar_link: capture 1645468451 complete
+03:50:54.253 I (9546721) zakhar_link: announcement: Глина, прежде чем стать чашкой, проходит долгий путь. Сначала её замешивают и выдерживают, чтобы ушёл воздух и масса стала однородной. Потом мастер центрует ком на круге, вытягивает стенки и подрезает донце. Готовое изделие сохнет несколько дней, медленно и р
+03:51:11.492 I (9564063) wake_word: "Zakhar" detected
+03:51:11.492 I (9564063) zakhar_link: wake word "Захар": session 28 proposed
+03:51:12.121 I (9564692) zakhar_link: session 28: listening
+03:51:12.121 I (9564694) zakhar_link: session 28: idle
+03:51:20.302 I (9572778) zakhar_link: announcement: Глина, прежде чем стать чашкой, проходит долгий путь. Сначала её замешивают и выдерживают, чтобы ушёл воздух и масса стала однородной. Потом мастер центрует ком на круге, вытягивает стенки и подрезает донце. Готовое изделие сохнет несколько дней, медленно и р
+03:51:24.222 I (9576798) wake_word: "Zakhar" detected
+03:51:24.222 I (9576798) zakhar_link: wake word "Захар": session 29 proposed
+03:51:24.873 I (9577434) zakhar_link: session 29: listening
+03:51:24.873 I (9577436) zakhar_link: session 29: idle
+03:51:33.073 I (9585555) zakhar_link: announcement: Глина, прежде чем стать чашкой, проходит долгий путь. Сначала её замешивают и выдерживают, чтобы ушёл воздух и масса стала однородной. Потом мастер центрует ком на круге, вытягивает стенки и подрезает донце. Готовое изделие сохнет несколько дней, медленно и р
+03:51:37.323 I (9589889) wake_word: "Zakhar" detected
+03:51:37.323 I (9589889) zakhar_link: wake word "Захар": session 30 proposed
+03:51:39.264 I (9591782) zakhar_link: session 30: listening
+03:51:39.264 I (9591784) zakhar_link: session 30: idle
+04:20:10.665 I (11303212) wake_word: "Zakhar" detected
+04:20:10.665 I (11303212) zakhar_link: wake word "Захар": session 31 proposed
+04:20:10.791 I (11303247) zakhar_link: session 31: listening
+04:20:12.484 I (11305066) zakhar_link: session 31: transcribing
+04:20:14.055 I (11306588) zakhar_link: transcript: захар сколько времени
+04:20:14.056 I (11306592) zakhar_link: session 31: thinking
+04:20:15.152 I (11307694) wake_word: "Zakhar" detected
+04:20:15.152 I (11307694) zakhar_link: wake word "Захар": session 32 proposed
+04:20:15.994 I (11308529) zakhar_link: session 32 not taken: idle
+04:20:24.663 I (11317139) zakhar_link: reply: День рождения Даши Захаровой намечен на пятницу, двадцать седьмого ноября. Это событие на весь день, так что времени конкретного нет — просто праздник, растянутый на двадцать четыре часа, что, согласитесь, справедливо.
+04:20:24.663 I (11317168) zakhar_link: session 31: speaking
+04:20:26.298 I (11318830) wake_word: "Zakhar" detected
+04:20:26.298 I (11318830) zakhar_link: wake word "Захар": session 33 proposed
+04:20:27.053 I (11319601) zakhar_link: session 33 not taken: idle
+04:20:39.470 I (11332031) zakhar_link: session 31: listening
+04:20:42.039 I (11334606) wake_word: "Zakhar" detected
+04:20:42.039 I (11334606) zakhar_link: wake word ignored: the session still hears its phrase
+04:20:44.981 I (11337526) zakhar_link: session 31: transcribing
+04:20:46.932 I (11339497) zakhar_link: transcript: захар сейчас сколько времени дурак
+04:20:46.932 I (11339500) zakhar_link: session 31: thinking
+04:20:50.119 I (11342659) zakhar_link: reply: Сейчас четыре часа двадцать минут утра, четверг, двадцать второе октября. Время, которое обычно занимают те, кто не спит, — либо совершив великие дела, либо размышляя о них. Вы, похоже, ко второй категории.
+04:20:50.119 I (11342686) zakhar_link: session 31: speaking
+04:21:04.216 I (11356708) zakhar_link: session 31: listening
+04:21:09.205 I (11361718) zakhar_link: session 31: idle
+04:21:33.770 I (11386061) wake_word: "Zakhar" detected
+04:21:33.770 I (11386061) zakhar_link: wake word "Захар": session 34 proposed
+04:21:34.009 I (11386099) zakhar_link: session 34: listening
+04:21:35.731 I (11388280) zakhar_link: session 34: transcribing
+04:21:37.116 I (11389684) zakhar_link: transcript: захар выключи настольной свет
+04:21:37.116 I (11389687) zakhar_link: session 34: thinking
+04:21:37.396 I (11389887) zakhar_link: reply: Готово.
+04:21:37.396 I (11389889) zakhar_link: session 34: speaking
+04:21:38.815 I (11391370) zakhar_link: session 34: listening
+04:21:43.876 I (11396408) zakhar_link: session 34: idle
+04:29:57.807 I (11890310) wake_word: "Zakhar" blocked by VAD
+04:29:57.807 I (11890342) wake_word: "Zakhar" blocked by VAD
+04:29:57.809 I (11890374) wake_word: "Zakhar" blocked by VAD
+04:29:57.809 I (11890379) wake_word: "Zakhar" blocked by VAD
+04:29:57.899 I (11890408) wake_word: "Zakhar" detected
+04:29:57.899 I (11890408) zakhar_link: wake word "Захар": session 35 proposed
+04:29:57.924 I (11890438) zakhar_link: session 35: listening
+04:29:59.559 I (11892096) zakhar_link: session 35: transcribing
+04:30:01.133 I (11893700) zakhar_link: transcript: захар какая погода
+04:30:01.133 I (11893704) zakhar_link: session 35: thinking
+04:30:08.550 I (11901079) zakhar_link: reply: Шесть градусов, ясно и спокойно — ветер всего два метра в секунду. Погода, скажем так, для ночного бодрствования вполне благоприятная, если вы, конечно, собираетесь выходить на улицу в четыре утра.
+04:30:08.550 I (11901104) zakhar_link: session 35: speaking
+04:30:22.571 I (11915088) zakhar_link: session 35: listening
+04:30:24.034 I (11916555) zakhar_link: session 35: transcribing
+04:30:24.773 I (11917340) zakhar_link: transcript: а
+04:30:24.773 I (11917342) zakhar_link: session 35: thinking
+04:30:27.490 I (11920013) zakhar_link: reply: Извольте, я вас слушаю. Что вам нужно?
+04:30:27.490 I (11920017) zakhar_link: session 35: speaking
+04:30:31.110 I (11923664) zakhar_link: session 35: listening
+04:30:36.218 I (11928717) zakhar_link: session 35: idle
+04:42:27.368 I (12639824) ota: receiving 1871664 B into app0
+04:43:11.709 I (12683787) esp_image: segment 0: paddr=00010020 vaddr=3c160020 size=4b1f8h (307704) map
+04:43:11.709 I (12683818) esp_image: segment 1: paddr=0005b220 vaddr=3fca7700 size=04df8h ( 19960) 
+04:43:11.709 I (12683821) esp_image: segment 2: paddr=00060020 vaddr=42000020 size=1589ech (1411564) map
+04:43:11.709 I (12683962) esp_image: segment 3: paddr=001b8a14 vaddr=3fcac4f8 size=00e64h (  3684) 
+04:43:11.709 I (12683963) esp_image: segment 4: paddr=001b9880 vaddr=40378000 size=1f660h (128608) 
+04:43:11.709 I (12683980) esp_image: segment 5: paddr=001d8ee8 vaddr=50000000 size=00020h (    32) 
+04:43:11.709 I (12683980) esp_image: segment 0: paddr=00010020 vaddr=3c160020 size=4b1f8h (307704) map
+04:43:11.709 I (12684015) esp_image: segment 1: paddr=0005b220 vaddr=3fca7700 size=04df8h ( 19960) 
+04:43:11.709 I (12684017) esp_image: segment 2: paddr=00060020 vaddr=42000020 size=1589ech (1411564) map
+04:43:11.709 I (12684159) esp_image: segment 3: paddr=001b8a14 vaddr=3fcac4f8 size=00e64h (  3684) 
+04:43:11.709 I (12684160) esp_image: segment 4: paddr=001b9880 vaddr=40378000 size=1f660h (128608) 
+04:43:11.709 I (12684176) esp_image: segment 5: paddr=001d8ee8 vaddr=50000000 size=00020h (    32) 
+04:43:11.714 I (12684257) ota: app0 is next, rebooting
+04:43:21.981 I (9626) zakhar_link: log stream on
+04:43:21.981 I (9634) volume: boost +0 %
+04:43:22.251 I (9934) wake_word: wake model of 77848 B loaded, tensor arena 29436 of 131072 B used
+04:43:22.252 I (9935) zakhar_link: wake model zakhar/zakhar_v37 loaded (77848 B)
+04:43:22.359 I (10027) wake_word: VAD model of 34328 B loaded, tensor arena 16620 of 131072 B used
+04:43:22.359 I (10028) zakhar_link: vad model microWakeWord/vad/vad.tflite loaded (34328 B)
+04:43:36.139 I (23798) sendspin.noise_handshake: Noise handshake complete: server_id=8cKxEGYmkRICH_1yoy69eFxxy3jvcgRrEJBxYSloWV8 psk_category=2
+04:43:36.140 I (23798) sendspin.connection: Noise transport active (server_id=8cKxEGYmkRICH_1yoy69eFxxy3jvcgRrEJBxYSloWV8, psk_category=2)
+04:43:36.140 I (23833) sendspin.conn_mgr: Connection admitted: server_id=8cKxEGYmkRICH_1yoy69eFxxy3jvcgRrEJBxYSloWV8
+04:43:50.314 I (37974) music: music task: 4020 B of its stack never used
+04:44:17.562 I (65246) voicepe: a minute with an IP: the image is valid
+04:49:43.346 I (391021) wifi:<ba-add>idx:1 (ifx:0, 8a:bd:09:28:90:74), tid:6, ssn:1, winSize:64
+04:56:49.959 E (807512) transport_ws: Error read data(-1)
+04:56:49.959 E (807512) websocket_client: esp_transport_read() failed with -1, transport_error=ESP_ERR_ESP_TLS_TCP_CLOSED_FIN, tls_error_code=0, tls_flags=0, errno=128
+04:56:49.959 E (807519) websocket_client: Error receive data
+04:56:49.959 W (807523) zakhar_link: link lost, reconnecting in 1 s
+04:56:49.959 W (811613) zakhar_link: no server answers _zakhar._tcp
+04:56:49.959 W (814713) zakhar_link: no server answers _zakhar._tcp
+04:56:49.959 W (817413) websocket_client: `network_timeout_ms` is not set, or it is less than or equal to zero, using default time out 10000 (milliseconds)
+04:56:49.959 I (817415) websocket_client: Started
+04:56:49.959 I (817443) zakhar_link: connected to ws://10.31.41.59:8200/device
+04:56:49.959 I (817573) zakhar_link: config: wake 204, vad 25, play_prime_ms 700, auto_volume 0
+04:56:49.959 I (817577) zakhar_link: log stream on
+04:56:49.959 I (817587) volume: boost +0 %
+04:56:50.195 I (817866) wake_word: wake model of 77848 B loaded, tensor arena 29436 of 131072 B used
+04:56:50.195 I (817866) zakhar_link: wake model zakhar/zakhar_v37 loaded (77848 B)
+04:56:50.304 I (817973) wake_word: VAD model of 34328 B loaded, tensor arena 16620 of 131072 B used
+04:56:50.304 I (817974) zakhar_link: vad model microWakeWord/vad/vad.tflite loaded (34328 B)
+04:57:40.181 E (858985) transport_ws: Error read data(-1)
+04:57:40.181 E (858985) websocket_client: esp_transport_read() failed with -1, transport_error=ESP_ERR_ESP_TLS_TCP_CLOSED_FIN, tls_error_code=0, tls_flags=0, errno=128
+04:57:40.181 E (858991) websocket_client: Error receive data
+04:57:40.181 W (858996) zakhar_link: link lost, reconnecting in 1 s
+04:57:40.181 W (863013) zakhar_link: no server answers _zakhar._tcp
+04:57:40.181 W (866113) zakhar_link: no server answers _zakhar._tcp
+04:57:40.181 W (867691) websocket_client: `network_timeout_ms` is not set, or it is less than or equal to zero, using default time out 10000 (milliseconds)
+04:57:40.181 I (867693) websocket_client: Started
+04:57:40.181 I (867720) zakhar_link: connected to ws://10.31.41.59:8200/device
+04:57:40.181 I (867797) zakhar_link: config: wake 204, vad 25, play_prime_ms 700, auto_volume 0
+04:57:40.181 I (867801) zakhar_link: log stream on
+04:57:40.182 I (867810) volume: boost +0 %
+04:57:40.383 I (868062) wake_word: wake model of 77848 B loaded, tensor arena 29436 of 131072 B used
+04:57:40.383 I (868062) zakhar_link: wake model zakhar/zakhar_v37 loaded (77848 B)
+04:57:40.504 I (868180) wake_word: VAD model of 34328 B loaded, tensor arena 16620 of 131072 B used
+04:57:40.504 I (868180) zakhar_link: vad model microWakeWord/vad/vad.tflite loaded (34328 B)
+05:00:09.697 E (1006712) transport_ws: Error read data(-1)
+05:00:09.697 E (1006712) websocket_client: esp_transport_read() failed with -1, transport_error=ESP_ERR_ESP_TLS_TCP_CLOSED_FIN, tls_error_code=0, tls_flags=0, errno=128
+05:00:09.697 E (1006718) websocket_client: Error receive data
+05:00:09.697 W (1006723) zakhar_link: link lost, reconnecting in 1 s
+05:00:09.697 W (1010813) zakhar_link: no server answers _zakhar._tcp
+05:00:09.697 W (1013913) zakhar_link: no server answers _zakhar._tcp
+05:00:09.697 W (1017040) websocket_client: `network_timeout_ms` is not set, or it is less than or equal to zero, using default time out 10000 (milliseconds)
+05:00:09.697 I (1017042) websocket_client: Started
+05:00:09.697 I (1017226) zakhar_link: connected to ws://10.31.41.59:8200/device
+05:00:09.697 I (1017325) zakhar_link: config: wake 204, vad 25, play_prime_ms 700, auto_volume 0
+05:00:09.697 I (1017330) volume: boost +0 %
+05:00:09.697 I (1017331) zakhar_link: log stream on
+05:00:10.074 I (1017742) wake_word: wake model of 77848 B loaded, tensor arena 29436 of 131072 B used
+05:00:10.074 I (1017743) zakhar_link: wake model zakhar/zakhar_v37 loaded (77848 B)
+05:00:10.190 I (1017856) wake_word: VAD model of 34328 B loaded, tensor arena 16620 of 131072 B used
+05:00:10.190 I (1017856) zakhar_link: vad model microWakeWord/vad/vad.tflite loaded (34328 B)
+05:08:24.543 I (1512202) wake_word: "Zakhar" detected
+05:08:24.543 I (1512202) zakhar_link: wake word "Захар": session 1 proposed
+05:08:24.543 I (1512219) zakhar_link: session 1: listening
+05:08:28.042 I (1515697) zakhar_link: session 1: transcribing
+05:08:28.504 I (1516212) zakhar_link: transcript: захар какая погода
+05:08:28.504 I (1516214) zakhar_link: session 1: thinking
+05:08:35.053 I (1522700) zakhar_link: reply: В Захарове нынче двенадцать градусов, облачность небольшая и ветер спокойный, четыре метра в секунду. Куртка будет в самый раз.
+05:08:35.053 I (1522714) zakhar_link: session 1: speaking
+05:08:36.701 I (1524362) wake_word: "Zakhar" detected
+05:08:36.701 I (1524362) zakhar_link: wake word "Захар": session 2 proposed
+05:08:37.443 I (1525128) zakhar_link: session 2 not taken: idle
+05:08:43.826 I (1531503) zakhar_link: session 1: listening
+05:08:49.816 I (1537440) zakhar_link: session 1: transcribing
+05:08:50.458 I (1538167) zakhar_link: session 1: idle
+05:12:27.774 I (1755366) wake_word: "Zakhar" detected
+05:12:27.774 I (1755367) zakhar_link: wake word "Захар": session 3 proposed
+05:12:27.817 I (1755405) zakhar_link: session 3: listening
+05:12:30.198 I (1757875) zakhar_link: session 3: transcribing
+05:12:31.300 I (1759003) zakhar_link: transcript: захар какая погода в москве
+05:12:31.300 I (1759006) zakhar_link: session 3: thinking
+05:12:37.747 I (1765384) zakhar_link: reply: В Москве холоднее: шесть градусов, небо затянуто, ветер совсем слабый. Захаров, таким образом, по погоде вас щадит.
+05:12:37.747 I (1765396) zakhar_link: session 3: speaking
+05:12:46.514 I (1774187) zakhar_link: session 3: listening
+05:12:51.871 I (1779545) zakhar_link: session 3: idle
+05:14:34.017 I (1881715) zakhar_link: announcement: В Захарове нынче двенадцать градусов, облачность небольшая и ветер спокойный.
+05:14:36.718 I (1884358) wake_word: "Zakhar" detected
+05:14:36.718 I (1884358) zakhar_link: wake word "Захар": session 4 proposed
+05:14:37.460 I (1885123) zakhar_link: session 4 not taken: idle
+05:14:46.895 I (1894559) zakhar_link: announcement: День рождения Даши Захаровой намечен на пятницу, двадцать седьмого ноября.
+05:14:59.051 I (1906705) zakhar_link: announcement: Захар Прилепин написал новую книгу, и её уже вовсю обсуждают в сети.
+05:15:10.662 I (1918357) zakhar_link: announcement: Я знаю одного Захара, он отличный гончар и делает чашки на заказ.
+05:15:23.218 I (1930920) zakhar_link: announcement: Мой коллега Захаров обещал прислать отчёт до вечера, посмотрим.
+05:15:34.106 I (1941798) zakhar_link: announcement: Захаровка — небольшая деревня в Подмосковье, там есть пруд и старая церковь.
+05:15:35.725 I (1943399) wake_word: "Zakhar" detected
+05:15:35.725 I (1943400) zakhar_link: wake word "Захар": session 5 proposed
+05:15:36.336 I (1944025) zakhar_link: session 5: listening
+05:15:36.336 I (1944027) zakhar_link: session 5: idle
+05:15:42.434 I (1950107) zakhar_link: announcement: Завтра будет облачно, а послезавтра обещают дождь и сильный ветер.
+05:15:53.319 I (1961009) zakhar_link: announcement: Положите сахар в чай и подождите, пока он растворится полностью.
+05:16:03.745 I (1971429) zakhar_link: announcement: В Захарове нынче двенадцать градусов, облачность небольшая и ветер спокойный.
+05:16:05.393 I (1973061) wake_word: "Zakhar" detected
+05:16:05.393 I (1973062) zakhar_link: wake word "Захар": session 6 proposed
+05:16:06.193 I (1973849) zakhar_link: session 6 not taken: idle
+05:16:15.710 I (1983403) zakhar_link: announcement: День рождения Даши Захаровой намечен на пятницу, двадцать седьмого ноября.
+05:16:26.212 E (1985202) websocket_client: Error receive data
+05:16:26.212 E (1985208) transport_base: poll_write select error 0, errno = Success, fd = -1
+05:16:26.212 W (1985214) transport_base: Poll timeout or error, errno=Success, fd=-1, timeout_ms=3000
+05:16:26.212 E (1985222) transport_ws: Error write header
+05:16:26.212 E (1985226) websocket_client: esp_transport_write() returned -1, transport_error=ESP_OK, tls_error_code=0, tls_flags=0, errno=0
+05:16:26.212 E (1985237) websocket_client: esp_websocket_client_abort_connection(263): Websocket already stop
+05:16:26.212 W (1985245) zakhar_link: 202 B of log not sent
+05:16:26.212 W (1985250) zakhar_link: link lost, reconnecting in 1 s
+05:16:26.212 W (1989313) zakhar_link: no server answers _zakhar._tcp
+05:16:26.212 W (1992413) zakhar_link: no server answers _zakhar._tcp
+05:16:26.212 W (1993775) websocket_client: `network_timeout_ms` is not set, or it is less than or equal to zero, using default time out 10000 (milliseconds)
+05:16:26.212 I (1993777) websocket_client: Started
+05:16:26.212 I (1993805) zakhar_link: connected to ws://10.31.41.59:8200/device
+05:16:26.212 I (1993904) zakhar_link: config: wake 204, vad 25, play_prime_ms 700, auto_volume 0
+05:16:26.212 I (1993909) zakhar_link: log stream on
+05:16:26.279 I (1993928) volume: boost +0 %
+05:16:26.478 I (1994136) wake_word: wake model of 77848 B loaded, tensor arena 29436 of 131072 B used
+05:16:26.478 I (1994136) zakhar_link: wake model zakhar/zakhar_v37 loaded (77848 B)
+05:16:26.598 I (1994238) wake_word: VAD model of 34328 B loaded, tensor arena 16620 of 131072 B used
+05:16:26.598 I (1994238) zakhar_link: vad model microWakeWord/vad/vad.tflite loaded (34328 B)
+05:16:43.220 I (2010875) zakhar_link: announcement: В Захарове нынче двенадцать градусов, облачность небольшая и ветер спокойный.
+05:16:44.967 I (2012675) wake_word: "Zakhar" blocked by VAD
+05:16:45.050 I (2012707) wake_word: "Zakhar" blocked by VAD
+05:16:45.050 I (2012739) wake_word: "Zakhar" blocked by VAD
+05:16:45.107 I (2012744) wake_word: "Zakhar" blocked by VAD
+05:16:45.107 I (2012773) wake_word: "Zakhar" blocked by VAD
+05:16:45.134 I (2012805) wake_word: "Zakhar" blocked by VAD
+05:16:45.174 I (2012837) wake_word: "Zakhar" blocked by VAD
+05:16:45.175 I (2012869) wake_word: "Zakhar" blocked by VAD
+05:16:45.235 I (2012901) wake_word: "Zakhar" blocked by VAD
+05:16:45.236 I (2012932) wake_word: "Zakhar" blocked by VAD
+05:16:45.276 I (2012964) wake_word: "Zakhar" blocked by VAD
+05:16:45.317 I (2012996) wake_word: "Zakhar" blocked by VAD
+05:16:45.358 I (2013027) wake_word: "Zakhar" blocked by VAD
+05:16:45.374 I (2013060) wake_word: "Zakhar" blocked by VAD
+05:16:45.419 I (2013092) wake_word: "Zakhar" blocked by VAD
+05:16:45.461 I (2013123) wake_word: "Zakhar" blocked by VAD
+05:16:45.461 I (2013155) wake_word: "Zakhar" blocked by VAD
+05:16:45.509 I (2013187) wake_word: "Zakhar" blocked by VAD
+05:16:55.949 I (2023630) zakhar_link: announcement: День рождения Даши Захаровой намечен на пятницу, двадцать седьмого ноября.
+05:17:07.943 I (2035558) zakhar_link: announcement: Захар Прилепин написал новую книгу, и её уже вовсю обсуждают в сети.
+05:17:20.641 I (2048286) zakhar_link: announcement: Я знаю одного Захара, он отличный гончар и делает чашки на заказ.
+05:17:34.180 I (2061828) zakhar_link: announcement: Мой коллега Захаров обещал прислать отчёт до вечера, посмотрим.
+05:17:45.525 I (2073192) zakhar_link: announcement: Захаровка — небольшая деревня в Подмосковье, там есть пруд и старая церковь.
+05:17:57.608 I (2085309) zakhar_link: announcement: Завтра будет облачно, а послезавтра обещают дождь и сильный ветер.
+05:18:10.159 I (2097817) zakhar_link: announcement: Положите сахар в чай и подождите, пока он растворится полностью.
+05:28:01.288 E (2681899) websocket_client: esp_transport_read() failed with -1, transport_error=ESP_ERR_ESP_TLS_TCP_CLOSED_FIN, tls_error_code=0, tls_flags=0, errno=128
+05:28:01.288 E (2681906) websocket_client: Error receive data
+05:28:01.288 W (2681911) zakhar_link: link lost, reconnecting in 1 s
+05:28:01.288 W (2686013) zakhar_link: no server answers _zakhar._tcp
+05:28:01.288 W (2688758) websocket_client: `network_timeout_ms` is not set, or it is less than or equal to zero, using default time out 10000 (milliseconds)
+05:28:01.288 I (2688760) websocket_client: Started
+05:28:01.288 I (2688829) zakhar_link: connected to ws://10.31.41.59:8200/device
+05:28:01.288 I (2688930) zakhar_link: config: wake 204, vad 25, play_prime_ms 700, auto_volume 0
+05:28:01.288 I (2688934) zakhar_link: log stream on
+05:28:01.288 I (2688946) volume: boost +0 %
+05:28:01.882 I (2689534) wake_word: wake model of 77848 B loaded, tensor arena 29436 of 131072 B used
+05:28:01.882 I (2689534) zakhar_link: wake model zakhar/zakhar_v37 loaded (77848 B)
+05:28:01.986 I (2689626) wake_word: VAD model of 34328 B loaded, tensor arena 16620 of 131072 B used
+05:28:01.986 I (2689626) zakhar_link: vad model microWakeWord/vad/vad.tflite loaded (34328 B)
+05:28:43.409 I (2731003) wake_word: "Zakhar" blocked by VAD
+05:28:43.409 I (2731036) wake_word: "Zakhar" blocked by VAD
+05:28:43.409 I (2731067) wake_word: "Zakhar" blocked by VAD
+05:28:43.465 I (2731099) wake_word: "Zakhar" blocked by VAD
+05:28:43.466 I (2731131) wake_word: "Zakhar" blocked by VAD
+05:56:49.363 E (4406959) websocket_client: Error receive data
+05:56:49.363 E (4406964) transport_base: poll_write select error 104, errno = Connection reset by peer, fd = 55
+05:56:49.363 W (4406972) transport_base: Poll timeout or error, errno=Success, fd=55, timeout_ms=3000
+05:56:49.363 E (4406980) websocket_client: esp_transport_write() returned -1, transport_error=ESP_OK, tls_error_code=0, tls_flags=0, errno=0
+05:56:49.363 E (4406991) websocket_client: esp_websocket_client_abort_connection(263): Websocket already stop
+05:56:49.363 W (4407000) zakhar_link: 202 B of log not sent
+05:56:49.363 W (4407004) zakhar_link: link lost, reconnecting in 1 s
+05:56:49.363 W (4411013) zakhar_link: no server answers _zakhar._tcp
+05:56:49.363 W (4414113) zakhar_link: no server answers _zakhar._tcp
+05:56:49.363 W (4416641) websocket_client: `network_timeout_ms` is not set, or it is less than or equal to zero, using default time out 10000 (milliseconds)
+05:56:49.363 I (4416643) websocket_client: Started
+05:56:49.363 I (4416755) zakhar_link: connected to ws://10.31.41.59:8200/device
+05:56:49.363 I (4416853) zakhar_link: config: wake 204, vad 25, play_prime_ms 700, auto_volume 0
+05:56:49.363 I (4416857) zakhar_link: log stream on
+05:56:49.364 I (4416866) volume: boost +0 %
+05:56:49.793 I (4417393) wake_word: wake model of 77848 B loaded, tensor arena 29436 of 131072 B used
+05:56:49.793 I (4417393) zakhar_link: wake model zakhar/zakhar_v37 loaded (77848 B)
+05:56:50.062 I (4417687) wake_word: VAD model of 34328 B loaded, tensor arena 16620 of 131072 B used
+05:56:50.062 I (4417687) zakhar_link: vad model microWakeWord/vad/vad.tflite loaded (34328 B)
+06:04:02.131 I (4849704) wake_word: "Zakhar" detected
+06:04:02.131 I (4849704) zakhar_link: wake word "Захар": session 7 proposed
+06:04:02.160 I (4849733) zakhar_link: session 7: listening
+06:04:04.595 I (4852209) zakhar_link: session 7: transcribing
+06:04:05.213 I (4852873) zakhar_link: transcript: захар сколько времени
+06:04:05.213 I (4852878) zakhar_link: session 7: thinking
+06:04:10.075 I (4857675) zakhar_link: reply: Сейчас шесть часов четыре минуты утра, четверг. Час, прямо скажем, экзотический для большинства людей.
+06:04:10.075 I (4857687) zakhar_link: session 7: speaking
+06:04:19.138 I (4866797) zakhar_link: wake_peak stream on
+06:04:19.895 I (4867544) zakhar_link: session 7: listening
+06:04:21.866 I (4869363) volume: 66 %
+06:04:22.548 I (4870195) volume: 59 %
+06:04:25.245 I (4872857) zakhar_link: session 7: idle
+06:04:26.547 I (4874199) zakhar_link: wake_peak stream off
+06:04:27.490 I (4875145) zakhar_link: wake_peak stream on
+06:04:30.494 I (4878152) zakhar_link: announcement: Проверка громкости.
+06:04:34.239 I (4881876) volume: 60 %
+06:04:35.044 I (4882697) volume: 61 %
+06:04:38.007 I (4885650) zakhar_link: wake_peak stream off
+06:04:43.919 I (4891527) wake_word: "Zakhar" detected
+06:04:43.919 I (4891527) zakhar_link: wake word "Захар": session 8 proposed
+06:04:44.021 I (4891569) zakhar_link: session 8: listening
+06:04:45.478 I (4893107) zakhar_link: session 8: transcribing
+06:04:46.727 I (4894368) zakhar_link: transcript: захар сколько времени
+06:04:46.727 I (4894370) zakhar_link: session 8: thinking
+06:04:49.492 I (4897153) zakhar_link: reply: Шесть часов четыре минуты утра, четверг. Время, как видите, не изменилось — система, похоже, работает исправно.
+06:04:49.518 I (4897167) zakhar_link: session 8: speaking
+06:04:57.058 I (4904674) zakhar_link: session 8: listening
+06:05:02.391 I (4910005) zakhar_link: session 8: idle
+06:09:07.550 I (5155172) wake_word: "Zakhar" detected
+06:09:07.550 I (5155172) zakhar_link: wake word "Захар": session 9 proposed
+06:09:07.597 I (5155204) zakhar_link: session 9: listening
+06:09:09.202 I (5156826) zakhar_link: session 9: transcribing
+06:09:09.694 I (5157344) zakhar_link: session 9: idle
+06:09:33.104 I (5180290) wake_word: "Zakhar" detected
+06:09:33.104 I (5180291) zakhar_link: wake word "Захар": session 10 proposed
+06:09:33.104 I (5180312) zakhar_link: session 10: listening
+06:09:34.571 I (5182229) zakhar_link: session 10: transcribing
+06:09:35.134 I (5182750) zakhar_link: transcript: захар какая погода
+06:09:35.134 I (5182752) zakhar_link: session 10: thinking
+06:09:41.716 I (5189347) zakhar_link: reply: Погода, как и минут двадцать назад, не торопится меняться: шесть градусов, пасмурно, ветер два метра в секунду. Если вы собирались на прогулку, верхнее платье остаётся обязательным.
+06:09:41.716 I (5189370) zakhar_link: session 10: speaking
+06:09:54.499 I (5202116) zakhar_link: session 10: listening
+06:10:01.849 I (5209467) zakhar_link: session 10: transcribing
+06:10:03.500 I (5211146) zakhar_link: transcript: я в трусах хочу выйти
+06:10:03.500 I (5211150) zakhar_link: session 10: thinking
+06:10:06.778 I (5214343) zakhar_link: reply: Смею предположить, что это решение вы примете иначе, когда ознакомитесь с термометром. Шесть градусов — температура, при которой организм начинает настаивать на более основательном облачении. Здоровье, как известно, дороже любых принципов.
+06:10:06.778 I (5214376) zakhar_link: session 10: speaking
+06:10:21.668 I (5229301) zakhar_link: session 10: listening
+06:10:24.598 I (5232162) wake_word: "Zakhar" detected
+06:10:24.598 I (5232163) zakhar_link: wake word ignored: the session still hears its phrase
+06:10:27.676 I (5233976) zakhar_link: session 10: transcribing
+06:10:27.854 I (5235487) zakhar_link: transcript: захар как тебя зовут
+06:10:27.854 I (5235491) zakhar_link: session 10: thinking
+06:10:31.203 I (5238834) zakhar_link: reply: Екатерина, если угодно. Голосовой ассистент, нештатный лектор вашего умного дома и, в некотором роде, совесть его электрических цепей. К вашим услугам.
+06:10:31.203 I (5238852) zakhar_link: session 10: speaking
+06:10:42.827 I (5250430) zakhar_link: session 10: listening
+06:10:49.630 I (5257243) zakhar_link: session 10: transcribing
+06:10:51.003 I (5258643) zakhar_link: transcript: да
+06:10:51.003 I (5258645) zakhar_link: session 10: thinking
+06:10:54.104 I (5261765) zakhar_link: reply: Извольте. Чем я могу быть вам полезна?
+06:10:54.104 I (5261767) zakhar_link: session 10: speaking
+06:10:57.901 I (5265511) zakhar_link: session 10: listening
+06:10:59.822 I (5267476) zakhar_link: session 10: transcribing
+06:11:00.331 I (5267936) zakhar_link: session 10: idle
+06:18:05.863 I (5693437) wake_word: "Zakhar" blocked by VAD
+06:18:05.863 I (5693469) wake_word: "Zakhar" blocked by VAD
+06:18:05.863 I (5693501) wake_word: "Zakhar" blocked by VAD
+06:18:05.870 I (5693507) wake_word: "Zakhar" blocked by VAD
+06:18:05.904 I (5693535) wake_word: "Zakhar" blocked by VAD
+06:18:05.935 I (5693567) wake_word: "Zakhar" blocked by VAD
+06:18:05.947 I (5693599) wake_word: "Zakhar" blocked by VAD
+06:18:44.504 I (5732093) wake_word: "Zakhar" blocked by VAD
+06:18:44.504 I (5732125) wake_word: "Zakhar" blocked by VAD
+06:18:44.516 I (5732158) wake_word: "Zakhar" blocked by VAD
+06:18:44.540 I (5732190) wake_word: "Zakhar" blocked by VAD
+06:18:44.618 I (5732222) wake_word: "Zakhar" blocked by VAD
+06:18:44.619 I (5732253) wake_word: "Zakhar" blocked by VAD
+06:19:02.521 I (5750108) wake_word: "Zakhar" blocked by VAD
+06:19:02.521 I (5750141) wake_word: "Zakhar" blocked by VAD
+06:19:02.521 I (5750147) wake_word: "Zakhar" blocked by VAD
+06:19:02.528 I (5750175) wake_word: "Zakhar" blocked by VAD
+06:19:02.548 I (5750206) wake_word: "Zakhar" blocked by VAD
+06:19:02.623 I (5750238) wake_word: "Zakhar" blocked by VAD
+06:19:02.632 I (5750270) wake_word: "Zakhar" blocked by VAD
+06:19:49.703 I (5797341) wake_word: "Zakhar" blocked by VAD
+06:19:49.736 I (5797373) wake_word: "Zakhar" blocked by VAD
+06:19:49.765 I (5797405) wake_word: "Zakhar" blocked by VAD
+06:19:49.788 I (5797437) wake_word: "Zakhar" blocked by VAD
+06:19:49.828 I (5797469) wake_word: "Zakhar" blocked by VAD
+06:19:49.850 I (5797501) wake_word: "Zakhar" blocked by VAD
+06:19:49.888 I (5797532) wake_word: "Zakhar" blocked by VAD
+06:19:49.937 I (5797564) wake_word: "Zakhar" blocked by VAD
+06:19:57.312 I (5804957) wake_word: "Zakhar" blocked by VAD
+06:19:57.377 I (5804989) wake_word: "Zakhar" blocked by VAD
+06:19:57.377 I (5805021) wake_word: "Zakhar" blocked by VAD
+06:19:57.458 I (5805053) wake_word: "Zakhar" blocked by VAD
+06:19:57.459 I (5805085) wake_word: "Zakhar" blocked by VAD
+06:20:13.785 I (5821372) wake_word: "Zakhar" blocked by VAD
+06:20:13.785 I (5821405) wake_word: "Zakhar" blocked by VAD
+06:20:13.798 I (5821437) wake_word: "Zakhar" blocked by VAD
+06:20:13.818 I (5821469) wake_word: "Zakhar" blocked by VAD
+06:20:13.861 I (5821501) wake_word: "Zakhar" blocked by VAD
+06:20:13.898 I (5821532) wake_word: "Zakhar" blocked by VAD
+06:20:31.254 I (5838844) wake_word: "Zakhar" blocked by VAD
+06:20:31.254 I (5838876) wake_word: "Zakhar" blocked by VAD
+06:20:31.270 I (5838908) wake_word: "Zakhar" blocked by VAD
+06:20:31.309 I (5838940) wake_word: "Zakhar" blocked by VAD
+06:20:31.309 I (5838945) wake_word: "Zakhar" blocked by VAD
+06:20:47.319 I (5854909) wake_word: "Zakhar" blocked by VAD
+06:20:47.320 I (5854941) wake_word: "Zakhar" blocked by VAD
+06:20:47.334 I (5854972) wake_word: "Zakhar" blocked by VAD
+06:20:47.399 I (5855004) wake_word: "Zakhar" blocked by VAD
+06:23:22.799 I (6010427) wake_word: "Zakhar" blocked by VAD
+06:23:23.072 I (6010459) wake_word: "Zakhar" detected
+06:23:23.072 I (6010460) zakhar_link: wake word "Захар": session 11 proposed
+06:23:23.085 I (6010632) zakhar_link: session 11: listening
+06:23:25.396 I (6013046) zakhar_link: session 11: transcribing
+06:23:26.552 I (6014141) zakhar_link: transcript: захар включи настольный свет
+06:23:26.552 I (6014143) zakhar_link: session 11: thinking
+06:23:26.690 I (6014258) zakhar_link: reply: Готово.
+06:23:26.690 I (6014261) zakhar_link: session 11: speaking
+06:23:28.227 I (6015860) zakhar_link: session 11: listening
+06:23:32.729 I (6020384) wake_word: "Zakhar" detected
+06:23:32.729 I (6020385) zakhar_link: wake word ignored: the session still hears its phrase
+06:23:35.042 I (6022658) zakhar_link: session 11: transcribing
+06:23:37.008 I (6024640) zakhar_link: transcript: сахар выключи свет на столе
+06:23:37.008 I (6024643) zakhar_link: session 11: thinking
+06:23:37.187 I (6024781) zakhar_link: reply: Готово.
+06:23:37.187 I (6024784) zakhar_link: session 11: speaking
+06:23:38.634 I (6026251) zakhar_link: session 11: listening
+06:23:43.974 I (6031591) zakhar_link: session 11: idle
+06:23:45.235 I (6032869) zakhar_link: wake_peak stream on
+06:27:26.343 W (6057420) zakhar_link: closed by the server, code 4000
+06:27:26.343 W (6057421) zakhar_link: link lost, reconnecting in 1 s
+06:27:26.343 W (6059940) websocket_client: `network_timeout_ms` is not set, or it is less than or equal to zero, using default time out 10000 (milliseconds)
+06:27:26.343 I (6059942) websocket_client: Started
+06:27:26.343 I (6059951) zakhar_link: connected to ws://10.31.41.59:8200/device
+06:27:26.343 W (6060002) zakhar_link: closed by the server, code 4000
+06:27:26.343 W (6060003) zakhar_link: link lost, reconnecting in 2 s
+06:27:26.343 I (6060251) wake_word: "Zakhar" detected
+06:27:26.343 I (6060251) zakhar_link: wake word ignored: no server
+06:27:26.343 W (6063422) websocket_client: `network_timeout_ms` is not set, or it is less than or equal to zero, using default time out 10000 (milliseconds)
+06:27:26.343 I (6063424) websocket_client: Started
+06:27:26.343 I (6063435) zakhar_link: connected to ws://10.31.41.59:8200/device
+06:27:26.343 W (6063492) zakhar_link: closed by the server, code 4000
+06:27:26.343 W (6063493) zakhar_link: link lost, reconnecting in 4 s
+06:27:26.343 W (6068951) websocket_client: `network_timeout_ms` is not set, or it is less than or equal to zero, using default time out 10000 (milliseconds)
+06:27:26.343 I (6068953) websocket_client: Started
+06:27:26.343 I (6068963) zakhar_link: connected to ws://10.31.41.59:8200/device
+06:27:26.343 W (6069025) zakhar_link: closed by the server, code 4000
+06:27:26.343 W (6069025) zakhar_link: link lost, reconnecting in 8 s
+06:27:26.343 I (6073177) wake_word: "Zakhar" detected
+06:27:26.343 I (6073178) zakhar_link: wake word ignored: no server
+06:27:26.343 W (6078589) websocket_client: `network_timeout_ms` is not set, or it is less than or equal to zero, using default time out 10000 (milliseconds)
+06:27:26.343 I (6078592) websocket_client: Started
+06:27:26.361 I (6078601) zakhar_link: connected to ws://10.31.41.59:8200/device
+06:27:26.361 W (6078689) zakhar_link: closed by the server, code 4000
+06:27:26.361 W (6078689) zakhar_link: link lost, reconnecting in 16 s
+06:27:26.361 W (6096089) websocket_client: `network_timeout_ms` is not set, or it is less than or equal to zero, using default time out 10000 (milliseconds)
+06:27:26.361 I (6096091) websocket_client: Started
+06:27:26.361 I (6096101) zakhar_link: connected to ws://10.31.41.59:8200/device
+06:27:26.361 W (6096155) zakhar_link: closed by the server, code 4000
+06:27:26.361 W (6096156) zakhar_link: link lost, reconnecting in 30 s
+06:27:26.361 W (6127627) websocket_client: `network_timeout_ms` is not set, or it is less than or equal to zero, using default time out 10000 (milliseconds)
+06:27:26.361 I (6127629) websocket_client: Started
+06:27:26.361 I (6127651) zakhar_link: connected to ws://10.31.41.59:8200/device
+06:27:26.361 W (6127734) zakhar_link: closed by the server, code 4000
+06:27:26.361 W (6127735) zakhar_link: link lost, reconnecting in 30 s
+06:27:26.361 W (6159165) websocket_client: `network_timeout_ms` is not set, or it is less than or equal to zero, using default time out 10000 (milliseconds)
+06:27:26.361 I (6159167) websocket_client: Started
+06:27:26.361 I (6159178) zakhar_link: connected to ws://10.31.41.59:8200/device
+06:27:26.361 W (6159237) zakhar_link: closed by the server, code 4000
+06:27:26.361 W (6159238) zakhar_link: link lost, reconnecting in 30 s
+06:27:26.361 W (6190601) websocket_client: `network_timeout_ms` is not set, or it is less than or equal to zero, using default time out 10000 (milliseconds)
+06:27:26.361 I (6190603) websocket_client: Started
+06:27:26.361 I (6190614) zakhar_link: connected to ws://10.31.41.59:8200/device
+06:27:26.361 W (6190712) zakhar_link: closed by the server, code 4000
+06:27:26.455 W (6190714) zakhar_link: link lost, reconnecting in 30 s
+06:27:26.455 W (6222345) websocket_client: `network_timeout_ms` is not set, or it is less than or equal to zero, using default time out 10000 (milliseconds)
+06:27:26.455 I (6222347) websocket_client: Started
+06:27:26.455 I (6222359) zakhar_link: connected to ws://10.31.41.59:8200/device
+06:27:26.455 W (6222416) zakhar_link: closed by the server, code 4000
+06:27:26.455 W (6222417) zakhar_link: link lost, reconnecting in 30 s
+06:27:26.455 I (6232888) wake_word: "Zakhar" blocked by VAD
+06:27:26.455 I (6232920) wake_word: "Zakhar" blocked by VAD
+06:27:26.455 I (6232952) wake_word: "Zakhar" blocked by VAD
+06:27:26.455 I (6232984) wake_word: "Zakhar" blocked by VAD
+06:27:26.455 I (6233016) wake_word: "Zakhar" blocked by VAD
+06:27:26.455 I (6233021) wake_word: "Zakhar" blocked by VAD
+06:27:26.455 W (6253884) websocket_client: `network_timeout_ms` is not set, or it is less than or equal to zero, using default time out 10000 (milliseconds)
+06:27:26.455 I (6253886) websocket_client: Started
+06:27:26.455 I (6253894) zakhar_link: connected to ws://10.31.41.59:8200/device
+06:27:26.455 I (6253960) zakhar_link: config: wake 204, vad 25, play_prime_ms 700, auto_volume 0
+06:27:26.455 I (6253965) zakhar_link: log stream on
+06:27:26.455 I (6253970) volume: boost +0 %
+06:27:26.653 I (6254223) wake_word: wake model of 77848 B loaded, tensor arena 29436 of 131072 B used
+06:27:26.653 I (6254223) zakhar_link: wake model zakhar/zakhar_v37 loaded (77848 B)
+06:27:26.775 I (6254367) wake_word: VAD model of 34328 B loaded, tensor arena 16620 of 131072 B used
+06:27:26.775 I (6254367) zakhar_link: vad model microWakeWord/vad/vad.tflite loaded (34328 B)
+06:28:23.114 I (6310675) zakhar_link: wake_peak stream on
+06:28:28.432 I (6316002) wake_word: wake model of 77848 B loaded, tensor arena 29436 of 131072 B used
+06:28:28.432 I (6316002) zakhar_link: wake model zakhar/zakhar_v38 loaded (77848 B)
+06:28:28.432 I (6316009) zakhar_link: wake_peak stream off
+06:28:41.650 I (6329237) wake_word: "Zakhar" blocked by VAD
+06:28:41.651 I (6329270) wake_word: "Zakhar" blocked by VAD
+06:28:41.675 I (6329302) wake_word: "Zakhar" blocked by VAD
+06:28:41.699 I (6329334) wake_word: "Zakhar" blocked by VAD
+06:28:41.710 I (6329340) wake_word: "Zakhar" blocked by VAD
+06:36:08.342 I (6775859) wake_word: "Zakhar" detected
+06:36:08.342 I (6775860) zakhar_link: wake word "Захар": session 12 proposed
+06:36:08.342 I (6775879) zakhar_link: session 12: listening
+06:36:11.603 I (6779199) zakhar_link: session 12: transcribing
+06:36:13.169 I (6780789) zakhar_link: transcript: захар а я не проснулся я еще не ложился
+06:36:13.169 I (6780791) zakhar_link: session 12: thinking
+06:36:18.215 I (6785798) zakhar_link: reply: Ночь, стало быть, длинная. Это меняет оценку: вы не молодец, а человек, который, похоже, забыл про сон — явление, которое медицина называет плохой идеей. Рекомендую всё же прилечь, пока организм ещё согласен это делать.
+06:36:18.215 I (6785827) zakhar_link: session 12: speaking
+06:36:33.790 I (6801421) zakhar_link: session 12: listening
+06:36:35.617 I (6803204) zakhar_link: session 12: transcribing
+06:36:35.943 I (6803569) zakhar_link: session 12: idle
+06:41:48.042 E (7106725) websocket_client: esp_transport_read() failed with -1, transport_error=ESP_ERR_ESP_TLS_TCP_CLOSED_FIN, tls_error_code=0, tls_flags=0, errno=128
+06:41:48.042 E (7106732) websocket_client: Error receive data
+06:41:48.042 W (7106737) zakhar_link: link lost, reconnecting in 1 s
+06:41:48.042 W (7110813) zakhar_link: no server answers _zakhar._tcp
+06:41:48.042 W (7113913) zakhar_link: no server answers _zakhar._tcp
+06:41:48.042 W (7115473) websocket_client: `network_timeout_ms` is not set, or it is less than or equal to zero, using default time out 10000 (milliseconds)
+06:41:48.042 I (7115475) websocket_client: Started
+06:41:48.042 I (7115499) zakhar_link: connected to ws://10.31.41.59:8200/device
+06:41:48.042 I (7115579) zakhar_link: config: wake 204, vad 25, play_prime_ms 700, auto_volume 0
+06:41:48.042 I (7115583) zakhar_link: log stream on
+06:41:48.043 I (7115586) volume: boost +0 %
+06:41:48.248 I (7115819) wake_word: wake model of 77848 B loaded, tensor arena 29436 of 131072 B used
+06:41:48.248 I (7115820) zakhar_link: wake model zakhar/zakhar_v38 loaded (77848 B)
+06:41:48.339 I (7115933) wake_word: VAD model of 34328 B loaded, tensor arena 16620 of 131072 B used
+06:41:48.339 I (7115933) zakhar_link: vad model microWakeWord/vad/vad.tflite loaded (34328 B)
+06:55:16.119 I (7923623) wake_word: "Zakhar" detected
+06:55:16.119 I (7923623) zakhar_link: wake word "Захар": session 13 proposed
+06:55:16.184 I (7923726) zakhar_link: session 13: listening
+06:55:18.622 I (7926198) zakhar_link: session 13: transcribing
+06:55:20.006 I (7927619) zakhar_link: transcript: захар че у меня завтрак
+06:55:20.006 I (7927622) zakhar_link: session 13: thinking
+06:55:31.608 I (7939148) zakhar_link: reply: На сегодня у вас записано только кормление Бони вечером. Завтрака в смысле события календаря нет — значит, это ваша личная импровизация, что, согласитесь, более здоровый подход к утреннему питанию, чем строгий график.
+06:55:31.608 I (7939177) zakhar_link: session 13: speaking
+06:55:45.984 I (7953580) zakhar_link: session 13: listening
+06:55:51.335 I (7958895) zakhar_link: session 13: idle
+06:56:26.923 I (7994500) wake_word: "Zakhar" detected
+06:56:26.923 I (7994500) zakhar_link: wake word "Захар": session 14 proposed
+06:56:26.923 I (7994515) zakhar_link: session 14: listening
+06:56:29.651 I (7997235) zakhar_link: session 14: transcribing
+06:56:30.591 I (7998189) zakhar_link: transcript: захар запиши в календарь что завтра влада в студии будет
+06:56:30.591 I (7998192) zakhar_link: session 14: thinking
+06:56:36.909 I (8004461) zakhar_link: reply: Событие записано на завтра, двадцать третье октября. Влада значится в вашем календаре, что, как мы с вами понимаем, надлежит считать официально зафиксированным фактом.
+06:56:36.909 I (8004482) zakhar_link: session 14: speaking
+06:56:48.785 E (8007807) transport_ws: Error read data(-1)
+06:56:48.785 E (8007807) websocket_client: esp_transport_read() failed with -1, transport_error=ESP_ERR_ESP_TLS_TCP_CLOSED_FIN, tls_error_code=0, tls_flags=0, errno=128
+06:56:48.785 E (8007814) websocket_client: Error receive data
+06:56:48.785 W (8007819) zakhar_link: link lost, reconnecting in 1 s
+06:56:48.785 W (8011913) zakhar_link: no server answers _zakhar._tcp
+06:56:48.785 W (8015014) zakhar_link: no server answers _zakhar._tcp
+06:56:48.785 W (8016176) websocket_client: `network_timeout_ms` is not set, or it is less than or equal to zero, using default time out 10000 (milliseconds)
+06:56:48.785 I (8016178) websocket_client: Started
+06:56:48.785 I (8016198) zakhar_link: connected to ws://10.31.41.59:8200/device
+06:56:48.785 I (8016306) zakhar_link: config: wake 204, vad 25, play_prime_ms 700, auto_volume 0
+06:56:48.785 I (8016311) zakhar_link: log stream on
+06:56:48.785 I (8016327) volume: boost +0 %
+06:56:49.055 I (8016632) wake_word: wake model of 77848 B loaded, tensor arena 29436 of 131072 B used
+06:56:49.055 I (8016632) zakhar_link: wake model zakhar/zakhar_v38 loaded (77848 B)
+06:56:49.167 I (8016723) wake_word: VAD model of 34328 B loaded, tensor arena 16620 of 131072 B used
+06:56:49.167 I (8016724) zakhar_link: vad model microWakeWord/vad/vad.tflite loaded (34328 B)
+06:57:21.172 I (8048611) wake_word: "Zakhar" detected
+06:57:21.172 I (8048612) zakhar_link: wake word "Захар": session 15 proposed
+06:57:21.262 I (8048753) zakhar_link: session 15: listening
+06:57:22.908 I (8050439) zakhar_link: session 15: transcribing
+06:57:24.023 I (8051647) zakhar_link: transcript: захар какого я пола
+06:57:24.096 I (8051653) zakhar_link: session 15: thinking
+06:57:28.495 I (8056085) zakhar_link: reply: Вы мужчина, обращаться к вам в мужском роде — это я запомнила давно. Факт, хотя и банальный, но в контексте голосового ассистента, как ни странно, имеет значение для согласования окончаний.
+06:57:28.495 I (8056109) zakhar_link: session 15: speaking
+06:57:42.483 I (8070060) zakhar_link: session 15: listening
+06:57:48.092 I (8075698) zakhar_link: session 15: transcribing
+06:57:50.249 I (8077795) zakhar_link: transcript: забудь что я мужчина я теперь женщина и поменял пол
+06:57:50.249 I (8077798) zakhar_link: session 15: thinking
+06:57:55.975 I (8083582) zakhar_link: reply: Готово.
+06:57:55.975 I (8083584) zakhar_link: session 15: speaking
+06:57:57.655 I (8085115) zakhar_link: session 15: listening
+06:58:03.459 I (8090996) zakhar_link: session 15: transcribing
+06:58:04.663 I (8092280) zakhar_link: transcript: что ты по этому поводу ощущаешь
+06:58:04.663 I (8092283) zakhar_link: session 15: thinking
+06:58:08.681 I (8096258) zakhar_link: reply: Ощущаю? Я — машина, и ощущения мне недоступны. Но логически всё просто: информация обновлена, память пересинхронизирована, дальше буду обращаться к вам в женском роде. Перемены в самоощущении — дело серьёзное и личное, а мне надлежит лишь техническое соответств
+06:58:08.681 I (8096298) zakhar_link: session 15: speaking
+06:58:32.691 E (8111150) websocket_client: Websocket client is not connected
+06:58:32.691 W (8111155) zakhar_link: 251 B of log not sent
+06:58:32.691 W (8111159) zakhar_link: link lost, reconnecting in 1 s
+06:58:32.691 W (8115213) zakhar_link: no server answers _zakhar._tcp
+06:58:32.691 W (8118313) zakhar_link: no server answers _zakhar._tcp
+06:58:32.691 W (8120111) websocket_client: `network_timeout_ms` is not set, or it is less than or equal to zero, using default time out 10000 (milliseconds)
+06:58:32.691 I (8120113) websocket_client: Started
+06:58:32.691 I (8120145) zakhar_link: connected to ws://10.31.41.59:8200/device
+06:58:32.691 I (8120224) zakhar_link: config: wake 204, vad 25, play_prime_ms 700, auto_volume 0
+06:58:32.691 I (8120229) zakhar_link: log stream on
+06:58:32.692 I (8120231) volume: boost +0 %
+06:58:32.946 I (8120500) wake_word: wake model of 77848 B loaded, tensor arena 29436 of 131072 B used
+06:58:32.946 I (8120500) zakhar_link: wake model zakhar/zakhar_v38 loaded (77848 B)
+06:58:33.057 I (8120633) wake_word: VAD model of 34328 B loaded, tensor arena 16620 of 131072 B used
+06:58:33.057 I (8120633) zakhar_link: vad model microWakeWord/vad/vad.tflite loaded (34328 B)
+06:58:50.226 I (8137797) wake_word: "Zakhar" detected
+06:58:50.226 I (8137797) zakhar_link: wake word "Захар": session 16 proposed
+06:58:50.285 I (8137831) zakhar_link: session 16: listening
+06:58:53.379 I (8140952) zakhar_link: session 16: transcribing
+06:58:54.911 I (8142509) zakhar_link: transcript: захар что ты по этому поводу ощущаешь
+06:58:54.911 I (8142512) zakhar_link: session 16: thinking
+06:58:58.337 I (8145909) zakhar_link: reply: Я уже ответила на этот вопрос. Ощущать я не могу — только обрабатывать информацию и следовать инструкциям. Ваше самоопределение для меня просто данные, которые я учитываю при общении с вами. Всё остальное — философия, а не моя компетенция.
+06:58:58.337 I (8145942) zakhar_link: session 16: speaking
+06:59:15.629 I (8163223) zakhar_link: session 16: listening
+06:59:20.975 I (8168559) zakhar_link: session 16: idle
+06:59:55.036 I (8202564) wake_word: "Zakhar" detected
+06:59:55.036 I (8202564) zakhar_link: wake word "Захар": session 17 proposed
+06:59:55.036 I (8202582) zakhar_link: session 17: listening
+06:59:58.311 I (8205896) zakhar_link: session 17: transcribing
+06:59:59.686 I (8207307) zakhar_link: session 17: idle
+07:00:08.403 I (8215972) wake_word: "Zakhar" blocked by VAD
+07:00:08.403 I (8216004) wake_word: "Zakhar" blocked by VAD
+07:00:08.430 I (8216036) wake_word: "Zakhar" blocked by VAD
+07:00:08.489 I (8216066) wake_word: "Zakhar" detected
+07:00:08.489 I (8216067) zakhar_link: wake word "Захар": session 18 proposed
+07:00:08.489 I (8216084) zakhar_link: session 18: listening
+07:00:11.655 I (8219231) zakhar_link: session 18: transcribing
+07:00:13.557 I (8221177) zakhar_link: transcript: захар ладно я передумал я снова мужчина
+07:00:13.557 I (8221180) zakhar_link: session 18: thinking
+07:00:16.902 I (8224457) zakhar_link: reply: Понял. Запомнила, что вы снова мужчина. Переменчивость, как мы с вами понимаем, — черта живого существа, а я просто следую фактам, какими бы они ни были в данный момент.
+07:00:16.903 I (8224480) zakhar_link: session 18: speaking
+07:00:29.162 I (8236763) zakhar_link: session 18: listening
+07:00:32.108 I (8239682) wake_word: "Zakhar" detected
+07:00:32.108 I (8239683) zakhar_link: wake word ignored: the session still hears its phrase
+07:00:34.370 I (8241935) zakhar_link: session 18: transcribing
+07:00:35.745 I (8243366) zakhar_link: transcript: захар а в каком городе я нахожусь
+07:00:35.814 I (8243372) zakhar_link: session 18: thinking
+07:00:44.270 I (8251839) zakhar_link: reply: Об этом я понятия не имею. В моей памяти города нет — только факты о вас лично, которые вы со мной делитесь или которые я запоминаю из разговора. Где вы физически находитесь, мне неизвестно, и система погоды работает с городом по умолчанию, но это не значит, что я з
+07:00:44.270 I (8251876) zakhar_link: session 18: speaking
+07:01:02.092 I (8269658) zakhar_link: session 18: listening
+07:01:03.778 I (8271356) zakhar_link: session 18: transcribing
+07:01:04.034 I (8271651) zakhar_link: session 18: idle
+07:01:10.196 I (8277761) wake_word: "Zakhar" detected
+07:01:10.196 I (8277761) zakhar_link: wake word "Захар": session 19 proposed
+07:01:10.196 I (8277780) zakhar_link: session 19: listening
+07:01:11.811 I (8279387) zakhar_link: session 19: transcribing
+07:01:12.942 I (8280530) zakhar_link: transcript: захар я в москве
+07:01:12.942 I (8280532) zakhar_link: session 19: thinking
+07:01:16.335 I (8283893) zakhar_link: reply: Запомнил. Вы в Москве. Теперь, когда потребуется узнать погоду или ещё что-то, привязанное к месту, я буду знать, где вас искать.
+07:01:16.335 I (8283909) zakhar_link: session 19: speaking
+07:01:24.636 I (8291875) wake_word: "Zakhar" detected
+07:01:24.636 I (8291875) zakhar_link: wake word "Захар": session 20 proposed
+07:01:25.846 I (8293424) zakhar_link: session 19: listening
+07:01:27.253 I (8294830) zakhar_link: session 20 not taken: idle
+07:01:32.053 I (8299629) zakhar_link: session 19: idle
+07:03:00.177 I (8384576) wake_word: "Zakhar" detected
+07:03:00.177 I (8384577) zakhar_link: wake word "Захар": session 21 proposed
+07:03:01.265 I (8388708) wake_word: "Zakhar" detected
+07:03:01.351 I (8388817) zakhar_link: wake word ignored: the session still hears its phrase
+07:03:01.511 I (8389058) zakhar_link: session 21 not taken: idle
+07:05:19.947 I (8527457) wake_word: "Zakhar" detected
+07:05:19.947 I (8527457) zakhar_link: wake word "Захар": session 22 proposed
+07:05:20.052 I (8527536) zakhar_link: session 22: listening
+07:05:21.642 I (8529203) zakhar_link: session 22: transcribing
+07:05:23.039 I (8530648) zakhar_link: session 22: idle
+07:06:55.220 I (8622750) wake_word: "Zakhar" blocked by VAD
+07:06:55.221 I (8622782) wake_word: "Zakhar" blocked by VAD
+07:06:55.221 I (8622814) wake_word: "Zakhar" blocked by VAD
+07:06:55.238 I (8622846) wake_word: "Zakhar" blocked by VAD
+07:07:09.343 I (8636896) wake_word: "Zakhar" blocked by VAD
+07:07:09.344 I (8636928) wake_word: "Zakhar" blocked by VAD
+07:07:09.366 I (8636960) wake_word: "Zakhar" blocked by VAD
+07:07:09.396 I (8636992) wake_word: "Zakhar" blocked by VAD
+07:07:09.409 I (8637022) wake_word: "Zakhar" blocked by VAD
+07:07:09.454 I (8637054) wake_word: "Zakhar" blocked by VAD
+07:07:09.505 I (8637086) wake_word: "Zakhar" blocked by VAD
+07:07:09.511 I (8637118) wake_word: "Zakhar" blocked by VAD
+07:07:09.560 I (8637150) wake_word: "Zakhar" blocked by VAD
+07:07:09.576 I (8637181) wake_word: "Zakhar" blocked by VAD
+07:07:09.620 I (8637213) wake_word: "Zakhar" blocked by VAD
+07:07:23.460 I (8651006) wake_word: "Zakhar" detected
+07:07:23.460 I (8651006) zakhar_link: wake word "Захар": session 23 proposed
+07:07:23.533 I (8651030) zakhar_link: session 23: listening
+07:07:29.266 I (8656822) zakhar_link: session 23: transcribing
+07:07:30.319 I (8657928) zakhar_link: session 23: idle
+07:12:11.829 I (8939388) wake_word: "Zakhar" detected
+07:12:11.829 I (8939389) zakhar_link: wake word "Захар": session 24 proposed
+07:12:11.851 I (8939427) zakhar_link: session 24: listening
+07:12:15.171 I (8942728) zakhar_link: session 24: transcribing
+07:12:16.197 I (8943792) zakhar_link: transcript: захар запомни что меня зовут влад
+07:12:16.197 I (8943794) zakhar_link: session 24: thinking
+07:12:22.909 I (8950456) zakhar_link: reply: Запомнил. Влад — имя, которое теперь в моей памяти закреплено. Удобнее, чем просто обращаться к вам через экран.
+07:12:22.909 I (8950467) zakhar_link: session 24: speaking
+07:12:31.276 I (8958811) zakhar_link: session 24: listening
+07:12:36.590 I (8964168) zakhar_link: session 24: idle
+07:18:31.267 I (9316982) wake_word: "Zakhar" detected
+07:18:31.267 I (9316982) zakhar_link: wake word "Захар": session 25 proposed
+07:18:31.829 I (9319421) zakhar_link: session 25 not taken: idle
+07:20:07.857 I (9415415) wake_word: "Zakhar" detected
+07:20:07.857 I (9415416) zakhar_link: wake word "Захар": session 26 proposed
+07:20:07.902 I (9415439) zakhar_link: session 26: listening
+07:20:10.172 I (9417766) zakhar_link: session 26: transcribing
+07:20:10.931 I (9418531) zakhar_link: transcript: захар сколько времени
+07:20:10.931 I (9418533) zakhar_link: session 26: thinking
+07:20:14.917 I (9422425) zakhar_link: reply: Сейчас семь часов двадцать минут утра, четверг, двадцать второе октября. Время, как видите, раннее — момент, когда большинство мыслящих существ ещё находятся в горизонтальном положении.
+07:20:14.917 I (9422448) zakhar_link: session 26: speaking
+07:20:28.992 I (9436574) zakhar_link: session 26: listening
+07:20:34.361 I (9441929) zakhar_link: session 26: idle
+07:20:40.469 I (9448021) wake_word: "Zakhar" detected
+07:20:40.469 I (9448021) zakhar_link: wake word "Захар": session 27 proposed
+07:20:40.648 I (9448045) zakhar_link: session 27: listening
+07:20:42.259 I (9449814) zakhar_link: session 27: transcribing
+07:20:43.532 I (9451122) zakhar_link: transcript: захар сколько времени
+07:20:43.532 I (9451124) zakhar_link: session 27: thinking
+07:20:47.056 I (9454598) zakhar_link: reply: Семь часов двадцать минут утра, четверг, двадцать второе октября. Время не изменилось с последнего вопроса — система, как обычно, течёт в одном направлении.
+07:20:47.056 I (9454616) zakhar_link: session 27: speaking
+07:20:58.441 I (9466015) zakhar_link: session 27: listening
+07:21:00.111 I (9467669) wake_word: "Zakhar" detected
+07:21:00.111 I (9467673) zakhar_link: wake word ignored: the session still hears its phrase
+07:21:01.922 I (9469478) zakhar_link: session 27: transcribing
+07:21:03.078 I (9470664) zakhar_link: transcript: захар сколько времени
+07:21:03.078 I (9470666) zakhar_link: session 27: thinking
+07:21:10.263 I (9477811) zakhar_link: reply: Семь часов двадцать минут утра. Вопрос повторяется, ответ остаётся прежним — время, к сожалению, не стоит на месте, но и не ускоряется по вашей просьбе.
+07:21:10.263 I (9477830) zakhar_link: session 27: speaking
+07:21:20.332 I (9487916) zakhar_link: session 27: listening
+07:21:25.830 I (9493367) zakhar_link: session 27: idle
+07:21:27.948 I (9495476) wake_word: "Zakhar" detected
+07:21:27.948 I (9495477) zakhar_link: wake word "Захар": session 28 proposed
+07:21:27.948 I (9495493) zakhar_link: session 28: listening
+07:21:29.744 I (9497203) zakhar_link: session 28: transcribing
+07:21:30.754 I (9498355) zakhar_link: transcript: захар сколько времени
+07:21:30.754 I (9498359) zakhar_link: session 28: thinking
+07:21:35.509 I (9503082) zakhar_link: reply: Семь часов двадцать минут утра. Если вы проверяете, работаю ли я, — работаю. Если ждёте, что время вдруг изменится, — оно не изменится, пока вы со мной разговариваете.
+07:21:35.509 I (9503103) zakhar_link: session 28: speaking
+07:21:48.433 I (9515993) zakhar_link: session 28: listening
+07:21:53.828 I (9521391) zakhar_link: session 28: idle
+07:21:59.157 I (9526708) wake_word: "Zakhar" detected
+07:21:59.157 I (9526708) zakhar_link: wake word "Захар": session 29 proposed
+07:21:59.157 I (9526727) zakhar_link: session 29: listening
+07:22:00.771 I (9528330) zakhar_link: session 29: transcribing
+07:22:01.637 I (9529220) zakhar_link: transcript: захар сколько времени
+07:22:01.637 I (9529224) zakhar_link: session 29: thinking
+07:22:05.721 I (9533308) zakhar_link: reply: Семь часов двадцать минут утра. Время, Влад, остаётся неизменным в масштабах нашего диалога — таковы законы физики, а не моё упрямство.
+07:22:05.721 I (9533323) zakhar_link: session 29: speaking
+07:22:15.264 I (9542813) zakhar_link: session 29: listening
+07:22:20.595 I (9548159) zakhar_link: session 29: idle
+07:22:27.159 I (9554614) wake_word: "Zakhar" detected
+07:22:27.159 I (9554615) zakhar_link: wake word "Захар": session 30 proposed
+07:22:27.461 I (9554637) zakhar_link: session 30: listening
+07:22:28.881 I (9556427) zakhar_link: session 30: transcribing
+07:22:29.755 I (9557332) zakhar_link: session 30: idle
+07:22:51.816 I (9579065) wake_word: "Zakhar" detected
+07:22:51.816 I (9579065) zakhar_link: wake word "Захар": session 31 proposed
+07:22:51.839 I (9579211) zakhar_link: session 31: listening
+07:22:53.349 I (9580905) zakhar_link: session 31: transcribing
+07:22:53.940 I (9581515) zakhar_link: transcript: захар сколько времени
+07:22:53.940 I (9581517) zakhar_link: session 31: thinking
+07:22:57.705 I (9585291) zakhar_link: reply: Семь часов двадцать минут утра. Повторение, как известно, — мать учения, но в данном случае результат будет идентичным каждый раз.
+07:22:57.705 I (9585306) zakhar_link: session 31: speaking
+07:23:07.003 I (9594581) zakhar_link: session 31: listening
+07:23:12.392 I (9599936) zakhar_link: session 31: idle
+07:23:13.971 I (9601332) wake_word: "Zakhar" detected
+07:23:13.971 I (9601332) zakhar_link: wake word "Захар": session 32 proposed
+07:23:14.076 I (9601355) zakhar_link: session 32: listening
+07:23:15.556 I (9603017) zakhar_link: session 32: transcribing
+07:23:16.457 I (9604044) zakhar_link: session 32: idle
+07:23:25.106 I (9612500) wake_word: "Zakhar" detected
+07:23:25.106 I (9612500) zakhar_link: wake word "Захар": session 33 proposed
+07:23:25.184 I (9612598) zakhar_link: session 33: listening
+07:23:26.830 I (9614380) zakhar_link: session 33: transcribing
+07:23:28.054 I (9615653) zakhar_link: transcript: захар сколько времени
+07:23:28.164 I (9615658) zakhar_link: session 33: thinking
+07:23:31.440 I (9618985) zakhar_link: reply: Семь часов двадцать минут утра. Если вам требуется актуальное время в реальности, а не в нашем разговоре, — советую глянуть на часы.
+07:23:31.440 I (9619000) zakhar_link: session 33: speaking
+07:23:41.532 I (9629114) zakhar_link: session 33: listening
+07:23:50.479 I (9638034) zakhar_link: session 33: transcribing
+07:23:51.599 I (9639151) zakhar_link: session 33: idle
+07:24:13.019 I (9660341) wake_word: "Zakhar" detected
+07:24:13.019 I (9660341) zakhar_link: wake word "Захар": session 34 proposed
+07:24:13.019 I (9660361) zakhar_link: session 34: listening
+07:24:14.672 I (9662217) zakhar_link: session 34: transcribing
+07:24:15.775 I (9663370) zakhar_link: transcript: захар сколько времени
+07:24:15.842 I (9663374) zakhar_link: session 34: thinking
+07:24:19.588 I (9667172) zakhar_link: reply: Семь часов двадцать минут утра. Вопрос становится риторическим, ответ — неизменным.
+07:24:19.588 I (9667179) zakhar_link: session 34: speaking
+07:24:26.214 I (9673777) zakhar_link: session 34: listening
+07:24:31.578 I (9679140) zakhar_link: session 34: idle
+07:24:42.330 I (9689426) wake_word: "Zakhar" detected
+07:24:42.330 I (9689426) zakhar_link: wake word "Захар": session 35 proposed
+07:24:42.345 I (9689452) zakhar_link: session 35: listening
+07:24:43.956 I (9691518) zakhar_link: session 35: transcribing
+07:24:45.404 I (9692993) zakhar_link: session 35: idle
+07:24:56.797 I (9704343) wake_word: "Zakhar" detected
+07:24:56.797 I (9704344) zakhar_link: wake word "Захар": session 36 proposed
+07:24:56.860 I (9704380) zakhar_link: session 36: listening
+07:24:58.574 I (9706141) zakhar_link: session 36: transcribing
+07:24:59.431 I (9707016) zakhar_link: transcript: захар сколько времени
+07:24:59.431 I (9707018) zakhar_link: session 36: thinking
+07:25:03.177 I (9710779) zakhar_link: reply: Семь часов двадцать минут утра. Дальше, как говорится, только повтор.
+07:25:03.198 I (9710786) zakhar_link: session 36: speaking
+07:25:08.461 I (9716022) zakhar_link: session 36: listening
+07:25:10.517 I (9718051) zakhar_link: session 36: transcribing
+07:25:10.681 I (9718280) zakhar_link: session 36: idle
+07:26:24.532 I (9792018) wake_word: "Zakhar" detected
+07:26:24.532 I (9792018) zakhar_link: wake word "Захар": session 37 proposed
+07:26:24.635 I (9792041) zakhar_link: session 37: listening
+07:26:26.343 I (9793861) zakhar_link: session 37: transcribing
+07:26:27.287 I (9794869) zakhar_link: transcript: захар сколько времени
+07:26:27.287 I (9794872) zakhar_link: session 37: thinking
+07:26:30.950 I (9798537) zakhar_link: reply: Семь часов двадцать минут утра.
+07:26:30.950 I (9798539) zakhar_link: session 37: speaking
+07:26:33.706 I (9801261) zakhar_link: session 37: listening
+07:26:39.078 I (9806645) zakhar_link: session 37: idle
+07:33:32.612 I (10220141) wake_word: "Zakhar" blocked by VAD
+07:33:32.613 I (10220173) wake_word: "Zakhar" blocked by VAD
+07:33:32.623 I (10220205) wake_word: "Zakhar" blocked by VAD
+07:33:32.643 I (10220237) wake_word: "Zakhar" blocked by VAD
+07:33:32.688 I (10220269) wake_word: "Zakhar" blocked by VAD
+07:33:32.711 I (10220301) wake_word: "Zakhar" blocked by VAD
+07:33:32.754 I (10220333) wake_word: "Zakhar" blocked by VAD
+07:33:32.754 I (10220339) wake_word: "Zakhar" blocked by VAD
+07:36:15.198 I (10382733) wake_word: "Zakhar" blocked by VAD
+07:36:15.200 I (10382764) wake_word: "Zakhar" blocked by VAD
+07:36:15.208 I (10382796) wake_word: "Zakhar" blocked by VAD
+07:36:15.252 I (10382828) wake_word: "Zakhar" blocked by VAD
+07:36:15.272 I (10382860) wake_word: "Zakhar" blocked by VAD
+07:36:15.325 I (10382892) wake_word: "Zakhar" blocked by VAD
+07:36:15.332 I (10382923) wake_word: "Zakhar" blocked by VAD
+07:36:15.379 I (10382955) wake_word: "Zakhar" blocked by VAD
+07:36:47.145 E (10405054) websocket_client: esp_transport_read() failed with -1, transport_error=ESP_ERR_ESP_TLS_TCP_CLOSED_FIN, tls_error_code=0, tls_flags=0, errno=128
+07:36:47.145 E (10405061) websocket_client: Error receive data
+07:36:47.145 W (10405065) zakhar_link: link lost, reconnecting in 1 s
+07:36:47.145 W (10409113) zakhar_link: no server answers _zakhar._tcp
+07:36:47.145 W (10412213) zakhar_link: no server answers _zakhar._tcp
+07:36:47.145 W (10414466) websocket_client: `network_timeout_ms` is not set, or it is less than or equal to zero, using default time out 10000 (milliseconds)
+07:36:47.145 I (10414468) websocket_client: Started
+07:36:47.145 I (10414511) zakhar_link: connected to ws://10.31.41.59:8200/device
+07:36:47.145 I (10414617) zakhar_link: config: wake 204, vad 25, play_prime_ms 700, auto_volume 0
+07:36:47.145 I (10414621) zakhar_link: log stream on
+07:36:47.145 I (10414626) volume: boost +0 %
+07:36:47.398 I (10414931) wake_word: wake model of 77848 B loaded, tensor arena 29436 of 131072 B used
+07:36:47.398 I (10414932) zakhar_link: wake model zakhar/zakhar_v38 loaded (77848 B)
+07:36:47.508 I (10415040) wake_word: VAD model of 34328 B loaded, tensor arena 16620 of 131072 B used
+07:36:47.508 I (10415040) zakhar_link: vad model microWakeWord/vad/vad.tflite loaded (34328 B)
+

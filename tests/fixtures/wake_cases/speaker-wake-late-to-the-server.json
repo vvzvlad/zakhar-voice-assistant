@@ -1,0 +1,165 @@
+{
+  "case": "Пробуждение колонки дошло на 1,9 с позже, чем она услышала слово",
+  "status": "open",
+  "status_note": "No expected behaviour is decided: «expected» is today's outcome, so a fix flips this replay.",
+  "doc": "docs/wake-cases.md",
+  "time": "server clock, Moscow time, 2026-10-22",
+  "run_fields": {
+    "recording": "the run's stored audio from /api/runs/<id>; the speaker's is stereo and channel 0 is what the server recognises, the panels' is mono; a wake run's recording starts with the device's 2 s pre-roll",
+    "stt_text": "the text the server recognised (run record)",
+    "was": "[result, reason] of the run record",
+    "record_ts": "the run record's ts: when its phrase was end-pointed",
+    "expected": "[result, reason] the run must end with",
+    "shown_answer_of": "the device whose answer this speakerless device must be shown"
+  },
+  "devices": {
+    "20f83b0a332d": {
+      "name": "main_room_voicepe (Voice PE)",
+      "speaker": true,
+      "follow_up": true,
+      "mic_channels": 2
+    },
+    "fc012cd1e5ec": {
+      "name": "circle_espanel",
+      "speaker": false,
+      "follow_up": false,
+      "mic_channels": 1
+    },
+    "80f1b2d12c91": {
+      "name": "rectangular panel",
+      "speaker": false,
+      "follow_up": false,
+      "mic_channels": 1
+    }
+  },
+  "groups": [
+    {
+      "name": "07:18:29",
+      "online": [
+        "20f83b0a332d",
+        "fc012cd1e5ec",
+        "80f1b2d12c91"
+      ],
+      "before": {
+        "20f83b0a332d": {
+          "state": "idle",
+          "source": "07:12:36.590 session 24: idle (device log)"
+        },
+        "fc012cd1e5ec": {
+          "state": "idle"
+        },
+        "80f1b2d12c91": {
+          "state": "idle"
+        }
+      },
+      "timeline": [
+        {
+          "at_ms": 0,
+          "device": "80f1b2d12c91",
+          "event": "wake",
+          "run": 4494,
+          "source": "07:18:29.285 80f1b2d12c91: run started (cid=16)"
+        },
+        {
+          "at_ms": 7,
+          "device": "fc012cd1e5ec",
+          "event": "wake",
+          "run": 4492,
+          "source": "07:18:29.292 fc012cd1e5ec: run started (cid=23)"
+        },
+        {
+          "at_ms": 511,
+          "event": "ruled",
+          "source": "07:18:29.796 wake arbitration: 80f1b2d12c91 (speaker no, SNR 20.6 dB), fc012cd1e5ec (speaker no, SNR 4.3 dB) -> 80f1b2d12c91 keeps the phrase"
+        },
+        {
+          "at_ms": 1931,
+          "device": "20f83b0a332d",
+          "event": "wake",
+          "run": 4493,
+          "source": "07:18:31.216 20f83b0a332d: receiving audio (held): its first audio; the wake, lost inside its registration, logs no line of its own"
+        }
+      ],
+      "runs": {
+        "4494": {
+          "device": "80f1b2d12c91",
+          "recording": "run-4494.wav",
+          "stt_text": "захар сколько времени",
+          "was": [
+            "ok",
+            "endpoint"
+          ],
+          "record_ts": "07:18:30.977",
+          "expected": [
+            "ok",
+            "endpoint"
+          ]
+        },
+        "4492": {
+          "device": "fc012cd1e5ec",
+          "recording": "run-4492.wav",
+          "stt_text": "захар сколько времени",
+          "was": [
+            "rejected",
+            "duplicate"
+          ],
+          "record_ts": "07:18:30.505",
+          "expected": [
+            "rejected",
+            "duplicate"
+          ],
+          "shown_answer_of": "80f1b2d12c91"
+        },
+        "4493": {
+          "device": "20f83b0a332d",
+          "recording": "run-4493.wav",
+          "stt_text": "захар сколько времени",
+          "was": [
+            "rejected",
+            "duplicate"
+          ],
+          "record_ts": "07:18:31.804",
+          "expected": [
+            "rejected",
+            "duplicate"
+          ]
+        }
+      },
+      "assumptions": [
+        "fc012cd1e5ec's 4.3 dB was taken on a pre-roll not yet all in; its whole pre-roll gives 19.3 dB, still under 80f1b2d12c91's 20.6 dB.",
+        "The speaker heard «Захар» about 07:18:29.4 by its own counter (device log: «session 24: idle» at uptime 8964168 ms reached the server at 07:12:36.590, «\"Zakhar\" detected» has uptime 9316982 ms); the replay sends its wake when the server got it."
+      ],
+      "log": [
+        "2026-10-22 07:18:29.285 | INFO     | src.pipeline:_take:325 - 80f1b2d12c91: ▶️ run started (cid=16)",
+        "2026-10-22 07:18:29.286 | INFO     | src.pipeline:on_audio:548 - 80f1b2d12c91: 🎤 receiving audio (held)...",
+        "2026-10-22 07:18:29.292 | INFO     | src.pipeline:_take:325 - fc012cd1e5ec: ▶️ run started (cid=23)",
+        "2026-10-22 07:18:29.293 | INFO     | src.pipeline:on_audio:548 - fc012cd1e5ec: 🎤 receiving audio (held)...",
+        "2026-10-22 07:18:29.796 | INFO     | src.wake_arbiter:_close:256 - wake arbitration: 80f1b2d12c91 (speaker no, SNR 20.6 dB), fc012cd1e5ec (speaker no, SNR 4.3 dB) -> 80f1b2d12c91 keeps the phrase",
+        "2026-10-22 07:18:30.504 | INFO     | src.pipeline:_end_held:384 - fc012cd1e5ec: 🚫 wake dropped as a duplicate of another device's wake",
+        "2026-10-22 07:18:30.977 | INFO     | src.pipeline:_run:919 - 80f1b2d12c91: 🎙️ captured 117760 bytes (~3.7s), reason=endpoint, vad=ten",
+        "2026-10-22 07:18:31.216 | INFO     | src.pipeline:on_audio:548 - 20f83b0a332d: 🎤 receiving audio (held)...",
+        "2026-10-22 07:18:31.720 | INFO     | src.chains:run:200 - 80f1b2d12c91: 📝 STT [gigaam/gigaam-v3-rnnt] chain 'Команды' (0.74s): 'захар сколько времени'",
+        "2026-10-22 07:18:31.721 | INFO     | src.chains:run:222 - 80f1b2d12c91: 🤖 → LLM [simple-nlu] chain 'Команды': 'захар сколько времени'",
+        "2026-10-22 07:18:31.729 | INFO     | src.chains:run:235 - 80f1b2d12c91: ↪️ chain 'Команды' declined: 'Не понял команду.'",
+        "2026-10-22 07:18:31.730 | INFO     | src.chains:run:200 - 80f1b2d12c91: 📝 STT [gigaam/gigaam-v3-rnnt] chain 'Jev' (0.00s): 'захар сколько времени'",
+        "2026-10-22 07:18:31.730 | INFO     | src.chains:run:222 - 80f1b2d12c91: 🤖 → LLM [jev/typesafe/jev-1.14] chain 'Jev': 'захар сколько времени'",
+        "2026-10-22 07:18:31.803 | INFO     | src.pipeline:_end_held:384 - 20f83b0a332d: 🚫 wake dropped as a duplicate of another device's wake",
+        "2026-10-22 07:18:32.583 | INFO     | src.plugins.llm.jev:_decide:332 - jev decision: kind=other (other 100%; confidence 100%), target=none (none 100%; confidence 100%), action=none (none 100%; confidence 100%), compound=9%, delayed=25%",
+        "2026-10-22 07:18:32.586 | INFO     | src.chains:run:235 - 80f1b2d12c91: ↪️ chain 'Jev' declined: 'Не понял команду, повтори.'",
+        "2026-10-22 07:18:32.587 | INFO     | src.chains:run:200 - 80f1b2d12c91: 📝 STT [gigaam/gigaam-v3-rnnt] chain 'LLM' (0.00s): 'захар сколько времени'",
+        "2026-10-22 07:18:32.588 | INFO     | src.chains:run:222 - 80f1b2d12c91: 🤖 → LLM [openrouter/anthropic/claude-haiku-4.5] chain 'LLM': 'захар сколько времени'",
+        "2026-10-22 07:18:38.863 | INFO     | src.chains:run:252 - 80f1b2d12c91: 💬 LLM reply chain 'LLM' (6.28s): 'Сейчас семь часов восемнадцать минут утра, четверг, двадцать второе октября. Время, как известно, — вещество, которое течёт одинаково для всех, но ощущается совершенно по-разному.'",
+        "2026-10-22 07:18:38.863 | INFO     | src.llm:respond:160 - LLM response: model=anthropic/claude-haiku-4.5 total_tokens=20716 content='Сейчас семь часов восемнадцать минут утра, четверг, двадцать второе октября. Время, как известно, — вещество, которое течёт одинаково для всех, но ощущается совершенно по-разному.' tool_calls=0",
+        "2026-10-22 07:18:38.864 | INFO     | src.speech:speak_reply:209 - 80f1b2d12c91: ✒️ Accent [ruaccent/off] (0.00s): 'Сейчас семь часов восемнадцать минут утра, четверг, двадцать второе октября. Время, как известно, — вещество, которое течёт одинаково для всех, но ощущается совершенно по-разному.'",
+        "2026-10-22 07:18:38.865 | INFO     | src.pipeline:_run:1150 - 80f1b2d12c91: ✅ run complete in 7.89s"
+      ],
+      "device_log": [
+        "07:12:31.276 I (8958811) zakhar_link: session 24: listening",
+        "07:12:36.590 I (8964168) zakhar_link: session 24: idle",
+        "07:18:31.267 I (9316982) wake_word: \"Zakhar\" detected",
+        "07:18:31.267 I (9316982) zakhar_link: wake word \"Захар\": session 25 proposed",
+        "07:18:31.829 I (9319421) zakhar_link: session 25 not taken: idle"
+      ]
+    }
+  ]
+}

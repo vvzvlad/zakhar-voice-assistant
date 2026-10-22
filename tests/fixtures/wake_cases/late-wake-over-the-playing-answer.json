@@ -1,0 +1,208 @@
+{
+  "case": "«Захар» поверх ответа колонки опоздал к выбору устройства",
+  "status": "closed",
+  "doc": "docs/wake-cases.md",
+  "time": "server clock, Moscow time, 2026-10-22",
+  "run_fields": {
+    "recording": "the run's stored audio from /api/runs/<id>; the speaker's is stereo and channel 0 is what the server recognises, the panels' is mono; a wake run's recording starts with the device's 2 s pre-roll",
+    "stt_text": "the text the server recognised (run record)",
+    "was": "[result, reason] of the run record",
+    "record_ts": "the run record's ts: when its phrase was end-pointed",
+    "expected": "[result, reason] the run must end with",
+    "shown_answer_of": "the device whose answer this speakerless device must be shown",
+    "answer_stopped": "the device's playing answer must be stopped by this run"
+  },
+  "devices": {
+    "20f83b0a332d": {
+      "name": "main_room_voicepe (Voice PE)",
+      "speaker": true,
+      "follow_up": true,
+      "mic_channels": 2
+    },
+    "fc012cd1e5ec": {
+      "name": "circle_espanel",
+      "speaker": false,
+      "follow_up": false,
+      "mic_channels": 1
+    },
+    "80f1b2d12c91": {
+      "name": "rectangular panel",
+      "speaker": false,
+      "follow_up": false,
+      "mic_channels": 1
+    }
+  },
+  "groups": [
+    {
+      "name": "07:01:24",
+      "online": [
+        "20f83b0a332d",
+        "fc012cd1e5ec",
+        "80f1b2d12c91"
+      ],
+      "before": {
+        "20f83b0a332d": {
+          "state": "answering",
+          "source": "07:01:16.805 TTS stream start of the answer to run 4477 «захар я в москве» (session 19, «session 19: speaking» in the device log); the old code let it play out at 07:01:25.791"
+        },
+        "fc012cd1e5ec": {
+          "state": "idle"
+        },
+        "80f1b2d12c91": {
+          "state": "idle"
+        }
+      },
+      "timeline": [
+        {
+          "at_ms": 0,
+          "device": "fc012cd1e5ec",
+          "event": "wake",
+          "run": 4478,
+          "source": "07:01:24.098 fc012cd1e5ec: run started (cid=18)"
+        },
+        {
+          "at_ms": 9,
+          "device": "80f1b2d12c91",
+          "event": "wake",
+          "run": 4480,
+          "source": "07:01:24.107 80f1b2d12c91: run started (cid=13)"
+        },
+        {
+          "at_ms": 501,
+          "event": "ruled",
+          "source": "07:01:24.599 wake arbitration: fc012cd1e5ec (speaker no, SNR 6.1 dB), 80f1b2d12c91 (speaker no, SNR 22.2 dB) -> 80f1b2d12c91 keeps the phrase"
+        },
+        {
+          "at_ms": 522,
+          "device": "20f83b0a332d",
+          "event": "wake",
+          "run": 4479,
+          "source": "07:01:24.620 20f83b0a332d: wake (cid=20) over the running answer waits for the wake-word check"
+        }
+      ],
+      "runs": {
+        "4478": {
+          "device": "fc012cd1e5ec",
+          "recording": "run-4478.wav",
+          "stt_text": "",
+          "was": [
+            "rejected",
+            "duplicate"
+          ],
+          "record_ts": "07:01:26.920",
+          "expected": [
+            "rejected",
+            "duplicate"
+          ]
+        },
+        "4480": {
+          "device": "80f1b2d12c91",
+          "recording": "run-4480.wav",
+          "stt_text": "и еще что то привязанная захар стоп я буду знать где вас искать",
+          "was": [
+            "rejected",
+            "wakeword_reject"
+          ],
+          "record_ts": "07:01:27.985",
+          "expected": [
+            "rejected",
+            "wakeword_reject"
+          ]
+        },
+        "4479": {
+          "device": "20f83b0a332d",
+          "recording": "run-4479.wav",
+          "stt_text": "захар стоп",
+          "was": [
+            "rejected",
+            "duplicate"
+          ],
+          "record_ts": "07:01:27.200",
+          "expected": [
+            "ok",
+            "wake_stop"
+          ],
+          "answer_stopped": true
+        }
+      },
+      "assumptions": [
+        "The speaker's wake-word check accepts its wake, as it did: 07:01:25.157 «wake word confirmed (score=1.0, 93 ms)». Its window is 2500 ms (the vosk window_ms of the local data/config.json; production's is not in the log). It fits the log: the check began 444 ms after the wake (537 ms to the confirmation minus its 93 ms), about the 0.5 s of live audio a 2.5 s window needs after the 2 s pre-roll.",
+        "fc012cd1e5ec's 6.1 dB was taken at the window's end on a pre-roll not yet all in; its whole 2 s pre-roll gives 17.3 dB. The replay sends each pre-roll at its wake, so 80f1b2d12c91 (22.2 dB) keeps the phrase either way.",
+        "The speaker's answer is a stand-in: one stand-in phrase answered with a long clip that plays through the group; the 07:01:10 group (runs 4475-4477) that made it answer is not replayed.",
+        "80f1b2d12c91's outcome is the rule of «Панели записали ответ колонки вокруг «Захар»» (panels-recorded-the-speakers-answer.json)."
+      ],
+      "log": [
+        "2026-10-22 07:01:02.027 | INFO     | src.pipeline:_run:1150 - 20f83b0a332d: ✅ run complete in 27.72s",
+        "2026-10-22 07:01:02.027 | INFO     | src.speech:_voice:287 - 20f83b0a332d: 🔊 TTS played (17.82s total, 1493014 bytes)",
+        "2026-10-22 07:01:02.028 | INFO     | src.pipeline:_arm_followup:409 - 20f83b0a332d: 👂 listening for a follow-up (5000 ms)",
+        "2026-10-22 07:01:02.367 | INFO     | src.pipeline:on_audio:580 - 20f83b0a332d: 🎤 receiving audio...",
+        "2026-10-22 07:01:03.726 | INFO     | src.pipeline:_run:919 - 20f83b0a332d: 🎙️ captured 44672 bytes (~1.4s), reason=endpoint, vad=ten",
+        "2026-10-22 07:01:04.016 | INFO     | src.chains:run:200 - 20f83b0a332d: 📝 STT [gigaam/gigaam-v3-rnnt] chain 'Jev' (0.00s): ''",
+        "2026-10-22 07:01:04.016 | INFO     | src.chains:run:200 - 20f83b0a332d: 📝 STT [gigaam/gigaam-v3-rnnt] chain 'Команды' (0.29s): ''",
+        "2026-10-22 07:01:04.017 | INFO     | src.chains:run:200 - 20f83b0a332d: 📝 STT [gigaam/gigaam-v3-rnnt] chain 'LLM' (0.00s): ''",
+        "2026-10-22 07:01:04.017 | INFO     | src.pipeline:_run:1116 - 20f83b0a332d: no chain heard a request, ending run",
+        "2026-10-22 07:01:09.972 | INFO     | src.pipeline:_take:325 - fc012cd1e5ec: ▶️ run started (cid=17)",
+        "2026-10-22 07:01:09.972 | INFO     | src.pipeline:on_audio:548 - fc012cd1e5ec: 🎤 receiving audio (held)...",
+        "2026-10-22 07:01:10.030 | INFO     | src.pipeline:_take:325 - 80f1b2d12c91: ▶️ run started (cid=12)",
+        "2026-10-22 07:01:10.030 | INFO     | src.pipeline:on_audio:548 - 80f1b2d12c91: 🎤 receiving audio (held)...",
+        "2026-10-22 07:01:10.142 | INFO     | src.pipeline:_take:325 - 20f83b0a332d: ▶️ run started (cid=19)",
+        "2026-10-22 07:01:10.145 | INFO     | src.pipeline:on_audio:548 - 20f83b0a332d: 🎤 receiving audio (held)...",
+        "2026-10-22 07:01:10.612 | INFO     | src.wake_arbiter:_close:256 - wake arbitration: fc012cd1e5ec (speaker no, SNR 27.8 dB), 80f1b2d12c91 (speaker no, SNR 29.7 dB), 20f83b0a332d (speaker yes, SNR 30.3 dB) -> 20f83b0a332d keeps the phrase",
+        "2026-10-22 07:01:11.562 | INFO     | src.pipeline:_end_held:384 - fc012cd1e5ec: 🚫 wake dropped as a duplicate of another device's wake",
+        "2026-10-22 07:01:11.618 | INFO     | src.pipeline:_end_held:384 - 80f1b2d12c91: 🚫 wake dropped as a duplicate of another device's wake",
+        "2026-10-22 07:01:11.755 | INFO     | src.pipeline:_run:919 - 20f83b0a332d: 🎙️ captured 114688 bytes (~3.6s), reason=endpoint, vad=ten",
+        "2026-10-22 07:01:12.874 | INFO     | src.chains:run:200 - 20f83b0a332d: 📝 STT [gigaam/gigaam-v3-rnnt] chain 'Команды' (1.12s): 'захар я в москве'",
+        "2026-10-22 07:01:12.875 | INFO     | src.chains:run:222 - 20f83b0a332d: 🤖 → LLM [simple-nlu] chain 'Команды': 'захар я в москве'",
+        "2026-10-22 07:01:12.880 | INFO     | src.chains:run:235 - 20f83b0a332d: ↪️ chain 'Команды' declined: 'Не понял команду.'",
+        "2026-10-22 07:01:12.881 | INFO     | src.chains:run:200 - 20f83b0a332d: 📝 STT [gigaam/gigaam-v3-rnnt] chain 'Jev' (0.00s): 'захар я в москве'",
+        "2026-10-22 07:01:12.881 | INFO     | src.chains:run:222 - 20f83b0a332d: 🤖 → LLM [jev/typesafe/jev-1.14] chain 'Jev': 'захар я в москве'",
+        "2026-10-22 07:01:12.898 | INFO     | src.speech:_play_ack:365 - 20f83b0a332d: 🔔 end-of-phrase ack",
+        "2026-10-22 07:01:13.535 | INFO     | src.plugins.llm.jev:_decide:332 - jev decision: kind=other (other 100%; confidence 100%), target=none (none 100%; confidence 100%), action=none (none 100%; confidence 100%), compound=5%, delayed=5%",
+        "2026-10-22 07:01:13.536 | INFO     | src.chains:run:200 - 20f83b0a332d: 📝 STT [gigaam/gigaam-v3-rnnt] chain 'LLM' (0.00s): 'захар я в москве'",
+        "2026-10-22 07:01:13.536 | INFO     | src.chains:run:222 - 20f83b0a332d: 🤖 → LLM [openrouter/anthropic/claude-haiku-4.5] chain 'LLM': 'захар я в москве'",
+        "2026-10-22 07:01:13.536 | INFO     | src.chains:run:235 - 20f83b0a332d: ↪️ chain 'Jev' declined: 'Не понял команду, повтори.'",
+        "2026-10-22 07:01:16.260 | INFO     | src.llm:respond:160 - LLM response: model=anthropic/claude-haiku-4.5 total_tokens=21405 content='Запомнил. Вы в Москве. Теперь, когда потребуется узнать погоду или ещё что-то, привязанное к месту, я буду знать, где вас искать.' tool_calls=0",
+        "2026-10-22 07:01:16.261 | INFO     | src.chains:run:252 - 20f83b0a332d: 💬 LLM reply chain 'LLM' (2.72s): 'Запомнил. Вы в Москве. Теперь, когда потребуется узнать погоду или ещё что-то, привязанное к месту, я буду знать, где вас искать.'",
+        "2026-10-22 07:01:16.261 | INFO     | src.speech:speak_reply:209 - 20f83b0a332d: ✒️ Accent [ruaccent/off] (0.00s): 'Запомнил. Вы в Москве. Теперь, когда потребуется узнать погоду или ещё что-то, привязанное к месту, я буду знать, где вас искать.'",
+        "2026-10-22 07:01:16.805 | INFO     | src.speech:_voice:276 - 20f83b0a332d: 🔊 TTS [fishaudio/s2-pro/9b64e083ed7943e5bda2193fd783ee5d] stream start (0.54s): 'Запомнил. Вы в Москве. Теперь, когда потребуется узнать погоду или ещё что-то, привязанное к месту, я буду знать, где вас искать.'",
+        "2026-10-22 07:01:24.098 | INFO     | src.pipeline:_take:325 - fc012cd1e5ec: ▶️ run started (cid=18)",
+        "2026-10-22 07:01:24.098 | INFO     | src.pipeline:on_audio:548 - fc012cd1e5ec: 🎤 receiving audio (held)...",
+        "2026-10-22 07:01:24.107 | INFO     | src.pipeline:_take:325 - 80f1b2d12c91: ▶️ run started (cid=13)",
+        "2026-10-22 07:01:24.107 | INFO     | src.pipeline:on_audio:548 - 80f1b2d12c91: 🎤 receiving audio (held)...",
+        "2026-10-22 07:01:24.599 | INFO     | src.wake_arbiter:_close:256 - wake arbitration: fc012cd1e5ec (speaker no, SNR 6.1 dB), 80f1b2d12c91 (speaker no, SNR 22.2 dB) -> 80f1b2d12c91 keeps the phrase",
+        "2026-10-22 07:01:24.620 | INFO     | src.pipeline:on_wake:232 - 20f83b0a332d: 🛡️ wake (cid=20) over the running answer waits for the wake-word check",
+        "2026-10-22 07:01:24.621 | INFO     | src.pipeline:on_audio:548 - 20f83b0a332d: 🎤 receiving audio (held)...",
+        "2026-10-22 07:01:25.157 | INFO     | src.pipeline:verify_wake:666 - 20f83b0a332d: ✅ wake word confirmed (score=1.0, 93 ms)",
+        "2026-10-22 07:01:25.791 | INFO     | src.speech:_voice:287 - 20f83b0a332d: 🔊 TTS played (9.53s total, 778986 bytes)",
+        "2026-10-22 07:01:25.792 | INFO     | src.pipeline:_run:1150 - 20f83b0a332d: ✅ run complete in 14.04s",
+        "2026-10-22 07:01:25.794 | INFO     | src.pipeline:_arm_followup:409 - 20f83b0a332d: 👂 listening for a follow-up (5000 ms)",
+        "2026-10-22 07:01:26.917 | INFO     | src.pipeline:_end_held:384 - fc012cd1e5ec: 🚫 wake dropped as a duplicate of another device's wake",
+        "2026-10-22 07:01:27.200 | INFO     | src.pipeline:_end_held:384 - 20f83b0a332d: 🚫 wake dropped as a duplicate of another device's wake",
+        "2026-10-22 07:01:27.209 | INFO     | src.pipeline:on_audio:580 - 20f83b0a332d: 🎤 receiving audio...",
+        "2026-10-22 07:01:27.985 | INFO     | src.pipeline:_run:919 - 80f1b2d12c91: 🎙️ captured 150528 bytes (~4.7s), reason=endpoint, vad=ten",
+        "2026-10-22 07:01:29.108 | INFO     | src.chains:run:200 - 80f1b2d12c91: 📝 STT [gigaam/gigaam-v3-rnnt] chain 'Команды' (1.12s): 'и еще что то привязанная захар стоп я буду знать где вас искать'",
+        "2026-10-22 07:01:29.108 | INFO     | src.pipeline:_end_silently:890 - 80f1b2d12c91: 🚫 no wake word in 'и еще что то привязанная захар стоп я буду знать где вас искать', wake dropped",
+        "2026-10-22 07:01:31.999 | INFO     | src.pipeline:_run:919 - 20f83b0a332d: 🎙️ captured 160768 bytes (~5.0s), reason=no_speech, vad=ten",
+        "2026-10-22 07:01:32.000 | INFO     | src.pipeline:_run:973 - 20f83b0a332d: 😶 no speech detected by VAD, skipping STT"
+      ],
+      "device_log": [
+        "07:01:02.092 I (8269658) zakhar_link: session 18: listening",
+        "07:01:03.778 I (8271356) zakhar_link: session 18: transcribing",
+        "07:01:04.034 I (8271651) zakhar_link: session 18: idle",
+        "07:01:10.196 I (8277761) wake_word: \"Zakhar\" detected",
+        "07:01:10.196 I (8277761) zakhar_link: wake word \"Захар\": session 19 proposed",
+        "07:01:10.196 I (8277780) zakhar_link: session 19: listening",
+        "07:01:11.811 I (8279387) zakhar_link: session 19: transcribing",
+        "07:01:12.942 I (8280530) zakhar_link: transcript: захар я в москве",
+        "07:01:12.942 I (8280532) zakhar_link: session 19: thinking",
+        "07:01:16.335 I (8283893) zakhar_link: reply: Запомнил. Вы в Москве. Теперь, когда потребуется узнать погоду или ещё что-то, привязанное к месту, я буду знать, где вас искать.",
+        "07:01:16.335 I (8283909) zakhar_link: session 19: speaking",
+        "07:01:24.636 I (8291875) wake_word: \"Zakhar\" detected",
+        "07:01:24.636 I (8291875) zakhar_link: wake word \"Захар\": session 20 proposed",
+        "07:01:25.846 I (8293424) zakhar_link: session 19: listening",
+        "07:01:27.253 I (8294830) zakhar_link: session 20 not taken: idle",
+        "07:01:32.053 I (8299629) zakhar_link: session 19: idle"
+      ]
+    }
+  ]
+}
