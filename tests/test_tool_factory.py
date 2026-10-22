@@ -30,8 +30,9 @@ def test_build_sources_empty_config_yields_only_the_volume_source():
     assert (sources[0].kind, sources[0].slow) == ("builtin", False)
 
 
-def test_build_sources_memory_gated_on_store():
-    # A MemoryStore adds the fast builtin "memory" source after volume; None omits it.
+def test_build_sources_memory_gated_on_store_and_enabled():
+    # A MemoryStore adds the fast builtin "memory" source after volume; None or
+    # core.memory switched off omits it.
     sources = build_sources(CoreConfig(), http_cloud=object(), scheduler=None, assistant_tasks=None,
                             get_manager=_no_manager, memory=object())
     assert _ids(sources) == ["volume", "memory"]
@@ -39,6 +40,10 @@ def test_build_sources_memory_gated_on_store():
     assert "memory" not in _ids(build_sources(CoreConfig(), http_cloud=object(), scheduler=None,
                                               assistant_tasks=None, get_manager=_no_manager,
                                               memory=None))
+    off = CoreConfig(memory={"enabled": False})
+    assert "memory" not in _ids(build_sources(off, http_cloud=object(), scheduler=None,
+                                              assistant_tasks=None, get_manager=_no_manager,
+                                              memory=object()))
 
 
 def test_build_sources_mcp_servers_one_http_source_each():

@@ -8,7 +8,8 @@ describe("enabledToolSources", () => {
       mcp_servers: [{ name: "home" }, { name: "search", enabled: true }, { name: "lab", enabled: false }],
       calendar: { enabled: false },
       reminders: { enabled: true },
+      memory: { enabled: false },
     })).toBe(2 + 3);
-    expect(enabledToolSources(undefined)).toBe(4);
+    expect(enabledToolSources(undefined)).toBe(5);
   });
 });

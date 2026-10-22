@@ -2254,14 +2254,16 @@ def test_llm_request_names_the_wake_word_of_the_model_else_the_wake(tmp_path, mo
 
 
 def test_llm_request_carries_the_facts_of_the_memory_store(tmp_path, monkeypatch):
-    # Every request reads the runtime's MemoryStore anew; without a store the
-    # placeholder reads «(пусто)».
+    # Every request reads the runtime's MemoryStore anew; without a store, or with
+    # core.memory switched off, the placeholder reads «(пусто)».
     pipeline, _ = make_pipeline(tmp_path, monkeypatch)
     pipeline.rt.core.prompt.system = "MEMORY <<<<<MEMORY>>>>>"
     assert pipeline._llm_request("x").system_prompt.startswith("MEMORY (пусто)\n\n")
     pipeline.rt.memory = MemoryStore(str(tmp_path / "memory.json"))
     pipeline.rt.memory.add("Пользователь — мужчина")
     assert pipeline._llm_request("x").system_prompt.startswith("MEMORY - Пользователь — мужчина\n\n")
+    pipeline.rt.core.memory.enabled = False
+    assert pipeline._llm_request("x").system_prompt.startswith("MEMORY (пусто)\n\n")
 
 
 async def test_llm_backend_hot_swap_applies_on_next_run(tmp_path, monkeypatch):

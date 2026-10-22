@@ -19,7 +19,7 @@ def build_sources(core, http_cloud, scheduler, assistant_tasks, get_manager, mem
     which also needs core.assistant_tasks enabled with a url and a secret;
     `get_manager` (a zero-arg callable returning the DeviceManager) backs the volume
     source, which is always present; `memory` (a MemoryStore or None) backs the memory
-    source — None omits it."""
+    source, which also needs core.memory enabled — None omits it."""
     sources = []
     for srv in core.mcp_servers:
         if srv.enabled and srv.url and srv.name:
@@ -51,7 +51,7 @@ def build_sources(core, http_cloud, scheduler, assistant_tasks, get_manager, mem
                                         slow=False))
     # One message to the speaker: fast, no filler.
     sources.append(BuiltinMcpSource("volume", build_volume_server(get_manager), slow=False))
-    if memory is not None:
+    if memory is not None and core.memory.enabled:
         from src.builtin_mcp.memory import build_memory_server
         # Memory is an in-process file: fast, no filler.
         sources.append(BuiltinMcpSource("memory", build_memory_server(memory), slow=False))

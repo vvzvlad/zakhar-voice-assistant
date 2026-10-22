@@ -76,7 +76,7 @@ function SyntaxCard({ children }) {
       <div className="z-f">
         <div className="z-fl"><b>The memory variable</b></div>
         <div className="z-info">
-          <span className="z-paramtag" style={{ fontSize: 11 }}>{"<<<<<MEMORY>>>>>"}</span> is substituted at request time with the <b>facts</b> the assistant saved with its remember tool (data/memory.json), one per line, or «(пусто)» when there are none.
+          <span className="z-paramtag" style={{ fontSize: 11 }}>{"<<<<<MEMORY>>>>>"}</span> is substituted at request time with the <b>facts</b> the assistant saved with its remember tool (data/memory.json), one per line, or «(пусто)» when there are none or Memory is switched off on the Tools page.
         </div>
       </div>
       {children}

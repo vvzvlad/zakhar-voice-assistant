@@ -111,7 +111,7 @@ only setting is `core.agent_mcp.enabled`, panel-editable and read live per reque
   provider's fields. Adding a provider = one new plugin file; zero changes to the core.
 - `core.*` holds non-provider settings (context, audio, vad — end-pointing thresholds +
   mic conditioning, network, openweathermap, mcp_servers,
-  calendar, assistant_tasks, agent_mcp, prompt, runs, reminders, ack, devices, commands —
+  calendar, assistant_tasks, agent_mcp, prompt, runs, reminders, memory, ack, devices, commands —
   the command catalog both command handlers read (helpers in `src/commands.py`), telemetry —
   the MQTT broker the server publishes its and the devices' telemetry to (topics in
   `src/telemetry.py`), tts_timeout, log_level, device_log_days) as plain `CoreConfig` pydantic

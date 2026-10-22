@@ -26,6 +26,15 @@ def test_facts_persist_across_stores_on_the_same_file(tmp_path):
     assert MemoryStore(path).facts() == ["Пользователь — мужчина"]
 
 
+def test_replace_normalizes_and_drops_empty_and_repeated_facts(tmp_path):
+    path = str(tmp_path / "memory.json")
+    store = MemoryStore(path)
+    store.add("Кота зовут Барсик")
+    stored = store.replace(["- Пользователь — мужчина ", "", "   ", "пользователь — МУЖЧИНА", "Собаку зовут Шарик"])
+    assert stored == ["Пользователь — мужчина", "Собаку зовут Шарик"]
+    assert MemoryStore(path).facts() == stored
+
+
 def call(store, tool, fact):
     async def main():
         source = BuiltinMcpSource("memory", build_memory_server(store))

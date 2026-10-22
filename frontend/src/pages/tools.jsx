@@ -9,7 +9,7 @@ import { errorLines } from "../useStageForm.js";
 import { usePageForm } from "../usePageForm.js";
 import { deref } from "../schema.js";
 import { BUILTIN_SOURCES } from "../toolSources.js";
-import { getTools } from "../api.js";
+import { getTools, getMemory, putMemory } from "../api.js";
 
 // ── Tool sources (multi-source view of the ToolHub) ───────────────────────
 // Integration cards driven by CONFIG (so each shows even before it is
@@ -40,7 +40,8 @@ function ToolChips({ tools }) {
 //   draft, onChange — the card's draft core.<section> values and its setter
 //   configured(values) -> bool ("configured")
 //   live      — matching /api/tools entry, or null when absent
-function SourceCard({ name, sub, schema, root, draft, onChange, configured, live }) {
+//   children  — the source's own editor, shown above the tool chips
+function SourceCard({ name, sub, schema, root, draft, onChange, configured, live, children }) {
   const isConfigured = configured(draft);
   const kind = live?.kind || "builtin";
 
@@ -73,9 +74,57 @@ function SourceCard({ name, sub, schema, root, draft, onChange, configured, live
       {schema
         ? <SchemaForm schema={schema} root={root} values={draft} onChange={onChange} />
         : <div className="z-fh">Schema unavailable.</div>}
+      {children}
       <ToolChips tools={live?.tools} />
     </div>
   </details>;
+}
+
+// A mono textarea, as the MCP server's Prompt and the memory card take it.
+const TEXTAREA_STYLE = { width: "100%", minHeight: 90, resize: "vertical", border: "1px solid var(--line)", borderRadius: 8, padding: "10px 12px", fontFamily: "var(--mono)", fontSize: 12, lineHeight: 1.6, color: "var(--ink)", outline: "none", background: "var(--panel2)" };
+
+// The memory card's draft: the saved facts as one text, one fact per line, loaded on
+// mount. The assistant may remember or forget facts while the page is open, so save()
+// applies the owner's edit (lines removed from and added to the loaded text) to the
+// facts as they are now, then shows the list as the server stored it; it keeps its own
+// error, so it never rejects.
+function useMemoryDraft() {
+  const [text, setText] = useState(null);       // null until loaded
+  const [loaded, setLoaded] = useState("");     // the text as last loaded or saved
+  const [loadErr, setLoadErr] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState(null);
+  const show = (r) => { const t = r.facts.join("\n"); setText(t); setLoaded(t); };
+  useEffect(() => { getMemory().then(show).catch(setLoadErr); }, []);
+  const save = async () => {
+    setSaving(true); setErr(null);
+    try {
+      const before = loaded.split("\n"), after = text.split("\n");
+      const { facts } = await getMemory();
+      show(await putMemory([...facts.filter((f) => after.includes(f) || !before.includes(f)),
+        ...after.filter((f) => !before.includes(f))]));
+    }
+    catch (e) { setErr(e); }
+    finally { setSaving(false); }
+  };
+  return { text, setText, loadErr, err, saving, save, dirty: text != null && text !== loaded };
+}
+
+// The memory source's editor of the saved facts (data/memory.json, not the config),
+// one per line, inside its card. The draft belongs to the page, saved with the page's
+// one Save.
+function MemoryFacts({ text, onChange, loadErr }) {
+  return <div className="z-f">
+    <div className="z-fh" style={{ marginBottom: 8 }}>
+      Facts the assistant saved with its remember tool, one per line; they replace <span className="z-paramtag" style={{ fontSize: 11 }}>{"<<<<<MEMORY>>>>>"}</span> in every request. Edit or delete a line and Save. Off, the assistant neither sees nor changes them.
+    </div>
+    {text != null
+      ? <textarea value={text} onChange={(e) => onChange(e.target.value)} spellCheck={false}
+          aria-label="Memory facts" style={{ ...TEXTAREA_STYLE, minHeight: 140 }} />
+      : loadErr
+        ? <div className="z-fh" style={{ color: "#b91c1c" }}>{errorLines(loadErr).join(" · ")}</div>
+        : <Loading />}
+  </div>;
 }
 
 // ── External MCP server modal (add / edit) ────────────────────────────────
@@ -128,7 +177,7 @@ function McpServerModal({ initial, onSave, onClose, title, takenNames }) {
     </Field>
     <Field label="Prompt" hint="Describes this server's tools to the model (appended to the system prompt).">
       <textarea value={prompt} onChange={(e) => setPrompt(e.target.value)} spellCheck={false}
-        style={{ width: "100%", minHeight: 90, resize: "vertical", border: "1px solid var(--line)", borderRadius: 8, padding: "10px 12px", fontFamily: "var(--mono)", fontSize: 12, lineHeight: 1.6, color: "var(--ink)", outline: "none", background: "var(--panel2)" }} />
+        style={TEXTAREA_STYLE} />
     </Field>
   </Modal>;
 }
@@ -215,6 +264,14 @@ export function MCP() {
   ], patchAndRefresh);
   const servers = form.draftOf("mcp_servers").mcp_servers;   // [{enabled,name,url,token,transport,prompt,slow}]
   const setServers = (list) => form.onChangeOf("mcp_servers")("mcp_servers", list);
+  // The saved facts live outside the config: the page's one Save sends the config patch
+  // and the facts, each only when dirty; the save bar shows the errors of both.
+  const memory = useMemoryDraft();
+  const page = {
+    dirty: form.dirty || memory.dirty,
+    saving: form.saving || memory.saving,
+    save: () => Promise.all([form.dirty && form.save(), memory.dirty && memory.save()]),
+  };
 
   const [modal, setModal] = useState(null); // { mode:'add'|'edit', index }
   const onAdd = (s) => { setServers([...servers, s]); setModal(null); };
@@ -227,8 +284,8 @@ export function MCP() {
   // server is dropped from the ToolHub and its prompt block.
   const onServerChange = (i) => (field, value) => setServers(servers.map((x, idx) => (idx === i ? { ...x, [field]: value } : x)));
 
-  return <FormPage form={form} narrow>
-    <PageHeader title="Tools" desc="Tool sources the model calls: external smart-home MCP servers and built-in weather/calendar/reminders/assistant tasks, plus the always-on device volume and memory tools. Sources are applied live — rebuilt on save, no restart needed."
+  return <FormPage form={page} narrow errors={[...(form.dirty ? errorLines(form.err) : []), ...(memory.dirty ? errorLines(memory.err) : [])]}>
+    <PageHeader title="Tools" desc="Tool sources the model calls: external smart-home MCP servers and built-in weather/calendar/reminders/assistant tasks/memory, plus the always-on device volume tool. Sources are applied live — rebuilt on save, no restart needed."
       actions={<button className="z-btn p" onClick={() => setModal({ mode: "add" })}><Ic n="add" w={14} />Add server</button>} />
     {toolsErr && <div className="z-banner warn" style={{ margin: "0 0 14px" }}>
       <Ic n="restart" w={15} />
@@ -246,7 +303,9 @@ export function MCP() {
               onEdit={() => setModal({ mode: "edit", index: i })} onDelete={() => onDelete(i)} />)}
         <div className="z-sl">Built-in sources<div className="ln" /></div>
         {BUILTIN_SOURCES.map((s) => <SourceCard key={s.id} name={s.name} sub={s.sub} schema={sub(s.id)} root={coreSchema}
-          draft={form.draftOf(s.id)} onChange={form.onChangeOf(s.id)} configured={s.configured} live={liveOf(s.id)} />)}
+          draft={form.draftOf(s.id)} onChange={form.onChangeOf(s.id)} configured={s.configured} live={liveOf(s.id)}>
+          {s.id === "memory" && <MemoryFacts text={memory.text} onChange={memory.setText} loadErr={memory.loadErr} />}
+        </SourceCard>)}
       </>}
     {modal?.mode === "add" && <McpServerModal title="Add MCP server" onSave={onAdd} onClose={() => setModal(null)}
       takenNames={servers.map((s) => s.name)} />}

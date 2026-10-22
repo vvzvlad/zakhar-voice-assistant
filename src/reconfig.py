@@ -76,7 +76,8 @@ def action_for(path: str) -> str:
     if path == "core.tts_timeout":
         return "rebuild_backends"
     if (path.startswith("core.openweathermap") or path.startswith("core.calendar")
-            or path.startswith("core.mcp_servers") or path.startswith("core.assistant_tasks")):
+            or path.startswith("core.mcp_servers") or path.startswith("core.assistant_tasks")
+            or path.startswith("core.memory")):
         return "rebuild_tools"
     if path.startswith("core.agent_mcp"):
         return "live"          # enabled is read per /mcp request through the panel

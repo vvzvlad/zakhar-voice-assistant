@@ -199,7 +199,7 @@ class PanelServer:
     def __init__(self, svc, host, port, *, version, started_at,
                  devices=None,
                  static_dir=None, runs_store=None, tool_sources=None,
-                 run_events=None, prompt_store=None, agent_mcp=None,
+                 run_events=None, prompt_store=None, memory=None, agent_mcp=None,
                  assistant_task_reply=None,
                  heartbeat_interval: float = 1.0, reload_status=None):
         # svc: ConfigService; started_at: float (time.time())
@@ -213,6 +213,8 @@ class PanelServer:
         # run_events: optional RunEventsHub for the live WS run stream (None -> WS closes)
         # prompt_store: optional PromptStore (named system-prompt profiles); None ->
         #   every /api/prompt* endpoint returns 503
+        # memory: optional MemoryStore (the facts the assistant saved with its memory
+        #   tool); None -> /api/memory returns 503
         # agent_mcp: optional AgentMcpEndpoint (the agent-facing MCP server bridged
         #   at /mcp); None -> /mcp returns 503 (API-only / boot-failure tolerant,
         #   mirroring runs_store=None). Its start/stop lifecycle is owned by this
@@ -233,6 +235,7 @@ class PanelServer:
         self.tool_sources = tool_sources
         self.run_events = run_events
         self.prompt_store = prompt_store
+        self.memory = memory
         self.agent_mcp = agent_mcp
         # assistant_task_reply: optional async callable (payload) -> (status, body) that
         #   takes one reply of the ZeroClaw assistant (AssistantTasks.on_reply). None ->
@@ -687,6 +690,27 @@ class PanelServer:
         except (ValidationError, ValueError) as e:
             return {"voice_error": str(e)}
         return {"voice_applied": {"provider": parsed["provider"], "fields": patch["tts"]["instances"][parsed["provider"]]}}
+
+    async def _get_memory(self, request: web.Request) -> web.Response:
+        """The facts the assistant saved with its memory tool, as {"facts": [...]}."""
+        if self.memory is None:
+            return web.json_response({"error": "memory not available"}, status=503)
+        facts = await asyncio.to_thread(self.memory.facts)
+        return web.json_response({"facts": facts})
+
+    async def _put_memory(self, request: web.Request) -> web.Response:
+        """{"facts": [str, ...]} replaces the saved facts; answers the stored list
+        (normalized, without empty ones and repeats) as {"facts": [...]}."""
+        if self.memory is None:
+            return web.json_response({"error": "memory not available"}, status=503)
+        body = await _read_json(request)
+        facts = body.get("facts") if isinstance(body, dict) else None
+        if not isinstance(facts, list) or not all(isinstance(f, str) for f in facts):
+            return web.json_response(
+                {"error": 'field "facts" (list of strings) is required'}, status=400
+            )
+        stored = await asyncio.to_thread(self.memory.replace, facts)
+        return web.json_response({"facts": stored})
 
     def _system_snapshot(self) -> dict:
         # Lightweight system/liveness payload shared by /api/system and the WS
@@ -1441,6 +1465,8 @@ class PanelServer:
             web.put("/api/prompt/profiles/{id}", self._put_prompt_profile),
             web.delete("/api/prompt/profiles/{id}", self._delete_prompt_profile),
             web.post("/api/prompt/profiles/{id}/activate", self._activate_prompt_profile),
+            web.get("/api/memory", self._get_memory),
+            web.put("/api/memory", self._put_memory),
             web.get("/api/system", self._get_system),
             web.get("/api/devices", self._get_devices),
             web.get("/api/device/controls", self._get_device_controls),

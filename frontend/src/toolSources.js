@@ -12,6 +12,8 @@ export const BUILTIN_SOURCES = [
     fallback: { enabled: true }, configured: (v) => !!(v && v.enabled) },
   { id: "assistant_tasks", name: "Assistant tasks", sub: "ZeroClaw webhook",
     fallback: { enabled: true, url: "", secret: "", task_suffix: "", prompt: "" }, configured: (v) => !!(v && v.url && v.secret) },
+  { id: "memory", name: "Memory",
+    fallback: { enabled: true }, configured: (v) => !!(v && v.enabled) },
 ];
 
 // How many of the listed sources are switched on in `core`; a missing flag is on.

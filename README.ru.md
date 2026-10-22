@@ -226,7 +226,8 @@ docker compose pull && docker compose up -d
   словом активации модели устройства, датой/временем и фактами, которые ассистент сохранил
   инструментом памяти), `agent_mcp` (enabled — обращённый к
   агенту MCP-эндпоинт, отдаваемый панелью на `/mcp`), `runs` (enabled /
-  retention_days), `reminders` (enabled), `capture` (enabled / dir — сохранять
+  retention_days), `reminders` (enabled), `memory` (enabled — инструменты remember/forget
+  и сохранённые факты в промпте), `capture` (enabled / dir — сохранять
   каждую реплику в WAV), `ack` (enabled / sound_path — звук конца фразы), `commands`
   (aliases / actions / filler_words / level_on / off_token — каталог команд, который
   читают обработчики команд; правится на странице Commands), `devices`

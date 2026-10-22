@@ -3,7 +3,8 @@
 // the profile's preferred voice is shown by name and flagged when it is not the voice
 // speaking now, the prompt syntax reference is one collapsed disclosure, each page saves
 // with one Save (the Tools page's server edits included), deleting an MCP server
-// asks first, the built-in sources start folded and say "built-in" once, a
+// asks first, the built-in sources start folded and say "built-in" once, the Tools
+// page's Memory card edits the saved facts under the same Save, a
 // switched-off server keeps its controls unfaded and a switched-off speaker fades.
 import React from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
@@ -12,7 +13,7 @@ import { MCP } from "../pages/tools.jsx";
 import { Prompt, SystemPrompt } from "../pages/prompt.jsx";
 import { Devices } from "../pages/devices.jsx";
 import { useAppData } from "../appData.jsx";
-import { getOptions, getPromptProfile, updatePromptProfile } from "../api.js";
+import { getOptions, getPromptProfile, updatePromptProfile, getTools, getMemory, putMemory } from "../api.js";
 import { faded } from "./faded.js";
 
 vi.mock("../appData.jsx", () => ({ useAppData: vi.fn() }));
@@ -22,6 +23,8 @@ vi.mock("../api.js", () => ({
   updatePromptProfile: vi.fn(async () => ({})),
   getOptions: vi.fn(async () => ({ options: [{ value: "bbbb", label: "Boris" }] })),
   getTools: vi.fn(async () => ({ sources: [] })),
+  getMemory: vi.fn(async () => ({ facts: [] })),
+  putMemory: vi.fn(async (facts) => ({ facts })),
   getConfig: vi.fn(async () => ({ core: { devices: [{ name: "kitchen" }] } })),
 }));
 
@@ -230,6 +233,78 @@ describe("Tools — built-in sources", () => {
     expect(head.closest("summary")).toBeTruthy();
     expect(within(card).getAllByText(/built-in/i)).toHaveLength(1);
     expect(screen.queryByText(/core\./)).toBeNull();
+  });
+});
+
+describe("Tools — memory", () => {
+  // The core schema's memory section: its Enabled switch.
+  const withMemorySchema = (data) => {
+    data.catalog.core.schema.properties.memory = { type: "object", properties: { enabled: { type: "boolean", title: "Enabled" } } };
+    return data;
+  };
+
+  it("its card holds the Enabled switch, the saved facts one per line and the source's tools", async () => {
+    useAppData.mockReturnValue(withMemorySchema(appData()));
+    getTools.mockResolvedValueOnce({ sources: [{ id: "memory", kind: "builtin", online: true, tools: [{ name: "remember" }, { name: "forget" }] }] });
+    getMemory.mockResolvedValueOnce({ facts: ["Кота зовут Барсик", "Пользователь — мужчина"] });
+    render(<MCP />);
+    const box = await screen.findByLabelText("Memory facts");
+    expect(box.value).toBe("Кота зовут Барсик\nПользователь — мужчина");
+    const card = box.closest("details");
+    expect(within(card).getByText("Memory")).toBeInTheDocument();
+    expect(within(card).getByRole("switch")).toBeInTheDocument();
+    expect(within(card).getByText("Online")).toBeInTheDocument();
+    expect(within(card).getByText("remember")).toBeInTheDocument();
+  });
+
+  it("Save sends the lines without a config patch and shows the list as stored", async () => {
+    const data = appData();
+    useAppData.mockReturnValue(data);
+    getMemory.mockResolvedValueOnce({ facts: ["a"] }).mockResolvedValueOnce({ facts: ["a"] });
+    putMemory.mockResolvedValueOnce({ facts: ["a", "c"] });
+    render(<MCP />);
+    fireEvent.change(await screen.findByLabelText("Memory facts"), { target: { value: "a\n\n- c" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(screen.queryByTestId("save-bar")).toBeNull());
+    expect(putMemory).toHaveBeenCalledWith(["a", "", "- c"]);
+    expect(data.patch).not.toHaveBeenCalled();
+    expect(screen.getByLabelText("Memory facts").value).toBe("a\nc");
+  });
+
+  it("Save sends the switch to the config too, and a failed memory save stays in the save bar", async () => {
+    const data = withMemorySchema(appData());
+    useAppData.mockReturnValue(data);
+    putMemory.mockRejectedValueOnce(new Error("disk full"));
+    render(<MCP />);
+    const box = await screen.findByLabelText("Memory facts");
+    fireEvent.change(box, { target: { value: "a" } });
+    fireEvent.click(within(box.closest("details")).getByRole("switch"));
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(within(screen.getByTestId("save-bar")).getByText(/disk full/)).toBeInTheDocument());
+    expect(data.patch).toHaveBeenCalledWith({ core: { memory: { enabled: false } } });
+    expect(putMemory).toHaveBeenCalledWith(["a"]);
+    expect(screen.getByLabelText("Memory facts").value).toBe("a");
+  });
+
+  it("a config-only Save leaves the saved facts alone", async () => {
+    const data = withMemorySchema(appData());
+    useAppData.mockReturnValue(data);
+    getMemory.mockResolvedValueOnce({ facts: ["a"] });
+    render(<MCP />);
+    const box = await screen.findByLabelText("Memory facts");
+    fireEvent.click(within(box.closest("details")).getByRole("switch"));
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(data.patch).toHaveBeenCalled());
+    expect(putMemory).not.toHaveBeenCalled();
+  });
+
+  it("Save applies the owner's edit to the facts as they are now, keeping what the assistant saved meanwhile", async () => {
+    useAppData.mockReturnValue(appData());
+    getMemory.mockResolvedValueOnce({ facts: ["a", "b"] }).mockResolvedValueOnce({ facts: ["a", "b", "c"] });
+    render(<MCP />);
+    fireEvent.change(await screen.findByLabelText("Memory facts"), { target: { value: "a\nd" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(putMemory).toHaveBeenCalledWith(["a", "c", "d"]));
   });
 });
 

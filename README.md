@@ -222,7 +222,8 @@ Shape (see `templates/default_config.json` for the full default):
   facts the assistant saved with its memory tool),
   `agent_mcp` (enabled — the agent-facing MCP endpoint served by the panel at `/mcp`),
   `runs` (enabled / retention_days),
-  `reminders` (enabled), `capture` (enabled / dir — save every utterance as WAV),
+  `reminders` (enabled), `memory` (enabled — the remember/forget tools and the saved facts in
+  the prompt), `capture` (enabled / dir — save every utterance as WAV),
   `ack` (enabled / sound_path — the end-of-phrase chime), `commands` (aliases / actions /
   filler_words / level_on / off_token — the command catalog the command handlers read,
   edited on the Commands page), `devices` (list of

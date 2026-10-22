@@ -96,6 +96,10 @@ export const deletePromptProfile = (id) =>
 export const activatePromptProfile = (id, { applyVoice = false } = {}) =>
   request(`/api/prompt/profiles/${encodeURIComponent(id)}/activate`,
     { method: "POST", body: { apply_voice: applyVoice } });
+// The facts the assistant saved with its memory tool: GET returns {facts: [...]}, PUT
+// replaces them and returns {facts} as stored (normalized, empty lines and repeats dropped).
+export const getMemory = () => request("/api/memory");
+export const putMemory = (facts) => request("/api/memory", { method: "PUT", body: { facts } });
 export const getSystem = () => request("/api/system");
 export const getDevices = () => request("/api/devices");
 

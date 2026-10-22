@@ -798,7 +798,8 @@ class Pipeline(SpeechMixin):
         originating device. The prompt's wake word is the device model's, else the word
         the device reported in its latest wake (an uploaded model has no manifest)."""
         wake_word = self.wake_word() or (self._current.word if self._current is not None else None)
-        memory = self.rt.memory.facts() if self.rt.memory is not None else None
+        memory = (self.rt.memory.facts()
+                  if self.rt.memory is not None and self.core.memory.enabled else None)
         return llm.LlmRequest(
             system_prompt=build_system_prompt(self.core, self.prompt_store, wake_word, memory),
             history=context.load_context(

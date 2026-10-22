@@ -48,6 +48,18 @@ class MemoryStore:
         self._write(kept)
         return True
 
+    def replace(self, facts: list[str]) -> list[str]:
+        """Store `facts` (each normalized) instead of the saved ones, without empty ones
+        and repeats ignoring case (the first one stays); returns the stored list."""
+        kept: list[str] = []
+        seen: set[str] = set()
+        for fact in map(_norm, facts):
+            if fact and fact.casefold() not in seen:
+                seen.add(fact.casefold())
+                kept.append(fact)
+        self._write(kept)
+        return kept
+
     def _write(self, facts: list[str]) -> None:
         parent = os.path.dirname(self.path) or "."
         os.makedirs(parent, exist_ok=True)

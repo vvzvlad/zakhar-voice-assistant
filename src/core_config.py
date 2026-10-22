@@ -296,6 +296,11 @@ class RemindersConfig(BaseModel):
     enabled: bool = Field(True, title="Enabled", description="Off removes the reminder tools and pauses announcing reminders.")
 
 
+class MemoryConfig(BaseModel):
+    # The assistant's memory (data/memory.json); off keeps the file as it is.
+    enabled: bool = Field(True, title="Enabled", description="Off removes the memory tools and the saved facts from the prompt.")
+
+
 class AckConfig(BaseModel):
     # Server-side "end-of-phrase" confirmation chime ("блям"). The wake-word chime was
     # moved OFF the device (it overlapped the user's command now that the firmware
@@ -421,6 +426,7 @@ class CoreConfig(BaseModel):
     runs: RunsConfig = RunsConfig()
     telemetry: TelemetryConfig = TelemetryConfig()
     reminders: RemindersConfig = RemindersConfig()
+    memory: MemoryConfig = MemoryConfig()
     ack: AckConfig = AckConfig()
     commands: CommandsConfig = CommandsConfig()
     devices: list[DeviceConfig] = []

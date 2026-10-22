@@ -23,6 +23,7 @@ from aiohttp.test_utils import TestClient, TestServer
 from src import captures
 from src.config_service import ConfigService
 from src.device_server import RELEASE_WAKE_MODEL, CaptureBusyError, DeviceOfflineError, NoCaptureError
+from src.memory import MemoryStore
 from src.panel_api import PanelServer
 from src.plugins.base import Deps
 from src.plugins.tts.fishaudio import FISH_TTS_URL
@@ -883,6 +884,35 @@ async def test_prompt_profile_non_numeric_id_returns_400(tmp_path):
     finally:
         await client.close()
         store.close()
+
+
+# --- memory ----------------------------------------------------------------------
+
+async def test_memory_get_and_put(tmp_path):
+    memory = MemoryStore(str(tmp_path / "memory.json"))
+    memory.add("Кота зовут Барсик")
+    client, _svc_ = await _client(tmp_path, memory=memory)
+    try:
+        assert await (await client.get("/api/memory")).json() == {"facts": ["Кота зовут Барсик"]}
+        put = await client.put("/api/memory", json={"facts": ["- Пользователь — мужчина ", "", "пользователь — мужчина"]})
+        assert put.status == 200
+        assert await put.json() == {"facts": ["Пользователь — мужчина"]}
+        assert memory.facts() == ["Пользователь — мужчина"]
+        # Not a list of strings: 400, the saved facts stay.
+        assert (await client.put("/api/memory", json={"facts": "x"})).status == 400
+        assert (await client.put("/api/memory", json={"facts": [1]})).status == 400
+        assert memory.facts() == ["Пользователь — мужчина"]
+    finally:
+        await client.close()
+
+
+async def test_memory_without_store_returns_503(tmp_path):
+    client, _svc_ = await _client(tmp_path)
+    try:
+        assert (await client.get("/api/memory")).status == 503
+        assert (await client.put("/api/memory", json={"facts": []})).status == 503
+    finally:
+        await client.close()
 
 
 async def test_cors_header_present_on_error_response(tmp_path):

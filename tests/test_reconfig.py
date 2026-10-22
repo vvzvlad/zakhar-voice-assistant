@@ -86,6 +86,7 @@ def test_action_for_representative_paths():
         "core.calendar.url": "rebuild_tools",
         "core.mcp_servers": "rebuild_tools",
         "core.assistant_tasks.url": "rebuild_tools",
+        "core.memory.enabled": "rebuild_tools",
         # enabled is read live per /mcp request through the panel — no rebuild.
         "core.agent_mcp.enabled": "live",
         "core.reminders.enabled": "rebuild_reminders",
