@@ -98,7 +98,9 @@ class VadSession(ABC):
     def feed(self, chunk: bytes) -> str | None: ...
 
     def debug_state(self) -> dict:
-        """Small diagnostic dict for the pipeline's VAD-finalize debug log line.
+        """Small diagnostic dict for the pipeline's VAD-finalize debug log line. Its
+        `speech_detected` key is also read by the pipeline to mark when a follow-up
+        window's speech started, for the cross-device arbitration.
         Optional: the default is empty so minimal sessions stay minimal."""
         return {}
 

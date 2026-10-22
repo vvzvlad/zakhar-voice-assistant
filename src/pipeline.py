@@ -617,6 +617,9 @@ class Pipeline(SpeechMixin):
                     int(np.abs(np.frombuffer(data[:m], dtype="<i2")).max()),
                 )
             reason = run.vad.feed(vad_boost(data, run.vad_peak))
+            if (run.followup is not None and run.speech_at is None
+                    and run.vad.debug_state().get("speech_detected")):
+                run.speech_at = time.monotonic()
 
         if reason is not None:
             state = run.vad.debug_state() if run.vad else {}
@@ -630,6 +633,7 @@ class Pipeline(SpeechMixin):
         if reason is not None:
             claimed = run.claim()
             if claimed is not None:
+                run.ended_at = time.monotonic()
                 self._run_task = asyncio.create_task(
                     self._run(run, reason, claimed[0], pcm2=claimed[1]))
 
@@ -704,6 +708,17 @@ class Pipeline(SpeechMixin):
         once a ready candidate has one."""
         run = self._proposed or self._current
         return run is not None and run.verdict is None
+
+    def followup_speech(self) -> tuple[float, float | None] | None:
+        """For the arbiter, which lets a follow-up window that hears speech keep the
+        phrase other devices wake on: (when the window's VAD first heard speech, when
+        the window stopped listening or None while it listens), monotonic; None unless
+        the current run is a follow-up window that heard speech. The values outlive the
+        window's claim and answer until a newer run replaces it."""
+        run = self._current
+        if run is None or run.followup is None or run.speech_at is None:
+            return None
+        return run.speech_at, run.ended_at
 
     def awaits_arbitration(self, token: int) -> bool:
         """Whether the run registered under `token` still waits for the arbitration
@@ -922,8 +937,8 @@ class Pipeline(SpeechMixin):
                 # silently — no ack chime — so a bare wake word never beeps (a wake the
                 # quick check rejected never gets here: _end_held). A text-checked
                 # wake's phrase gets its chime only once the wake word is found in its
-                # transcript, a follow-up phrase only once the follow-up check accepts
-                # it (_gate).
+                # transcript, a follow-up phrase only once its transcript has the wake
+                # word or the follow-up check accepts it (_gate).
                 if reason != "no_speech" and followup is None and not text_checked:
                     self._schedule_ack()
 
@@ -1003,10 +1018,11 @@ class Pipeline(SpeechMixin):
                         self._emit(StageEvent.INTENT_START, {})
 
                     # A phrase heard in a follow-up window: the follow-up check of its
-                    # first transcript, asked before anything reaches the device. An
-                    # accepted phrase gets the end-of-phrase chime now and runs like any
-                    # phrase; a rejected one ends the run silently (below). The check
-                    # lands in the run's attempts.
+                    # first transcript, asked before anything reaches the device, unless
+                    # the transcript has the session's wake word (_gate). An accepted
+                    # phrase gets the end-of-phrase chime now and runs like any phrase; a
+                    # rejected one ends the run silently (below). The check lands in the
+                    # run's attempts.
                     followup_check = None
 
                     async def _followup_gate(text: str) -> bool:
@@ -1044,6 +1060,10 @@ class Pipeline(SpeechMixin):
                                 wake_reject_text = text
                                 return False
                             self._schedule_ack()
+                        if followup is not None and run.word and has_wake_word(text, run.word):
+                            # Addressed to the assistant by name: no follow-up check.
+                            self._schedule_ack()
+                            return True
                         return followup is None or await _followup_gate(text)
 
                     # The recognition chains: each enabled chain's STT then handler, in
@@ -1410,6 +1430,7 @@ class Pipeline(SpeechMixin):
             return
         # Synchronously, before any await: on_audio drops whatever still arrives.
         run.finalized = True
+        run.ended_at = time.monotonic()
         streams, run.stt_streams = run.stt_streams, {}
         logger.info(f"{self.name}: follow-up window closed for proactive speech")
         self._emit(StageEvent.STT_END, {"text": ""})

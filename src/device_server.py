@@ -993,8 +993,10 @@ class DeviceManager:
         self._devices: dict[str, Device] = {}
         self._runner: web.AppRunner | None = None
         # One phrase heard by several devices keeps one session (docs/device-protocol.md).
-        self.arbiter = WakeArbiter(online_count=lambda: sum(1 for d in self.clients if d.online),
-                                   send_reply=self._send_reply)
+        self.arbiter = WakeArbiter(
+            online_count=lambda: sum(1 for d in self.clients if d.online),
+            online_pipelines=lambda: [d.pipeline for d in self.clients if d.online],
+            send_reply=self._send_reply)
 
     def _device(self, name: str) -> Device:
         device = self._devices.get(name)

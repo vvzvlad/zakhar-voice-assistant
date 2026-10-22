@@ -206,6 +206,24 @@ async def test_an_accepted_phrase_chimes_runs_and_opens_the_window_again(tmp_pat
     assert gate.calls[-1] == ("Захар", "а в спальне", "готово", "и в коридоре")
 
 
+async def test_a_phrase_naming_the_assistant_runs_without_the_check(tmp_path, monkeypatch):
+    # Addressed to the assistant by its wake word: the check, which would reject it, is
+    # not asked, and the phrase chimes and runs.
+    store = FakeRunsStore()
+    gate = FakeGate(accepted=False, probability=0.1)
+    pipeline, events = _make(tmp_path, monkeypatch, gate=gate, runs_store=store)
+    pipeline._schedule_ack = lambda: events.append(("ack", None))
+    await _answer(pipeline)
+    events.clear()
+
+    await _say(pipeline, "Захар, как тебя зовут")
+    assert gate.calls == []
+    assert types_of(events)[:3] == [StageEvent.STT_VAD_END, "ack", StageEvent.STT_END]
+    rec = store.records[-1]
+    assert (rec["result"], rec["stt_text"]) == ("ok", "Захар, как тебя зовут")
+    assert "followup" not in [a["kind"] for a in rec["attempts"]]
+
+
 async def test_proactive_speech_closes_the_window_first(tmp_path, monkeypatch):
     # A reminder in the open window: the session ends before it plays, so the
     # speaker does not hear itself as a phrase.

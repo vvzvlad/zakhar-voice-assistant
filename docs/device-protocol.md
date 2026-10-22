@@ -198,21 +198,23 @@ device                                   server
   a device with a speaker is ready, a device without one is not waited for: it cannot win. A
   `wake` over a running answer (above) joins at its `wake` like any other.
   The server keeps one session — a device with a speaker over one without, between equals the
-  higher signal-to-noise ratio of the pre-roll, then the earlier wake. Each held device gets
-  `listening` as soon as its wake is confirmed (at once unless it is over a running answer),
-  without waiting for the ruling; one ruled out by then — in the cooldown, or by the ruling its
-  own confirmation completes — gets none, and is never taken: a running answer of that device plays
-  on. The devices that lost stream their microphone on until the server's VAD finds the end of the
-  phrase; then each one shown `listening` gets `state idle`, and each other one is ended as a
-  rejected wake is (above). For 2000 ms after the first of those wakes, a `wake` from any other
-  device is ended the same way. The ended runs
-  show in the run log as `rejected`, reason `duplicate`, with the phrase recognized by the STT
-  of the first enabled chain; the device gets no `transcript` of it. A device ended before the
-  check ruled on it is ended as a rejected wake as soon as the check rejects it instead, and its
-  run shows as `rejected`, reason `wakeword_reject`, untranscribed. When the kept session
-  answers, each ended device without a speaker gets that answer as a `reply` without `session`,
-  so its screen shows it; a device with a speaker gets nothing, nor does a later answer of the
-  same session (a follow-up).
+  higher signal-to-noise ratio of the pre-roll, then the earlier wake. A device whose follow-up
+  window already hears speech, started at most 2000 ms before the first of those wakes, keeps the
+  phrase instead (it sends no `wake` inside its own phrase, above): the woken devices lose to it
+  as below, and those without a speaker get its answer as a `reply` without `session`. Each held
+  device gets `listening` as soon as its wake is confirmed (at once unless it is over a running
+  answer), without waiting for the ruling; one ruled out by then — in the cooldown, or by the
+  ruling its own confirmation completes — gets none, and is never taken: a running answer of that
+  device plays on. The devices that lost stream their microphone on until the server's VAD finds
+  the end of the phrase; then each one shown `listening` gets `state idle`, and each other one is
+  ended as a rejected wake is (above). For 2000 ms after the first of those wakes, a `wake` from
+  any other device is ended the same way. The ended runs show in the run log as `rejected`, reason
+  `duplicate`, with the phrase recognized by the STT of the first enabled chain; the device gets
+  no `transcript` of it. A device ended before the check ruled on it is ended as a rejected wake
+  as soon as the check rejects it instead, and its run shows as `rejected`, reason
+  `wakeword_reject`, untranscribed. When the kept session answers, each ended device without a
+  speaker gets that answer as a `reply` without `session`, so its screen shows it; a device with a
+  speaker gets nothing, nor does a later answer of the same session (a follow-up).
 - «стоп» said as the phrase of a session — after the wake word or in the follow-up window — ends
   the session on the server's side: `state idle`, no sound, no `transcript`.
 - A device without a speaker (`caps.speaker: false`) never gets playback: the server skips TTS for
@@ -237,9 +239,12 @@ the answer, so the next phrase needs no wake word:
   a wake. While a proposed wake's audio is streaming, the follow-up goes on in that stream from
   where it is.
 - The server drops the first 300 ms of the window's audio, in which the end of the answer still
-  sounds in the room, then waits `followup` window for speech to start. Silence ends the session with
-  `state idle`, without a sound. A phrase that is «стоп» ends it the same way without asking jev. Any other phrase goes to the jev decision model with the assistant's name
-  (the `word` of the session's `wake`), the last request and answer; one it does not take for a
+  sounds in the room, then waits `followup` window for speech to start. Silence ends the session
+  with `state idle`, without a sound. A phrase that is «стоп» ends it the same way without asking
+  jev. A phrase with the wake word (the `word` of the session's `wake`) in its first three words
+  is addressed to the assistant: it gets the end-of-phrase chime and runs like any phrase without
+  asking jev. Any other phrase goes to the jev decision model with the assistant's name (the
+  `word` of the session's `wake`), the last request and answer; one it does not take for a
   continuation of the dialog also ends the session with `state idle`, without a sound and without
   a transcript. One it takes gets the end-of-phrase chime and runs like any phrase, and its answer
   opens the window again.

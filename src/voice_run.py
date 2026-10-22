@@ -75,6 +75,12 @@ class Run:
         self.finalized = False
         # The running utterance peak driving the decision-only VAD boost.
         self.vad_peak = 0
+        # For the cross-device arbitration, which reads a follow-up window's
+        # (Pipeline.followup_speech): monotonic time a follow-up window's VAD first
+        # reported speech, and the time the run stopped listening — its phrase ended
+        # (on_audio) or it was closed (_close_followup). None until then.
+        self.speech_at: float | None = None
+        self.ended_at: float | None = None
         # Logging only: "receiving audio" once per run; the missing second channel
         # warned once per run.
         self.audio_logged = False

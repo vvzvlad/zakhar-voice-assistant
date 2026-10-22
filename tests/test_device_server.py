@@ -820,8 +820,12 @@ async def test_follow_up_listens_after_a_played_answer_only(srv):
     await dev.send(type="played", id=got[-1]["id"], dry=0, gap_ms=0)
     # The answer played out: the session stays open and the microphone reopens.
     assert await dev.recv() == state(1, "listening")
-    # After the window's dropped start, a phrase the follow-up check drops ends the
-    # session without a transcript.
+    # After the window's dropped start, a phrase without the wake word that the
+    # follow-up check drops ends the session without a transcript.
+    async def no_wake_word(pcm):
+        return "ну и погодка сегодня"
+
+    srv.stt.transcribe = no_wake_word
     await dev.mic(stereo(9, -9, FOLLOWUP_SKIP_MS))
     await dev.phrase()
     assert await dev.recv() == state(1, "transcribing")

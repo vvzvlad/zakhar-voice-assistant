@@ -5,6 +5,8 @@ soon as its wake is confirmed; a lost run streams on to its end-point and is log
 duplicate with its transcript. The arbiter itself is a recording double in most tests; the verdicts are
 delivered by the test."""
 
+import asyncio
+
 import pytest
 
 from src.pipeline_events import StageEvent
@@ -21,7 +23,8 @@ from tests.test_pipeline import (
     settle,
     types_of,
 )
-from src.wake_arbiter import WakeArbiter
+from src.wake_arbiter import COOLDOWN_MS, WakeArbiter
+from tests.test_pipeline_followup import TAIL, _answer, _make
 from tests.test_pipeline_wakeword_gate import HEAD_BYTES, WAKE, FakeWakewordVerifier
 from tests.test_wake_arbiter import preroll
 
@@ -362,3 +365,75 @@ async def test_an_utterance_that_ended_during_the_hold_is_finalized_on_release(
     rec = store.records[-1]
     assert (rec["reason"], rec["stt_text"]) == ("endpoint", "захар свет")
     assert types_of(events)[-1] == StageEvent.RUN_END
+
+
+async def test_a_follow_up_window_notes_when_its_vad_first_hears_speech(tmp_path, monkeypatch):
+    speaker, _ = _make(tmp_path, monkeypatch)
+    await _answer(speaker)
+    await speaker.on_audio(TAIL + PHRASE[:640])  # one speech frame: under min_speech_ms
+    assert speaker.followup_speech() is None
+    await speaker.on_audio(PHRASE[640:1280])
+    assert speaker.followup_speech() is not None
+
+
+async def speaker_window_and_panel(tmp_path, monkeypatch, age=0.5):
+    """A speaker whose follow-up window heard a phrase start `age` seconds ago (its next
+    answer opens no window) and a speakerless panel on one real arbiter: (speaker,
+    panel, the panel's runs store, the replies sent to the panel)."""
+    monkeypatch.setattr("src.wake_arbiter.WINDOW_MS", 20)
+    speaker, _ = _make(tmp_path, monkeypatch, name="speaker")
+    await _answer(speaker)
+    speaker.play.outcome = "dropped"
+    await speaker.on_audio(TAIL + PHRASE[:1280])
+    speaker._current.speech_at -= age
+    store = FakeRunsStore()
+    panel, _ = make_pipeline(tmp_path, monkeypatch, name="panel", stt_text="захар свет",
+                             runs_store=store)
+    panel.has_speaker = False
+    held_phrase(panel)
+    sent = []
+    speaker.arbiter = panel.arbiter = WakeArbiter(
+        online_count=lambda: 2, online_pipelines=lambda: [speaker, panel],
+        send_reply=lambda p, text: sent.append((p.name, text)))
+    return speaker, panel, store, sent
+
+
+@pytest.mark.parametrize("age, ended, kept", [
+    (0.5, False, True),
+    (COOLDOWN_MS / 1000 + 0.5, False, False),  # the speech of an earlier phrase
+    (0.5, True, False),                        # its phrase ended before the wake
+])
+async def test_a_follow_up_window_hearing_the_phrase_keeps_it_from_a_panels_wake(
+        tmp_path, monkeypatch, age, ended, kept):
+    # The speaker sends no wake inside its window's phrase; the panel wakes on it.
+    speaker, panel, store, sent = await speaker_window_and_panel(tmp_path, monkeypatch, age)
+    if ended:
+        await speaker.on_audio(PHRASE[1280:])
+        await settle(speaker)
+    panel.on_wake("b", WAKE)
+    await asyncio.sleep(0.1)  # the group's window runs out
+    await panel.on_audio(FRAME * 9)
+    await speaker.on_audio(PHRASE[1280:])  # the window's phrase ends and is answered
+    for p in (panel, speaker):
+        await settle(p)
+    rec = store.records[-1]
+    assert (rec["result"], rec["reason"]) == (("rejected", "duplicate") if kept else ("ok", "endpoint"))
+    assert sent == ([("panel", "готово")] if kept else [])
+
+
+async def test_a_window_whose_device_woke_in_the_group_does_not_keep_the_phrase(
+        tmp_path, monkeypatch):
+    # The speaker's own wake over its window joined the group and its check rejected
+    # it: the panel keeps the phrase.
+    speaker, panel, store, _ = await speaker_window_and_panel(tmp_path, monkeypatch)
+    speaker.rt.wakeword_backend = FakeWakewordVerifier(accepted=False)
+    speaker.end_wake = lambda cid: None
+    speaker.on_wake("s2", WAKE, over_answer=True)
+    panel.on_wake("b", WAKE)
+    await speaker.on_audio(b"\x01\x02" * 30000)  # past the check's window: rejected
+    await asyncio.sleep(0.1)
+    await panel.on_audio(FRAME * 9)
+    for p in (panel, speaker):
+        await settle(p)
+    rec = store.records[-1]
+    assert (rec["result"], rec["reason"]) == ("ok", "endpoint")
