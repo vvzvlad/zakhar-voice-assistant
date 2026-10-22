@@ -31,6 +31,9 @@ configured under `core.mcp_servers` in `data/config.json`.
   changes this file, `src/device_server.py` and `firmware/components/zakhar_link` together.
   It states the contract as it is, with no decisions log or history: the owner's words behind a
   change go into its commit message.
+- `docs/wake-cases.md` — real multi-device wake cases from the run log: what happened, what must
+  happen, the test that holds it. Go through it before changing the wake arbitration, the wake
+  checks or the follow-up window; add a case when a run shows a new one.
 - `firmware/` — Voice PE speaker firmware, ESP-IDF C; the Music Assistant player
   (`main/music.cpp`, sendspin-cpp over the Sendspin protocol) is the only C++. Internal RAM is
   what runs out first: every `operator new` goes to PSRAM (`main/psram_new.cpp`), libraries'

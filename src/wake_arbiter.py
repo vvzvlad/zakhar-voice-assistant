@@ -268,9 +268,9 @@ class WakeArbiter:
             + f" -> {kept}"
         )
         # Several devices woke on one phrase: the wake is real, so the winner's phrase
-        # needs no wake word in its own transcript. Not while a device plays: the phrases
-        # then carry its answer's voice — one saying «Захар» itself, or ahead of the
-        # owner's «Захар, стоп» — and the transcript check is what drops them.
+        # needs no wake word in its own transcript. Not while a device plays: the other
+        # devices then record its answer's voice around the owner's «Захар», and the
+        # transcript check is what drops those phrases (docs/wake-cases.md).
         together = len(scored) > 1 and not self._any_playing()
         for _, p, token in scored:
             p.arbitration_verdict(token, p is winner, together=together)
