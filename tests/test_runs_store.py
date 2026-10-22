@@ -86,6 +86,26 @@ def test_insert_and_get_request_round_trip(tmp_path):
     store.close()
 
 
+def test_update_rewrites_the_row_fields_and_json_columns(tmp_path):
+    # A run's row inserted with its answer is rewritten whole when the run ends; the
+    # other rows stay as they are.
+    store = _store(tmp_path)
+    rid = store.insert(_rec(t_tts=0, attempts=[{"kind": "llm"}]))
+    other = store.insert(_rec(stt_text="другой"))
+    store.update(rid, _rec(result="error", t_tts=250, play_dry=2, error_stage="TTS",
+                           rounds=[{"round": 1, "calls": []}], request={"user_text": "q"},
+                           attempts=[{"kind": "llm"}, {"kind": "tts"}]))
+    got = store.get(rid)
+    assert (got["result"], got["t_tts"], got["play_dry"], got["error_stage"]) == (
+        "error", 250, 2, "TTS")
+    assert got["rounds"] == [{"round": 1, "calls": []}]
+    assert got["request"] == {"user_text": "q"}
+    assert got["attempts"] == [{"kind": "llm"}, {"kind": "tts"}]
+    assert store.count() == 2
+    assert store.get(other)["stt_text"] == "другой"
+    store.close()
+
+
 def test_get_request_is_none_when_absent(tmp_path):
     # A record WITHOUT a `request` key yields request=None (column defaults to NULL).
     store = _store(tmp_path)

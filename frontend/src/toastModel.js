@@ -23,7 +23,7 @@ export function toastFromRun(run) {
   const meta = statusMeta(run);
   return {
     key,
-    id: run.id ?? null, // null while live — no deep-link target yet
+    id: run.id ?? null, // null while live until the run's row is stored with its answer
     live,
     device,
     label: meta.label,

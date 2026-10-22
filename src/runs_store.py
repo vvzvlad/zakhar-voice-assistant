@@ -1,6 +1,7 @@
-"""SQLite-backed log of finalized pipeline runs (observability backend).
+"""SQLite-backed log of pipeline runs (observability backend).
 
-Each finalized voice run (STT -> LLM -> TTS) is appended as one row. Rounds (the
+Each run (STT -> LLM -> TTS) is one row, inserted when it ends; a run with an answer
+has it inserted as soon as the answer exists and rewritten (update) at its end. Rounds (the
 agentic tool-calling steps) are stored as a JSON string column to avoid a join.
 
 All methods are synchronous; callers in async code offload them to a worker thread
@@ -58,9 +59,9 @@ CREATE TABLE IF NOT EXISTS run_tts_audio (
 );
 """
 
-# Columns persisted on insert, in order. `id` autoincrements; the `*_json` columns
-# are derived from rec["rounds"/"request"/"attempts"] separately, so insert()
-# appends them last.
+# Columns persisted on insert and update, in order. `id` autoincrements; the `*_json`
+# columns are derived from rec["rounds"/"request"/"attempts"] separately, so
+# _row_values() appends them last.
 _INSERT_COLS = [
     "ts", "device", "result", "reason", "stt_text", "llm_text", "stress_text",
     "filler_text",
@@ -90,7 +91,7 @@ _VERIFIER_REJECTS = ("wakeword_reject", "wakeword_error")
 
 
 class RunsStore:
-    """Append-only run log over a single SQLite file."""
+    """Run log over a single SQLite file."""
 
     def __init__(self, path):
         self._lock = threading.Lock()
@@ -136,17 +137,21 @@ class RunsStore:
 
         Missing keys default to None. Returns the new row id.
         """
-        values = [rec.get(col) for col in _INSERT_COLS]
-        values.append(json.dumps(rec.get("rounds") or [], ensure_ascii=False))
-        values.append(json.dumps(rec.get("request"), ensure_ascii=False))
-        values.append(json.dumps(rec.get("attempts") or [], ensure_ascii=False))
-        cols = _INSERT_COLS + ["rounds_json", "request_json", "attempts_json"]
+        cols, values = _row_values(rec)
         placeholders = ", ".join("?" for _ in cols)
         sql = f"INSERT INTO runs ({', '.join(cols)}) VALUES ({placeholders})"
         with self._lock:
             cur = self._conn.execute(sql, values)
             self._conn.commit()
             return cur.lastrowid
+
+    def update(self, run_id: int, rec: dict) -> None:
+        """Rewrite the row `run_id` from `rec`, every column mapped as insert maps it."""
+        cols, values = _row_values(rec)
+        sql = f"UPDATE runs SET {', '.join(f'{c} = ?' for c in cols)} WHERE id = ?"
+        with self._lock:
+            self._conn.execute(sql, [*values, run_id])
+            self._conn.commit()
 
     def put_audio(self, run_id: int, wav: bytes, keep: int) -> None:
         """Store one run's utterance WAV, then prune to the newest `keep` rows.
@@ -429,6 +434,16 @@ class RunsStore:
             self._conn.close()
 
 
+def _row_values(rec: dict) -> tuple[list[str], list]:
+    """The stored columns of a run record and their values: _INSERT_COLS (a missing key
+    is None), then rec["rounds"], rec["request"] and rec["attempts"] JSON-encoded."""
+    values = [rec.get(col) for col in _INSERT_COLS]
+    values.append(json.dumps(rec.get("rounds") or [], ensure_ascii=False))
+    values.append(json.dumps(rec.get("request"), ensure_ascii=False))
+    values.append(json.dumps(rec.get("attempts") or [], ensure_ascii=False))
+    return _INSERT_COLS + ["rounds_json", "request_json", "attempts_json"], values
+
+
 def _wav_channels(header: bytes) -> int | None:
     """Channel count parsed from a WAV header prefix, or None when malformed.
 
@@ -536,9 +551,10 @@ def summary_row(rec: dict, run_id: int, has_audio: bool = False) -> dict:
 def live_row(rec: dict) -> dict:
     """Build an in-progress (live) run row for incremental WS streaming.
 
-    Same summary shape as summary_row but for a run that has NOT been persisted
-    yet: it has no DB id (id stays None) and is flagged `live` so the panel can
-    upsert the same row (keyed by device) as later stages stream in.
+    Same summary shape as summary_row but for a run still in progress, flagged `live`
+    so the panel can upsert the same row (keyed by device) as later stages stream in.
+    Its id is None until the run's row is inserted, then that row's id (rec["id"]), so
+    the panel can match it to the row it fetched.
     """
     row = {col: rec.get(col) for col in _LIST_COLS}  # id absent in rec -> None
     row["has_audio"] = 0

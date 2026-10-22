@@ -131,6 +131,22 @@ describe("applyStreamedRun", () => {
     expect(out).toBe(prev);
   });
 
+  it("keeps a fetched early row, its run's live partial and the final as one row", () => {
+    // The page loaded while the answer played: row 7 is that run's early row.
+    const fetched = [mapRun({ id: 7, device: "kitchen", llm_text: "a" }), mapRun({ id: 3, device: "hall" })];
+    const partial = mapRun({ id: 7, live: 1, device: "kitchen", llm_text: "a", t_stress: 5 });
+    const live = applyStreamedRun(fetched, partial, true, 100);
+    expect(live.map((r) => [r.key, r.live, r.t.stress])).toEqual([[7, true, 5], [3, false, 0]]);
+    const fin = mapRun({ id: 7, device: "kitchen", llm_text: "a", t_tts: 9 });
+    expect(applyStreamedRun(live, fin, true, 100).map((r) => [r.key, r.live])).toEqual([[7, false], [3, false]]);
+  });
+
+  it("upserts the device's live row for a live partial whose id the list does not hold", () => {
+    const prev = [mapRun({ live: 1, device: "kitchen" }), mapRun({ id: 3, device: "hall" })];
+    const partial = mapRun({ id: 7, live: 1, device: "kitchen" });
+    expect(applyStreamedRun(prev, partial, true, 100).map((r) => r.key)).toEqual(["live:kitchen", 3]);
+  });
+
   it("respects the cap argument", () => {
     const prev = [{ key: 1, id: 1 }, { key: 2, id: 2 }, { key: 3, id: 3 }];
     const fin = { key: 4, id: 4, live: false, device: "x" };

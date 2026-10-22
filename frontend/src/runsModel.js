@@ -64,8 +64,9 @@ export function fmtTime(ts, withDate = false) {
 // time of the run drawer's header; list rows format `ts` at render (fmtTime).
 export function mapRun(row) {
   if (!row) return row;
-  // Live (in-progress) rows have no DB id yet; they are upserted by device, so
-  // they are keyed "live:<device>". Finalized rows are keyed by their real id.
+  // Live (in-progress) rows are upserted by device, so they are keyed
+  // "live:<device>" (a run's live row gets its DB id once its answer is stored).
+  // Finalized rows are keyed by their real id.
   const live = !!row.live;
   const key = live ? "live:" + (row.device ?? "") : row.id;
   return {
@@ -121,8 +122,13 @@ export function emptyRequestText(r) {
 // live). A finalized run ALWAYS removes the live row it supersedes (same device),
 // even when the finalized row itself is filtered out, so a live row is never
 // stranded; it is (re)inserted only when `match` is true. A live partial is
-// inserted only when `match` is true. Newest first, capped at `cap`.
+// inserted only when `match` is true. A live partial of a run whose row the list
+// already holds (fetched once its answer was stored: the partial carries that row's
+// id) replaces that row in place, under the row's key. Newest first, capped at `cap`.
 export function applyStreamedRun(prev, mapped, match, cap = 100) {
+  if (mapped.live && match && mapped.id != null && prev.some((r) => r.key === mapped.id)) {
+    return prev.map((r) => (r.key === mapped.id ? { ...mapped, key: mapped.id } : r));
+  }
   const drop = new Set([mapped.key]);
   if (!mapped.live && mapped.device != null) drop.add("live:" + mapped.device);
   const rest = prev.filter((r) => !drop.has(r.key));

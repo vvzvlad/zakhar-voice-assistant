@@ -1,5 +1,6 @@
 import asyncio
 import io
+import time
 import wave
 
 import numpy as np
@@ -28,7 +29,7 @@ from src.pipeline_events import StageEvent
 from src.plugins.llm.base import LlmConfig
 from src.plugins.vad.webrtc import WebRtcVadBackend
 from src.prompt_store import PromptStore
-from src.runs_store import _LIST_COLS
+from src.runs_store import _LIST_COLS, RunsStore
 from src.runtime import Runtime
 from src.stage_errors import StageError
 from src.tts import OwnedChunks, TtsBackend, pcm_mime
@@ -114,6 +115,9 @@ class FakeRunsStore:
     def insert(self, rec):
         self.records.append(rec)
         return len(self.records)
+
+    def update(self, run_id, rec):
+        self.records[run_id - 1] = rec
 
     def put_audio(self, run_id, wav, keep):
         self.audio_calls.append((run_id, wav, keep))
@@ -1087,6 +1091,71 @@ async def test_run_streams_live_stage_updates(tmp_path, monkeypatch):
     # Last broadcast: finalized (real id, not live).
     assert hub.broadcasts[-1]["run"]["id"] == 1
     assert not hub.broadcasts[-1]["run"].get("live")
+
+
+def runs_on_play(pipeline, path):
+    """Make the play hook read the run log at `path` over a connection of its own, as
+    the restarted server would after a crash during the speech; returns the list of
+    (id, stt_text, llm_text, play_dry) rows it saw."""
+    seen = []
+    player = pipeline.play
+
+    async def play(mime, audio):
+        other = RunsStore(path)
+        seen.extend((r["id"], r["stt_text"], r["llm_text"], r["play_dry"], r["t_total"]) for r in other.list())
+        other.close()
+        return await player(mime, audio)
+
+    pipeline.play = play
+    return seen
+
+
+async def test_run_row_is_stored_before_the_answer_is_spoken(tmp_path, monkeypatch):
+    # A process that dies while the answer plays keeps the run in the log: its row holds
+    # the request and the answer before the speech, and the run's end completes that
+    # same row, broadcast once.
+    class Accentizer:
+        async def accentize(self, text):
+            return text + "!"
+
+    patch_llm(monkeypatch, reply="готово")
+    path = str(tmp_path / "runs.db")
+    hub = FakeRunEvents()
+    pipeline, _ = make_pipeline(tmp_path, monkeypatch, stt_text="включи свет",
+                                runs_store=RunsStore(path), run_events=hub,
+                                stress_backend=Accentizer())
+    pipeline.play.stats = {"outcome": "played", "dry": 1, "gap_ms": 30}
+    seen = runs_on_play(pipeline, path)
+
+    await say(pipeline)
+
+    assert seen == [(1, "включи свет", "готово", None, None)]
+    rows = pipeline.runs_store.list()
+    assert [(r["id"], r["play_dry"], r["play_gap_ms"]) for r in rows] == [(1, 1, 30)]
+    assert pipeline.runs_store.get(1)["attempts"][-1]["kind"] == "tts"
+    # The stress stage's live partial, sent after the insert, carries the row's id
+    # and no total yet.
+    assert [b["run"]["id"] for b in hub.broadcasts if b["run"].get("live")][-1] == 1
+    assert all(b["run"]["t_total"] is None for b in hub.broadcasts if b["run"].get("live"))
+    assert [b["run"]["id"] for b in hub.broadcasts if not b["run"].get("live")] == [1]
+
+
+async def test_a_wake_cancelling_the_run_during_its_early_insert_leaves_one_row(tmp_path, monkeypatch):
+    class SlowStore(FakeRunsStore):
+        def insert(self, rec):
+            time.sleep(0.2)  # a commit waiting on the store lock
+            return super().insert(dict(rec))
+
+    store = SlowStore()
+    pipeline, _ = make_pipeline(tmp_path, monkeypatch, runs_store=store)
+    record = pipeline._new_record("text", stt_text="x")
+    task = asyncio.create_task(pipeline._store_answer(record))
+    await asyncio.sleep(0.05)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    await pipeline._store_run(record, time.perf_counter())  # what _run's finally does next
+    assert len(store.records) == 1 and record["id"] == 1
 
 
 async def test_no_live_partial_on_no_speech(tmp_path, monkeypatch):
@@ -2446,6 +2515,25 @@ async def test_run_text_tts_failure_still_returns_reply(tmp_path, monkeypatch):
     assert rec["error_stage"] == "TTS"
     assert rec["llm_text"] == "готово"
     assert events == []
+
+
+async def test_run_text_row_is_stored_before_the_reply_is_spoken(tmp_path, monkeypatch):
+    # As in a voice run: the row holds the request and the reply before the speech, and
+    # the end completes that same row, broadcast once.
+    patch_llm(monkeypatch, reply="готово")
+    path = str(tmp_path / "runs.db")
+    hub = FakeRunEvents()
+    pipeline, _ = make_pipeline(tmp_path, monkeypatch, runs_store=RunsStore(path),
+                                run_events=hub)
+    pipeline.play.stats = {"outcome": "played", "dry": 1, "gap_ms": 30}
+    seen = runs_on_play(pipeline, path)
+
+    await pipeline.run_text("включи свет")
+
+    assert seen == [(1, "включи свет", "готово", None, None)]
+    rows = pipeline.runs_store.list()
+    assert [(r["id"], r["play_dry"], r["play_gap_ms"]) for r in rows] == [(1, 1, 30)]
+    assert [b["run"]["id"] for b in hub.broadcasts] == [1]
 
 
 async def test_run_text_without_store_or_hub(tmp_path, monkeypatch):

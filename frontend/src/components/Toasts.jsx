@@ -11,7 +11,7 @@ const TOAST_TTL_MS = 6000; // auto-dismiss delay per toast
 // too, upserted per device, and the finalized frame replaces the live toast.
 // Suppressed while the user is on the pages that already display live runs
 // (Dashboard / Request Log). Clicking a toast deep-links to that run in the
-// Log page (finalized runs only — live ones have no id yet).
+// Log page (a live one once its row is stored with its answer).
 export function Toasts({ active }) {
   const { subscribeRuns, catalog } = useAppData();
   const [toasts, setToasts] = useState([]);
@@ -54,8 +54,8 @@ export function Toasts({ active }) {
   };
 
   const open = (t) => {
-    // Live toasts have no DB id yet, so there is nothing to deep-link to —
-    // just go to the Log page where the live row is visible.
+    // A live toast before its row is stored has no DB id, so there is nothing to
+    // deep-link to — just go to the Log page where the live row is visible.
     if (t.id != null) {
       try { localStorage.setItem("z-openreq", String(t.id)); } catch { /* ignore */ }
     }

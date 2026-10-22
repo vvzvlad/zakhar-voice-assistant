@@ -950,8 +950,9 @@ class Pipeline(SpeechMixin):
                 pcm, pcm2 = self._condition_audio(pcm, pcm2, trim=followup is None)
 
                 # Observability record for this run (_new_record). Accumulated across
-                # all terminal paths below and inserted exactly once in the finally;
-                # the rest of the timings fill in as stages complete.
+                # all terminal paths below: inserted once its answer exists
+                # (_store_answer), else in the finally, which completes the row; the
+                # rest of the timings fill in as stages complete.
                 # The answer's stored speech (speak_reply), stored after the run is
                 # inserted, mirroring the utterance-audio store. Stays None unless the
                 # answer played, so a failed/empty TTS stores nothing.
@@ -1137,6 +1138,7 @@ class Pipeline(SpeechMixin):
                         except Exception as e:
                             # Context persistence failure must not break the run.
                             logger.error(f"{self.name}: context append failed: {e}")
+                    await self._store_answer(record)
 
                     self._emit(StageEvent.INTENT_END, {"conversation_id": conversation_id})
 
@@ -1278,18 +1280,46 @@ class Pipeline(SpeechMixin):
             **fields,
         })
 
+    async def _store_answer(self, record: dict) -> None:
+        """Insert the run record as soon as its answer exists, before it is spoken, so
+        a process that dies during the speech leaves the request and the answer in the
+        run log. The row has no t_total until _store_run completes it (the panel then
+        sums the stages, the metrics skip it). The row's id goes to record["id"]: the
+        live partials after it carry it (live_row) and _store_run completes that row,
+        also when a new wake cancels the run while the insert runs (the row commits
+        anyway). A failure is logged and the run goes on; _store_run then inserts the
+        record."""
+        if self.runs_store is None:
+            return
+        insert = asyncio.ensure_future(asyncio.to_thread(self.runs_store.insert, record))
+        try:
+            record["id"] = await asyncio.shield(insert)
+        except asyncio.CancelledError:
+            try:
+                record["id"] = await insert
+            except Exception as e:
+                logger.error(f"{self.name}: early run record failed: {e}")
+            raise
+        except Exception as e:
+            logger.error(f"{self.name}: early run record failed: {e}")
+
     async def _store_run(self, record: dict, t0: float, pcm: bytes = b"", pcm2: bytes = b"",
                          tts_audio=None, tts_mime=None) -> dict | None:
-        """Insert the run record, publish it to the telemetry (whether or not the run
-        log is on, with its run log id when it has one) and store its audio; returns the
-        summary row to broadcast (_broadcast_run), or None. A recording failure must never
-        break the run or swallow RUN_END, so it is fully wrapped."""
+        """Insert the run record (update its row when _store_answer inserted it),
+        publish it to the telemetry (whether or not the run log is on, with its run log
+        id when it has one) and store its audio; returns the summary row to broadcast
+        (_broadcast_run), or None. A recording failure must never break the run or
+        swallow RUN_END, so it is fully wrapped."""
         record["t_total"] = int((time.perf_counter() - t0) * 1000)
         if self.runs_store is None:
             telemetry.publish_run(self.rt, record)
             return None
+        run_id = record.get("id")
         try:
-            run_id = await asyncio.to_thread(self.runs_store.insert, record)
+            if run_id is None:
+                run_id = await asyncio.to_thread(self.runs_store.insert, record)
+            else:
+                await asyncio.to_thread(self.runs_store.update, run_id, record)
         except Exception as e:
             logger.error(f"{self.name}: run record failed: {e}")
             telemetry.publish_run(self.rt, record)
@@ -1391,6 +1421,7 @@ class Pipeline(SpeechMixin):
                         except Exception as e:
                             # Context persistence failure must not break the run.
                             logger.error(f"{self.name}: context append failed: {e}")
+                    await self._store_answer(record)
 
                     # Only the spoken text is accented: the value RETURNED to the caller
                     # stays the plain `reply`, which is also returned when its speech
