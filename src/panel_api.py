@@ -76,6 +76,13 @@ _UNSAFE_MODEL_STEM_RE = re.compile(r"[^A-Za-z0-9._-]")
 _EXT_FOR_MIME = {"audio/wav": "wav", "audio/mpeg": "mp3", "audio/flac": "flac"}
 
 
+def _utf8_dumps(obj) -> str:
+    """JSON with non-ASCII text as is: the run endpoints are also read by agents with
+    curl (the Request Log copies a run's link for them), and Cyrillic escaped as \\uXXXX
+    doubles the body and cannot be read without a parser."""
+    return json.dumps(obj, ensure_ascii=False)
+
+
 def ext_for_mime(mime: str) -> str:
     """File extension for a stored TTS audio mime; defaults to mp3 for unknown types."""
     return _EXT_FOR_MIME.get(mime, "mp3")
@@ -1208,7 +1215,7 @@ class PanelServer:
         total = await asyncio.to_thread(
             self.runs_store.count, device=device, result=result, search=search, chain=chain,
         )
-        return web.json_response({"runs": runs, "total": total})
+        return web.json_response({"runs": runs, "total": total}, dumps=_utf8_dumps)
 
     async def _get_run(self, request: web.Request) -> web.Response:
         if self.runs_store is None:
@@ -1220,7 +1227,7 @@ class PanelServer:
         run = await asyncio.to_thread(self.runs_store.get, run_id)
         if run is None:
             return web.json_response({"error": "not found"}, status=404)
-        return web.json_response(run)
+        return web.json_response(run, dumps=_utf8_dumps)
 
     async def _get_run_audio(self, request: web.Request) -> web.Response:
         """Serve the stored utterance WAV for one run (inline, playable/downloadable).

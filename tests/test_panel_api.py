@@ -1634,6 +1634,9 @@ async def test_get_run_by_id_and_404(tmp_path):
         assert body["id"] == 1
         assert body["device"] == "kitchen"
         assert body["rounds"] == [{"round": 1, "note": "final answer", "tokens": 10, "calls": []}]
+        # Text comes as UTF-8, not \u escapes: agents read runs with curl.
+        assert "включи свет" in await resp.text()
+        assert "включи свет" in await (await client.get("/api/runs")).text()
 
         missing = await client.get("/api/runs/9999")
         assert missing.status == 404
