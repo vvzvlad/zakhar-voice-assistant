@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
-// Render-level tests for the Prompt, Tools and Devices pages: the profile's
-// preferred voice is shown by name and flagged when it is not the voice speaking
-// now, the prompt syntax reference is one collapsed disclosure, each page saves
+// Render-level tests for the Character Prompt, System Prompt, Tools and Devices pages:
+// the profile's preferred voice is shown by name and flagged when it is not the voice
+// speaking now, the prompt syntax reference is one collapsed disclosure, each page saves
 // with one Save (the Tools page's server edits included), deleting an MCP server
 // asks first, the built-in sources start folded and say "built-in" once, a
 // switched-off server keeps its controls unfaded and a switched-off speaker fades.
@@ -9,7 +9,7 @@ import React from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, cleanup, fireEvent, waitFor, within } from "@testing-library/react";
 import { MCP } from "../pages/tools.jsx";
-import { Prompt } from "../pages/prompt.jsx";
+import { Prompt, SystemPrompt } from "../pages/prompt.jsx";
 import { Devices } from "../pages/devices.jsx";
 import { useAppData } from "../appData.jsx";
 import { getOptions, getPromptProfile, updatePromptProfile } from "../api.js";
@@ -76,7 +76,7 @@ describe("Prompt — preferred voice", () => {
 });
 
 describe("Prompt — syntax reference", () => {
-  it("is one collapsed Syntax disclosure holding the three references", async () => {
+  it("is one collapsed Syntax disclosure holding the four references", async () => {
     useAppData.mockReturnValue(appData());
     getPromptProfile.mockResolvedValue({ id: 1, name: "default", text: "hi" });
     render(<Prompt />);
@@ -84,9 +84,18 @@ describe("Prompt — syntax reference", () => {
     expect(summary.tagName).toBe("SUMMARY");
     const details = summary.closest("details");
     expect(details.open).toBe(false);
-    for (const t of ["The date/time variable", "The wake-word variable", "Preferred voice"]) expect(within(details).getByText(t)).toBeInTheDocument();
+    for (const t of ["The date/time variable", "The wake-word variable", "The memory variable", "Preferred voice"]) expect(within(details).getByText(t)).toBeInTheDocument();
     expect(screen.queryByText("Notation")).toBeNull();
     expect(screen.queryByText("Dialog context")).toBeNull();
+  });
+
+  it("on the System Prompt page holds the three variables, not the profile's voice marker", async () => {
+    useAppData.mockReturnValue(appData());
+    render(<SystemPrompt />);
+    const details = (await screen.findByText("Syntax")).closest("details");
+    expect(details.open).toBe(false);
+    for (const t of ["The date/time variable", "The wake-word variable", "The memory variable"]) expect(within(details).getByText(t)).toBeInTheDocument();
+    expect(screen.queryByText("Preferred voice")).toBeNull();
   });
 });
 
@@ -160,32 +169,25 @@ describe("one Save per page", () => {
     confirm.mockRestore();
   });
 
-  it("Prompt: the same Save sends an edited system prompt to the config, and the profile's text to its store", async () => {
+  it("System Prompt: the save bar sends the edited text to the config", async () => {
     const data = appData({ prompt: { system: "rules" } });
     // The real patch() refreshes the catalog with the stored value.
     data.patch.mockImplementation(async (p) => { data.catalog.core.values.prompt.system = p.core.prompt.system; });
     useAppData.mockReturnValue(data);
-    getPromptProfile.mockResolvedValue({ id: 1, name: "default", text: "hi" });
-    render(<Prompt />);
+    render(<SystemPrompt />);
     fireEvent.change(await screen.findByDisplayValue("rules"), { target: { value: "new rules" } });
     fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
     await waitFor(() => expect(data.patch).toHaveBeenCalledWith({ core: { prompt: { system: "new rules" } } }));
     expect(updatePromptProfile).not.toHaveBeenCalled();
     await waitFor(() => expect(screen.queryByTestId("save-bar")).toBeNull());
-    fireEvent.change(screen.getByDisplayValue("hi"), { target: { value: "hello" } });
-    fireEvent.change(screen.getByDisplayValue("new rules"), { target: { value: "newer rules" } });
-    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
-    await waitFor(() => expect(updatePromptProfile).toHaveBeenCalledWith(1, { text: "hello" }));
-    expect(data.patch).toHaveBeenLastCalledWith({ core: { prompt: { system: "newer rules" } } });
-    await waitFor(() => expect(screen.queryByTestId("save-bar")).toBeNull());
+    expect(screen.getByDisplayValue("new rules")).toBeInTheDocument();
   });
 
-  it("Prompt: Reload drops an unsaved system prompt edit back to the stored text", async () => {
+  it("System Prompt: Reload drops an unsaved edit back to the stored text", async () => {
     const data = appData({ prompt: { system: "rules" } });
     useAppData.mockReturnValue(data);
-    getPromptProfile.mockResolvedValue({ id: 1, name: "default", text: "hi" });
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
-    render(<Prompt />);
+    render(<SystemPrompt />);
     fireEvent.change(await screen.findByDisplayValue("rules"), { target: { value: "new rules" } });
     fireEvent.click(screen.getByRole("button", { name: "Reload" }));
     expect(confirm).toHaveBeenCalledWith("Discard unsaved changes?");

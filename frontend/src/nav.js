@@ -8,7 +8,7 @@ export const NAV = [
   // that choose what runs and switch stages on and off; every provider and engine
   // setting lives on the Providers pages.
   { grp: "Pipeline", items: [["devices", "Devices"], ["capture", "Capture"], ["logic", "Logic"], ["speech", "Speech"]] },
-  { grp: "Providers", items: [["vad", "VAD"], ["stt", "STT"], ["llm", "LLM", [["prompt", "System Prompt"]]], ["commands", "Commands"], ["tts", "TTS"], ["tools", "Tools"]] },
+  { grp: "Providers", items: [["vad", "VAD"], ["stt", "STT"], ["llm", "LLM", [["system-prompt", "System Prompt"], ["prompt", "Character Prompt"]]], ["commands", "Commands"], ["tts", "TTS"], ["tools", "Tools"]] },
   { grp: "Operations", items: [["log", "Request Log"], ["system", "System"]] },
 ];
 // Flatten children into TITLES so child ids stay valid routes/page titles.

@@ -86,8 +86,8 @@ const TRANSPORTS = [
   { value: "auto", label: "Auto" }, { value: "streamable_http", label: "Streamable HTTP" }, { value: "sse", label: "SSE" },
 ];
 // Built-in ToolHub source ids — an external server may not shadow them, or it
-// would hide the openweathermap/calendar/reminders/assistant_tasks/volume status in /api/tools.
-const RESERVED_NAMES = ["openweathermap", "calendar", "reminders", "assistant_tasks", "volume"];
+// would hide the openweathermap/calendar/reminders/assistant_tasks/volume/memory status in /api/tools.
+const RESERVED_NAMES = ["openweathermap", "calendar", "reminders", "assistant_tasks", "volume", "memory"];
 function McpServerModal({ initial, onSave, onClose, title, takenNames }) {
   const [name, setName] = useState(initial?.name || "");
   const [url, setUrl] = useState(initial?.url || "");
@@ -228,7 +228,7 @@ export function MCP() {
   const onServerChange = (i) => (field, value) => setServers(servers.map((x, idx) => (idx === i ? { ...x, [field]: value } : x)));
 
   return <FormPage form={form} narrow>
-    <PageHeader title="Tools" desc="Tool sources the model calls: external smart-home MCP servers and built-in weather/calendar/reminders/assistant tasks, plus the always-on device volume tool. Sources are applied live — rebuilt on save, no restart needed."
+    <PageHeader title="Tools" desc="Tool sources the model calls: external smart-home MCP servers and built-in weather/calendar/reminders/assistant tasks, plus the always-on device volume and memory tools. Sources are applied live — rebuilt on save, no restart needed."
       actions={<button className="z-btn p" onClick={() => setModal({ mode: "add" })}><Ic n="add" w={14} />Add server</button>} />
     {toolsErr && <div className="z-banner warn" style={{ margin: "0 0 14px" }}>
       <Ic n="restart" w={15} />
