@@ -28,6 +28,7 @@ from src.reply_compressor import CEILING_DBFS
 from src.runs_store import RunsStore
 from src.runtime import Runtime
 from src.tts import TtsBackend, pcm_mime
+from src.voice_run import FOLLOWUP_SKIP_MS
 from src.wakeword import WakewordVerdict, WakewordVerifier
 from tests.test_pipeline import FakeToolHub, FakeVad, make_llm_result, patch_llm
 from tests.test_pipeline_followup import FakeGate
@@ -797,7 +798,9 @@ async def test_follow_up_listens_after_a_played_answer_only(srv):
     await dev.send(type="played", id=got[-1]["id"], dry=0, gap_ms=0)
     # The answer played out: the session stays open and the microphone reopens.
     assert await dev.recv() == state(1, "listening")
-    # A phrase the follow-up check drops ends the session without a transcript.
+    # After the window's dropped start, a phrase the follow-up check drops ends the
+    # session without a transcript.
+    await dev.mic(stereo(9, -9, FOLLOWUP_SKIP_MS))
     await dev.phrase()
     assert await dev.recv() == state(1, "transcribing")
     assert await dev.recv() == state(1, "idle")
@@ -1539,6 +1542,7 @@ async def test_one_phrase_heard_by_three_devices_runs_on_the_first_speaker(srv, 
     got = [await speaker.recv() for _ in range(7)]
     await speaker.send(type="played", id=got[5]["id"], dry=0, gap_ms=0)
     assert await speaker.recv() == state(8, "listening")  # the follow-up window
+    await speaker.mic(stereo(9, -9, FOLLOWUP_SKIP_MS))  # its dropped start
     await speaker.phrase()
     got = []
     while not got or got[-1]["type"] != "play_end":

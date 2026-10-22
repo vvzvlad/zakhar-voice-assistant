@@ -13,6 +13,10 @@ from src.vad import SAMPLE_RATE
 # detected the wake word (docs/device-protocol.md, "Voice session").
 PREROLL_MS = 2000
 PREROLL_BYTES = PREROLL_MS * SAMPLE_RATE * 2 // 1000
+# A follow-up window drops this much of its audio's start: the window opens once the
+# device's answer is out, and the end of that answer still sounds in the room then.
+FOLLOWUP_SKIP_MS = 300
+FOLLOWUP_SKIP_BYTES = FOLLOWUP_SKIP_MS * SAMPLE_RATE * 2 // 1000
 
 
 class Run:
@@ -41,6 +45,9 @@ class Run:
         # only for the stored stereo diagnostic WAV.
         self.buffer = bytearray()
         self.buffer2 = bytearray()
+        # Bytes of the mic audio's start still to drop before anything hears it (a
+        # follow-up window's FOLLOWUP_SKIP_BYTES).
+        self.skip_bytes = 0
         # Live streaming STT sessions of the chains whose STT starts at speech, by
         # chain name; the run's _run takes them over once it is claimed.
         self.stt_streams: dict = {}
