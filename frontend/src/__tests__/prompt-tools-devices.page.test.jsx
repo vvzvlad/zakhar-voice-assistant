@@ -2,7 +2,8 @@
 // Render-level tests for the Character Prompt, System Prompt, Tools and Devices pages:
 // the profile's preferred voice is shown by name and flagged when it is not the voice
 // speaking now, the prompt syntax reference is one collapsed disclosure, each page saves
-// with one Save (the Tools page's server edits included), deleting an MCP server
+// with one Save (the Tools page's server edits included), typing in the System Prompt
+// editor keeps the page's scroll position, deleting an MCP server
 // asks first, the built-in sources start folded and say "built-in" once, the Tools
 // page's Memory card edits the saved facts under the same Save, a
 // switched-off server keeps its controls unfaded and a switched-off speaker fades.
@@ -184,6 +185,22 @@ describe("one Save per page", () => {
     expect(updatePromptProfile).not.toHaveBeenCalled();
     await waitFor(() => expect(screen.queryByTestId("save-bar")).toBeNull());
     expect(screen.getByDisplayValue("new rules")).toBeInTheDocument();
+  });
+
+  it("System Prompt: typing keeps the page's scroll while the editor regrows", async () => {
+    useAppData.mockReturnValue(appData({ prompt: { system: "rules" } }));
+    const { container } = render(<div className="z-scroll"><SystemPrompt /></div>);
+    const ta = await screen.findByDisplayValue("rules");
+    const scroller = container.querySelector(".z-scroll");
+    scroller.scrollTop = 689;
+    // jsdom has no layout. The browser lays the page out on this read: with the editor at
+    // "auto" the page is shorter and the scroller clamps its position.
+    Object.defineProperty(ta, "offsetHeight", { configurable: true, get() {
+      if (ta.style.height === "auto") scroller.scrollTop = Math.min(scroller.scrollTop, 113);
+      return 0;
+    } });
+    fireEvent.change(ta, { target: { value: "rules!" } });
+    expect(scroller.scrollTop).toBe(689);
   });
 
   it("System Prompt: Reload drops an unsaved edit back to the stored text", async () => {
