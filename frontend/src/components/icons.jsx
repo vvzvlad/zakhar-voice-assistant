@@ -14,6 +14,8 @@ export const ICONS = {
   mcp: "M12 2v5M12 17v5M5 12H2M22 12h-3M7 7l-2-2M19 5l-2 2M7 17l-2 2M19 19l-2-2M12 8a4 4 0 100 8 4 4 0 000-8z",
   tools: "M14.7 6.3a4 4 0 00-5.4 5.4L3 18l3 3 6.3-6.3a4 4 0 005.4-5.4l-2.6 2.6-2.4-.6-.6-2.4z",
   prompt: "M5 3h11l3 3v15H5zM9 9h7M9 13h7M9 17h4",
+  // The system prompt: the layer under every character prompt.
+  "system-prompt": "M12 3l9 5-9 5-9-5zM3 12l9 5 9-5M3 16.5l9 5 9-5",
   context: "M3 12a9 9 0 109-9 9 9 0 00-7 3.4M3 3v3.4h3.4M12 7v5l3 2",
   devices: "M5 4h14v12H5zM9 20h6M12 16v4M9 8h6M9 11h3",
   log: "M4 5h16M4 10h16M4 15h10M4 20h13",
