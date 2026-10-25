@@ -182,6 +182,9 @@ static void music_task(void *arg)
 
     sendspin::SendspinClientConfig cfg;
     cfg.name = name;
+    // client/hello device_info: Music Assistant shows these as the player's manufacturer and model.
+    cfg.manufacturer = "Nabu Casa";
+    cfg.product_name = "Home Assistant Voice PE";
     // POST /ota's server holds ESP_HTTPD_DEF_CTRL_PORT.
     cfg.httpd_ctrl_port = ESP_HTTPD_DEF_CTRL_PORT + 1;
     cfg.httpd_psram_stack = true;
