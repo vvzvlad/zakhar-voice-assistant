@@ -23,7 +23,7 @@ class Run:
     """The state of one run, from its wake (or its follow-up window) to its end."""
 
     def __init__(self, cid, word: str, vad, vad_desc: str, *, over_answer=False,
-                 over_playback=False, followup=None, taken=False):
+                 over_music=False, over_playback=False, followup=None, taken=False):
         # The conversation id (the device's session) the run's events are labelled with.
         self.cid = cid
         # The wake word; a follow-up window keeps the word of its session's wake.
@@ -35,6 +35,9 @@ class Run:
         # A wake over the device's own answer or open session, which the wake-word
         # check is told (WakewordVerifier.verify).
         self.over_answer = over_answer
+        # A wake over the device's own music: held for the quick wake-word check, with
+        # the plain grammar, which decides only whether the music ducks (Pipeline._check).
+        self.over_music = over_music
         # A wake over the device's playing stream: its audio carries that playback, so
         # it only stops it (Pipeline._stop_answer).
         self.over_playback = over_playback
@@ -52,13 +55,17 @@ class Run:
         # chain name; the run's _run takes them over once it is claimed.
         self.stt_streams: dict = {}
         # The wake-word check: its verdict (None until it rules; True for a run it does
-        # not check), its task, score, latency in ms, and whether it timed out or
-        # failed (no verdict, the fail policy decided).
+        # not check or checks only for the ducking, `duck`), its task, score, latency in
+        # ms, and whether it timed out or failed (no verdict, the fail policy decided);
+        # the last three stay at their defaults for a check of the ducking alone.
         self.verdict: bool | None = None
         self.verify = None
         self.score: float | None = None
         self.verify_ms = 0
         self.error = False
+        # Whether the device's music ducks under the taken session: false for a wake over
+        # the music its check did not accept.
+        self.duck = True
         # The cross-device arbitration: the token the run registered under, whether it
         # still waits for the verdict, and whether it lost.
         self.token = 0

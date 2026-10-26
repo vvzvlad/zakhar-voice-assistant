@@ -138,9 +138,10 @@ static void mic_task(void *arg)
 }
 
 // Per block: zakhar's playback (mono) on both channels plus the music stream (stereo, music.h) at
-// its gain, a tenth of it while a session is open or zakhar plays. The LEDs follow zakhar's
-// playback alone. The block is mixed in place, as internal RAM has no room for more buffers: the
-// music comes into `stereo`, which then carries the mix.
+// its gain, a tenth of it while a session is open (unless its `listening` said not to duck), a
+// capture is held or zakhar plays; a wake awaiting the server's ruling does not duck it. The LEDs
+// follow zakhar's playback alone. The block is mixed in place, as internal RAM has no room for more
+// buffers: the music comes into `stereo`, which then carries the mix.
 static void speaker_task(void *arg)
 {
     (void)arg;
@@ -168,7 +169,7 @@ static void speaker_task(void *arg)
         const size_t m = music_read(stereo, SPK_BLOCK);
         // Music Assistant's volume times what keeps the music at the dial.
         const uint32_t gain = (uint32_t)(((uint64_t)music_gain() * volume_music_gain()) >> 16);
-        mix_block(&mix, mono, stereo, m, gain, zl_mic_busy() || zl_playing(), SPK_BLOCK, stereo);
+        mix_block(&mix, mono, stereo, m, gain, zl_ducks() || zl_playing(), SPK_BLOCK, stereo);
         size_t written;
         i2s_channel_write(s_tx, stereo, sizeof stereo, &written, portMAX_DELAY);
         if (m > 0) music_played(m, esp_timer_get_time() + (int64_t)SPK_DMA_BUFS * SPK_BLOCK * 1000000 / SPK_RATE);

@@ -199,8 +199,9 @@ static void test_encode(void)
                              .wifi_reason = 8};
     encoded_is(zl_encode_stats(&bare),
                "{\"type\":\"stats\",\"cpu0\":100,\"heap\":90000,\"heap_min\":80000,\"heap_block\":65536,\"wifi_drops\":0}");
-    encoded_is(zl_encode_wake(17, "Захар"), "{\"type\":\"wake\",\"session\":17,\"word\":\"Захар\"}");
-    encoded_is(zl_encode_wake(4294967295u, "x"), "{\"type\":\"wake\",\"session\":4294967295,\"word\":\"x\"}");
+    encoded_is(zl_encode_wake(17, "Захар", false), "{\"type\":\"wake\",\"session\":17,\"word\":\"Захар\"}");
+    encoded_is(zl_encode_wake(4294967295u, "x", false), "{\"type\":\"wake\",\"session\":4294967295,\"word\":\"x\"}");
+    encoded_is(zl_encode_wake(17, "Захар", true), "{\"type\":\"wake\",\"session\":17,\"word\":\"Захар\",\"music\":true}");
     encoded_is(zl_encode_played(9, false, 2, 125), "{\"type\":\"played\",\"id\":9,\"dry\":2,\"gap_ms\":125}");
     encoded_is(zl_encode_played(9, false, 0, 0), "{\"type\":\"played\",\"id\":9,\"dry\":0,\"gap_ms\":0}");
     encoded_is(zl_encode_played(9, true, 0, 0), "{\"type\":\"played\",\"id\":9,\"dropped\":true}");
@@ -279,12 +280,12 @@ static void test_session(void)
     // A wake proposes number 1 and its audio streams; there is no current session until the server
     // takes it, and a detection inside the phrase proposes nothing.
     assert(zl_sess_wake(&s) == ZL_WAKE_START && s.proposed == 1 && s.session == 0 && !s.open && !s.mic);
-    assert(zl_sess_streams(&s) && zl_sess_busy(&s));
+    assert(zl_sess_streams(&s) && zl_sess_busy(&s) && !zl_sess_ducks(&s));
     assert(zl_sess_wake(&s) == ZL_WAKE_MIC && s.proposed == 1);
     assert(!zl_sess_capture(&s) && !s.capture);  // busy: a wake is proposed
     // `listening` of the proposed number takes it: shown, the stream goes on from the pre-roll.
     assert(state(&s, 1, "listening", &rewind) == SHOWN && !rewind);
-    assert(s.session == 1 && s.proposed == 0 && s.open && s.mic);
+    assert(s.session == 1 && s.proposed == 0 && s.open && s.mic && zl_sess_ducks(&s));
     assert(zl_sess_wake(&s) == ZL_WAKE_MIC && s.proposed == 0);  // its phrase is still being said
     assert(state(&s, 0, "idle", &rewind) == DROPPED);
     zl_msg_t any = msg_of("{\"type\": \"reply\", \"text\": \"a\"}");
@@ -328,7 +329,7 @@ static void test_session(void)
     assert(state(&s, 4, "idle", &rewind) == SHOWN && !s.open && !s.mic);
 
     assert(zl_sess_capture(&s) && s.capture);
-    assert(!zl_sess_streams(&s) && zl_sess_busy(&s));
+    assert(!zl_sess_streams(&s) && zl_sess_busy(&s) && zl_sess_ducks(&s));
     assert(zl_sess_wake_check(&s) == ZL_WAKE_CAPTURE);
     assert(zl_sess_wake(&s) == ZL_WAKE_CAPTURE && s.proposed == 0);  // wake words ignored during a capture
     bool open;
@@ -359,6 +360,17 @@ static void test_session(void)
     zl_sess_detect(&s, false);
     zl_sess_detect(&s, true);
     assert(zl_sess_wake_check(&s) == ZL_WAKE_MIC);  // detection is on again; the proposal still streams
+
+    // A `listening` with `duck: false` takes the proposal without ducking the music; a follow-up's
+    // plain `listening` ducks it again.
+    zl_sess_t q = {0};
+    assert(zl_sess_wake(&q) == ZL_WAKE_START && !zl_sess_ducks(&q));
+    zl_msg_t quiet = msg_of("{\"type\": \"state\", \"session\": 1, \"value\": \"listening\", \"duck\": false}");
+    assert(zl_sess_accepts(&q, &quiet) && zl_sess_state(&q, &quiet, &rewind));
+    assert(q.open && q.mic && !zl_sess_ducks(&q));
+    assert(state(&q, 1, "speaking", &rewind) == SHOWN && !zl_sess_ducks(&q));
+    assert(state(&q, 1, "listening", &rewind) == SHOWN && q.mic && zl_sess_ducks(&q));
+    zl_msg_free(&quiet);
 
     zl_msg_free(&any);
     zl_msg_free(&play);

@@ -666,8 +666,9 @@ static void wake(void)
         wake_refused(w);
         return;
     }
-    ESP_LOGI(TAG, "wake word \"%s\": session %u proposed", word, (unsigned)session);
-    send_json(s_ws, zl_encode_wake(session, word));
+    const bool music = s_cfg.music != NULL && s_cfg.music();
+    ESP_LOGI(TAG, "wake word \"%s\": session %u proposed%s", word, (unsigned)session, music ? " over music" : "");
+    send_json(s_ws, zl_encode_wake(session, word, music));
 }
 
 // A `capture` from the server: from now, no pre-roll, in place of one held already; refused while
@@ -1058,6 +1059,15 @@ bool zl_mic_busy(void)
     const bool busy = zl_sess_busy(&s_sess);
     unlock();
     return busy;
+}
+
+bool zl_ducks(void)
+{
+    if (s_lock == NULL) return false;
+    lock();
+    const bool ducks = zl_sess_ducks(&s_sess);
+    unlock();
+    return ducks;
 }
 
 size_t zl_play_read(int16_t *out, size_t max)

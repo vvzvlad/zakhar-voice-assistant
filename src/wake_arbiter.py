@@ -28,12 +28,14 @@ it, its run was cancelled, its device vanished), or once its wake-word verifier 
 ruled (the verifier's own timeout bounds that) and — when there are several
 candidates — its pre-roll is in or WINDOW_MS has passed since its own wake (its
 SNR is then taken on what it has): the pre-roll streams in only after the `wake`.
-Only a wake over the device's running answer waits for the verifier; any other has
-its verdict at its wake, and its phrase is checked for the wake word only after the
-ruling (Pipeline._run) — not at all when it won together with another candidate while no
-online device plays a stream (`together`). So the winner is a wake the verifier did not reject — a false
-wake not over an answer can win and start the cooldown — and a group whose candidates
-all dropped out leaves no cooldown. The group is ruled once every candidate is ready
+Only a wake over the device's running answer or its music waits for the verifier; any
+other has its verdict at its wake, and its phrase is checked for the wake word only after
+the ruling (Pipeline._run) — not at all when it won together with another candidate while
+no online device plays a stream (`together`); a wake over the music and not over an
+answer takes part whatever the verifier said, which decides only whether that music
+ducks. So the winner is never a wake over an answer the verifier rejected — a false wake
+not over an answer can win and start the cooldown — and a group whose candidates all
+dropped out leaves no cooldown. The group is ruled once every candidate is ready
 and either every online device has woken or the group's window has run out. A
 candidate without a speaker is not waited for once a ready candidate has one: it
 cannot outrank it, so it loses as it is. Its verifier still rules on it later: a

@@ -45,6 +45,7 @@ typedef struct {
     uint32_t session;
     zl_state_t state;     // STATE
     const char *text;     // STATE (NULL when absent), TRANSCRIPT and REPLY ("" when absent)
+    bool duck;            // STATE: false only when it carries `duck: false`
     uint32_t id;          // PLAY_START, PLAY_END, CAPTURE (> 0), CAPTURE_RESUME, CAPTURE_STOP
     uint8_t wake, vad;    // CONFIG, as uint8 cutoffs
     int play_prime_ms;    // CONFIG: 0..2000, the playback reserve
@@ -71,7 +72,7 @@ void zl_msg_free(zl_msg_t *m);
 // capture: the held capture's id, 0 when none is held. uptime_s: seconds since the device booted.
 // reset: why it booted, the wire value ("poweron" ...).
 char *zl_encode_hello(const zl_config_t *cfg, int volume, uint32_t capture, uint32_t uptime_s, const char *reset);
-char *zl_encode_wake(uint32_t session, const char *word);
+char *zl_encode_wake(uint32_t session, const char *word, bool music);
 // A stream that played out carries `dry` and `gap_ms`; a dropped one only `dropped`.
 char *zl_encode_played(uint32_t id, bool dropped, uint32_t dry, uint32_t gap_ms);
 char *zl_encode_volume(int percent);
@@ -127,6 +128,7 @@ typedef struct {
     uint32_t proposed;  // a wake the server has not ruled on yet; 0 = none. Its audio streams meanwhile
     uint32_t last;      // the last proposed number: numbers are never reused
     bool open;          // the current session: from its listening to its idle or error
+    bool quiet;         // its last shown listening carried `duck: false`: the music does not duck
     bool mic;           // the current session's audio streams: from its listening, or a follow-up one,
                         // to its next state other than listening
     bool capture;       // a capture is held: from its `capture` until it ends; a lost link keeps it
@@ -179,6 +181,10 @@ bool zl_sess_streams(const zl_sess_t *s);
 // Whether the microphone is in use for the server: a session is open, a wake is proposed or a
 // capture is held.
 bool zl_sess_busy(const zl_sess_t *s);
+
+// Whether the device's own music ducks: a session is open whose last listening did not carry
+// `duck: false`, or a capture is held; not while a wake is only proposed.
+bool zl_sess_ducks(const zl_sess_t *s);
 
 // The connection is gone: the session ends, a proposal is dropped, a held capture stays held, and
 // detection is on again for the next connection. Reports whether a session was open.

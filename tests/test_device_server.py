@@ -539,9 +539,10 @@ async def answer_playing(srv, dev, seconds: int) -> int:
     return got[-1]["id"]
 
 
-async def wake_over(dev, session):
-    """A wake and the two 60 ms mic frames that fill the verifier's window."""
-    await dev.send(type="wake", session=session, word="Захар")
+async def wake_over(dev, session, **fields):
+    """A wake (`fields` go into it) and the two 60 ms mic frames that fill the verifier's
+    window."""
+    await dev.send(type="wake", session=session, word="Захар", **fields)
     await dev.mic(stereo(11, -11, 60))
     await dev.mic(stereo(12, -12, 60))
 
@@ -603,13 +604,15 @@ async def test_a_wake_while_the_speaker_thinks_runs_its_phrase(srv, monkeypatch)
     assert await dev.recv() == state(2, "transcribing")
 
 
-async def test_a_rejected_wake_leaves_the_answer_playing(srv, tmp_path):
+@pytest.mark.parametrize("fields", [{}, {"music": True}])
+async def test_a_rejected_wake_leaves_the_answer_playing(srv, tmp_path, fields):
+    # Over the running answer the check rules on the wake, music or not.
     srv.rt.runs_store = RunsStore(str(tmp_path / "runs.db"))
     dev = await srv.connect(buffer_ms=1400)
     old = await answer_playing(srv, dev, 1)
     verifier = srv.rt.wakeword_backend = HeldVerifier()
     verifier.verdict(11).set_result(WakewordVerdict(accepted=False, score=0.0))
-    await wake_over(dev, 2)
+    await wake_over(dev, 2, **fields)
     # No play_stop: `state idle` of session 2 refuses the wake, nothing of session 1 is sent
     # again, and its answer plays to its end and ends session 1.
     assert await dev.recv() == state(2, "idle")
@@ -640,6 +643,33 @@ async def test_a_rejected_wake_over_an_announcement_ends_its_session(srv):
     assert len(dev.plays[start["id"]]) == 32000
     await dev.send(type="played", id=start["id"], dry=0, gap_ms=0)
     await asyncio.wait_for(say, 2)
+
+
+async def test_a_wake_over_the_music_the_check_rejects_is_taken_without_ducking(srv):
+    # Nothing of the server's runs: the device's own music alone holds the wake for the
+    # check, which decides only whether the music ducks; its phrase still decides the wake.
+    verifier = srv.rt.wakeword_backend = HeldVerifier()
+    verifier.verdict(11).set_result(WakewordVerdict(accepted=False, score=0.0))
+    dev = await srv.connect()
+    await dev.recv()  # config
+    await wake_over(dev, 1, music=True)
+    assert await dev.recv() == {"type": "play_stop"}
+    assert await dev.recv() == {**state(1, "listening"), "duck": False}
+    assert verifier.over_answer == [False]
+
+
+async def test_a_wake_over_the_music_the_check_accepts_ducks_it(srv):
+    verifier = srv.rt.wakeword_backend = HeldVerifier()
+    dev = await srv.connect()
+    await dev.recv()  # config
+    await wake_over(dev, 1, music=True)
+    await until(lambda: verifier.calls)
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(dev.recv(), 0.3)
+    verifier.verdict(11).set_result(WakewordVerdict(accepted=True, score=0.9))
+    assert await dev.recv() == {"type": "play_stop"}
+    assert await dev.recv() == state(1, "listening")
+    assert verifier.over_answer == [False]
 
 
 async def test_a_wake_with_nothing_to_protect_is_taken_at_once(srv):

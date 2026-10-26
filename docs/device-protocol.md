@@ -132,7 +132,8 @@ device                                   server
                                          or, with follow-up on, state listening (see Follow-up)
 ```
 
-- `wake`: `{"type": "wake", "session": 17, "word": "Захар"}`. `session` is the number the device
+- `wake`: `{"type": "wake", "session": 17, "word": "Захар"}`, plus `"music": true` while the device
+  plays music of its own (the Voice PE's Sendspin player). `session` is the number the device
   proposes for the session the wake would start: a device counter, +1 for every wake, never
   reused. The device stays on its current session until the server takes the proposal (below).
   Right after `wake` the device streams the microphone: first the pre-roll (the 2000 ms
@@ -147,8 +148,13 @@ device                                   server
 - The device keeps streaming until the server refuses the wake or, once it takes it, until a
   `state` of this session other than `listening` arrives. The end of the phrase is found by the
   server's VAD; the device has no end-pointing.
+- The Voice PE plays its music at a tenth of its level while a session of it is open (from its
+  `listening` to its idle or error) unless the last `listening` of it (the one that took the wake,
+  or a follow-up one) carries `"duck": false`, while a capture is held and while a stream of the
+  server plays; a wake the server has not taken leaves the music as it is.
 - `state`: `{"type": "state", "session": 17, "value": "listening"}`. Values: `listening`,
-  `transcribing`, `thinking`, `speaking`, `idle`, `error` (`error` carries `text`). The device
+  `transcribing`, `thinking`, `speaking`, `idle`, `error` (`error` carries `text`); `listening`
+  may carry `"duck": false` (absent: true), see above. The device
   draws its indication from the states of its current session only: between `wake` and the
   server's ruling it goes on showing what the current session shows, a running answer included.
 - `transcript` and `reply` carry the recognised phrase and the answer text, for devices with a
@@ -167,7 +173,11 @@ device                                   server
   device's own voice: the server holds it until its second wake-word check confirms it on the
   proposal's microphone audio (at once when that check is off), and the older run goes on
   meanwhile; the check also tells apart words that sound like the wake word (a fixed list in
-  the Vosk check, `ANSWER_SOUND_ALIKES`). Any other `wake` is confirmed at once. A confirmed wake is
+  the Vosk check, `ANSWER_SOUND_ALIKES`). A `wake` with `music`, not over a running answer, is
+  held for the same check, without those words, which decides only whether the music ducks: the
+  wake is confirmed whatever the check says (at once when the check is off), its `listening`
+  carries `"duck": false` when the check did not hear the wake word, and its phrase is checked as
+  that of a wake taken at once (below). Any other `wake` is confirmed at once. A confirmed wake is
   taken: the server cancels the older run and sends `play_stop`, which flushes the device's
   playback, a stream the server started before it saw the `wake` included, then `state listening`
   with the proposed `session`, which makes it the device's current session; the audio held
@@ -194,9 +204,9 @@ device                                   server
   of the other online devices, or less once every online device has woken; a lone online device
   is not held. With several wakes it rules only once
   each of them has its pre-roll in, or 500 ms after that device's own `wake`, and, for a `wake`
-  over a running answer, the server's second wake-word check has ruled on it; a wake that check
-  rejects takes no part. Any other wake takes part as it is and its phrase is checked for the
-  wake word only once it has won (not at all when another wake took part and nothing plays), so
+  over a running answer or with `music`, the server's second wake-word check has ruled on it; a
+  wake over a running answer that check rejects takes no part. Any other wake takes part as it is
+  and its phrase is checked for the wake word only once it has won (not at all when another wake took part and nothing plays), so
   a false one can win its group and start the cooldown. Once
   a device with a speaker is ready, a device without one is not waited for: it cannot win. A
   `wake` over a running answer (above) joins at its `wake` like any other, unless a stream is
@@ -208,8 +218,8 @@ device                                   server
   phrase instead (it sends no `wake` inside its own phrase, above): the woken devices lose to it
   as below, and those without a speaker get its answer as a `reply` without `session`. Each held
   device gets `listening` as soon as its wake is confirmed (at once unless it is over a running
-  answer), without waiting for the ruling; one ruled out by then — in the cooldown, or by the
-  ruling its own confirmation completes — gets none, and is never taken: a running answer of that
+  answer or with `music`), without waiting for the ruling; one ruled out by then — in the
+  cooldown, or by the ruling its own confirmation completes — gets none, and is never taken: a running answer of that
   device plays on. The devices that lost stream their microphone on until the server's VAD finds
   the end of the phrase; then each one shown `listening` gets `state idle`, and each other one is
   ended as a rejected wake is (above). For 2000 ms after the first of those wakes, a `wake` from

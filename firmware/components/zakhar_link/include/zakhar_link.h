@@ -43,6 +43,9 @@ typedef struct {
     size_t (*mic_read)(uint32_t *pos, int16_t *out, size_t max_frames);
     // The highest wake-word probability (0..255) since the previous call; resets it.
     uint8_t (*wake_peak_take)(void);
+    // Optional: whether the device plays music of its own (not the server's playback) now; a wake
+    // while it does carries `music: true`. May be NULL. Called on the component task.
+    bool (*music)(void);
     int play_rate;       // playback sample rate, Hz; 0: no speaker
     int play_buffer_ms;  // the playback buffer (PSRAM), hello.play.buffer_ms
     int volume;          // speaker volume at start, percent
@@ -122,6 +125,11 @@ void zl_report_button(void);
 // its `listening` to its idle or error) or a capture is held; false before zl_start(). Takes the
 // component's lock briefly.
 bool zl_mic_busy(void);
+
+// Whether the device's own music ducks: a voice session is open (from its `listening` to its idle
+// or error) whose last `listening` did not carry `duck: false`, or a capture is held; not while a
+// wake awaits the server's ruling; false before zl_start(). Takes the component's lock briefly.
+bool zl_ducks(void);
 
 // Speakers: the next playback samples (mono, play_rate) for the I2S writer task, after
 // zl_start(). Returns the count copied, fewer than max (0 included) when the buffer runs dry or

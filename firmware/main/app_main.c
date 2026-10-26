@@ -324,6 +324,7 @@ void app_main(void)
         .mic_position = audio_mic_position,
         .mic_read = audio_mic_read,
         .wake_peak_take = wake_word_take_peak,
+        .music = music_active,
         .play_rate = 48000,
         .play_buffer_ms = 4000,
         .volume = volume_get(),

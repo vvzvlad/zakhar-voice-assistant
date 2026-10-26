@@ -214,7 +214,8 @@ class Pipeline(SpeechMixin):
             and not isinstance(wb, PassthroughVerifier)
         )
 
-    def on_wake(self, cid, word, over_answer: bool = False, over_playback: bool = False) -> None:
+    def on_wake(self, cid, word, over_answer: bool = False, over_music: bool = False,
+                over_playback: bool = False) -> None:
         """A wake of the device: propose its run (docs/device-protocol.md, "Voice session").
 
         Synchronous. The run registers with the cross-device arbitration at once,
@@ -225,9 +226,13 @@ class Pipeline(SpeechMixin):
         check is told) may be the device's own voice: it is held — its audio buffered,
         nothing shown on the device, the current run going on untouched — until the
         quick wake-word check confirms it, when it is taken (_take), or rejects it, when
-        it ends held (_end_held). Any other wake is taken at once and confirmed later by
-        the wake word in its recognised phrase (_run), or by another device's wake ruled
-        on with it while nothing plays (arbitration_verdict). A taken run is released (_release)
+        it ends held (_end_held). A wake over the device's own music (`over_music`, not
+        over an answer) is held for the same check, with the plain grammar, which
+        decides only whether the music ducks (_check); whatever it rules, the wake is
+        then taken and goes on as any other wake. Any other wake is taken at once and
+        confirmed later by the wake word in its recognised phrase (_run), or by another
+        device's wake ruled on with it while nothing plays (arbitration_verdict). A
+        taken run is released (_release)
         once the arbitration lets it through; one that loses ends held. A released wake
         over the device's playing stream (`over_playback`), checked or not, only stops
         it (_stop_answer). A newer wake replaces a proposal silently."""
@@ -236,13 +241,15 @@ class Pipeline(SpeechMixin):
         run = self._proposed = self._new_run(
             cid, word or "", preroll_ms=PREROLL_MS if word else 0,
             no_speech_timeout_ms=self.core.vad.no_speech_timeout_ms, over_answer=over_answer,
-            over_playback=over_playback)
-        if over_answer and self.gates_wake(word):
-            logger.info(f"{self.name}: 🛡️ wake (cid={cid}) over the running answer waits "
-                        f"for the wake-word check")
+            over_music=over_music, over_playback=over_playback)
+        if (over_answer or over_music) and self.gates_wake(word):
+            what = ("over the running answer waits for the wake-word check" if over_answer
+                    else "over the music waits for the wake-word check, which decides only "
+                         "whether the music ducks")
+            logger.info(f"{self.name}: 🛡️ wake (cid={cid}) {what}")
         else:
-            # Not checked here (not over an answer, check disabled/None/passthrough, no
-            # wake word): its verdict is in.
+            # Not checked here (not over an answer or music, check disabled/None/
+            # passthrough, no wake word): its verdict is in.
             run.verdict = True
         if word and self.arbiter is not None and not over_playback:
             self._arbitration_token += 1
@@ -332,11 +339,16 @@ class Pipeline(SpeechMixin):
             self._spawn(self._close_stt_streams(streams))
         self.take_session(run.cid)
         logger.info(f"{self.name}: ▶️ run started (cid={run.cid})")
+        if not run.duck:
+            logger.info(f"{self.name}: 🎵 wake over the music: the check did not hear the "
+                        f"word, taken without ducking")
         self._emit(StageEvent.RUN_START, {})
         self._emit(StageEvent.STT_START, {})
         # Speech is already in-stream (pre-roll captured the command); the matching
         # STT_VAD_END (thinking) is emitted in _run once VAD finalizes the utterance.
-        self._emit(StageEvent.STT_VAD_START, {})
+        # Over the music the check did not accept, its `listening` tells the device not to
+        # duck that music (Device._send_event).
+        self._emit(StageEvent.STT_VAD_START, {} if run.duck else {"duck": False})
 
     def _release(self, run: Run) -> None:
         """Let a taken run's audio through to STT, once per run: the arbitration let it
@@ -691,7 +703,13 @@ class Pipeline(SpeechMixin):
         verdict = await self.verify_wake(pcm, over_answer=run.over_answer)
         if run.finalized:
             return  # the run was dropped while we were verifying.
-        run.verdict, run.score, run.verify_ms, run.error = verdict
+        if run.over_music and not run.over_answer:
+            # Over the device's music the check decides only whether the music ducks:
+            # the wake is taken either way and its phrase confirms it (_run), so its
+            # record carries no score of this check.
+            run.duck, run.verdict = verdict[0], True
+        else:
+            run.verdict, run.score, run.verify_ms, run.error = verdict
         if run.verdict and run.arbitrating:
             self.arbiter.run_changed(self, run.token)
         self._advance(run)
@@ -917,9 +935,10 @@ class Pipeline(SpeechMixin):
         conversation_id = run.cid
         # The last turn when this utterance was heard in a follow-up window, else None.
         followup = run.followup
-        # A wake's phrase the quick check did not hold (on_wake): with the wake-word
-        # check on, its wake is confirmed by the wake word in its transcript
-        # (has_wake_word, in _gate below). The same switch as the quick check, so with
+        # A wake's phrase the quick check did not hold (on_wake), or held over the music
+        # only for the ducking: with the wake-word check on, its wake is confirmed by the
+        # wake word in its transcript (has_wake_word, in _gate below). The same switch as
+        # the quick check, so with
         # it off a wake on a model of another word (Okay Nabu, Hey Jarvis) still passes.
         # A wake another device woke with is confirmed by that: one STT drops the wake
         # word that the other devices' recordings carry.
@@ -1272,7 +1291,8 @@ class Pipeline(SpeechMixin):
         """A pipeline run's record before its stages fill it in (new_record with the
         stage fields at their not-run values); `fields` set the rest. A voice run's
         (`run`) also carries its second-stage wake-word gate: the verify latency and
-        score, 0/None for an ungated (non-wake / disabled / passthrough) run; a text
+        score, 0/None for an ungated (non-wake / disabled / passthrough) run or one over
+        the music, checked only for the ducking; a text
         request has neither key.
 
         t_vad is the captured-utterance duration in ms (the "VAD capture" segment

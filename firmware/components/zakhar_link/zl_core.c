@@ -96,6 +96,9 @@ static bool decode_fields(const cJSON *o, const char *type, zl_msg_t *m)
         while (i < sizeof STATES / sizeof STATES[0] && strcmp(v->valuestring, STATES[i]) != 0) i++;
         if (i == sizeof STATES / sizeof STATES[0]) return false;
         m->state = (zl_state_t)i;
+        m->duck = true;
+        const cJSON *d = field(o, "duck");
+        if (d != NULL && !get_bool(d, &m->duck)) return false;
         return get_text(o, "text", NULL, &m->text);
     }
     if (strcmp(type, "transcript") == 0) {
@@ -255,11 +258,13 @@ char *zl_encode_hello(const zl_config_t *cfg, int volume, uint32_t capture, uint
     return finish(o, ok);
 }
 
-char *zl_encode_wake(uint32_t session, const char *word)
+char *zl_encode_wake(uint32_t session, const char *word, bool music)
 {
     cJSON *o = message("wake");
-    return finish(o, o != NULL && cJSON_AddNumberToObject(o, "session", session) != NULL &&
-                         cJSON_AddStringToObject(o, "word", word) != NULL);
+    bool ok = o != NULL && cJSON_AddNumberToObject(o, "session", session) != NULL &&
+              cJSON_AddStringToObject(o, "word", word) != NULL;
+    if (ok && music) ok = cJSON_AddTrueToObject(o, "music") != NULL;
+    return finish(o, ok);
 }
 
 char *zl_encode_played(uint32_t id, bool dropped, uint32_t dry, uint32_t gap_ms)
@@ -441,9 +446,11 @@ bool zl_sess_state(zl_sess_t *s, const zl_msg_t *m, bool *rewind)
         s->session = m->session;
         s->open = true;
         s->mic = true;
+        s->quiet = !m->duck;
         return true;
     }
     if (m->state == ZL_STATE_LISTENING) {
+        s->quiet = !m->duck;
         if (s->open && !s->mic) {
             s->mic = true;
             // A proposal's audio already streams: the follow-up's goes on in it, from where it is.
@@ -471,6 +478,11 @@ bool zl_sess_streams(const zl_sess_t *s)
 bool zl_sess_busy(const zl_sess_t *s)
 {
     return s->open || s->proposed != 0 || s->capture;
+}
+
+bool zl_sess_ducks(const zl_sess_t *s)
+{
+    return (s->open && !s->quiet) || s->capture;
 }
 
 void zl_sess_lost(zl_sess_t *s, bool *was_open)

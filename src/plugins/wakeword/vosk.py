@@ -5,7 +5,8 @@ trigger is decoded by a Vosk recognizer constrained to a tiny grammar (the wake
 keywords plus "[unk]"; for a wake over the device's own answer also the fixed
 sound-alike words, ANSWER_SOUND_ALIKES). Grammar mode keeps the decode fast (one decode of the
 default 2.5 s window takes ~45 ms in production), so it is required. The verdict
-gates the rest of the pipeline.
+gates the rest of the pipeline, except over the device's music alone, where it decides only
+whether that music ducks.
 """
 
 import asyncio
@@ -173,11 +174,12 @@ class VoskWakewordVerifier(WakewordVerifier):
 
 class VoskWakewordConfig(BaseModel):
     # Vosk listens only for the wake words; a reject stops the run before STT, LLM and
-    # TTS. The model loads on first enable.
+    # TTS (over the device's music alone it only keeps the music from ducking). The model
+    # loads on first enable.
     enabled: bool = Field(
         True,
         title="Wake word verify",
-        description="Checks wakes on the server: one over the device's running answer with offline recognition before the request runs (one over its playing answer only stops it), any other by the wake word in its recognised phrase, unless another device woke on it too while nothing plays. Off — every wake passes.",
+        description="Checks wakes on the server: one over the device's running answer with offline recognition before the request runs (one over its playing answer only stops it), any other by the wake word in its recognised phrase, unless another device woke on it too while nothing plays; over the device's music alone the offline recognition decides only whether the music ducks. Off — every wake passes.",
     )
     model_path: str = Field(
         "models/vosk-model-small-ru-0.22",
@@ -191,7 +193,7 @@ class VoskWakewordConfig(BaseModel):
     keywords: list[str] = Field(
         default_factory=lambda: ["захар"],
         title="Keywords",
-        description="Wake words the check over a running answer accepts; empty accepts every such wake. Any other wake is checked for the device's wake word in its phrase, unless another device woke on it too while nothing plays.",
+        description="Wake words the offline check accepts (over a running answer, or over the music for ducking); empty accepts every such wake. Any other wake is checked for the device's wake word in its phrase, unless another device woke on it too while nothing plays.",
         json_schema_extra=PHRASE_FIELD_EXTRA,
     )
 
@@ -235,7 +237,7 @@ class VoskWakewordConfig(BaseModel):
 class VoskWakewordProvider(Provider):
     category = "wakeword"
     id = "vosk"
-    label = "Wake check over an answer"
+    label = "Wake check over an answer or music"
     ConfigModel = VoskWakewordConfig
 
     def create(self, cfg: VoskWakewordConfig, deps: Deps):

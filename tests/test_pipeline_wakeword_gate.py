@@ -162,6 +162,32 @@ async def test_gate_accept_over_a_silent_session_runs_the_phrase(tmp_path, monke
     assert (rec["result"], rec["stt_text"], rec["llm_text"]) == ("ok", "включи свет", "готово")
 
 
+@pytest.mark.parametrize("accepted", [False, True])
+async def test_a_wake_over_the_music_is_decided_by_its_phrase(tmp_path, monkeypatch, accepted):
+    # Over the device's music the check decides only whether the music ducks: the wake is
+    # taken either way, and a phrase without the wake word ends it silently, with no
+    # handler and no answer.
+    patch_llm(monkeypatch, reply="готово")
+    store = FakeRunsStore()
+    verifier = FakeWakewordVerifier(accepted=accepted, score=0.4, window_ms=VERIFY_WINDOW_MS)
+    pipeline, events = _make_gated(tmp_path, monkeypatch, verifier=verifier,
+                                   stt_text="включи свет", runs_store=store)
+    install_phrase_vad(pipeline)
+
+    pipeline.on_wake("cid", WAKE, over_music=True)
+    assert events == []  # held for the check
+    await pipeline.on_audio(PHRASE)
+    await settle(pipeline)
+    assert len(verifier.calls) == 1
+    assert (StageEvent.STT_VAD_START, {} if accepted else {"duck": "False"}) in events
+    assert StageEvent.TTS_START not in types_of(events)
+    assert pipeline.play.calls == []
+    rec = store.records[-1]
+    assert (rec["result"], rec["reason"], rec["llm_text"]) == ("rejected", "wakeword_reject", "")
+    # The record is that of a wake decided by its phrase: no score of the ducking check.
+    assert (rec["wakeword_score"], rec["t_wakeword"]) == (None, 0)
+
+
 # --- (b) reject -> silent abort, recorded ------------------------------------
 
 

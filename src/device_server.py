@@ -600,7 +600,10 @@ class Device:
         elif event is StageEvent.RUN_END and not conn.session_open:
             pass  # the session already ended with `state error`
         elif event in _STATE_FOR_EVENT:
-            conn.send_session({"type": "state", "value": _STATE_FOR_EVENT[event]})
+            msg = {"type": "state", "value": _STATE_FOR_EVENT[event]}
+            if "duck" in data:  # a wake taken over the music without ducking it (Pipeline._take)
+                msg["duck"] = False
+            conn.send_session(msg)
         if event in (StageEvent.RUN_END, StageEvent.ERROR):
             conn.session_open = False
 
@@ -637,12 +640,14 @@ class Device:
         if kind == "wake":
             # Over a running answer or an open session the wake may be the speaker's
             # own voice, which the check is told; the answer goes on until the wake is
-            # taken (take_session). One over a playing stream only stops it.
+            # taken (take_session). One over a playing stream only stops it. One over the
+            # device's own music (`music`) is held for the check too, which decides only
+            # whether that music ducks.
             over_answer = conn.session_open or conn.playing
             self.publish_event("wake", {"session": msg["session"], "word": msg.get("word"),
                                         "over_answer": over_answer})
             self.pipeline.on_wake(msg["session"], msg.get("word"), over_answer=over_answer,
-                                  over_playback=conn.playing)
+                                  over_music=bool(msg.get("music")), over_playback=conn.playing)
         elif kind == "button":
             # The device's button stops what plays (a ring, an answer) as `play_stop` does.
             if conn.playing:
