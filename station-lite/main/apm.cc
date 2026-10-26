@@ -8,12 +8,12 @@ static const char *TAG = "apm";
 // Called from the capture thread only, as the modules require.
 static rtc::scoped_refptr<webrtc::AudioProcessing> s_clean, s_agc;
 
-extern "C" bool apm_init(void)
+extern "C" bool apm_init(bool noise_suppression)
 {
     webrtc::AudioProcessing::Config c;
     c.high_pass_filter.enabled = true;
     c.echo_canceller.enabled = true;
-    c.noise_suppression.enabled = true;
+    c.noise_suppression.enabled = noise_suppression;
     s_clean = webrtc::AudioProcessingBuilder().SetConfig(c).Create();
     webrtc::AudioProcessing::Config a;
     a.gain_controller2.enabled = true;

@@ -1,10 +1,8 @@
-// The capture thread reads 10 ms of the microphones (hw:0,1, 8 channels: the four microphones on 0,
-// 2, 4 and 6, each repeated on the next one) and of the speaker's own signal (hw:0,0 capture, 2
-// channels) in lockstep: the two streams are linked, so they start together and recover from an
-// overrun together. The microphones' average and the speaker's signal go through the audio
-// processing (apm.h); channel 1 is its cleaned 16 kHz output at WAKE_GAIN (below), channel
-// 0 the same after AGC2, as the Voice PE's XMOS gives its noise-suppressed and its AGC channel. Both
-// go to the tap, channel 1 also to the wake-word engine.
+// The capture thread reads 10 ms of the microphones (hw:0,1, 8 channels) and of the speaker's own
+// signal (hw:0,0 capture, 2 channels) in lockstep: the two streams are linked, so they start
+// together and recover from an overrun together. mic_chain.h turns the two into the tap's two 16
+// kHz channels: 1 the cleaned output, 0 the same after AGC2, as the Voice PE's XMOS gives its
+// noise-suppressed and its AGC channel. Both go to the tap, channel 1 also to the wake-word engine.
 // The speaker thread plays zakhar's playback (mono, 48 kHz) at the volume's gain on both channels of
 // hw:0,0, and silence while there is none.
 // tinyalsa opens, sets up, links and prepares the streams; the frames go through the READI and
@@ -15,7 +13,6 @@
 #include "audio.h"
 
 #include <errno.h>
-#include <math.h>
 #include <pthread.h>
 #include <sound/asound.h>
 #include <stdatomic.h>
@@ -26,6 +23,7 @@
 #include "apm.h"
 #include "audio_core.h"
 #include "esp_log.h"
+#include "mic_chain.h"
 #include "tinyalsa/pcm.h"
 #include "wake_word.h"
 #include "zakhar_link.h"
@@ -39,12 +37,7 @@ static const char *TAG = "audio";
 #define FRAMES APM_IN_FRAMES  // the period: 10 ms
 // The microphones take at most 2048 frames of buffer at 8 channels: 4 periods, for every stream.
 #define PERIODS 4
-#define MIC_CHANNELS 8
 #define MIC_RATE 16000
-// Channel 1's gain, four times the Voice PE's 4 (firmware/main/audio.c): at 4 a quiet room's noise
-// reaches the wake-word engine at a few LSB, and the model fires on it in bursts that only its VAD
-// holds back.
-#define WAKE_GAIN 16
 // The tap as the Voice PE sizes it (firmware/main/audio.c): 8.192 s, readers 1 s away from the end
 // being overwritten; what is left holds the 2000 ms pre-roll plus zakhar_link's 3000 ms send timeout.
 #define TAP_FRAMES (1u << 17)
@@ -82,35 +75,16 @@ static void transfer(struct pcm *pcm, unsigned long request, int16_t *buf, unsig
     }
 }
 
-static int16_t to_s16(float v)
-{
-    const float s = v * 32768.0f;
-    return s >= 32767.0f ? 32767 : s <= -32768.0f ? -32768 : (int16_t)lrintf(s);
-}
-
 static void *capture_main(void *arg)
 {
     (void)arg;
     static int16_t mics[FRAMES * MIC_CHANNELS], spk[FRAMES * 2], frames[APM_OUT_FRAMES * 2], wake[APM_OUT_FRAMES];
-    static float mic[FRAMES], ref_l[FRAMES], ref_r[FRAMES], clean[APM_OUT_FRAMES], agc[APM_OUT_FRAMES];
-    const float *const ref[2] = {ref_l, ref_r};
     ESP_LOGI(TAG, "capture thread running: microphones hw:%d,%d, speaker reference hw:%d,%d", CARD, DEV_MICS, CARD,
              DEV_SPEAKER);
     for (;;) {
         transfer(s_mics, SNDRV_PCM_IOCTL_READI_FRAMES, mics, MIC_CHANNELS, "microphones");
         transfer(s_ref, SNDRV_PCM_IOCTL_READI_FRAMES, spk, 2, "speaker reference");
-        for (int i = 0; i < FRAMES; i++) {
-            const int16_t *m = &mics[i * MIC_CHANNELS];
-            mic[i] = (float)(m[0] + m[2] + m[4] + m[6]) / (4.0f * 32768.0f);
-            ref_l[i] = (float)spk[2 * i] / 32768.0f;
-            ref_r[i] = (float)spk[2 * i + 1] / 32768.0f;
-        }
-        if (!apm_process(ref, mic, clean, agc)) exit(1);
-        for (int i = 0; i < APM_OUT_FRAMES; i++) {
-            wake[i] = to_s16(clean[i] * WAKE_GAIN);
-            frames[2 * i] = to_s16(agc[i]);
-            frames[2 * i + 1] = wake[i];
-        }
+        if (!mic_chain_process(mics, spk, frames, wake)) exit(1);
         tap_write(&s_tap, frames, APM_OUT_FRAMES);
         wake_word_feed(wake, APM_OUT_FRAMES);
     }
@@ -170,7 +144,7 @@ static bool start_thread(void *(*fn)(void *), size_t stack, const char *what)
 bool audio_start_capture(void)
 {
     tap_init(&s_tap, s_tap_buf, TAP_FRAMES, TAP_MARGIN, 2);
-    if (!apm_init()) return false;
+    if (!apm_init(true)) return false;
     s_mics = open_pcm(DEV_MICS, PCM_IN, MIC_CHANNELS, "microphones");
     s_ref = open_pcm(DEV_SPEAKER, PCM_IN, 2, "speaker reference");
     if (s_mics == NULL || s_ref == NULL) return false;

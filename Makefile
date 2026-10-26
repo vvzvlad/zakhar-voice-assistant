@@ -229,17 +229,17 @@ STATION_IMAGE := dockcross/linux-armv7l-musl:20260928-b67e766
 STATION_OUT   := station-lite/build
 STATION_SSH    = ssh -p 2222 root@$(HOST)
 
-.PHONY: station-build station-host-test station-run station-install
-station-build: ## Build the Station Lite client on cirunner into station-lite/build/zakhar-station
+.PHONY: station-build station-host-test station-run station-install station-replay
+station-build: ## Build the Station Lite client and zakhar-replay on cirunner into station-lite/build/
 	@mkdir -p $(STATION_OUT)
 	set -o pipefail; COPYFILE_DISABLE=1 tar -cf - station-lite/build.sh station-lite/compat station-lite/main \
-		firmware/components/zakhar_link firmware/components/wake_word firmware/main/audio_core.c \
+		station-lite/tools firmware/components/zakhar_link firmware/components/wake_word firmware/main/audio_core.c \
 		firmware/main/audio_core.h firmware/main/music_ring.h firmware/main/ui_core.c firmware/main/ui_core.h \
 	| $(FW_DOCKER) run --rm -i -v zakhar-station-cache:/cache --entrypoint bash $(STATION_IMAGE) -c 'set -e; \
 		mkdir /w; cd /w; tar -xf -; station-lite/build.sh $(shell git describe --always --dirty) >&2; \
-		tar -cf - -C station-lite/build zakhar-station' \
+		tar -cf - -C station-lite/build zakhar-station zakhar-replay' \
 	| tar -C $(STATION_OUT) -xf -
-	file $(STATION_OUT)/zakhar-station
+	file $(STATION_OUT)/zakhar-station $(STATION_OUT)/zakhar-replay
 
 station-host-test: ## Host-test the Station Lite client's pure parts (WebSocket frames, mDNS packets, volume)
 	@mkdir -p $(STATION_OUT)/host
@@ -282,6 +282,36 @@ station-install: ## Install the Station Lite client in place of quasar, from eve
 	$(STATION_SSH) 'mount -o remount,rw / && cat >/etc/init.d/S99zakhar && chmod +x /etc/init.d/S99zakhar && \
 		{ [ ! -f /etc/init.d/S99quasar ] || mv /etc/init.d/S99quasar /etc/init.d/quasar.disabled; } && sync; \
 		mount -o remount,ro / && /etc/init.d/S99zakhar start' <station-lite/S99zakhar
+
+# zakhar-replay (station-lite/tools/replay.c) runs the client's own microphone processing over a
+# recording of hw:0,1 (8 channels, S16, 48 kHz, as arecord writes it) on the board, with the speaker
+# reference silent, and brings back the tap's two 16 kHz channels as OUT; ARGS=--no-ns turns noise
+# suppression off. Channel 1 also goes through the client's wake-word engine: the tool prints the
+# moments the wake model reaches its cutoff, the engine what it decided there. It opens no sound
+# device, so the running client stays up. The tool, the models and IN go to the board's /tmp, which
+# is RAM (keep IN to a few tens of MB), and are deleted there afterwards, as is the output once
+# fetched. Each step gets its own ssh connection, not a shared ControlMaster one: the board's
+# dropbear keeps what a large upload made it allocate until its connection ends.
+station-replay: STATION_SSH = ssh -o ControlPath=none -p 2222 root@$(HOST)
+# The wake-word models the server sends the board, and its cutoffs as the engine takes them, 0..255
+# (the board's "config:" log line: wake 204, vad 76).
+station-replay: WAKE_MODEL ?= microWakeWord/v31/model/zakhar.tflite
+station-replay: VAD_MODEL ?= microWakeWord/vad/vad.tflite
+station-replay: WAKE_CUTOFF ?= 204
+station-replay: VAD_CUTOFF ?= 76
+station-replay: ## Replay a microphone recording through the client's processing and wake-word engine on a board: make station-replay HOST=<address> IN=<mics.wav> OUT=<out.wav> [ARGS=--no-ns]
+	@test -n "$(HOST)" -a -f "$(IN)" -a -n "$(OUT)" -a -d "$(dir $(OUT))" || \
+		{ echo "HOST=<board address> IN=<mics.wav> OUT=<out.wav> are required, IN and OUT's directory existing" >&2; exit 1; }
+	$(STATION_SSH) 'cat >/tmp/zakhar-replay && chmod +x /tmp/zakhar-replay' <$(STATION_OUT)/zakhar-replay && \
+	$(STATION_SSH) 'cat >/tmp/zakhar-replay-wake.tflite' <$(WAKE_MODEL) && \
+	$(STATION_SSH) 'cat >/tmp/zakhar-replay-vad.tflite' <$(VAD_MODEL) && \
+	$(STATION_SSH) 'cat >/tmp/zakhar-replay-in.wav' <$(IN) || { $(STATION_SSH) -n 'rm -f /tmp/zakhar-replay \
+		/tmp/zakhar-replay-wake.tflite /tmp/zakhar-replay-vad.tflite /tmp/zakhar-replay-in.wav'; exit 1; }
+	$(STATION_SSH) -n '/tmp/zakhar-replay $(ARGS) --wake /tmp/zakhar-replay-wake.tflite $(WAKE_CUTOFF) \
+		/tmp/zakhar-replay-vad.tflite $(VAD_CUTOFF) /tmp/zakhar-replay-in.wav /tmp/zakhar-replay-out.wav; s=$$?; \
+		rm -f /tmp/zakhar-replay /tmp/zakhar-replay-wake.tflite /tmp/zakhar-replay-vad.tflite /tmp/zakhar-replay-in.wav; \
+		[ $$s = 0 ] || rm -f /tmp/zakhar-replay-out.wav; exit $$s'
+	$(STATION_SSH) -n 'cat /tmp/zakhar-replay-out.wav && rm /tmp/zakhar-replay-out.wav' >$(OUT)
 
 # --- Housekeeping ------------------------------------------------------------
 .PHONY: clean

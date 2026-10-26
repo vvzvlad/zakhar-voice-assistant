@@ -1,5 +1,5 @@
 #!/bin/bash
-# Builds station-lite/build/zakhar-station: run by `make station-build` inside
+# Builds station-lite/build/zakhar-station and zakhar-replay: run by `make station-build` inside
 # dockcross/linux-armv7l-musl, from the root of the tree tarred in, with the cache volume on /cache.
 # Third-party code is fetched at pinned versions into /cache/src (checked against its sha256), and
 # the two heavy libraries (TFLite Micro, webrtc-audio-processing with its abseil) are built once
@@ -139,7 +139,7 @@ EOF
 fi
 WEBRTC_LIBS=$(find "$LIB/webrtc-build" -name '*.a' | sort)
 
-# ---------------------------------------------------------------- the binary
+# ---------------------------------------------------------------- the binaries
 
 COMPAT=station-lite/compat
 FW=firmware
@@ -158,8 +158,9 @@ compile "$CC" $FLAGS -O2 -std=gnu17 -I"$MSF/include" -I"$MSF/src" -I"$COMPAT" <"
 printf '%s\n' "$CJSON/cJSON.c" \
     $COMPAT/{esp,freertos,mdns,mdns_packet,websocket,ws_frame}.c \
     $FW/components/zakhar_link/{zakhar_link,zl_core}.c $FW/main/{audio_core,ui_core}.c \
-    station-lite/main/{main,audio,leds,volume}.c >"$OBJ/c.list"
+    station-lite/main/{main,audio,mic_chain,leds,volume}.c >"$OBJ/c.list"
 compile "$CC" $CFLAGS -DSTATION_VERSION="\"$VERSION\"" <"$OBJ/c.list"
+compile "$CC" $CFLAGS <<<"station-lite/tools/replay.c"
 compile "$CXX" $CXXFLAGS $TFLM_DEF $TFLM_INC <<<"$FW/components/wake_word/wake_word.cpp"
 # The installed abseil headers sit in include/, which the .pc of a build with abseil as a
 # subproject does not name.
@@ -169,4 +170,10 @@ compile "$CXX" $CXXFLAGS $(PKG_CONFIG_PATH="$LIB/webrtc/lib/pkgconfig" pkg-confi
 cat "$OBJ"/{c,tinyalsa,msf}.list <(echo "$FW/components/wake_word/wake_word.cpp") <(echo station-lite/main/apm.cc) \
     | objects >"$OBJ/link.list"
 "$CXX" $FLAGS -static -no-pie -o "$OUT/zakhar-station" $(cat "$OBJ/link.list") \
+    -Wl,--start-group "$LIB/libtflm.a" $WEBRTC_LIBS -Wl,--end-group -lm
+# The replay tool: the capture processing and the wake-word engine with its log, nothing of the
+# sound card or the link.
+cat <(printf '%s\n' station-lite/tools/replay.c station-lite/main/{mic_chain.c,apm.cc} $COMPAT/{esp,freertos}.c \
+    "$FW/components/wake_word/wake_word.cpp") "$OBJ/msf.list" | objects >"$OBJ/replay.list"
+"$CXX" $FLAGS -static -no-pie -o "$OUT/zakhar-replay" $(cat "$OBJ/replay.list") \
     -Wl,--start-group "$LIB/libtflm.a" $WEBRTC_LIBS -Wl,--end-group -lm
