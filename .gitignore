@@ -20,6 +20,7 @@ firmware/managed_components/
 firmware/sdkconfig
 firmware/sdkconfig.old
 firmware/sdkconfig.secrets
+station-lite/build/
 
 # Claude Code git worktrees — must never be committed
 .claude/worktrees/

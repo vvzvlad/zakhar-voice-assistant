@@ -215,6 +215,74 @@ fw-voicepe-host-test: ## Host-test the Voice PE firmware's pure cores (audio, in
 	$(FW_HOST)/test_audio_core
 	$(FW_HOST)/test_ui_core
 
+# --- Yandex Station Lite -----------------------------------------------------
+# station-lite/: the zakhar device client for the Yandex Station Lite board, one static armhf
+# binary in place of the board's stock audio software. It compiles the firmware's zakhar_link,
+# wake_word, audio_core and ui_core unchanged over station-lite/compat/'s ESP-IDF and FreeRTOS shims.
+# The build runs on the cirunner docker host like fw-build: the sources in as a tar on stdin, the
+# binary back as a tar on stdout into station-lite/build/, the log on stderr. The toolchain is
+# dockcross's musl one: the glibc of dockcross/linux-armv7 refuses to start on the board's 4.9
+# kernel ("FATAL: kernel too old", it wants 5.4), and its -lts images want 4.19.
+# station-lite/build.sh fetches the third-party code at pinned versions; the cirunner volume
+# zakhar-station-cache keeps the downloads and the built TFLite Micro and webrtc-audio-processing.
+STATION_IMAGE := dockcross/linux-armv7l-musl:20260928-b67e766
+STATION_OUT   := station-lite/build
+STATION_SSH    = ssh -p 2222 root@$(HOST)
+
+.PHONY: station-build station-host-test station-run station-install
+station-build: ## Build the Station Lite client on cirunner into station-lite/build/zakhar-station
+	@mkdir -p $(STATION_OUT)
+	set -o pipefail; COPYFILE_DISABLE=1 tar -cf - station-lite/build.sh station-lite/compat station-lite/main \
+		firmware/components/zakhar_link firmware/components/wake_word firmware/main/audio_core.c \
+		firmware/main/audio_core.h firmware/main/music_ring.h firmware/main/ui_core.c firmware/main/ui_core.h \
+	| $(FW_DOCKER) run --rm -i -v zakhar-station-cache:/cache --entrypoint bash $(STATION_IMAGE) -c 'set -e; \
+		mkdir /w; cd /w; tar -xf -; station-lite/build.sh $(shell git describe --always --dirty) >&2; \
+		tar -cf - -C station-lite/build zakhar-station' \
+	| tar -C $(STATION_OUT) -xf -
+	file $(STATION_OUT)/zakhar-station
+
+station-host-test: ## Host-test the Station Lite client's pure parts (WebSocket frames, mDNS packets, volume)
+	@mkdir -p $(STATION_OUT)/host
+	cc -std=gnu17 -Wall -Wextra -Werror -I station-lite/compat station-lite/host_test/test_ws_frame.c \
+		station-lite/compat/ws_frame.c -o $(STATION_OUT)/host/test_ws_frame
+	cc -std=gnu17 -Wall -Wextra -Werror -I station-lite/compat station-lite/host_test/test_mdns_packet.c \
+		station-lite/compat/mdns_packet.c -o $(STATION_OUT)/host/test_mdns_packet
+	cc -std=gnu17 -Wall -Wextra -Werror -I station-lite/main station-lite/host_test/test_volume.c \
+		station-lite/main/volume.c -lm -o $(STATION_OUT)/host/test_volume
+	$(STATION_OUT)/host/test_ws_frame
+	$(STATION_OUT)/host/test_mdns_packet
+	$(STATION_OUT)/host/test_volume
+
+# The stock software stops with the board's own helper (`q start` brings it back, as does a
+# reboot) and no maind may be left: it holds the microphones. A zakhar-station still running goes
+# too; the binary lands in /tmp (the rootfs is read-only) and runs detached, its log in
+# /tmp/zakhar-station.log, its stored volume in /tmp/volume.
+station-run: ## Start station-lite/build/zakhar-station on a board: make station-run HOST=<address>
+	@test -n "$(HOST)" || { echo "HOST=<board address> is required" >&2; exit 1; }
+	$(STATION_SSH) -n '/system/vendor/quasar/q stop; \
+		! pidof maind >/dev/null || { echo "maind is still running" >&2; exit 1; }; \
+		killall zakhar-station 2>/dev/null; while pidof zakhar-station >/dev/null; do sleep 1; done'
+	$(STATION_SSH) 'cat >/tmp/zakhar-station && chmod +x /tmp/zakhar-station && \
+		{ nohup /tmp/zakhar-station </dev/null >/tmp/zakhar-station.log 2>&1 & }' <$(STATION_OUT)/zakhar-station
+
+# The board as a zakhar device from every boot on: the binary (and the volume it stores next to
+# itself) in /data/opt/zakhar, /data being the board's writable partition; station-lite/S99zakhar
+# in /etc/init.d, and the stock S99quasar there renamed to quasar.disabled so the boot skips it
+# (renaming it back brings quasar back). The rootfs is read-only: remounted for the script and the
+# rename, synced before it goes back. The stock software and any running client stop first, then
+# the installed client starts.
+station-install: ## Install the Station Lite client in place of quasar, from every boot: make station-install HOST=<address>
+	@test -n "$(HOST)" || { echo "HOST=<board address> is required" >&2; exit 1; }
+	$(STATION_SSH) -n '/system/vendor/quasar/q stop; \
+		! pidof maind >/dev/null || { echo "maind is still running" >&2; exit 1; }; \
+		killall zakhar-station 2>/dev/null; while pidof zakhar-station >/dev/null; do sleep 1; done; \
+		mkdir -p /data/opt/zakhar'
+	$(STATION_SSH) 'cat >/data/opt/zakhar/zakhar-station && chmod +x /data/opt/zakhar/zakhar-station && sync' \
+		<$(STATION_OUT)/zakhar-station
+	$(STATION_SSH) 'mount -o remount,rw / && cat >/etc/init.d/S99zakhar && chmod +x /etc/init.d/S99zakhar && \
+		{ [ ! -f /etc/init.d/S99quasar ] || mv /etc/init.d/S99quasar /etc/init.d/quasar.disabled; } && sync; \
+		mount -o remount,ro / && /etc/init.d/S99zakhar start' <station-lite/S99zakhar
+
 # --- Housekeeping ------------------------------------------------------------
 .PHONY: clean
 clean: ## Remove the venv and Python caches

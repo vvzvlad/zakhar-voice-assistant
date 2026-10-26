@@ -1,0 +1,13 @@
+#!/bin/sh
+# zakhar-station, the zakhar device client, started at boot in place of the stock quasar software:
+# `make station-install` puts this script in /etc/init.d and renames S99quasar there to
+# quasar.disabled (renamed back, quasar starts again from the next boot). The client keeps its
+# volume next to its binary in /data/opt/zakhar; its log goes to /tmp/zakhar-station.log.
+case "$1" in
+start)
+	/data/opt/zakhar/zakhar-station </dev/null >/tmp/zakhar-station.log 2>&1 &
+	;;
+stop)
+	killall zakhar-station
+	;;
+esac
