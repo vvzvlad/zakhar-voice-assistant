@@ -284,6 +284,92 @@ async def test_groq_options_model_cache_is_keyed_by_api_key(_reset_model_caches)
         assert route.calls.last.request.headers["Authorization"] == "Bearer gsk-2"
 
 
+# --- Groq 404 model swap ------------------------------------------------------
+
+_GROQ_CATALOG = {"data": [
+    {"id": "openai/gpt-oss-120b", "output_modalities": ["text"], "input_modalities": ["text"],
+     "context_window": 131072},
+    {"id": "qwen/qwen3.8-27b", "output_modalities": ["text"], "input_modalities": ["text", "image"],
+     "context_window": 131072},
+    {"id": "whisper-large-v3", "output_modalities": ["transcription"],
+     "input_modalities": ["audio"], "context_window": 448},
+    {"id": "canopylabs/orpheus-v1-english", "output_modalities": ["speech"],
+     "input_modalities": ["text"], "context_window": 4000},
+    {"id": "meta-llama/llama-prompt-guard-2-86m", "output_modalities": ["text"],
+     "input_modalities": ["text"], "context_window": 512},
+]}
+
+
+def _groq_swap_routes():
+    chat = respx.post(GROQ_API_URL).mock(side_effect=[
+        httpx.Response(404, json={"error": {"message": "model decommissioned"}}),
+        httpx.Response(200, json={"choices": []}),
+        httpx.Response(200, json={"choices": []}),
+    ])
+    models = respx.get(GROQ_MODELS_URL).mock(return_value=httpx.Response(200, json=_GROQ_CATALOG))
+    return chat, models
+
+
+@respx.mock
+async def test_groq_llm_404_swaps_to_largest_context_chat_model(_reset_model_caches):
+    chat, models = _groq_swap_routes()
+    prov = get_provider("llm", "groq")
+    deps = _deps()
+    async with deps.http_cloud:
+        backend = prov.create(GroqLlmConfig(api_key="gsk-1", model="llama-3.3-70b-versatile"), deps)
+        out = await backend.complete([{"role": "user", "content": "hi"}], None)
+    assert out == {"choices": []}
+    import json as _json
+    assert _json.loads(chat.calls[0].request.content)["model"] == "llama-3.3-70b-versatile"
+    # gpt-oss-120b over qwen: same context, smaller id breaks the tie; whisper,
+    # Orpheus (TTS) and the prompt-guard classifiers are not chat models.
+    assert _json.loads(chat.calls[1].request.content)["model"] == "openai/gpt-oss-120b"
+    assert models.call_count == 1
+
+
+@respx.mock
+async def test_groq_llm_swap_is_remembered_for_later_requests(_reset_model_caches):
+    chat, _models = _groq_swap_routes()
+    prov = get_provider("llm", "groq")
+    deps = _deps()
+    async with deps.http_cloud:
+        backend = prov.create(GroqLlmConfig(api_key="gsk-1", model="gone"), deps)
+        await backend.complete([{"role": "user", "content": "hi"}], None)
+        await backend.complete([{"role": "user", "content": "hi"}], None)  # hits the live model
+    assert chat.calls[2].response.status_code == 200
+    import json as _json
+    assert _json.loads(chat.calls[2].request.content)["model"] == "openai/gpt-oss-120b"
+    assert chat.call_count == 3 and _models.call_count == 1
+
+
+@respx.mock
+async def test_groq_llm_404_without_a_chat_model_reraises(_reset_model_caches):
+    respx.post(GROQ_API_URL).mock(return_value=httpx.Response(404, json={}))
+    respx.get(GROQ_MODELS_URL).mock(return_value=httpx.Response(200, json={"data": [
+        {"id": "whisper-large-v3", "output_modalities": ["transcription"],
+         "input_modalities": ["audio"]},
+    ]}))
+    prov = get_provider("llm", "groq")
+    deps = _deps()
+    async with deps.http_cloud:
+        backend = prov.create(GroqLlmConfig(api_key="gsk-1", model="gone"), deps)
+        with pytest.raises(httpx.HTTPStatusError):
+            await backend.complete([{"role": "user", "content": "hi"}], None)
+
+
+@respx.mock
+async def test_groq_llm_non_404_is_not_swapped(_reset_model_caches):
+    chat = respx.post(GROQ_API_URL).mock(return_value=httpx.Response(429, json={}))
+    models = respx.get(GROQ_MODELS_URL).mock(return_value=httpx.Response(200, json=_GROQ_CATALOG))
+    prov = get_provider("llm", "groq")
+    deps = _deps()
+    async with deps.http_cloud:
+        backend = prov.create(GroqLlmConfig(api_key="gsk-1", model="m"), deps)
+        with pytest.raises(httpx.HTTPStatusError):
+            await backend.complete([{"role": "user", "content": "hi"}], None)
+    assert chat.call_count == 1 and models.call_count == 0  # rate limit, not a dead model
+
+
 # --- custom OpenAI-compatible endpoint ----------------------------------------
 
 @respx.mock
