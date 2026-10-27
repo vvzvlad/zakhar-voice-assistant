@@ -61,6 +61,10 @@ async def main() -> None:
     # deps.instance_config.
     deps.instance_config = svc.instance_config
     deps.commands = lambda: svc.core.commands
+    # The jev handler routes commands by the assistant's saved memory facts; the
+    # memory switch (core.memory.enabled) drops them the same way it drops them
+    # from the prompt.
+    deps.memory = lambda: memory.facts() if svc.core.memory.enabled else []
     core = svc.core
     vad_backend = svc.create("vad")
     # One STT / handler backend per provider an enabled recognition chain references.

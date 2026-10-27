@@ -405,3 +405,90 @@ def build_lemmatizer():
     identity-lowercase fallback if pymorphy3 is unavailable."""
     morph = morphology()
     return morph.lemma if morph is not None else (lambda w: w.lower())
+
+
+def _word_set(text: str, lemmatize) -> frozenset:
+    """The lowercased words of `text`, lemmatized when `lemmatize` is given."""
+    words = [w.lower() for w in re.findall(r"[а-яёa-zA-ZА-Я0-9]+", text)]
+    if lemmatize is not None:
+        words = [lemmatize(w) for w in words]
+    return frozenset(words)
+
+
+def aliases_from_facts(facts: list[str], catalog_entries: list[dict], lemmatize=None) -> list[dict]:
+    """Alias entries derived from the assistant's saved memory facts.
+
+    A fact of the form «X — это Y» records household names: X and Y are spoken
+    names of the same thing. The names route to a device when the fact anchors
+    them to one: exactly one latin id token in the fact (night_lamp —
+    resolve_alias auto-routes it), or a name matching a catalog alias phrase by
+    word sets (lemmatized when `lemmatize` is given). Facts naming nothing or
+    several distinct devices, or no new names contribute nothing. The entries
+    parse like parse_aliases output (auto-route form: tool and slot are None)."""
+    catalog_phrases = {
+        phrase.casefold() for entry in catalog_entries for phrase in entry["phrases"]
+    }
+    entries: list[dict] = []
+    # Phrases already emitted by earlier facts, so two facts about one device do
+    # not repeat a name in the criteria text.
+    seen_phrases: set[str] = set()
+    for fact in facts:
+        # Candidate names, in order, catalog duplicates included: a name equal to
+        # a catalog phrase adds no criteria text but still anchors the fact.
+        names: list[str] = []
+        for segment in re.split(r"[,;]", fact or ""):
+            segment = segment.strip()
+            if segment.endswith("."):
+                segment = segment[:-1]
+            segment = segment.strip()
+            if not segment:
+                continue
+            m = re.match(r"^(.+?)\s+[—–-]+\s+это\s+(.+)$", segment, re.IGNORECASE)
+            if m:
+                sides = (m.group(1), m.group(2))
+            else:
+                m = re.match(r"^(.+?)\s+[—–-]+\s+(.+)$", segment)
+                if m and re.fullmatch(r"[a-z][a-z0-9_]{2,}", m.group(2).strip()):
+                    sides = (m.group(1),)
+                else:
+                    sides = ()
+            for side in sides:
+                name = side.strip().lower()
+                if name and name not in names:
+                    names.append(name)
+        if not names:
+            logger.debug(f"memory fact yields no names, skipped: {fact}")
+            continue
+        # The fact's latin id tokens: the device values it may anchor to.
+        values = set(re.findall(r"\b[a-z][a-z0-9_]{2,}\b", fact or ""))
+        if len(values) > 1:
+            logger.debug(f"memory fact names several devices, skipped: {fact}")
+            continue
+        if values:
+            value = values.pop()
+        else:
+            # No id in the fact: anchor it by a name matching one catalog alias
+            # phrase by word sets (either a subset of the other).
+            matched = []
+            for entry in catalog_entries:
+                if any(
+                    _word_set(phrase, lemmatize) <= _word_set(name, lemmatize)
+                    or _word_set(name, lemmatize) <= _word_set(phrase, lemmatize)
+                    for phrase in entry["phrases"] for name in names
+                ):
+                    matched.append(entry)
+            if len(matched) != 1:
+                logger.debug(f"memory fact names no device, skipped: {fact}")
+                continue
+            value = matched[0]["value"]
+        # Names the catalog or an earlier fact already speaks add no criteria
+        # text; a fact whose names are all known contributes nothing.
+        phrases = []
+        for name in names:
+            folded = name.casefold()
+            if folded not in catalog_phrases and folded not in seen_phrases:
+                seen_phrases.add(folded)
+                phrases.append(name)
+        if phrases:
+            entries.append({"phrases": phrases, "value": value, "tool": None, "slot": None})
+    return entries

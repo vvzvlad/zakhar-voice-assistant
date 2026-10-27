@@ -14,6 +14,10 @@ reads the aliases, the action verbs and the levels an on- or off-verb sets from 
 command catalog (core.commands, the Commands page) through Deps.commands, so an edit
 there reaches the next request without a rebuild. Round 2 (a tool ran) speaks this
 handler's reply_done, or reply_error when the tool failed, the way simple-nlu does.
+
+The spoken names also come from the assistant's saved memory facts (data/memory.json,
+read through Deps.memory): a «X — это Y» fact anchored to one device makes X and Y
+names of it, read fresh on every request like the catalog.
 """
 
 import json
@@ -23,6 +27,7 @@ from loguru import logger
 from pydantic import Field
 
 from src.commands import (
+    aliases_from_facts,
     build_lemmatizer,
     envelope,
     extract_number,
@@ -249,6 +254,7 @@ class JevBackend(LlmBackend):
         reply_error: str,
         client: httpx.AsyncClient,
         commands,
+        memory=None,
     ):
         self._model = model
         self._api_key = api_key
@@ -260,6 +266,9 @@ class JevBackend(LlmBackend):
         self._client = client
         # () -> the live command catalog, core.commands (Deps.commands).
         self._commands = commands
+        # () -> the facts the assistant saved with its memory tool (Deps.memory);
+        # None when no memory store is bound.
+        self._memory = memory
         self._lemmatize = build_lemmatizer()
 
     async def complete(self, messages: list, tools: list | None, *, has_next: bool = False) -> dict:
@@ -296,11 +305,16 @@ class JevBackend(LlmBackend):
         # of the questions tells which: leave such phrases to the next chain.
         if extract_number(user_text) is not None:
             return None, "decision model: a number is left to the next chain"
-        # The names and verbs of the Commands page, read on every request.
+        # The names and verbs of the Commands page, read on every request; the
+        # memory facts add the names the assistant was taught («подсобка — это
+        # night_lamp»), also read on every request.
         catalog = self._commands()
         actions = parse_actions(catalog.actions)
         tools_index = index_tools(tools, set(actions))
-        targets = _targets(parse_aliases(catalog.aliases), tools_index)
+        entries = parse_aliases(catalog.aliases)
+        if self._memory is not None:
+            entries.extend(aliases_from_facts(self._memory(), entries, self._lemmatize))
+        targets = _targets(entries, tools_index)
         if not targets:
             return None, "decision model: no device options"
         named = _named_targets(targets, user_text, self._lemmatize)
@@ -387,4 +401,5 @@ class JevProvider(Provider):
             reply_error=cfg.reply_error,
             client=deps.http_cloud,
             commands=deps.commands,
+            memory=deps.memory,
         )

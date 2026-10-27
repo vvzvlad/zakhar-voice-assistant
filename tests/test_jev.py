@@ -10,7 +10,13 @@ import httpx
 import pytest
 
 import src.plugins  # noqa: F401  triggers @register on all providers
-from src.commands import build_lemmatizer, index_tools, parse_actions, parse_aliases
+from src.commands import (
+    aliases_from_facts,
+    build_lemmatizer,
+    index_tools,
+    parse_actions,
+    parse_aliases,
+)
 from src.config_service import ConfigService
 from src.core_config import CommandsConfig
 from src.llm import LlmRequest, LlmStage
@@ -31,13 +37,15 @@ def _client(respond, requests):
     return httpx.AsyncClient(transport=httpx.MockTransport(handler))
 
 
-def _jev(respond, **catalog):
+def _jev(respond, memory=None, **catalog):
     """(backend, requests): a jev backend reading the Commands names `_ALIASES` and
-    the other `catalog` fields."""
+    the other `catalog` fields; `memory` is the Deps.memory callable."""
     requests = []
     client = _client(respond, requests)
+    fields = {"aliases": _ALIASES, **catalog}
     deps = Deps(http_cloud=client, http_local=client,
-                commands=lambda: CommandsConfig(aliases=_ALIASES, **catalog))
+                commands=lambda: CommandsConfig(**fields),
+                memory=memory)
     return get_provider("llm", "jev").create(JevConfig(api_key="key"), deps), requests
 
 
@@ -63,6 +71,43 @@ def _answers(kind="device_command", target="set_light.entity=bright_room_light",
             "delayed": {"type": "noul", "noul": delayed},
         }})
     return reply
+
+
+_NIGHT_LAMP_FACT = "Маленькая комната студии — это подсобка, её светильник — night_lamp."
+
+
+def test_aliases_from_facts_anchor_by_the_latin_id():
+    catalog = parse_aliases("ночник = night_lamp\nкладовка, свет в кладовке = storage_room_light")
+    assert aliases_from_facts([_NIGHT_LAMP_FACT], catalog) == [
+        {"phrases": ["маленькая комната студии", "подсобка", "её светильник"],
+         "value": "night_lamp", "tool": None, "slot": None},
+    ]
+
+
+def test_aliases_from_facts_anchor_by_a_catalog_alias():
+    catalog = parse_aliases("ночник = night_lamp\nкладовка, свет в кладовке = storage_room_light")
+    assert aliases_from_facts(["Подсобка — это кладовка."], catalog) == [
+        {"phrases": ["подсобка"], "value": "storage_room_light", "tool": None, "slot": None},
+    ]
+
+
+def test_aliases_from_facts_skip_unanchored_facts():
+    catalog = parse_aliases("ночник = night_lamp\nкладовка, свет в кладовке = storage_room_light")
+    # No «X — это Y» clause, no latin id: nothing to anchor.
+    assert aliases_from_facts(["Пользователь находится в Москве."], catalog) == []
+    # Two distinct device values in one fact.
+    assert aliases_from_facts(["подсобка — night_lamp, а лампа — wled."], catalog) == []
+    # A name the catalog already has adds no duplicate criteria text.
+    assert aliases_from_facts(["ночник — это night_lamp."], catalog) == [
+        {"phrases": ["night_lamp"], "value": "night_lamp", "tool": None, "slot": None},
+    ]
+    # A bare id without a dash clause yields no names: an empty criteria option
+    # would only confuse the model.
+    assert aliases_from_facts(["night_lamp."], catalog) == []
+    # Two facts about one device: the second adds no repeated name.
+    assert aliases_from_facts(["Подсобка — night_lamp.", "Подсобка — это ночник."], catalog) == [
+        {"phrases": ["подсобка"], "value": "night_lamp", "tool": None, "slot": None},
+    ]
 
 
 @pytest.mark.parametrize("text, respond, name, args", [
@@ -132,6 +177,31 @@ async def test_request_carries_the_alias_options():
     }
     assert questions["compound"]["type"] == "noul"
     assert questions["delayed"]["type"] == "noul"
+
+
+_LIGHT_TOOLS = [{"type": "function", "function": {
+    "name": "set_light", "description": "Light",
+    "parameters": {"type": "object", "properties": {
+        "entity": {"type": "string", "enum": ["night_lamp"]},
+        "state": {"type": "string", "enum": ["on", "off"]}},
+        "required": ["entity", "state"]}}}]
+
+
+async def test_memory_facts_name_the_device():
+    backend, requests = _jev(_answers(target="set_light.entity=night_lamp"),
+                             memory=lambda: [_NIGHT_LAMP_FACT],
+                             aliases="ночник = night_lamp")
+    assert await _strict(backend, "включи свет в подсобке", _LIGHT_TOOLS) == (
+        "set_light", {"entity": "night_lamp", "state": "on"})
+    criteria = json.loads(requests[0].content)["questions"]["target"]["criteria"]
+    assert criteria["set_light.entity=night_lamp"] == (
+        "ночник, маленькая комната студии, подсобка, её светильник")
+
+    # Without the memory the fact's names are not among the criteria.
+    backend, requests = _jev(_answers())
+    await _strict(backend, "включи свет в подсобке")
+    criteria = json.loads(requests[0].content)["questions"]["target"]["criteria"]
+    assert "set_light.entity=night_lamp" not in criteria
 
 
 async def test_an_edited_commands_alias_reaches_the_next_request_without_a_rebuild(tmp_path):

@@ -30,6 +30,10 @@ class Deps:
     # verbs, filler words) the command handlers read. Bound to the ConfigService's core
     # config once the service exists (src/app.py).
     commands: Callable[[], BaseModel] | None = None
+    # () -> the facts the assistant saved with its memory tool (data/memory.json,
+    # src/memory.py), [] when the memory is off. Bound in src/app.py; the jev
+    # handler derives extra device names from them on every request.
+    memory: Callable[[], list[str]] | None = None
 
 
 # Shared schema annotation for the `model` field: rendered as a dynamic select
