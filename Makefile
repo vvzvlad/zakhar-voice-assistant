@@ -313,6 +313,15 @@ station-replay: ## Replay a microphone recording through the client's processing
 		[ $$s = 0 ] || rm -f /tmp/zakhar-replay-out.wav; exit $$s'
 	$(STATION_SSH) -n 'cat /tmp/zakhar-replay-out.wav && rm /tmp/zakhar-replay-out.wav' >$(OUT)
 
+# A Yandex Station with its stock software (quasar, wake word «Алиса») as a zakhar device: its
+# quasar.cfg points uniProxyUrl at ws://<host>:<port>/uni.ws. The zakhar server serves /uni.ws next
+# to its /device itself; this runs the bridge (src/uniproxy) on its own, linked to SERVER.
+.PHONY: station-bridge
+station-bridge: install ## Run the Yandex Station bridge on its own: make station-bridge PORT=<port> SERVER=ws://<host>:<port>/device
+	@test -n "$(PORT)" -a -n "$(SERVER)" || \
+		{ echo "PORT=<port of /uni.ws> SERVER=ws://<zakhar host>:<port>/device are required" >&2; exit 1; }
+	$(PY) -m src.uniproxy --port $(PORT) --server $(SERVER)
+
 # --- Housekeeping ------------------------------------------------------------
 .PHONY: clean
 clean: ## Remove the venv and Python caches

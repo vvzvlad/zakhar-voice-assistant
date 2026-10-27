@@ -1,7 +1,9 @@
 """Device server: the WebSocket endpoint voice devices connect to (docs/device-protocol.md).
 
-One aiohttp app on core.audio.host/port serves GET /device (the device protocol) and
-GET /health. DeviceManager keeps one Device per name; a Device keeps its Pipeline and its
+One aiohttp app on core.audio.host/port serves GET /device (the device protocol),
+GET /health and GET /uni.ws, where a Yandex Station's stock quasar joins as a device through
+src/uniproxy (its link comes back to this /device). DeviceManager keeps one Device per name;
+a Device keeps its Pipeline and its
 running capture across reconnects and binds the pipeline's transport hooks (send_event,
 play, has_speaker, has_follow_up, take_session, end_wake) to its live Connection. This
 module alone maps StageEvents onto wire messages and converts outgoing audio to what the
@@ -36,6 +38,7 @@ from src.run_context import in_command
 from src.run_events import record_run
 from src.runs_store import new_record
 from src.tts import pcm_mime, pcm_rate
+from src.uniproxy.uniproxy import Bridge
 from src.wake_arbiter import WakeArbiter
 
 # Binary frame kinds (first byte).
@@ -1051,7 +1054,7 @@ class Device:
 
 
 class DeviceManager:
-    """The device server: one aiohttp app (/device, /health) and one Device per name."""
+    """The device server: one aiohttp app (/device, /health, /uni.ws) and one Device per name."""
 
     def __init__(self, runtime):
         self.rt = runtime
@@ -1059,6 +1062,8 @@ class DeviceManager:
         self.port = runtime.core.audio.port
         self._devices: dict[str, Device] = {}
         self._runner: web.AppRunner | None = None
+        # Yandex Stations on /uni.ws, each linked to this server's own /device.
+        self._bridge = Bridge(lambda: f"ws://127.0.0.1:{self.port}/device")
         # One phrase heard by several devices keeps one session (docs/device-protocol.md).
         self.arbiter = WakeArbiter(
             online_count=lambda: sum(1 for d in self.clients if d.online),
@@ -1285,6 +1290,7 @@ class DeviceManager:
         app.add_routes([
             web.get("/device", self._handle_device),
             web.get("/health", self._handle_health),
+            web.get("/uni.ws", self._bridge.handle),
         ])
         self._runner = web.AppRunner(app, access_log=None)
         await self._runner.setup()
@@ -1295,6 +1301,7 @@ class DeviceManager:
         logger.info(f"device server on {self.host}:{self.port}")
 
     async def stop(self) -> None:
+        await self._bridge.close()
         for device in self._devices.values():
             if device.conn is not None:
                 device.conn.close(WSCloseCode.GOING_AWAY)

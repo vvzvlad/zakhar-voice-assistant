@@ -53,6 +53,11 @@ configured under `core.mcp_servers` in `data/config.json`.
   ESP-IDF/FreeRTOS shims in `station-lite/compat/`, so a change to those files must still build
   there (`make station-build`; an ESP-IDF call they newly use needs its shim). `station-run HOST=…`
   tries a build on the board, `station-install HOST=…` makes it start at boot in place of quasar.
+- `src/uniproxy/` — the other way to run a Yandex Station: its stock quasar (wake word «Алиса»)
+  talks to a uniproxy emulation built on quasard (github.com/amirilivice/quasard; `protocol.py`,
+  `aliceapi.py`, `audio.py` are its files unchanged), handing each request to the server as a device
+  at `/uni.ws` on the device port (`make station-bridge` runs it standalone). The content of the
+  station's messages is never logged or sent on — `SynchronizeState` carries its Yandex OAuth token.
 - `microWakeWord/` — wake-word model training research and the deployed models.
 - `data/` — runtime state: `config.json`, per-device context files, `prompts.db` (SQLite store of named character prompts), `memory.json` (facts the assistant saved with its memory tool, `src/memory.py`), `captures/` and `datasets/` (device recordings, `src/captures.py`), `device_logs/` (the speakers' own logs, `src/device_logs.py`) (gitignored, docker volume)
 - `templates/` — committed reference assets seeded into `data/` on first boot (`default_prompt.md`, `default_config.json`)

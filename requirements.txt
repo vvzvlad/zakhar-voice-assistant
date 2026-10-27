@@ -20,3 +20,5 @@ scikit-learn==1.9.0
 rapidfuzz==3.14.5
 zeroconf==0.151.5
 paho-mqtt==2.1.0
+av==18.1.0
+protobuf==6.33.6
