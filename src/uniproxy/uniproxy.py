@@ -162,7 +162,9 @@ class Link:
 
     def __init__(self, bridge: Bridge, device_id: str):
         self.bridge = bridge
-        self.device_id = device_id
+        self.device_id = device_id  # the station's own id, as it names itself to uniproxy
+        # Its name as a zakhar device: a station id is "LB" and 30 hex digits that differ in the tail.
+        self.name = "YA-" + device_id[-8:]
         self.stations: list[StationSession] = []  # open connections, the latest last
         self.request: VoiceRequest | None = None  # the latest VoiceInput while its run lasts
         self._started = time.monotonic()  # the device's "boot", for the hello's uptime
@@ -198,7 +200,7 @@ class Link:
                         self._out = asyncio.Queue()
                         writer = asyncio.create_task(self._write(ws, self._out))
                         self._send(self._hello())
-                        logger.info(f"station {self.device_id}: linked to {url}")
+                        logger.info(f"station {self.name}: linked to {url}")
                         delay = 1
                         try:
                             async for msg in ws:
@@ -210,9 +212,9 @@ class Link:
                             self._out = None
                             writer.cancel()
                             await self._lost()
-                    logger.warning(f"station {self.device_id}: link closed (code {ws.close_code})")
+                    logger.warning(f"station {self.name}: link closed (code {ws.close_code})")
                 except (aiohttp.ClientError, asyncio.TimeoutError, OSError) as e:
-                    logger.warning(f"station {self.device_id}: link to {url} failed: {e!r}")
+                    logger.warning(f"station {self.name}: link to {url} failed: {e!r}")
                 await asyncio.sleep(delay)
                 delay = min(delay * 2, RECONNECT_MAX_S)
 
@@ -235,7 +237,7 @@ class Link:
 
     def _hello(self) -> dict:
         return {
-            "type": "hello", "id": self.device_id, "fw": "quasar bridge",
+            "type": "hello", "id": self.name, "fw": "quasar bridge",
             "uptime": int(time.monotonic() - self._started),
             "caps": {"speaker": True, "screen": False, "follow_up": False},
             "mic": {"channels": 1},
@@ -263,7 +265,7 @@ class Link:
         self.request = req
         self._send({"type": "wake", "session": req.session, "word": WAKE_WORD})
         asyncio.get_running_loop().call_later(PREROLL_WAIT_S, self.send_preroll, req)
-        logger.info(f"station {self.device_id}: wake, session {req.session}")
+        logger.info(f"station {self.name}: wake, session {req.session}")
 
     def mic(self, req: VoiceRequest, pcm: np.ndarray) -> None:
         """Decoded microphone audio of `req` (float32, 16 kHz): held until the pre-roll goes,
@@ -480,7 +482,7 @@ class StationSession:
     def __init__(self, ws: web.WebSocketResponse, headers, link: Link):
         self.ws = ws
         self.link = link
-        self.device_id = link.device_id
+        self.name = link.name
         self.session_id = headers.get("X-UPRX-SSID") or str(uuid.uuid4())
         self.proto = False  # the station sent an AAPI frame: answer in protobuf (firmware 3.x)
         self._send_lock = asyncio.Lock()
@@ -535,7 +537,7 @@ class StationSession:
     # ------------------------------------------------------------ main loop
 
     async def run(self) -> None:
-        logger.info(f"station {self.device_id}: connected")
+        logger.info(f"station {self.name}: connected")
         try:
             async for msg in self.ws:
                 if msg.type == WSMsgType.TEXT:
@@ -545,13 +547,13 @@ class StationSession:
         finally:
             for t in list(self._tasks):
                 t.cancel()
-            logger.info(f"station {self.device_id}: disconnected")
+            logger.info(f"station {self.name}: disconnected")
 
     async def _on_text(self, text: str) -> None:
         try:
             msg = json.loads(text)
         except json.JSONDecodeError:
-            logger.warning(f"station {self.device_id}: a text frame that is not JSON")
+            logger.warning(f"station {self.name}: a text frame that is not JSON")
             return
         await self._on_message(msg)
 
@@ -594,12 +596,12 @@ class StationSession:
         if data.startswith(aliceapi.MAGIC):
             # Firmware 3.x: events come in protobuf; the session switches and they go on in the JSON form.
             if not self.proto:
-                logger.info(f"station {self.device_id}: speaks protobuf (AAPI)")
+                logger.info(f"station {self.name}: speaks protobuf (AAPI)")
                 self.proto = True
             try:
                 msg = aliceapi.client_to_json(aliceapi.decode_client(data))
             except Exception as e:
-                logger.warning(f"station {self.device_id}: AAPI frame not parsed ({type(e).__name__})")
+                logger.warning(f"station {self.name}: AAPI frame not parsed ({type(e).__name__})")
                 return
             if msg is not None:
                 await self._on_message(msg)
@@ -611,7 +613,7 @@ class StationSession:
         try:
             pcm = req.decoder.feed(chunk)
         except Exception as e:
-            logger.warning(f"station {self.device_id}: microphone audio not decoded ({type(e).__name__})")
+            logger.warning(f"station {self.name}: microphone audio not decoded ({type(e).__name__})")
             return
         self.link.mic(req, pcm)
 
@@ -633,7 +635,7 @@ class StationSession:
             spotter_validation=bool(payload.get("enable_spotter_validation")),
         )
         if not self.link.up:
-            logger.warning(f"station {self.device_id}: no link to the server, the request gets an empty answer")
+            logger.warning(f"station {self.name}: no link to the server, the request gets an empty answer")
             await self.respond(req, "", [])
             return
         await self.send_json(P.input_start_ack(req.ref))

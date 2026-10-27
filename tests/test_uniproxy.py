@@ -118,10 +118,11 @@ async def test_station_session_through_the_bridge():
     http = aiohttp.ClientSession()
     try:
         ws = await http.ws_connect(f"ws://127.0.0.1:{bridge_port}/uni.ws",
-                                   headers={"X-UPRX-DEVICE-ID": "station1", "X-UPRX-SSID": "ssid1"})
+                                   headers={"X-UPRX-DEVICE-ID": "LB0000000000000527720000d3336afa",
+                                            "X-UPRX-SSID": "ssid1"})
         station = FakeStation(ws)
         hello = await server.recv()
-        assert hello["type"] == "hello" and hello["id"] == "station1"
+        assert hello["type"] == "hello" and hello["id"] == "YA-d3336afa"
         assert hello["caps"] == {"speaker": True, "screen": False, "follow_up": False}
         assert hello["mic"] == {"channels": 1} and hello["play"]["rate"] == 48000
         assert hello["volume"] == 50
