@@ -15,15 +15,17 @@ connection of that id is open.
                                         PREROLL_WAIT_S) as the pre-roll, then live
   Spotter.Validation               ◄──  state listening          ◄──
                                         state transcribing: the microphone stops going to the server
+  TTS.Speak, Ogg (chime, filler)   ◄──  play_start / 0x02 / play_end before the reply
   final ASR.Result, mic closed     ◄──  transcript (its text)    ◄──
   VinsResponse, TTS.Speak, Ogg     ◄──  reply, then the answer's play_start / 0x02 / play_end
   empty VinsResponse               ◄──  state idle or error without an answer, a refused wake
 
 The wake word stays quasar's own: the station spots «Алиса», and the server's wake-word models
-are refused (`model_loaded ok: false`). Streams of a session before its `reply` (the end-of-phrase
-chime, a filler) are not sent to the station; any other stream (an announcement) goes as a
-TTS.Speak of no request. The station reports nothing of its playback, so `played` goes once a
-stream's duration has passed since its first audio came.
+are refused (`model_loaded ok: false`). Every stream of a session (the end-of-phrase chime, a
+filler, the answer) goes out as a TTS.Speak of its request; the VinsResponse waits for the
+reply's text. A stream of no session (an announcement) goes as a TTS.Speak of no request. The
+station reports nothing of its playback, so `played` goes once a stream's duration has passed
+since its first audio came.
 
 The server end-points a phrase from the microphone audio, so when the station stops its own stream
 first (a streamcontrol close or Vins.CancelRequest), the Link feeds the server silence until its VAD
@@ -407,17 +409,19 @@ class Link:
     async def _on_play_start(self, msg: dict) -> None:
         play = self._open = self._plays[msg["id"]] = Play(msg["id"])
         req = self._of(msg.get("session"))
-        if req is not None and req.reply is None:
-            return  # the chime or a filler before the answer: not sent to the station
         if req is not None and req.cancelled:
             return  # a cancelled request: reported played (station stays None), not sent out
-        if req is not None and not req.responded:
+        if req is None or req.responded:
+            station, ref = (req.station if req is not None else self.stations[-1]), ""
+        elif req.reply is None:
+            # The chime or a filler while the answer is not ready: a plain TTS.Speak of the
+            # request; the VinsResponse waits for the reply's text.
+            station, ref = req.station, req.ref
+        else:
             station, ref = req.station, req.ref
             await self._finish_asr(req, "")
             req.responded = True
             await station.respond(req, req.reply, req.directives)
-        else:
-            station, ref = (req.station if req is not None else self.stations[-1]), ""
         play.station, play.sid, play.encoder = station, station.next_stream_id(), OggOpusStreamEncoder()
         await station.send_json(P.tts_speak(ref, play.sid))
 
