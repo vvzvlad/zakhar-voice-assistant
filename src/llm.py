@@ -61,10 +61,18 @@ class LlmStage:
         (the hub owns the ambient-device ContextVar, not this stage).
 
         `on_filler`, when given, is an optional `async (content: str, tool_names:
-        list[str]) -> None` callback invoked for each tool-requesting round that also
+        list[str]) -> bool` callback invoked for each tool-requesting round that also
         carries spoken content, so the caller can play an early "filler" line while
-        the (slow) tool + final round run. Best-effort: it never affects the result
-        or control flow, and its failures are swallowed with a warning.
+        the (slow) tool + final round run; it returns True when it takes the line
+        for playback. Its failures are swallowed with a warning and count as not
+        spoken.
+
+        A tool round's content that was not spoken (no callback, or the callback
+        declined) becomes the reply when the model's final round comes back empty —
+        a model that said "Запомнила." alongside the remember call often has nothing
+        left to add after the tool result — and when the tool rounds run out. A
+        round's content the callback did take is never returned as the reply: it
+        would be said a second time.
 
         `has_next` is passed to every backend round: True when a later recognition
         chain would take the utterance if this handler declines. A backend's
@@ -102,6 +110,9 @@ class LlmStage:
         rounds: list = []
         last_content = ""
         tool_executed = False
+        # The latest tool round's content that nobody spoke: the reply when the final
+        # round comes back empty or the rounds run out (see the docstring).
+        unspoken = ""
 
         def _error(message: str, *, kind: str = "error") -> StageError:
             # Build a StageError carrying the partial observability data, so the
@@ -182,7 +193,7 @@ class LlmStage:
                     "content": last_content,
                     "calls": [],
                 })
-                reply = clean_llm_output(last_content)
+                reply = clean_llm_output(last_content) or unspoken
                 if reply:
                     return _result(reply)
                 return _result(
@@ -195,14 +206,18 @@ class LlmStage:
             # run. Policy (speak-or-not, at-most-once) lives entirely in the callback; we
             # stay policy-free and just forward content + the tool names. Isolated: a
             # callback failure must never break the tool loop.
-            if on_filler is not None:
-                filler_text = (message.get("content") or "").strip()
-                if filler_text:
-                    tool_names = [tc["function"]["name"] for tc in tool_calls]
-                    try:
-                        await on_filler(filler_text, tool_names)
-                    except Exception as e:  # noqa: BLE001 - filler is best-effort
-                        logger.warning(f"on_filler callback failed: {e}")
+            filler_text = (message.get("content") or "").strip()
+            spoken = False
+            if filler_text and on_filler is not None:
+                tool_names = [tc["function"]["name"] for tc in tool_calls]
+                try:
+                    spoken = bool(await on_filler(filler_text, tool_names))
+                except Exception as e:  # noqa: BLE001 - filler is best-effort
+                    logger.warning(f"on_filler callback failed: {e}")
+            # A tool round's content nobody spoke stays a reply candidate; a later
+            # spoken round does not erase an earlier unspoken one.
+            if filler_text and not spoken:
+                unspoken = clean_llm_output(filler_text)
 
             # Execute each requested tool via the hub and feed results back. The
             # originating device rides along so the hub can publish it to in-process
@@ -236,7 +251,10 @@ class LlmStage:
             continue
 
         # Rounds exhausted: the model kept asking for tools without a final reply.
+        # Its unspoken tool-round text is still speech — return it; a line already
+        # spoken as a filler is not repeated: with nothing left to say the run fails
+        # to the error phrase.
         logger.warning(f"Tool-calling loop exhausted after {cfg.max_tool_rounds} rounds")
-        if last_content:
-            return _result(clean_llm_output(last_content))
+        if unspoken:
+            return _result(unspoken)
         raise _error("tool-calling rounds exhausted", kind="tool_rounds")

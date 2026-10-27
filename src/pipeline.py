@@ -1022,7 +1022,7 @@ class Pipeline(SpeechMixin):
                     self._emit(StageEvent.STT_VAD_END, {})
                     filler_fired = False  # at most one early filler per run
 
-                    async def _speak_filler(text: str, tool_names: list[str]) -> None:
+                    async def _speak_filler(text: str, tool_names: list[str]) -> bool:
                         # Policy lives here (llm.py is policy-free): speak at most once per
                         # run, and only for a SLOW tool (so instant smart-home actions don't
                         # double-talk). The slow KNOWLEDGE comes from the tool source via
@@ -1030,18 +1030,23 @@ class Pipeline(SpeechMixin):
                         # Schedule synthesis+play as a fire-and-forget task
                         # so the slow tool is NOT delayed by filler TTS. Synchronous
                         # gate/dedup first (no await before we decide), then schedule.
+                        # Returns whether the line was claimed for playback (the
+                        # synthesis itself is fire-and-forget): an unclaimed one stays
+                        # the LLM stage's reply if the model's final round comes back
+                        # empty.
                         nonlocal filler_fired
                         if filler_fired or not self.has_speaker:
-                            return
+                            return False
                         if not any(self.hub.is_slow(n) for n in tool_names):
-                            return  # fast action: the final reply alone is enough
+                            return False  # fast action: the final reply alone is enough
                         spoken = clean_llm_output(text)  # tag cleanup only; engine post-processing happens inside the TTS backend
                         if not spoken:
-                            return
+                            return False
                         filler_fired = True
                         record["filler_text"] = spoken
                         record["t_filler"] = int((time.perf_counter() - t0) * 1000)
                         self._schedule_filler(spoken)
+                        return True
 
                     def _on_text(text: str, t_stt: int) -> None:
                         # The first non-empty transcript of any chain: shown on the device
