@@ -177,7 +177,9 @@ docker compose pull && docker compose up -d
   - `stt`: `groq` (облачный Whisper) | `vosk` (офлайн) | `gigaam` (офлайн GigaAM v3, каталог
     модели `models/gigaam-v3-onnx`) | `yandex` (SpeechKit v3, стриминг по gRPC).
   - `llm` (обработчики): `openrouter` | `groq` — model, api_key, temperature, max_tokens,
-    max_tool_rounds; `simple-nlu` — офлайн-движок команд по каталогу команд
+    max_tool_rounds; `custom` — те же настройки плюс `url`, базовый адрес любого
+    OpenAI-совместимого API (Ollama, vLLM, LM Studio, OpenAI, …);
+    `simple-nlu` — офлайн-движок команд по каталогу команд
     `core.commands`; `jev` — модель решений `typesafe/jev-1.14` на OpenRouter: для фразы
     без числа выбирает одно устройство и одно действие из названий и глаголов страницы
     Commands (`core.commands`), всё остальное отклоняет.

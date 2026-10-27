@@ -32,7 +32,9 @@ class OpenAICompatLlmBackend(LlmBackend):
             payload["tool_choice"] = "auto"
         headers = {
             "Content-Type": "application/json",
-            "Authorization": f"Bearer {self.api_key}",
+            # Keyless local servers get no header: an empty "Bearer " value is illegal
+            # and httpx refuses to send the request at all.
+            **({"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}),
             **(self.extra_headers or {}),
         }
         resp = await self.client.post(

@@ -13,7 +13,7 @@ def test_stt_ids_registered():
 
 
 def test_llm_ids_registered():
-    assert set(providers("llm")) == {"openrouter", "groq", "simple-nlu", "jev"}
+    assert set(providers("llm")) == {"openrouter", "groq", "custom", "simple-nlu", "jev"}
 
 
 def test_registry_holds_provider_instances():

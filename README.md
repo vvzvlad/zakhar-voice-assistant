@@ -175,7 +175,9 @@ Shape (see `templates/default_config.json` for the full default):
   - `stt`: `groq` (cloud Whisper) | `vosk` (offline) | `gigaam` (offline GigaAM v3, model
     directory `models/gigaam-v3-onnx`) | `yandex` (SpeechKit v3 streaming, gRPC).
   - `llm` (handlers): `openrouter` | `groq` — model, api_key, temperature, max_tokens,
-    max_tool_rounds; `simple-nlu` — the offline command engine over the command catalog
+    max_tool_rounds; `custom` — the same settings plus `url`, the base URL of any
+    OpenAI-compatible API (Ollama, vLLM, LM Studio, OpenAI, …);
+    `simple-nlu` — the offline command engine over the command catalog
     `core.commands`; `jev` — the decision model `typesafe/jev-1.14` on OpenRouter: picks
     one device and one action for a phrase without a number, from the names and verbs of
     the Commands page (`core.commands`), and declines anything else.

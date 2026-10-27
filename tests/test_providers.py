@@ -9,6 +9,7 @@ from src.plugins.llm import groq as groq_mod
 from src.plugins.llm import openrouter as openrouter_mod
 from src.plugins.llm._openai_compat import OpenAICompatLlmBackend
 from src.plugins.llm.base import LlmConfig
+from src.plugins.llm.custom import CustomLlmConfig
 from src.plugins.llm.groq import GROQ_API_URL, GROQ_MODELS_URL, GroqLlmConfig
 from src.plugins.llm.openrouter import OPENROUTER_API_URL, OPENROUTER_MODELS_URL
 from src.plugins.stt import groq as stt_groq_mod
@@ -281,6 +282,60 @@ async def test_groq_options_model_cache_is_keyed_by_api_key(_reset_model_caches)
         await prov.options("model", GroqLlmConfig(api_key="gsk-2"), deps)
         assert route.call_count == 2
         assert route.calls.last.request.headers["Authorization"] == "Bearer gsk-2"
+
+
+# --- custom OpenAI-compatible endpoint ----------------------------------------
+
+@respx.mock
+async def test_custom_llm_posts_to_configured_url_and_model():
+    route = respx.post("http://llm.lan:11434/v1/chat/completions").mock(
+        return_value=httpx.Response(200, json={"choices": []})
+    )
+    prov = get_provider("llm", "custom")
+    deps = _deps()
+    async with deps.http_cloud:
+        backend = prov.create(
+            CustomLlmConfig(url="http://llm.lan:11434/v1/", model="qwen3:8b", api_key="k"), deps
+        )
+        await backend.complete([{"role": "user", "content": "hi"}], None)
+    req = route.calls.last.request
+    assert req.headers["Authorization"] == "Bearer k"
+    import json as _json
+    assert _json.loads(req.content)["model"] == "qwen3:8b"
+
+
+@respx.mock
+async def test_custom_llm_without_key_sends_no_authorization():
+    # Local servers (Ollama, LM Studio) run without a key; an empty "Bearer " value is
+    # an illegal header that httpx refuses to send.
+    route = respx.post("http://llm.lan/v1/chat/completions").mock(
+        return_value=httpx.Response(200, json={"choices": []})
+    )
+    deps = _deps()
+    async with deps.http_cloud:
+        backend = get_provider("llm", "custom").create(
+            CustomLlmConfig(url="http://llm.lan/v1", model="m"), deps
+        )
+        await backend.complete([{"role": "user", "content": "hi"}], None)
+    assert "Authorization" not in route.calls.last.request.headers
+
+
+@respx.mock
+async def test_custom_llm_options_model_lists_ids_from_url_models():
+    route = respx.get("http://llm.lan/v1/models").mock(return_value=httpx.Response(200, json={
+        "data": [{"id": "zzz"}, {"id": "Abc"}],
+    }))
+    prov = get_provider("llm", "custom")
+    deps = _deps()
+    async with deps.http_cloud:
+        out = await prov.options("model", CustomLlmConfig(url="http://llm.lan/v1"), deps)
+        assert out == ["Abc", "zzz"]
+        assert "Authorization" not in route.calls.last.request.headers  # no key, no header
+        await prov.options("model", CustomLlmConfig(url="http://llm.lan/v1", api_key="k"), deps)
+        assert route.calls.last.request.headers["Authorization"] == "Bearer k"
+        # No URL yet: nothing to ask.
+        assert await prov.options("model", CustomLlmConfig(), deps) == []
+    assert route.call_count == 2
 
 
 # --- STT model-list options() (network-backed, TTL-cached) -------------------
