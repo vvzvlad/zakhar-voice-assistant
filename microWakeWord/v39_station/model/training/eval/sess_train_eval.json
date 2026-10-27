@@ -1,0 +1,2766 @@
+{
+ "wav": "sess_train.wav",
+ "n_phrases": 70,
+ "device_live": [],
+ "device_live_outside": [],
+ "models": {
+  "v38": {
+   "dev_cont_det": [
+    5.09,
+    8.6,
+    11.78,
+    15.47,
+    18.89,
+    22.37,
+    25.76,
+    29.39,
+    32.96,
+    36.35,
+    39.89,
+    43.37,
+    46.76,
+    50.27,
+    53.87,
+    60.83,
+    64.7,
+    67.91,
+    78.62,
+    81.89,
+    85.4,
+    88.82,
+    92.24,
+    99.26,
+    102.83,
+    110.06,
+    113.6,
+    116.84,
+    120.92,
+    123.95,
+    127.58,
+    130.79,
+    134.33,
+    137.84,
+    141.41,
+    144.74,
+    149.3,
+    151.88,
+    155.54,
+    169.73,
+    172.85,
+    176.33,
+    179.87,
+    193.79,
+    197.33,
+    200.81,
+    204.32,
+    208.01,
+    221.84,
+    232.28,
+    235.88,
+    239.3,
+    242.75
+   ],
+   "dev_cont_outside": [],
+   "vad_blocked": [
+    127.43,
+    127.46,
+    127.49,
+    127.52,
+    127.55
+   ],
+   "py_cont_det": [
+    5.09,
+    8.6,
+    11.78,
+    15.47,
+    18.89,
+    22.37,
+    25.76,
+    29.39,
+    32.96,
+    36.38,
+    39.89,
+    43.37,
+    46.76,
+    50.27,
+    53.87,
+    60.83,
+    64.7,
+    67.91,
+    78.62,
+    81.89,
+    85.4,
+    88.82,
+    92.24,
+    99.26,
+    102.83,
+    110.06,
+    113.6,
+    116.84,
+    120.95,
+    123.95,
+    127.43,
+    130.79,
+    134.33,
+    137.84,
+    141.41,
+    144.74,
+    149.3,
+    151.88,
+    155.54,
+    169.73,
+    172.82,
+    176.3,
+    179.87,
+    193.79,
+    197.33,
+    200.81,
+    204.32,
+    208.01,
+    221.84,
+    232.28,
+    235.88,
+    239.3,
+    242.75
+   ],
+   "py_cont_outside": [],
+   "phrases": [
+    {
+     "id": "0001.wav",
+     "text": "",
+     "kind": "wordless",
+     "s": 0.3,
+     "e": 3.4,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.198,
+     "py_cont_peak": 0.199
+    },
+    {
+     "id": "0002.wav",
+     "text": "захар",
+     "kind": "word",
+     "s": 3.8,
+     "e": 6.7,
+     "live": [],
+     "dev_cont": [
+      5.09
+     ],
+     "py_cont": [
+      5.09
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "0003.wav",
+     "text": "захар",
+     "kind": "word",
+     "s": 7.3,
+     "e": 10.2,
+     "live": [],
+     "dev_cont": [
+      8.6
+     ],
+     "py_cont": [
+      8.6
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.988,
+     "py_cont_peak": 0.999
+    },
+    {
+     "id": "0004.wav",
+     "text": "захар",
+     "kind": "word",
+     "s": 10.8,
+     "e": 13.7,
+     "live": [],
+     "dev_cont": [
+      11.78
+     ],
+     "py_cont": [
+      11.78
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "0005.wav",
+     "text": "захар",
+     "kind": "word",
+     "s": 14.3,
+     "e": 17.2,
+     "live": [],
+     "dev_cont": [
+      15.47
+     ],
+     "py_cont": [
+      15.47
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "0006.wav",
+     "text": "захар",
+     "kind": "word",
+     "s": 17.8,
+     "e": 20.7,
+     "live": [],
+     "dev_cont": [
+      18.89
+     ],
+     "py_cont": [
+      18.89
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.989,
+     "py_cont_peak": 0.999
+    },
+    {
+     "id": "0007.wav",
+     "text": "захар",
+     "kind": "word",
+     "s": 21.3,
+     "e": 24.2,
+     "live": [],
+     "dev_cont": [
+      22.37
+     ],
+     "py_cont": [
+      22.37
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "0008.wav",
+     "text": "захар",
+     "kind": "word",
+     "s": 24.8,
+     "e": 27.7,
+     "live": [],
+     "dev_cont": [
+      25.76
+     ],
+     "py_cont": [
+      25.76
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "0009.wav",
+     "text": "захар",
+     "kind": "word",
+     "s": 28.3,
+     "e": 31.2,
+     "live": [],
+     "dev_cont": [
+      29.39
+     ],
+     "py_cont": [
+      29.39
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.98,
+     "py_cont_peak": 0.994
+    },
+    {
+     "id": "0010.wav",
+     "text": "захар",
+     "kind": "word",
+     "s": 31.8,
+     "e": 34.7,
+     "live": [],
+     "dev_cont": [
+      32.96
+     ],
+     "py_cont": [
+      32.96
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "0011.wav",
+     "text": "захар",
+     "kind": "word",
+     "s": 35.3,
+     "e": 38.2,
+     "live": [],
+     "dev_cont": [
+      36.35
+     ],
+     "py_cont": [
+      36.38
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "0012.wav",
+     "text": "захар",
+     "kind": "word",
+     "s": 38.8,
+     "e": 41.7,
+     "live": [],
+     "dev_cont": [
+      39.89
+     ],
+     "py_cont": [
+      39.89
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "0013.wav",
+     "text": "захар",
+     "kind": "word",
+     "s": 42.3,
+     "e": 45.2,
+     "live": [],
+     "dev_cont": [
+      43.37
+     ],
+     "py_cont": [
+      43.37
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "0014.wav",
+     "text": "захар",
+     "kind": "word",
+     "s": 45.8,
+     "e": 48.7,
+     "live": [],
+     "dev_cont": [
+      46.76
+     ],
+     "py_cont": [
+      46.76
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "0015.wav",
+     "text": "нахар",
+     "kind": "word",
+     "s": 49.3,
+     "e": 52.4,
+     "live": [],
+     "dev_cont": [
+      50.27
+     ],
+     "py_cont": [
+      50.27
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "0016.wav",
+     "text": "захар",
+     "kind": "word",
+     "s": 52.8,
+     "e": 55.7,
+     "live": [],
+     "dev_cont": [
+      53.87
+     ],
+     "py_cont": [
+      53.87
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.99,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "0017.wav",
+     "text": "",
+     "kind": "ambig",
+     "s": 56.3,
+     "e": 59.2,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.614,
+     "py_cont_peak": 0.676
+    },
+    {
+     "id": "0018.wav",
+     "text": "захар",
+     "kind": "word",
+     "s": 59.8,
+     "e": 62.7,
+     "live": [],
+     "dev_cont": [
+      60.83
+     ],
+     "py_cont": [
+      60.83
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.988,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "0019.wav",
+     "text": "захар",
+     "kind": "word",
+     "s": 63.3,
+     "e": 66.2,
+     "live": [],
+     "dev_cont": [
+      64.7
+     ],
+     "py_cont": [
+      64.7
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.995,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "0020.wav",
+     "text": "",
+     "kind": "ambig",
+     "s": 66.8,
+     "e": 69.7,
+     "live": [],
+     "dev_cont": [
+      67.91
+     ],
+     "py_cont": [
+      67.91
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "0021.wav",
+     "text": "",
+     "kind": "wordless",
+     "s": 70.3,
+     "e": 73.2,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.043,
+     "py_cont_peak": 0.043
+    },
+    {
+     "id": "0022.wav",
+     "text": "",
+     "kind": "wordless",
+     "s": 73.8,
+     "e": 76.7,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.084,
+     "py_cont_peak": 0.082
+    },
+    {
+     "id": "0023.wav",
+     "text": "",
+     "kind": "ambig",
+     "s": 77.3,
+     "e": 80.2,
+     "live": [],
+     "dev_cont": [
+      78.62
+     ],
+     "py_cont": [
+      78.62
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.855,
+     "py_cont_peak": 0.973
+    },
+    {
+     "id": "0024.wav",
+     "text": "захар",
+     "kind": "word",
+     "s": 80.8,
+     "e": 83.7,
+     "live": [],
+     "dev_cont": [
+      81.89
+     ],
+     "py_cont": [
+      81.89
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "0025.wav",
+     "text": "захаров",
+     "kind": "word",
+     "s": 84.3,
+     "e": 87.2,
+     "live": [],
+     "dev_cont": [
+      85.4
+     ],
+     "py_cont": [
+      85.4
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "0026.wav",
+     "text": "захаров",
+     "kind": "word",
+     "s": 87.8,
+     "e": 90.7,
+     "live": [],
+     "dev_cont": [
+      88.82
+     ],
+     "py_cont": [
+      88.82
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "0027.wav",
+     "text": "вахар",
+     "kind": "word",
+     "s": 91.3,
+     "e": 94.2,
+     "live": [],
+     "dev_cont": [
+      92.24
+     ],
+     "py_cont": [
+      92.24
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "0028.wav",
+     "text": "мухар",
+     "kind": "word",
+     "s": 94.8,
+     "e": 97.7,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.01,
+     "py_cont_peak": 0.014
+    },
+    {
+     "id": "0029.wav",
+     "text": "мухар",
+     "kind": "word",
+     "s": 98.3,
+     "e": 101.2,
+     "live": [],
+     "dev_cont": [
+      99.26
+     ],
+     "py_cont": [
+      99.26
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.984,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "0030.wav",
+     "text": "захар",
+     "kind": "word",
+     "s": 101.8,
+     "e": 104.7,
+     "live": [],
+     "dev_cont": [
+      102.83
+     ],
+     "py_cont": [
+      102.83
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "0046.wav",
+     "text": "хар",
+     "kind": "word",
+     "s": 105.3,
+     "e": 108.2,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.02,
+     "py_cont_peak": 0.02
+    },
+    {
+     "id": "0047.wav",
+     "text": "захар",
+     "kind": "word",
+     "s": 108.8,
+     "e": 111.7,
+     "live": [],
+     "dev_cont": [
+      110.06
+     ],
+     "py_cont": [
+      110.06
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "0048.wav",
+     "text": "захар",
+     "kind": "word",
+     "s": 112.3,
+     "e": 115.2,
+     "live": [],
+     "dev_cont": [
+      113.6
+     ],
+     "py_cont": [
+      113.6
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "0049.wav",
+     "text": "эха",
+     "kind": "ambig",
+     "s": 115.8,
+     "e": 118.7,
+     "live": [],
+     "dev_cont": [
+      116.84
+     ],
+     "py_cont": [
+      116.84
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "0050.wav",
+     "text": "захар",
+     "kind": "word",
+     "s": 119.3,
+     "e": 122.2,
+     "live": [],
+     "dev_cont": [
+      120.92
+     ],
+     "py_cont": [
+      120.95
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "0051.wav",
+     "text": "захар",
+     "kind": "word",
+     "s": 122.8,
+     "e": 125.7,
+     "live": [],
+     "dev_cont": [
+      123.95
+     ],
+     "py_cont": [
+      123.95
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "0052.wav",
+     "text": "захаров",
+     "kind": "word",
+     "s": 126.3,
+     "e": 129.2,
+     "live": [],
+     "dev_cont": [
+      127.58
+     ],
+     "py_cont": [
+      127.43
+     ],
+     "vad_blocked": [
+      127.43,
+      127.46,
+      127.49,
+      127.52,
+      127.55
+     ],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "0053.wav",
+     "text": "юхар",
+     "kind": "word",
+     "s": 129.8,
+     "e": 132.7,
+     "live": [],
+     "dev_cont": [
+      130.79
+     ],
+     "py_cont": [
+      130.79
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "0054.wav",
+     "text": "вахар",
+     "kind": "word",
+     "s": 133.3,
+     "e": 136.2,
+     "live": [],
+     "dev_cont": [
+      134.33
+     ],
+     "py_cont": [
+      134.33
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "0055.wav",
+     "text": "захар",
+     "kind": "word",
+     "s": 136.8,
+     "e": 139.77,
+     "live": [],
+     "dev_cont": [
+      137.84
+     ],
+     "py_cont": [
+      137.84
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "0056.wav",
+     "text": "захар",
+     "kind": "word",
+     "s": 140.3,
+     "e": 143.2,
+     "live": [],
+     "dev_cont": [
+      141.41
+     ],
+     "py_cont": [
+      141.41
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "0057.wav",
+     "text": "мухар",
+     "kind": "word",
+     "s": 143.8,
+     "e": 146.7,
+     "live": [],
+     "dev_cont": [
+      144.74
+     ],
+     "py_cont": [
+      144.74
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "0058.wav",
+     "text": "",
+     "kind": "ambig",
+     "s": 147.3,
+     "e": 150.2,
+     "live": [],
+     "dev_cont": [
+      149.3
+     ],
+     "py_cont": [
+      149.3
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "0059.wav",
+     "text": "захар",
+     "kind": "word",
+     "s": 150.8,
+     "e": 153.7,
+     "live": [],
+     "dev_cont": [
+      151.88
+     ],
+     "py_cont": [
+      151.88
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "0060.wav",
+     "text": "захар",
+     "kind": "word",
+     "s": 154.3,
+     "e": 157.2,
+     "live": [],
+     "dev_cont": [
+      155.54
+     ],
+     "py_cont": [
+      155.54
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "0061.wav",
+     "text": "ор",
+     "kind": "wordless",
+     "s": 157.8,
+     "e": 160.7,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.008,
+     "py_cont_peak": 0.006
+    },
+    {
+     "id": "0062.wav",
+     "text": "пар",
+     "kind": "wordless",
+     "s": 161.3,
+     "e": 164.2,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.025,
+     "py_cont_peak": 0.031
+    },
+    {
+     "id": "0063.wav",
+     "text": "захар",
+     "kind": "word",
+     "s": 164.8,
+     "e": 167.7,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.742,
+     "py_cont_peak": 0.745
+    },
+    {
+     "id": "0064.wav",
+     "text": "захар",
+     "kind": "word",
+     "s": 168.3,
+     "e": 171.2,
+     "live": [],
+     "dev_cont": [
+      169.73
+     ],
+     "py_cont": [
+      169.73
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "0065.wav",
+     "text": "захар",
+     "kind": "word",
+     "s": 171.8,
+     "e": 174.7,
+     "live": [],
+     "dev_cont": [
+      172.85
+     ],
+     "py_cont": [
+      172.82
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "0066.wav",
+     "text": "мухар",
+     "kind": "word",
+     "s": 175.3,
+     "e": 178.2,
+     "live": [],
+     "dev_cont": [
+      176.33
+     ],
+     "py_cont": [
+      176.3
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "0067.wav",
+     "text": "джахар",
+     "kind": "word",
+     "s": 178.8,
+     "e": 181.7,
+     "live": [],
+     "dev_cont": [
+      179.87
+     ],
+     "py_cont": [
+      179.87
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "0068.wav",
+     "text": "ухар",
+     "kind": "word",
+     "s": 182.3,
+     "e": 185.2,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.398,
+     "py_cont_peak": 0.493
+    },
+    {
+     "id": "0069.wav",
+     "text": "хар",
+     "kind": "word",
+     "s": 185.8,
+     "e": 188.7,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.627,
+     "py_cont_peak": 0.679
+    },
+    {
+     "id": "0070.wav",
+     "text": "пар",
+     "kind": "wordless",
+     "s": 189.3,
+     "e": 192.2,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.027,
+     "py_cont_peak": 0.034
+    },
+    {
+     "id": "0071.wav",
+     "text": "захар",
+     "kind": "word",
+     "s": 192.8,
+     "e": 195.7,
+     "live": [],
+     "dev_cont": [
+      193.79
+     ],
+     "py_cont": [
+      193.79
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "0072.wav",
+     "text": "мухар",
+     "kind": "word",
+     "s": 196.3,
+     "e": 199.2,
+     "live": [],
+     "dev_cont": [
+      197.33
+     ],
+     "py_cont": [
+      197.33
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "0073.wav",
+     "text": "вахар",
+     "kind": "word",
+     "s": 199.8,
+     "e": 202.7,
+     "live": [],
+     "dev_cont": [
+      200.81
+     ],
+     "py_cont": [
+      200.81
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "0074.wav",
+     "text": "вахар",
+     "kind": "word",
+     "s": 203.3,
+     "e": 206.2,
+     "live": [],
+     "dev_cont": [
+      204.32
+     ],
+     "py_cont": [
+      204.32
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "0075.wav",
+     "text": "захар",
+     "kind": "word",
+     "s": 206.8,
+     "e": 209.7,
+     "live": [],
+     "dev_cont": [
+      208.01
+     ],
+     "py_cont": [
+      208.01
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "0091.wav",
+     "text": "",
+     "kind": "wordless",
+     "s": 210.3,
+     "e": 213.2,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.021,
+     "py_cont_peak": 0.02
+    },
+    {
+     "id": "0092.wav",
+     "text": "о",
+     "kind": "wordless",
+     "s": 213.8,
+     "e": 216.7,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.091,
+     "py_cont_peak": 0.115
+    },
+    {
+     "id": "0093.wav",
+     "text": "ар",
+     "kind": "wordless",
+     "s": 217.3,
+     "e": 220.2,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.008,
+     "py_cont_peak": 0.004
+    },
+    {
+     "id": "0094.wav",
+     "text": "захар",
+     "kind": "word",
+     "s": 220.8,
+     "e": 223.7,
+     "live": [],
+     "dev_cont": [
+      221.84
+     ],
+     "py_cont": [
+      221.84
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "0095.wav",
+     "text": "",
+     "kind": "wordless",
+     "s": 224.3,
+     "e": 227.2,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.028,
+     "py_cont_peak": 0.023
+    },
+    {
+     "id": "0096.wav",
+     "text": "ихар",
+     "kind": "word",
+     "s": 227.8,
+     "e": 230.7,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.08,
+     "py_cont_peak": 0.065
+    },
+    {
+     "id": "0097.wav",
+     "text": "махар",
+     "kind": "word",
+     "s": 231.3,
+     "e": 234.2,
+     "live": [],
+     "dev_cont": [
+      232.28
+     ],
+     "py_cont": [
+      232.28
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "0098.wav",
+     "text": "захар",
+     "kind": "word",
+     "s": 234.8,
+     "e": 237.7,
+     "live": [],
+     "dev_cont": [
+      235.88
+     ],
+     "py_cont": [
+      235.88
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "0099.wav",
+     "text": "захар",
+     "kind": "word",
+     "s": 238.3,
+     "e": 241.2,
+     "live": [],
+     "dev_cont": [
+      239.3
+     ],
+     "py_cont": [
+      239.3
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "0100.wav",
+     "text": "мхар",
+     "kind": "word",
+     "s": 241.8,
+     "e": 244.7,
+     "live": [],
+     "dev_cont": [
+      242.75
+     ],
+     "py_cont": [
+      242.75
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    }
+   ]
+  },
+  "v39": {
+   "dev_cont_det": [
+    5.12,
+    8.6,
+    11.78,
+    15.5,
+    18.89,
+    22.37,
+    25.79,
+    29.36,
+    32.96,
+    36.35,
+    39.89,
+    43.37,
+    46.76,
+    50.27,
+    53.9,
+    55.61,
+    60.86,
+    64.7,
+    67.94,
+    78.65,
+    81.86,
+    85.4,
+    88.82,
+    92.24,
+    95.84,
+    99.26,
+    102.83,
+    110.06,
+    113.6,
+    116.87,
+    120.95,
+    123.95,
+    127.58,
+    129.35,
+    130.76,
+    132.65,
+    134.33,
+    137.84,
+    141.38,
+    144.74,
+    149.33,
+    155.48,
+    167.06,
+    169.7,
+    172.82,
+    176.3,
+    179.87,
+    181.67,
+    183.35,
+    186.89,
+    193.79,
+    197.33,
+    199.25,
+    200.78,
+    204.32,
+    208.01,
+    221.84,
+    232.28,
+    235.85,
+    239.3,
+    242.78
+   ],
+   "dev_cont_outside": [],
+   "vad_blocked": [
+    16.95,
+    38.24,
+    38.27,
+    38.3,
+    38.33,
+    38.36,
+    38.39,
+    48.71,
+    48.74,
+    48.77,
+    48.8,
+    55.49,
+    55.52,
+    55.55,
+    55.58,
+    83.78,
+    83.81,
+    83.84,
+    83.87,
+    83.9,
+    104.75,
+    104.78,
+    104.81,
+    104.84,
+    127.43,
+    127.46,
+    127.49,
+    127.52,
+    127.55,
+    152.99,
+    153.02,
+    153.05,
+    153.08,
+    153.11,
+    153.14,
+    153.17,
+    153.2,
+    153.23,
+    153.26,
+    153.29,
+    153.32,
+    153.35,
+    153.38,
+    153.41,
+    153.44,
+    153.47,
+    153.5,
+    153.53,
+    153.56,
+    153.59,
+    153.62,
+    153.65,
+    153.68,
+    153.71,
+    153.74,
+    153.77,
+    153.8,
+    153.83,
+    153.86,
+    153.89,
+    153.92,
+    153.95,
+    153.98,
+    154.01,
+    174.41,
+    174.77,
+    174.8,
+    174.83,
+    174.86,
+    174.89,
+    209.93,
+    209.96,
+    209.99,
+    210.02,
+    223.82,
+    223.85,
+    223.88,
+    241.28,
+    241.31,
+    241.34,
+    241.37
+   ],
+   "py_cont_det": [
+    5.12,
+    8.6,
+    11.78,
+    15.5,
+    16.85,
+    18.92,
+    22.37,
+    25.79,
+    26.93,
+    27.68,
+    29.36,
+    32.96,
+    36.35,
+    38.24,
+    39.89,
+    40.88,
+    43.37,
+    46.76,
+    48.71,
+    50.27,
+    53.9,
+    55.43,
+    60.86,
+    64.7,
+    67.94,
+    78.68,
+    81.86,
+    83.78,
+    85.4,
+    88.82,
+    92.24,
+    95.84,
+    99.26,
+    102.83,
+    110.06,
+    113.6,
+    116.87,
+    117.92,
+    118.67,
+    120.95,
+    123.95,
+    127.43,
+    129.38,
+    130.76,
+    132.17,
+    132.92,
+    134.33,
+    135.71,
+    136.46,
+    137.84,
+    138.92,
+    139.67,
+    141.38,
+    144.74,
+    149.33,
+    150.08,
+    150.83,
+    151.85,
+    152.99,
+    153.74,
+    155.48,
+    167.06,
+    167.93,
+    169.7,
+    170.45,
+    171.2,
+    172.82,
+    174.77,
+    176.3,
+    179.87,
+    181.31,
+    183.35,
+    186.89,
+    193.79,
+    197.33,
+    199.22,
+    200.78,
+    204.32,
+    208.01,
+    209.96,
+    221.87,
+    223.82,
+    232.28,
+    235.88,
+    239.3,
+    241.28,
+    242.78,
+    244.79
+   ],
+   "py_cont_outside": [],
+   "phrases": [
+    {
+     "id": "0001.wav",
+     "text": "",
+     "kind": "wordless",
+     "s": 0.3,
+     "e": 3.4,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.209,
+     "py_cont_peak": 0.21
+    },
+    {
+     "id": "0002.wav",
+     "text": "захар",
+     "kind": "word",
+     "s": 3.8,
+     "e": 6.7,
+     "live": [],
+     "dev_cont": [
+      5.12
+     ],
+     "py_cont": [
+      5.12
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "0003.wav",
+     "text": "захар",
+     "kind": "word",
+     "s": 7.3,
+     "e": 10.2,
+     "live": [],
+     "dev_cont": [
+      8.6
+     ],
+     "py_cont": [
+      8.6
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "0004.wav",
+     "text": "захар",
+     "kind": "word",
+     "s": 10.8,
+     "e": 13.7,
+     "live": [],
+     "dev_cont": [
+      11.78
+     ],
+     "py_cont": [
+      11.78
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "0005.wav",
+     "text": "захар",
+     "kind": "word",
+     "s": 14.3,
+     "e": 17.2,
+     "live": [],
+     "dev_cont": [
+      15.5
+     ],
+     "py_cont": [
+      15.5,
+      16.85
+     ],
+     "vad_blocked": [
+      16.95
+     ],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "0006.wav",
+     "text": "захар",
+     "kind": "word",
+     "s": 17.8,
+     "e": 20.7,
+     "live": [],
+     "dev_cont": [
+      18.89
+     ],
+     "py_cont": [
+      18.92
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 0.999
+    },
+    {
+     "id": "0007.wav",
+     "text": "захар",
+     "kind": "word",
+     "s": 21.3,
+     "e": 24.2,
+     "live": [],
+     "dev_cont": [
+      22.37
+     ],
+     "py_cont": [
+      22.37
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "0008.wav",
+     "text": "захар",
+     "kind": "word",
+     "s": 24.8,
+     "e": 27.7,
+     "live": [],
+     "dev_cont": [
+      25.79
+     ],
+     "py_cont": [
+      25.79,
+      26.93,
+      27.68
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "0009.wav",
+     "text": "захар",
+     "kind": "word",
+     "s": 28.3,
+     "e": 31.2,
+     "live": [],
+     "dev_cont": [
+      29.36
+     ],
+     "py_cont": [
+      29.36
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "0010.wav",
+     "text": "захар",
+     "kind": "word",
+     "s": 31.8,
+     "e": 34.7,
+     "live": [],
+     "dev_cont": [
+      32.96
+     ],
+     "py_cont": [
+      32.96
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "0011.wav",
+     "text": "захар",
+     "kind": "word",
+     "s": 35.3,
+     "e": 38.2,
+     "live": [],
+     "dev_cont": [
+      36.35
+     ],
+     "py_cont": [
+      36.35,
+      38.24
+     ],
+     "vad_blocked": [
+      38.24,
+      38.27,
+      38.3,
+      38.33,
+      38.36,
+      38.39
+     ],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "0012.wav",
+     "text": "захар",
+     "kind": "word",
+     "s": 38.8,
+     "e": 41.7,
+     "live": [],
+     "dev_cont": [
+      39.89
+     ],
+     "py_cont": [
+      39.89,
+      40.88
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "0013.wav",
+     "text": "захар",
+     "kind": "word",
+     "s": 42.3,
+     "e": 45.2,
+     "live": [],
+     "dev_cont": [
+      43.37
+     ],
+     "py_cont": [
+      43.37
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "0014.wav",
+     "text": "захар",
+     "kind": "word",
+     "s": 45.8,
+     "e": 48.7,
+     "live": [],
+     "dev_cont": [
+      46.76
+     ],
+     "py_cont": [
+      46.76,
+      48.71
+     ],
+     "vad_blocked": [
+      48.71,
+      48.74,
+      48.77,
+      48.8
+     ],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "0015.wav",
+     "text": "нахар",
+     "kind": "word",
+     "s": 49.3,
+     "e": 52.4,
+     "live": [],
+     "dev_cont": [
+      50.27
+     ],
+     "py_cont": [
+      50.27
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "0016.wav",
+     "text": "захар",
+     "kind": "word",
+     "s": 52.8,
+     "e": 55.7,
+     "live": [],
+     "dev_cont": [
+      53.9,
+      55.61
+     ],
+     "py_cont": [
+      53.9,
+      55.43
+     ],
+     "vad_blocked": [
+      55.49,
+      55.52,
+      55.55,
+      55.58
+     ],
+     "dev_cont_peak": 0.984,
+     "py_cont_peak": 0.999
+    },
+    {
+     "id": "0017.wav",
+     "text": "",
+     "kind": "ambig",
+     "s": 56.3,
+     "e": 59.2,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.538,
+     "py_cont_peak": 0.527
+    },
+    {
+     "id": "0018.wav",
+     "text": "захар",
+     "kind": "word",
+     "s": 59.8,
+     "e": 62.7,
+     "live": [],
+     "dev_cont": [
+      60.86
+     ],
+     "py_cont": [
+      60.86
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.948,
+     "py_cont_peak": 0.998
+    },
+    {
+     "id": "0019.wav",
+     "text": "захар",
+     "kind": "word",
+     "s": 63.3,
+     "e": 66.2,
+     "live": [],
+     "dev_cont": [
+      64.7
+     ],
+     "py_cont": [
+      64.7
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "0020.wav",
+     "text": "",
+     "kind": "ambig",
+     "s": 66.8,
+     "e": 69.7,
+     "live": [],
+     "dev_cont": [
+      67.94
+     ],
+     "py_cont": [
+      67.94
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "0021.wav",
+     "text": "",
+     "kind": "wordless",
+     "s": 70.3,
+     "e": 73.2,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.02,
+     "py_cont_peak": 0.028
+    },
+    {
+     "id": "0022.wav",
+     "text": "",
+     "kind": "wordless",
+     "s": 73.8,
+     "e": 76.7,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.319,
+     "py_cont_peak": 0.261
+    },
+    {
+     "id": "0023.wav",
+     "text": "",
+     "kind": "ambig",
+     "s": 77.3,
+     "e": 80.2,
+     "live": [],
+     "dev_cont": [
+      78.65
+     ],
+     "py_cont": [
+      78.68
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.823,
+     "py_cont_peak": 0.876
+    },
+    {
+     "id": "0024.wav",
+     "text": "захар",
+     "kind": "word",
+     "s": 80.8,
+     "e": 83.7,
+     "live": [],
+     "dev_cont": [
+      81.86
+     ],
+     "py_cont": [
+      81.86,
+      83.78
+     ],
+     "vad_blocked": [
+      83.78,
+      83.81,
+      83.84,
+      83.87,
+      83.9
+     ],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "0025.wav",
+     "text": "захаров",
+     "kind": "word",
+     "s": 84.3,
+     "e": 87.2,
+     "live": [],
+     "dev_cont": [
+      85.4
+     ],
+     "py_cont": [
+      85.4
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "0026.wav",
+     "text": "захаров",
+     "kind": "word",
+     "s": 87.8,
+     "e": 90.7,
+     "live": [],
+     "dev_cont": [
+      88.82
+     ],
+     "py_cont": [
+      88.82
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "0027.wav",
+     "text": "вахар",
+     "kind": "word",
+     "s": 91.3,
+     "e": 94.2,
+     "live": [],
+     "dev_cont": [
+      92.24
+     ],
+     "py_cont": [
+      92.24
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "0028.wav",
+     "text": "мухар",
+     "kind": "word",
+     "s": 94.8,
+     "e": 97.7,
+     "live": [],
+     "dev_cont": [
+      95.84
+     ],
+     "py_cont": [
+      95.84
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.85,
+     "py_cont_peak": 0.936
+    },
+    {
+     "id": "0029.wav",
+     "text": "мухар",
+     "kind": "word",
+     "s": 98.3,
+     "e": 101.2,
+     "live": [],
+     "dev_cont": [
+      99.26
+     ],
+     "py_cont": [
+      99.26
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "0030.wav",
+     "text": "захар",
+     "kind": "word",
+     "s": 101.8,
+     "e": 104.7,
+     "live": [],
+     "dev_cont": [
+      102.83
+     ],
+     "py_cont": [
+      102.83
+     ],
+     "vad_blocked": [
+      104.75,
+      104.78,
+      104.81,
+      104.84
+     ],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "0046.wav",
+     "text": "хар",
+     "kind": "word",
+     "s": 105.3,
+     "e": 108.2,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.076,
+     "py_cont_peak": 0.093
+    },
+    {
+     "id": "0047.wav",
+     "text": "захар",
+     "kind": "word",
+     "s": 108.8,
+     "e": 111.7,
+     "live": [],
+     "dev_cont": [
+      110.06
+     ],
+     "py_cont": [
+      110.06
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "0048.wav",
+     "text": "захар",
+     "kind": "word",
+     "s": 112.3,
+     "e": 115.2,
+     "live": [],
+     "dev_cont": [
+      113.6
+     ],
+     "py_cont": [
+      113.6
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "0049.wav",
+     "text": "эха",
+     "kind": "ambig",
+     "s": 115.8,
+     "e": 118.7,
+     "live": [],
+     "dev_cont": [
+      116.87
+     ],
+     "py_cont": [
+      116.87,
+      117.92,
+      118.67
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "0050.wav",
+     "text": "захар",
+     "kind": "word",
+     "s": 119.3,
+     "e": 122.2,
+     "live": [],
+     "dev_cont": [
+      120.95
+     ],
+     "py_cont": [
+      120.95
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "0051.wav",
+     "text": "захар",
+     "kind": "word",
+     "s": 122.8,
+     "e": 125.7,
+     "live": [],
+     "dev_cont": [
+      123.95
+     ],
+     "py_cont": [
+      123.95
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "0052.wav",
+     "text": "захаров",
+     "kind": "word",
+     "s": 126.3,
+     "e": 129.2,
+     "live": [],
+     "dev_cont": [
+      127.58,
+      129.35
+     ],
+     "py_cont": [
+      127.43,
+      129.38
+     ],
+     "vad_blocked": [
+      127.43,
+      127.46,
+      127.49,
+      127.52,
+      127.55
+     ],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "0053.wav",
+     "text": "юхар",
+     "kind": "word",
+     "s": 129.8,
+     "e": 132.7,
+     "live": [],
+     "dev_cont": [
+      130.76,
+      132.65
+     ],
+     "py_cont": [
+      130.76,
+      132.17,
+      132.92
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "0054.wav",
+     "text": "вахар",
+     "kind": "word",
+     "s": 133.3,
+     "e": 136.2,
+     "live": [],
+     "dev_cont": [
+      134.33
+     ],
+     "py_cont": [
+      134.33,
+      135.71,
+      136.46
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "0055.wav",
+     "text": "захар",
+     "kind": "word",
+     "s": 136.8,
+     "e": 139.77,
+     "live": [],
+     "dev_cont": [
+      137.84
+     ],
+     "py_cont": [
+      137.84,
+      138.92,
+      139.67
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "0056.wav",
+     "text": "захар",
+     "kind": "word",
+     "s": 140.3,
+     "e": 143.2,
+     "live": [],
+     "dev_cont": [
+      141.38
+     ],
+     "py_cont": [
+      141.38
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "0057.wav",
+     "text": "мухар",
+     "kind": "word",
+     "s": 143.8,
+     "e": 146.7,
+     "live": [],
+     "dev_cont": [
+      144.74
+     ],
+     "py_cont": [
+      144.74
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "0058.wav",
+     "text": "",
+     "kind": "ambig",
+     "s": 147.3,
+     "e": 150.2,
+     "live": [],
+     "dev_cont": [
+      149.33
+     ],
+     "py_cont": [
+      149.33,
+      150.08
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "0059.wav",
+     "text": "захар",
+     "kind": "word",
+     "s": 150.8,
+     "e": 153.7,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [
+      150.83,
+      151.85,
+      152.99,
+      153.74
+     ],
+     "vad_blocked": [
+      152.99,
+      153.02,
+      153.05,
+      153.08,
+      153.11,
+      153.14,
+      153.17,
+      153.2,
+      153.23,
+      153.26,
+      153.29,
+      153.32,
+      153.35,
+      153.38,
+      153.41,
+      153.44,
+      153.47,
+      153.5,
+      153.53,
+      153.56,
+      153.59,
+      153.62,
+      153.65,
+      153.68,
+      153.71,
+      153.74,
+      153.77,
+      153.8,
+      153.83,
+      153.86,
+      153.89,
+      153.92,
+      153.95,
+      153.98,
+      154.01
+     ],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "0060.wav",
+     "text": "захар",
+     "kind": "word",
+     "s": 154.3,
+     "e": 157.2,
+     "live": [],
+     "dev_cont": [
+      155.48
+     ],
+     "py_cont": [
+      155.48
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "0061.wav",
+     "text": "ор",
+     "kind": "wordless",
+     "s": 157.8,
+     "e": 160.7,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.301,
+     "py_cont_peak": 0.328
+    },
+    {
+     "id": "0062.wav",
+     "text": "пар",
+     "kind": "wordless",
+     "s": 161.3,
+     "e": 164.2,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.045,
+     "py_cont_peak": 0.05
+    },
+    {
+     "id": "0063.wav",
+     "text": "захар",
+     "kind": "word",
+     "s": 164.8,
+     "e": 167.7,
+     "live": [],
+     "dev_cont": [
+      167.06
+     ],
+     "py_cont": [
+      167.06,
+      167.93
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.98,
+     "py_cont_peak": 0.988
+    },
+    {
+     "id": "0064.wav",
+     "text": "захар",
+     "kind": "word",
+     "s": 168.3,
+     "e": 171.2,
+     "live": [],
+     "dev_cont": [
+      169.7
+     ],
+     "py_cont": [
+      169.7,
+      170.45,
+      171.2
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "0065.wav",
+     "text": "захар",
+     "kind": "word",
+     "s": 171.8,
+     "e": 174.7,
+     "live": [],
+     "dev_cont": [
+      172.82
+     ],
+     "py_cont": [
+      172.82,
+      174.77
+     ],
+     "vad_blocked": [
+      174.41,
+      174.77,
+      174.8,
+      174.83,
+      174.86,
+      174.89
+     ],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "0066.wav",
+     "text": "мухар",
+     "kind": "word",
+     "s": 175.3,
+     "e": 178.2,
+     "live": [],
+     "dev_cont": [
+      176.3
+     ],
+     "py_cont": [
+      176.3
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "0067.wav",
+     "text": "джахар",
+     "kind": "word",
+     "s": 178.8,
+     "e": 181.7,
+     "live": [],
+     "dev_cont": [
+      179.87,
+      181.67
+     ],
+     "py_cont": [
+      179.87,
+      181.31
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "0068.wav",
+     "text": "ухар",
+     "kind": "word",
+     "s": 182.3,
+     "e": 185.2,
+     "live": [],
+     "dev_cont": [
+      183.35
+     ],
+     "py_cont": [
+      183.35
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.83,
+     "py_cont_peak": 0.89
+    },
+    {
+     "id": "0069.wav",
+     "text": "хар",
+     "kind": "word",
+     "s": 185.8,
+     "e": 188.7,
+     "live": [],
+     "dev_cont": [
+      186.89
+     ],
+     "py_cont": [
+      186.89
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.903,
+     "py_cont_peak": 0.969
+    },
+    {
+     "id": "0070.wav",
+     "text": "пар",
+     "kind": "wordless",
+     "s": 189.3,
+     "e": 192.2,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.065,
+     "py_cont_peak": 0.06
+    },
+    {
+     "id": "0071.wav",
+     "text": "захар",
+     "kind": "word",
+     "s": 192.8,
+     "e": 195.7,
+     "live": [],
+     "dev_cont": [
+      193.79
+     ],
+     "py_cont": [
+      193.79
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "0072.wav",
+     "text": "мухар",
+     "kind": "word",
+     "s": 196.3,
+     "e": 199.2,
+     "live": [],
+     "dev_cont": [
+      197.33,
+      199.25
+     ],
+     "py_cont": [
+      197.33,
+      199.22
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "0073.wav",
+     "text": "вахар",
+     "kind": "word",
+     "s": 199.8,
+     "e": 202.7,
+     "live": [],
+     "dev_cont": [
+      200.78
+     ],
+     "py_cont": [
+      200.78
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "0074.wav",
+     "text": "вахар",
+     "kind": "word",
+     "s": 203.3,
+     "e": 206.2,
+     "live": [],
+     "dev_cont": [
+      204.32
+     ],
+     "py_cont": [
+      204.32
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "0075.wav",
+     "text": "захар",
+     "kind": "word",
+     "s": 206.8,
+     "e": 209.7,
+     "live": [],
+     "dev_cont": [
+      208.01
+     ],
+     "py_cont": [
+      208.01,
+      209.96
+     ],
+     "vad_blocked": [
+      209.93,
+      209.96,
+      209.99,
+      210.02
+     ],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "0091.wav",
+     "text": "",
+     "kind": "wordless",
+     "s": 210.3,
+     "e": 213.2,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.366,
+     "py_cont_peak": 0.347
+    },
+    {
+     "id": "0092.wav",
+     "text": "о",
+     "kind": "wordless",
+     "s": 213.8,
+     "e": 216.7,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.526,
+     "py_cont_peak": 0.541
+    },
+    {
+     "id": "0093.wav",
+     "text": "ар",
+     "kind": "wordless",
+     "s": 217.3,
+     "e": 220.2,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.05,
+     "py_cont_peak": 0.019
+    },
+    {
+     "id": "0094.wav",
+     "text": "захар",
+     "kind": "word",
+     "s": 220.8,
+     "e": 223.7,
+     "live": [],
+     "dev_cont": [
+      221.84
+     ],
+     "py_cont": [
+      221.87,
+      223.82
+     ],
+     "vad_blocked": [
+      223.82,
+      223.85,
+      223.88
+     ],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "0095.wav",
+     "text": "",
+     "kind": "wordless",
+     "s": 224.3,
+     "e": 227.2,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.136,
+     "py_cont_peak": 0.118
+    },
+    {
+     "id": "0096.wav",
+     "text": "ихар",
+     "kind": "word",
+     "s": 227.8,
+     "e": 230.7,
+     "live": [],
+     "dev_cont": [],
+     "py_cont": [],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.338,
+     "py_cont_peak": 0.398
+    },
+    {
+     "id": "0097.wav",
+     "text": "махар",
+     "kind": "word",
+     "s": 231.3,
+     "e": 234.2,
+     "live": [],
+     "dev_cont": [
+      232.28
+     ],
+     "py_cont": [
+      232.28
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "0098.wav",
+     "text": "захар",
+     "kind": "word",
+     "s": 234.8,
+     "e": 237.7,
+     "live": [],
+     "dev_cont": [
+      235.85
+     ],
+     "py_cont": [
+      235.88
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "0099.wav",
+     "text": "захар",
+     "kind": "word",
+     "s": 238.3,
+     "e": 241.2,
+     "live": [],
+     "dev_cont": [
+      239.3
+     ],
+     "py_cont": [
+      239.3,
+      241.28
+     ],
+     "vad_blocked": [
+      241.28,
+      241.31,
+      241.34,
+      241.37
+     ],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    },
+    {
+     "id": "0100.wav",
+     "text": "мхар",
+     "kind": "word",
+     "s": 241.8,
+     "e": 244.7,
+     "live": [],
+     "dev_cont": [
+      242.78
+     ],
+     "py_cont": [
+      242.78,
+      244.79
+     ],
+     "vad_blocked": [],
+     "dev_cont_peak": 0.996,
+     "py_cont_peak": 1.0
+    }
+   ]
+  }
+ }
+}

@@ -1,0 +1,60 @@
+{
+ "wav": "room_1249_1254utc.wav",
+ "n_phrases": 0,
+ "device_live": [],
+ "device_live_outside": [],
+ "models": {
+  "v38": {
+   "dev_cont_det": [
+    48.05
+   ],
+   "dev_cont_outside": [
+    48.05
+   ],
+   "vad_blocked": [
+    235.43,
+    235.46,
+    235.49,
+    235.52,
+    235.55,
+    235.58,
+    235.61,
+    235.64,
+    235.67,
+    235.7
+   ],
+   "py_cont_det": [
+    48.05,
+    235.43
+   ],
+   "py_cont_outside": [
+    48.05,
+    235.43
+   ],
+   "phrases": []
+  },
+  "v39": {
+   "dev_cont_det": [],
+   "dev_cont_outside": [],
+   "vad_blocked": [
+    235.49,
+    235.52,
+    235.55,
+    235.58,
+    235.61,
+    235.64,
+    235.67,
+    235.7,
+    235.73,
+    235.76
+   ],
+   "py_cont_det": [
+    235.49
+   ],
+   "py_cont_outside": [
+    235.49
+   ],
+   "phrases": []
+  }
+ }
+}

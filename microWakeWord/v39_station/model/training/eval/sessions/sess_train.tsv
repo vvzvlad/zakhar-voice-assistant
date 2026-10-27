@@ -1,0 +1,71 @@
+clip	kind	text	start_s	end_s	live_v38	split
+0001.wav	wordless		0.3	3.4	0	train
+0002.wav	word	захар	3.8	6.7	1	train
+0003.wav	word	захар	7.3	10.2	1	train
+0004.wav	word	захар	10.8	13.7	1	train
+0005.wav	word	захар	14.3	17.2	1	train
+0006.wav	word	захар	17.8	20.7	1	train
+0007.wav	word	захар	21.3	24.2	1	train
+0008.wav	word	захар	24.8	27.7	1	train
+0009.wav	word	захар	28.3	31.2	1	train
+0010.wav	word	захар	31.8	34.7	1	train
+0011.wav	word	захар	35.3	38.2	1	train
+0012.wav	word	захар	38.8	41.7	1	train
+0013.wav	word	захар	42.3	45.2	1	train
+0014.wav	word	захар	45.8	48.7	1	train
+0015.wav	word	нахар	49.3	52.4	1	train
+0016.wav	word	захар	52.8	55.7	1	train
+0017.wav	ambig		56.3	59.2	1	train
+0018.wav	word	захар	59.8	62.7	1	train
+0019.wav	word	захар	63.3	66.2	1	train
+0020.wav	ambig		66.8	69.7	1	train
+0021.wav	wordless		70.3	73.2	0	train
+0022.wav	wordless		73.8	76.7	0	train
+0023.wav	ambig		77.3	80.2	1	train
+0024.wav	word	захар	80.8	83.7	1	train
+0025.wav	word	захаров	84.3	87.2	1	train
+0026.wav	word	захаров	87.8	90.7	1	train
+0027.wav	word	вахар	91.3	94.2	1	train
+0028.wav	word	мухар	94.8	97.7	0	train
+0029.wav	word	мухар	98.3	101.2	1	train
+0030.wav	word	захар	101.8	104.7	1	train
+0046.wav	word	хар	105.3	108.2	0	train
+0047.wav	word	захар	108.8	111.7	1	train
+0048.wav	word	захар	112.3	115.2	1	train
+0049.wav	ambig	эха	115.8	118.7	1	train
+0050.wav	word	захар	119.3	122.2	1	train
+0051.wav	word	захар	122.8	125.7	1	train
+0052.wav	word	захаров	126.3	129.2	1	train
+0053.wav	word	юхар	129.8	132.7	1	train
+0054.wav	word	вахар	133.3	136.2	1	train
+0055.wav	word	захар	136.8	139.77	1	train
+0056.wav	word	захар	140.3	143.2	1	train
+0057.wav	word	мухар	143.8	146.7	1	train
+0058.wav	ambig		147.3	150.2	1	train
+0059.wav	word	захар	150.8	153.7	1	train
+0060.wav	word	захар	154.3	157.2	1	train
+0061.wav	wordless	ор	157.8	160.7	0	train
+0062.wav	wordless	пар	161.3	164.2	0	train
+0063.wav	word	захар	164.8	167.7	1	train
+0064.wav	word	захар	168.3	171.2	1	train
+0065.wav	word	захар	171.8	174.7	1	train
+0066.wav	word	мухар	175.3	178.2	1	train
+0067.wav	word	джахар	178.8	181.7	1	train
+0068.wav	word	ухар	182.3	185.2	0	train
+0069.wav	word	хар	185.8	188.7	0	train
+0070.wav	wordless	пар	189.3	192.2	0	train
+0071.wav	word	захар	192.8	195.7	1	train
+0072.wav	word	мухар	196.3	199.2	1	train
+0073.wav	word	вахар	199.8	202.7	1	train
+0074.wav	word	вахар	203.3	206.2	1	train
+0075.wav	word	захар	206.8	209.7	1	train
+0091.wav	wordless		210.3	213.2	0	train
+0092.wav	wordless	о	213.8	216.7	0	train
+0093.wav	wordless	ар	217.3	220.2	0	train
+0094.wav	word	захар	220.8	223.7	1	train
+0095.wav	wordless		224.3	227.2	0	train
+0096.wav	word	ихар	227.8	230.7	0	train
+0097.wav	word	махар	231.3	234.2	1	train
+0098.wav	word	захар	234.8	237.7	1	train
+0099.wav	word	захар	238.3	241.2	1	train
+0100.wav	word	мхар	241.8	244.7	1	train

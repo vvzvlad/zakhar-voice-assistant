@@ -1,0 +1,32 @@
+{
+ "wav": "bg_1403utc.wav",
+ "n_phrases": 0,
+ "device_live": [],
+ "device_live_outside": [],
+ "models": {
+  "v38": {
+   "dev_cont_det": [],
+   "dev_cont_outside": [],
+   "vad_blocked": [],
+   "py_cont_det": [],
+   "py_cont_outside": [],
+   "phrases": []
+  },
+  "v39": {
+   "dev_cont_det": [
+    220.85
+   ],
+   "dev_cont_outside": [
+    220.85
+   ],
+   "vad_blocked": [],
+   "py_cont_det": [
+    220.82
+   ],
+   "py_cont_outside": [
+    220.82
+   ],
+   "phrases": []
+  }
+ }
+}
