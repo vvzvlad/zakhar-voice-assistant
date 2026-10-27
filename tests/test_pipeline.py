@@ -144,13 +144,24 @@ class FakeRunEvents:
 
 class FakeToolHub:
     """ToolHub double for the filler policy: is_slow() is membership in a fixed set
-    of slow tool names (mirrors the real hub, where the owning source declares it)."""
+    of slow tool names (mirrors the real hub, where the owning source declares it).
+    The remaining surface is what the REAL LlmStage needs, so a test can run the
+    real stage over this hub."""
 
     def __init__(self, slow_tools=()):
         self.slow_tools = set(slow_tools)
+        self.tools = []  # the advertised tool list LlmStage sends to the model
+        self.calls = []  # records (name, arguments)
 
     def is_slow(self, name):
         return name in self.slow_tools
+
+    async def ensure_tools(self):
+        return None
+
+    async def call(self, name, arguments, *, device=None):
+        self.calls.append((name, arguments))
+        return "ok"
 
 
 def make_pipeline(tmp_path, monkeypatch, name="dev", stt_text="распознанный текст",
@@ -1872,6 +1883,107 @@ async def test_no_filler_when_content_blank_after_processing(tmp_path, monkeypat
 
     assert played_texts(pipeline) == ["готово"]
     assert store.records[0]["filler_text"] == ""
+
+
+# --- the REAL LlmStage over the real _speak_filler --------------------------------
+
+
+class ScriptedLlmBackend:
+    """Minimal LLM backend double for the real-LlmStage seam tests: returns the
+    scripted provider JSON per complete() call."""
+
+    def __init__(self, responses):
+        self._responses = list(responses)
+
+    async def complete(self, messages, tools, *, has_next=False):
+        return self._responses.pop(0)
+
+
+def _patch_llm_backend(monkeypatch, backend):
+    # Swap ONLY the llm category's backend; the STT (and any other) stage keeps the
+    # real builder from the runtime.
+    import src.chains
+    real_backend = src.chains._backend
+    monkeypatch.setattr(
+        src.chains, "_backend",
+        lambda rt, category, provider_id: (
+            backend if category == "llm" else real_backend(rt, category, provider_id)
+        ),
+    )
+
+
+def _tool_round(name, args_json, content):
+    # A tool-call round that also carries spoken content.
+    return {
+        "choices": [{
+            "message": {
+                "role": "assistant",
+                "content": content,
+                "tool_calls": [{
+                    "id": "c1",
+                    "type": "function",
+                    "function": {"name": name, "arguments": args_json},
+                }],
+            }
+        }],
+        "model": "x",
+        "usage": {},
+    }
+
+
+def _final_round(content):
+    return {
+        "choices": [{"message": {"role": "assistant", "content": content}}],
+        "model": "x",
+        "usage": {},
+    }
+
+
+async def test_real_llm_stage_fast_tool_unspoken_answer_is_the_reply(tmp_path, monkeypatch):
+    # The run-101/120 production case end to end: the model's answer rides the tool
+    # round, the fast tool means no filler, the final round comes back empty — the
+    # unspoken answer is the reply, not the "Готово." fallback.
+    backend = ScriptedLlmBackend([
+        _tool_round("set_light", "{}", "Запомнила."),
+        _final_round(""),
+    ])
+    _patch_llm_backend(monkeypatch, backend)
+    store = FakeRunsStore()
+    pipeline, _ = make_pipeline(
+        tmp_path, monkeypatch, stt_text="запомни, что мы в Москве",
+        runs_store=store, tts_backend=EchoTts(),
+    )
+
+    await say(pipeline)
+    await _drain_filler_tasks(pipeline)
+
+    assert played_texts(pipeline) == ["Запомнила."]
+    assert store.records[0]["filler_text"] == ""
+
+
+async def test_real_llm_stage_spoken_filler_is_not_repeated(tmp_path, monkeypatch):
+    # A slow tool whose round carries a filler line: the filler plays, the final
+    # round is empty, and the configured fallback is spoken — the filler line is
+    # not said a second time.
+    backend = ScriptedLlmBackend([
+        _tool_round("search_events", "{}", "Щас гляну…"),
+        _final_round(""),
+    ])
+    _patch_llm_backend(monkeypatch, backend)
+    store = FakeRunsStore()
+    pipeline, _ = make_pipeline(
+        tmp_path, monkeypatch, stt_text="что у меня в календаре",
+        runs_store=store, tts_backend=EchoTts(),
+    )
+
+    await say(pipeline)
+    await _drain_filler_tasks(pipeline)
+
+    assert played_texts(pipeline) == [
+        clean_llm_output("Щас гляну…"),
+        LlmConfig().reply_empty_after_tools,
+    ]
+    assert store.records[0]["filler_text"] == clean_llm_output("Щас гляну…")
 
 
 # --- end-of-phrase "ack" chime (server-side «блям» at VAD finalize) ---------------

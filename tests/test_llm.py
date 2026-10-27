@@ -527,6 +527,89 @@ async def test_on_filler_failure_does_not_break_loop():
     assert result.reply == clean_llm_output("Готово.")
 
 
+async def test_unspoken_tool_round_content_is_the_reply_when_final_is_empty():
+    # The model says its answer next to a fast tool call, then returns nothing after
+    # the tool result: the unspoken tool-round line is the reply, not the fallback.
+    hub = StubHub(tools=[SET_LIGHT_TOOL])
+    backend = FakeLlmBackend([
+        _tool_call_with_content("set_light", "{}", "Запомнила."),
+        _final(""),
+    ])
+
+    async def declines(content, tool_names):
+        return False
+
+    result = await _respond(backend, hub, "запомни, что мы в Москве", on_filler=declines)
+
+    assert result.reply == "Запомнила."
+
+
+async def test_spoken_filler_is_not_repeated_when_final_is_empty():
+    # A tool-round line already spoken as a filler is not said twice: an empty final
+    # round falls back to the configured phrase.
+    hub = StubHub(tools=[SET_LIGHT_TOOL])
+    backend = FakeLlmBackend([
+        _tool_call_with_content("set_light", "{}", "Щас гляну…"),
+        _final(""),
+    ])
+
+    async def speaks(content, tool_names):
+        return True
+
+    result = await _respond(backend, hub, "включи свет", on_filler=speaks)
+
+    assert result.reply == LlmConfig().reply_empty_after_tools
+
+
+async def test_later_spoken_filler_keeps_earlier_unspoken_reply():
+    # Round 1: the answer next to a fast tool (no filler). Round 2: a line spoken
+    # as a filler next to a slow tool. An empty final round leaves the round-1
+    # answer as the reply — the spoken filler must not erase it.
+    hub = StubHub(tools=[SET_LIGHT_TOOL])
+    backend = FakeLlmBackend([
+        _tool_call_with_content("set_light", "{}", "Запомнила."),
+        _tool_call_with_content("search_events", "{}", "Щас гляну…"),
+        _final(""),
+    ])
+
+    async def policy(content, tool_names):
+        return "search_events" in tool_names
+
+    result = await _respond(backend, hub, "запомни и глянь", on_filler=policy)
+
+    assert result.reply == "Запомнила."
+
+
+async def test_rounds_exhausted_return_unspoken_tool_round_content():
+    # The tool rounds run out with no final reply: the unspoken tool-round text is
+    # still the answer, not a tool_rounds failure.
+    hub = StubHub(tools=[SET_LIGHT_TOOL])
+    backend = FakeLlmBackend([_tool_call_with_content("set_light", "{}", "Запомнила.")])
+
+    async def declines(content, tool_names):
+        return False
+
+    result = await _respond(backend, hub, "включи свет", max_tool_rounds=1,
+                            on_filler=declines)
+
+    assert result.reply == "Запомнила."
+
+
+async def test_rounds_exhausted_after_spoken_filler_raises():
+    # The tool rounds run out and the only spoken line already went out as a
+    # filler: it must not be said again, so the run fails to the error phrase.
+    hub = StubHub(tools=[SET_LIGHT_TOOL])
+    backend = FakeLlmBackend([_tool_call_with_content("set_light", "{}", "Щас гляну…")])
+
+    async def speaks(content, tool_names):
+        return True
+
+    with pytest.raises(StageError) as ei:
+        await _respond(backend, hub, "включи свет", max_tool_rounds=1, on_filler=speaks)
+
+    assert ei.value.kind == "tool_rounds"
+
+
 # --- pipeline <-> LlmStage contract pin -------------------------------------------
 
 
