@@ -1,0 +1,21 @@
+#!/bin/sh
+# The activation sound on the wake word: starts /data/opt/zakhar/alice-blip.sh, which follows
+# quasar's own spot log line (onPhraseSpotted in maind.log) and plays the stock earcon asset
+# through maind --gst-launch. Its log is /tmp/alice-blip.log (RAM, gone at boot).
+case "$1" in
+start)
+	[ -f /tmp/alice-blip.pid ] && kill -0 "$(cat /tmp/alice-blip.pid)" 2>/dev/null && exit 0
+	rm -f /tmp/alice-blip.pid
+	/data/opt/zakhar/alice-blip.sh </dev/null >/tmp/alice-blip.log 2>&1 &
+	echo $! >/tmp/alice-blip.pid
+	;;
+stop)
+	for p in $(ps | grep "[a]lice-blip.sh" | awk '{print $1}'); do
+		kill "$p" 2>/dev/null
+	done
+	for p in $(ps | grep "[t]ail -F -n0 /data/quasar/daemons_logs/maind.log" | awk '{print $1}'); do
+		kill "$p" 2>/dev/null
+	done
+	rm -f /tmp/alice-blip.pid
+	;;
+esac
