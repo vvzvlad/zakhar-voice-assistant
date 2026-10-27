@@ -104,6 +104,16 @@ class FakeStation:
                 continue
             return data
 
+    async def recv_with_partials(self) -> dict:
+        """recv() that returns the empty partial ASR results too, instead of skipping them."""
+        while True:
+            msg = await asyncio.wait_for(self.ws.receive(), 5)
+            if msg.type == aiohttp.WSMsgType.BINARY:
+                sid = struct.unpack(">I", msg.data[:4])[0]
+                self.audio.setdefault(sid, bytearray()).extend(msg.data[4:])
+                continue
+            return json.loads(msg.data)
+
     async def directive(self, name: str) -> dict:
         d = (await self.recv())["directive"]
         assert d["header"]["name"] == name, d["header"]
@@ -156,7 +166,6 @@ async def test_station_session_through_the_bridge():
         await server.send(type="play_stop")
         await server.send(type="state", session=1, value="listening")
         assert (await station.directive("Validation"))["payload"]["valid"] == 1
-        # The final ASR.Result waits for the transcript: quasar plays no answer after an empty one.
         # The chime goes out before the transcript, as in production: the server plays it once
         # the wake word is found, before STT. It goes as a plain TTS.Speak of the request; the
         # VinsResponse waits for the reply's text.
@@ -170,12 +179,13 @@ async def test_station_session_through_the_bridge():
         assert station.audio[2].startswith(b"OggS")
         assert await server.recv() == {"type": "played", "id": 7, "dry": 0, "gap_ms": 0}
         await server.send(type="transcript", session=1, text="алиса включи свет")
-        final = await station.directive("Result")
-        assert final["payload"]["endOfUtt"] is True and final["header"]["refMessageId"] == ref
-        assert final["payload"]["recognition"][0]["normalized"] == "алиса включи свет"
-        assert (await station.recv())["streamcontrol"]["streamId"] == 1
-        # quasar closes its own microphone stream once it has the final result: that is no
-        # cancel, the answer still goes to the station.
+        # The final ASR.Result is held until the answer: quasar gives a request 15 s from the
+        # final result and plays its error sound over a slower answer, so the first thing the
+        # station gets after the transcript is an empty partial holding it, not the final.
+        held = await station.recv_with_partials()
+        assert held["directive"]["payload"]["endOfUtt"] is False
+        # quasar closes its own microphone stream once it has got its own final result from the
+        # station side: that is no cancel, the answer still goes to the station.
         await ws.send_str(json.dumps({"streamcontrol": {"action": 0, "reason": 7, "streamId": 1}}))
 
         # The answer: VinsResponse and TTS.Speak at its play_start, its audio as Ogg/Opus, closed at
@@ -188,6 +198,10 @@ async def test_station_session_through_the_bridge():
         for i in range(0, len(answer), 4096):
             await server.ws.send_bytes(bytes([PLAY]) + answer[i:i + 4096])
         await server.send(type="play_end", id=8, session=1)
+        final = await station.directive("Result")
+        assert final["payload"]["endOfUtt"] is True and final["header"]["refMessageId"] == ref
+        assert final["payload"]["recognition"][0]["normalized"] == "алиса включи свет"
+        assert (await station.recv())["streamcontrol"]["streamId"] == 1
         vins = await station.directive("VinsResponse")
         assert vins["payload"]["header"]["ref_message_id"] == ref
         assert vins["payload"]["voice_response"]["output_speech"]["text"] == "Свет включён"

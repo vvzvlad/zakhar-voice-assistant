@@ -16,7 +16,10 @@ connection of that id is open.
   Spotter.Validation               ◄──  state listening          ◄──
                                         state transcribing: the microphone stops going to the server
   TTS.Speak, Ogg (chime, filler)   ◄──  play_start / 0x02 / play_end before the reply
-  final ASR.Result, mic closed     ◄──  transcript (its text)    ◄──
+  empty ASR.Result (partials)      ◄──  after the transcript: the answer takes longer than
+                                        quasar's 15-s request timeout, so the final result
+                                        waits for it and the partials hold the station
+  final ASR.Result, mic closed     ◄──  with the reply, at the answer's play_start
   VinsResponse, TTS.Speak, Ogg     ◄──  reply, then the answer's play_start / 0x02 / play_end
   empty VinsResponse               ◄──  state idle or error without an answer, a refused wake
 
@@ -102,6 +105,7 @@ class VoiceRequest:
     cancelled: bool = False  # the station abandoned it: no answer goes back
     draining: bool = False  # silence is being fed so the server end-points it
     asr_sent: bool = False  # its final ASR.Result went out
+    transcript: str = ""  # its final text, the ASR.Result held until the answer (see _hold_asr)
     reply: str | None = None
     responded: bool = False  # its VinsResponse went out
     directives: list[dict] = field(default_factory=list)  # for its VinsResponse
@@ -177,6 +181,7 @@ class Link:
         self._model: dict | None = None  # the `model` whose bytes are coming
         self._model_left = 0
         self._drains: set[asyncio.Task] = set()  # silence feeds for abandoned requests
+        self._holds: set[asyncio.Task] = set()  # final-ASR holds of requests waiting for an answer
         self._task = asyncio.create_task(self._run())
         self._task.add_done_callback(_log_task_error)
 
@@ -186,9 +191,9 @@ class Link:
 
     async def stop(self) -> None:
         self._task.cancel()
-        for t in list(self._drains):
+        for t in list(self._drains) + list(self._holds):
             t.cancel()
-        await asyncio.gather(self._task, *self._drains, return_exceptions=True)
+        await asyncio.gather(self._task, *self._drains, *self._holds, return_exceptions=True)
 
     # ------------------------------------------------------------ server connection
 
@@ -332,7 +337,7 @@ class Link:
             req = self._of(msg.get("session"))
             if req is not None:
                 await self._close_mic(req)
-                await self._finish_asr(req, msg.get("text", ""))
+                await self._hold_asr(req, msg.get("text", ""))
         elif kind == "play_start":
             await self._on_play_start(msg)
         elif kind == "play_end":
@@ -395,11 +400,34 @@ class Link:
         await req.station.send_json(P.asr_result(req.ref, text, req.partial_no, True, req.duration_ms))
         await req.station.send_json(P.stream_control(req.stream_id))
 
+    async def _hold_asr(self, req: VoiceRequest, text: str) -> None:
+        """Take the transcript but hold its final ASR.Result until the answer plays: quasar
+        times a request out 15 s after the final result and plays its error sound over a
+        slower answer, so the result goes out together with the VinsResponse, and empty
+        partial ASR.Results keep the station listening meanwhile."""
+        if not req.taken or req.asr_sent or req.cancelled or req.responded:
+            return
+        req.transcript = text
+        t = asyncio.create_task(self._hold_loop(req))
+        self._holds.add(t)
+        t.add_done_callback(self._holds.discard)
+        t.add_done_callback(_log_task_error)
+
+    async def _hold_loop(self, req: VoiceRequest) -> None:
+        """Empty partial ASR.Results while the answer is being made (see _hold_asr)."""
+        while (req is self.request and not req.asr_sent and not req.cancelled
+               and not req.responded and self.up):
+            await asyncio.sleep(PARTIAL_INTERVAL_S)
+            if req is not self.request or req.asr_sent or req.cancelled or not self.up:
+                return
+            await req.station.send_json(P.asr_result(req.ref, "", req.partial_no, False, req.duration_ms))
+            req.partial_no += 1
+
     async def _end(self, req: VoiceRequest) -> None:
         """The run of `req` is over: its microphone stops and, if no answer went, an empty
         VinsResponse does."""
         await self._close_mic(req)
-        await self._finish_asr(req, "")
+        await self._finish_asr(req, req.transcript)
         if self.request is req:
             self.request = None
         if not req.responded and not req.cancelled:
@@ -419,7 +447,7 @@ class Link:
             station, ref = req.station, req.ref
         else:
             station, ref = req.station, req.ref
-            await self._finish_asr(req, "")
+            await self._finish_asr(req, req.transcript)
             req.responded = True
             await station.respond(req, req.reply, req.directives)
         play.station, play.sid, play.encoder = station, station.next_stream_id(), OggOpusStreamEncoder()
