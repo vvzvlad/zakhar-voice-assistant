@@ -162,6 +162,9 @@ async def test_station_session_through_the_bridge():
         assert final["payload"]["endOfUtt"] is True and final["header"]["refMessageId"] == ref
         assert final["payload"]["recognition"][0]["normalized"] == "алиса включи свет"
         assert (await station.recv())["streamcontrol"]["streamId"] == 1
+        # quasar closes its own microphone stream once it has the final result: that is no
+        # cancel, the answer still goes to the station.
+        await ws.send_str(json.dumps({"streamcontrol": {"action": 0, "reason": 7, "streamId": 1}}))
 
         # The chime before the reply is not sent to the station, but reported played.
         await server.send(type="state", session=1, value="thinking")

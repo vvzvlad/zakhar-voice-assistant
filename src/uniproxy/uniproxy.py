@@ -655,7 +655,9 @@ class StationSession:
             return
         if sc.get("action") == STREAM_SPOTTER_END:
             self.link.send_preroll(req)
-        elif sc.get("action") == STREAM_CLOSE:
+        elif sc.get("action") == STREAM_CLOSE and req.mic_open:
+            # A close after the server stopped listening is no cancel: quasar closes its stream
+            # itself once it gets the final ASR.Result, and waits for the answer.
             self.link.station_stopped(req, sc.get("reason") in (REASON_CANCEL, REASON_NO_SPEECH))
 
     async def _respond_empty(self, ref: str, payload: dict) -> None:
