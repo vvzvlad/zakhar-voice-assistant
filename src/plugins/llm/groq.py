@@ -23,7 +23,7 @@ class GroqLlmConfig(LlmConfig):
     # Groq serves open-weight models; default to a fast, capable one.
     # The json_schema_extra must be re-attached: pydantic does not inherit Field
     # metadata on overridden fields (see MODEL_FIELD_EXTRA in src/plugins/base.py).
-    model: str = Field("llama-3.3-70b-versatile", title="Model", json_schema_extra=MODEL_FIELD_EXTRA)
+    model: str = Field("openai/gpt-oss-120b", title="Model", json_schema_extra=MODEL_FIELD_EXTRA)
 
 
 @register
