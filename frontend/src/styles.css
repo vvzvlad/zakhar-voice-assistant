@@ -452,6 +452,8 @@ details.z-card[open]>summary .z-chev{transform:none;}
 .z-toast .z-dot{margin-top:4px;}
 .z-toast-body{min-width:0;flex:1;}
 .z-toast-head{display:flex;align-items:center;gap:8px;font-size:12px;}
+/* An unlabelled device shows its raw id, one unbreakable word: let it wrap so the status and time stay inside the card. */
+.z-toast-head b{min-width:0;overflow-wrap:anywhere;}
 .z-toast-time{font-family:var(--mono);font-size:10.5px;color:var(--mut);margin-left:auto;}
 .z-toast-text{font-size:11.5px;color:var(--mut);margin-top:2px;overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;}
 .z-toast-x{border:none;background:transparent;color:var(--mut2);font-size:14px;line-height:1;cursor:pointer;padding:0 0 0 2px;}
