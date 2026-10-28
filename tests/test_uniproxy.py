@@ -422,18 +422,28 @@ async def test_a_followup_window_without_the_servers_listening_closes(monkeypatc
         await station.mic(3, mic2.add(tone(0.4, 16000), 16000))
         await asyncio.sleep(0.1)
         assert len(server.mic) == before  # held while the cycle waits for the listening
-        # The wait runs out: the cycle's stream closes and its held audio is dropped, with no
-        # answer — the station just stops listening.
-        sc = await station.recv()
-        assert sc["streamcontrol"]["streamId"] == 3 and sc["streamcontrol"]["action"] == 0
-        try:
-            await asyncio.wait_for(station.recv(), 0.5)
-            raise AssertionError("the cycle got a message after the wait ran out")
-        except asyncio.TimeoutError:
-            pass
+        # The wait runs out: the held audio is dropped and the cycle ends as an empty window does.
+        await empty_window_end(station, 3)
         assert len(server.mic) == before  # the held audio never went to the server
     finally:
         await hang_up(http, bridge_runner, server_runner)
+
+
+async def empty_window_end(station, stream_id: int) -> None:
+    """A follow-up window that ends with no phrase ends as real Yandex ends one: a final empty
+    ASR.Result first (on a bare close quasar's post-answer state machine, still waiting for
+    it, plays its error sound), then the stream's close, and no answer."""
+    final = await station.recv()
+    assert final["directive"]["header"]["name"] == "Result", final
+    assert final["directive"]["payload"]["endOfUtt"] is True
+    assert final["directive"]["payload"]["recognition"][0]["normalized"] == ""
+    sc = await station.recv()
+    assert sc["streamcontrol"]["streamId"] == stream_id and sc["streamcontrol"]["action"] == 0
+    try:
+        msg = await asyncio.wait_for(station.recv(), 0.5)
+    except asyncio.TimeoutError:
+        return
+    raise AssertionError(f"the empty window got a message after its close: {msg}")
 
 
 async def test_the_followup_window_ended_idle_closes_its_stream():
@@ -444,9 +454,32 @@ async def test_the_followup_window_ended_idle_closes_its_stream():
         await followup_input(station, 3, "r-fup")
         # No speech in the window: the server ends the session with idle.
         await server.send(type="state", session=1, value="idle")
-        final = await station.directive("Result")
-        assert final["payload"]["endOfUtt"] is True  # the window's empty final result
-        sc = await station.recv()
-        assert sc["streamcontrol"]["streamId"] == 3 and sc["streamcontrol"]["action"] == 0
+        await empty_window_end(station, 3)
+    finally:
+        await hang_up(http, bridge_runner, server_runner)
+
+
+async def test_the_followup_window_closed_by_the_station_ends_with_a_final_result():
+    server, station, ws, http, bridge_runner, server_runner = await connect()
+    try:
+        await wake_and_answer(server, station, ws, 1, "алиса включи свет", "Свет включён")
+        await server.send(type="state", session=1, value="listening")
+        await followup_input(station, 3, "r-fup")
+        # The station's own end of the window: no speech heard (reason 8), then the server's idle.
+        await ws.send_str(json.dumps({"streamcontrol": {"action": 0, "reason": 8, "streamId": 3}}))
+        await server.send(type="state", session=1, value="idle")
+        await empty_window_end(station, 3)
+    finally:
+        await hang_up(http, bridge_runner, server_runner)
+
+
+async def test_the_followup_window_ended_before_its_listening_gets_no_bare_close():
+    server, station, ws, http, bridge_runner, server_runner = await connect()
+    try:
+        await wake_and_answer(server, station, ws, 1, "алиса включи свет", "Свет включён")
+        # The window's VoiceInput comes first and the session ends before its `listening`.
+        await followup_input(station, 3, "r-fup")
+        await server.send(type="state", session=1, value="idle")
+        await empty_window_end(station, 3)
     finally:
         await hang_up(http, bridge_runner, server_runner)

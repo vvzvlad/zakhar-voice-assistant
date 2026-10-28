@@ -312,16 +312,18 @@ class Link:
         logger.info(f"station {self.name}: follow-up window, session {req.session}")
 
     def _followup_timeout(self, req: VoiceRequest) -> None:
-        """The server's follow-up `listening` never came for the cycle: its stream closes and the
-        audio it held is dropped, with no answer — the station just stops listening."""
+        """The server's follow-up `listening` never came for the cycle: the audio it held is
+        dropped and it ends as an empty window does (_end) — a final empty ASR.Result, its
+        stream's close, no answer: the station just stops listening."""
         if req is not self.request or req.preroll_sent or req.responded or req.cancelled:
             return
         req.mic_open = False
         req.pcm.clear()
+        req.responded = True
         if self._window == req.session:
             self._window = 0  # the closed cycle was the window's last chance
         self.request = None
-        self._spawn_send(req.station.send_json(P.stream_control(req.stream_id)))
+        self._spawn_send(self._send_final(req, ""))
 
     def _spawn_send(self, coro) -> None:
         t = asyncio.create_task(coro)
@@ -441,11 +443,13 @@ class Link:
         """The microphone of `req` stops (a `state` other than `listening`). A refused wake fails
         its spotter validation and the station's stream closes; a taken one waits for its
         transcript (_finish_asr): quasar takes an empty final ASR.Result for a phrase it did not
-        hear and plays no answer after it."""
+        hear and plays no answer after it. _close_mic never closes a follow-up cycle's stream: an
+        empty window ends with a final ASR.Result first (_end, _followup_timeout); a wake word
+        that supersedes the cycle closes it in Link.wake."""
         if not req.mic_open:
             return
         req.mic_open = False
-        if req.taken or req.cancelled:
+        if req.taken or req.cancelled or req.followup:
             return
         if req.spotter_validation:
             await req.station.send_json(P.spotter_validation(req.ref, self.device_id, False))
@@ -453,7 +457,13 @@ class Link:
 
     async def _finish_asr(self, req: VoiceRequest, text: str) -> None:
         """A taken wake's final ASR.Result with `text`, and the station's stream closes; once."""
-        if not req.taken or req.asr_sent or req.cancelled:
+        if not req.taken or req.cancelled:
+            return
+        await self._send_final(req, text)
+
+    async def _send_final(self, req: VoiceRequest, text: str) -> None:
+        """The final ASR.Result of `req` with `text`, then its stream's close; once."""
+        if req.asr_sent:
             return
         req.asr_sent = True
         await req.station.send_json(P.asr_result(req.ref, text, req.partial_no, True, req.duration_ms))
@@ -484,9 +494,18 @@ class Link:
 
     async def _end(self, req: VoiceRequest) -> None:
         """The run of `req` is over: its microphone stops and, if no answer went, an empty
-        VinsResponse does."""
+        VinsResponse does; a follow-up window with no phrase gets only its final empty
+        ASR.Result and no answer."""
         await self._close_mic(req)
         await self._finish_asr(req, req.transcript)
+        if req.followup and not req.transcript and not req.responded:
+            # The window ended with no phrase (the station's own close of its stream, the
+            # server's idle, the link gone): it ends the way real Yandex ends an empty window —
+            # a final empty ASR.Result, then the stream's close, and no answer. On a bare close
+            # quasar's post-answer state machine, still waiting for the final result, plays its
+            # error sound.
+            req.responded = True
+            await self._send_final(req, "")
         if self.request is req:
             self.request = None
         if not req.responded and not req.cancelled:
