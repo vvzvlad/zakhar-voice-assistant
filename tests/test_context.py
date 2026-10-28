@@ -3,7 +3,7 @@ import json
 import os
 from datetime import datetime
 
-from src.context import append_context, load_context
+from src.context import append_context, append_spoken, load_context
 
 # Defaults baked into context.load_context / append_context.
 DEFAULT_TTL_SECONDS = 300
@@ -35,35 +35,54 @@ def test_two_appends_within_ttl_accumulate(tmp_path):
     ]
 
 
-def test_tool_calls_are_noted_after_the_answer(tmp_path):
-    # An answer that ran tools is followed by a third-person note naming them, so the
-    # history does not read as if saying «поставлено» was enough.
+def test_tool_calls_precede_the_answer_round_by_round(tmp_path):
+    # An answer that ran tools carries each round's calls and their results before the
+    # reply, so «отменил» does not read as enough by itself, and a call made after
+    # seeing an earlier round's result stays after it.
     path = str(tmp_path / "context_living.txt")
-    calls = [{"name": "set_reminder",
-              "args": {"text": "помыть посуду", "in_minutes": 5, "at": None},
-              "result": "Напоминание поставлено (№3)."},
-             {"name": "list_reminders", "args": {}, "result": "..."}]
-    append_context(path, "напомни помыть посуду", "Напомню.", calls=calls)
-    assert load_context(path)[2:] == [{
-        "role": "user",
-        "content": "[Этот ответ ассистент дал, вызвав инструменты: "
-                   'set_reminder(text="помыть посуду", in_minutes=5); list_reminders()]',
-    }]
+    rounds = [[{"name": "list_reminders", "args": {}, "result": "№3 помыть посуду"}],
+              [{"name": "cancel_reminder", "args": {"id": 3}, "result": "Отменено."},
+               {"name": "set_timer", "args": {"seconds": 60}, "result": "ok"}]]
+    append_context(path, "отмени напоминание", "Отменил.", rounds=rounds)
+    user, made1, res1, made2, res2, res3, reply = load_context(path)
+    assert user == {"role": "user", "content": "отмени напоминание"}
+    assert reply == {"role": "assistant", "content": "Отменил."}
+    for made, results, calls in ((made1, [res1], rounds[0]), (made2, [res2, res3], rounds[1])):
+        assert made["role"] == "assistant" and made["content"] == ""
+        assert [(c["function"]["name"], json.loads(c["function"]["arguments"]))
+                for c in made["tool_calls"]] == [(c["name"], c["args"]) for c in calls]
+        assert [(r["role"], r["tool_call_id"], r["content"]) for r in results] == [
+            ("tool", tc["id"], c["result"]) for tc, c in zip(made["tool_calls"], calls)]
 
 
-def test_tool_notes_do_not_shrink_the_window(tmp_path):
-    # The window keeps max_turns exchanges however many of them called tools, and
-    # never opens with a note whose answer was cut off.
+def test_tool_calls_do_not_shrink_the_window(tmp_path):
+    # The window keeps max_turns exchanges however many of them called tools, each
+    # kept answer with its calls and results.
     path = str(tmp_path / "context_living.txt")
-    calls = [{"name": "set_timer", "args": {"seconds": 60}}]
+    rounds = [[{"name": "set_timer", "args": {"seconds": 60}, "result": "ok"}]]
     for i in range(4):
-        append_context(path, f"u{i}", f"a{i}", max_turns=2, calls=calls)
-    note = {"role": "user",
-            "content": "[Этот ответ ассистент дал, вызвав инструменты: set_timer(seconds=60)]"}
-    assert load_context(path, max_turns=2) == [
-        {"role": "user", "content": "u2"}, {"role": "assistant", "content": "a2"}, note,
-        {"role": "user", "content": "u3"}, {"role": "assistant", "content": "a3"}, note,
+        append_context(path, f"u{i}", f"a{i}", max_turns=2, rounds=rounds)
+    assert [(m["role"], m["content"]) for m in load_context(path, max_turns=2)] == [
+        ("user", "u2"), ("assistant", ""), ("tool", "ok"), ("assistant", "a2"),
+        ("user", "u3"), ("assistant", ""), ("tool", "ok"), ("assistant", "a3"),
     ]
+
+
+def test_window_cut_before_a_request_keeps_its_answers_calls_whole(tmp_path):
+    # A spoken note shifts the cut onto a request: the window opens with that answer's
+    # calls, results and reply, never with a call missing its result.
+    path = str(tmp_path / "context_living.txt")
+    rounds = [[{"name": "set_timer", "args": {"seconds": 60}, "result": "ok"}]]
+    append_context(path, "u1", "a1", max_turns=2, rounds=rounds)
+    append_spoken(path, "Таймер", max_turns=2)
+    append_context(path, "u2", "a2", max_turns=2)
+    window = load_context(path, max_turns=2)
+    assert [(m["role"], m["content"]) for m in window] == [
+        ("assistant", ""), ("tool", "ok"), ("assistant", "a1"),
+        ("user", "[На колонке была произнесена фраза: «Таймер»]"),
+        ("user", "u2"), ("assistant", "a2"),
+    ]
+    assert window[1]["tool_call_id"] == window[0]["tool_calls"][0]["id"]
 
 
 def test_trimming_drops_oldest(tmp_path):

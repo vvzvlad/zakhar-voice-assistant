@@ -54,9 +54,9 @@ HARD_CAP_BYTES = SAMPLE_RATE * 2 * 60
 STOP_WORD = "стоп"
 
 
-def _calls(run) -> list[dict]:
-    """The tool calls an answered chain run made, every round's, in order."""
-    return [c for rnd in run.result.rounds for c in rnd.get("calls") or []]
+def _calls(run) -> list[list[dict]]:
+    """The tool calls an answered chain run made, one list per round that made any."""
+    return [rnd["calls"] for rnd in run.result.rounds if rnd.get("calls")]
 
 
 def _words(text: str) -> list[str]:
@@ -1172,7 +1172,7 @@ class Pipeline(SpeechMixin):
                                 reply,
                                 max_turns=self.core.context.max_turns,
                                 ttl_seconds=self.core.context.ttl_seconds,
-                                calls=_calls(chain_run),
+                                rounds=_calls(chain_run),
                             )
                         except Exception as e:
                             # Context persistence failure must not break the run.
@@ -1457,7 +1457,7 @@ class Pipeline(SpeechMixin):
                                 reply,
                                 max_turns=self.core.context.max_turns,
                                 ttl_seconds=self.core.context.ttl_seconds,
-                                calls=_calls(run),
+                                rounds=_calls(run),
                             )
                         except Exception as e:
                             # Context persistence failure must not break the run.
