@@ -891,7 +891,7 @@ async def test_run_accentizes_tts_text_but_keeps_llm_text_original(tmp_path, mon
     await say(pipeline)
 
     # (a) TTS synthesized the accented text.
-    assert tts.texts == ["готово [ACC]"]
+    assert tts.texts == ["готово [ACC]."]
     # The TTS_START event carries the accented text too.
     assert dict(events)[StageEvent.TTS_START] == {"text": "готово [ACC]"}
     # (b) and (c): the recorded run keeps the original reply and records t_stress.
@@ -928,7 +928,7 @@ async def test_run_accent_noop_leaves_stress_text_empty(tmp_path, monkeypatch):
 
     await say(pipeline)
 
-    assert tts.texts == ["готово"]
+    assert tts.texts == ["готово."]
     assert len(store.records) == 1
     rec = store.records[0]
     assert rec["llm_text"] == "готово"
@@ -1717,7 +1717,7 @@ async def test_filler_fires_when_any_tool_in_round_is_slow(tmp_path, monkeypatch
     await say(pipeline)
     await _drain_filler_tasks(pipeline)
 
-    assert sorted(played_texts(pipeline)) == sorted([clean_llm_output("Секунду…"), "готово"])
+    assert sorted(played_texts(pipeline)) == sorted([clean_llm_output("Секунду…"), "готово."])
 
 
 # --- pipeline.speak() (public proactive-speech entry) -------------------------
@@ -1730,8 +1730,29 @@ async def test_speak_synthesizes_and_plays(tmp_path, monkeypatch):
 
     await pipeline.speak("привет")
 
-    assert tts.calls == [("привет", "ru")]
-    assert pipeline.play.calls == [("привет".encode(), "audio/x-test")]
+    # A text without a sentence-final mark gets a '.', so the TTS ends it with a
+    # falling intonation.
+    assert tts.calls == [("привет.", "ru")]
+    assert pipeline.play.calls == [("привет.".encode(), "audio/x-test")]
+
+
+@pytest.mark.parametrize("text, spoken", [
+    ("Как дела?", "Как дела?"),
+    ("Готово!", "Готово!"),
+    ("Секунду…", "Секунду…"),
+    ("Включила режим «Кино»", "Включила режим «Кино»."),
+    ("Он сказал «Привет!»", "Он сказал «Привет!»"),
+    ("готово  ", "готово."),
+])
+async def test_speak_ends_the_sentence_once(tmp_path, monkeypatch, text, spoken):
+    # The '.' is added only where the text (before any closing quote) has no
+    # sentence-final mark of its own.
+    tts = EchoTts()
+    pipeline, _ = make_pipeline(tmp_path, monkeypatch, tts_backend=tts)
+
+    await pipeline.speak(text)
+
+    assert tts.calls == [(spoken, "ru")]
 
 
 async def test_speak_without_speaker_synthesizes_nothing(tmp_path, monkeypatch):
@@ -1822,7 +1843,7 @@ async def test_no_filler_for_fast_tool(tmp_path, monkeypatch):
     await say(pipeline)
     await _drain_filler_tasks(pipeline)
 
-    assert played_texts(pipeline) == ["готово"]
+    assert played_texts(pipeline) == ["готово."]
     assert store.records[0]["filler_text"] == ""
     assert store.records[0]["t_filler"] is None
 
@@ -1881,7 +1902,7 @@ async def test_no_filler_when_content_blank_after_processing(tmp_path, monkeypat
     await say(pipeline)
     await _drain_filler_tasks(pipeline)
 
-    assert played_texts(pipeline) == ["готово"]
+    assert played_texts(pipeline) == ["готово."]
     assert store.records[0]["filler_text"] == ""
 
 
@@ -2356,15 +2377,17 @@ async def test_filler_think_block_stripped_before_announce(tmp_path, monkeypatch
     await say(pipeline)
     await _drain_filler_tasks(pipeline)
 
-    # The played and the recorded filler text are exactly the cleaned line.
-    assert "Щас гляну" in played_texts(pipeline)
+    # The recorded filler text is exactly the cleaned line; the played one also ends
+    # the sentence.
+    assert "Щас гляну." in played_texts(pipeline)
     assert store.records[0]["filler_text"] == "Щас гляну"
 
 
 async def test_llm_reply_reaches_tts_verbatim(tmp_path, monkeypatch):
     # R3 canonical text contract: the LLM reply (with '+' stress marks and units)
     # is handed to the TTS backend VERBATIM — any engine-specific adaptation is the
-    # backend's own job, never the pipeline's.
+    # backend's own job, never the pipeline's. The reply already ends a sentence, so
+    # no '.' is added.
     class _RecordingTts(FakeTtsBackend):
         def __init__(self):
             super().__init__(mime="audio/mpeg", audio=b"MP3")
@@ -2374,7 +2397,7 @@ async def test_llm_reply_reaches_tts_verbatim(tmp_path, monkeypatch):
             self.calls.append((text, lang))
             return await super().synthesize(text, lang)
 
-    reply = "прив+ет, сейчас 5 °C"
+    reply = "прив+ет, сейчас 5 °C."
     patch_llm(monkeypatch, reply=reply)
     tts = _RecordingTts()
     pipeline, events = make_pipeline(

@@ -21,6 +21,17 @@ from src.stage_errors import StageError
 from src.tts import TtsBackend, pcm_rate
 
 
+def _end_sentence(text: str) -> str:
+    """`text` ending with a sentence-final mark. Without one the TTS engines read the
+    end as unfinished and give it the wrong intonation, so a '.' is added — after any
+    closing quote or bracket, and not to an empty text."""
+    text = text.rstrip()
+    core = text.rstrip("»\"”')]")
+    if core and core[-1] not in ".!?…":
+        text += "."
+    return text
+
+
 async def _synthesize_stream(backend, text: str, lang: str = "ru"):
     """Resolve `backend`'s streaming synthesis entry point.
 
@@ -251,11 +262,12 @@ class SpeechMixin:
         return played, tts_audio, tts_mime
 
     async def _voice(self, text: str, attempts: list | None = None, keep: bool = False):
-        """Synthesize `text` via the first TTS variant that starts (see _start_tts) and
-        play it on the device, returning once it has played: every speech — a reply
-        (speak_reply), a filler, proactive speech (speak). A device without a speaker
-        gets no synthesis at all. `attempts` collects the variants tried. Raises on
-        failure (callers decide isolation).
+        """Synthesize `text`, ended with a sentence-final mark (_end_sentence), via the
+        first TTS variant that starts (see _start_tts) and play it on the device,
+        returning once it has played: every speech — a reply (speak_reply), a filler,
+        proactive speech (speak). A device without a speaker gets no synthesis at all.
+        `attempts` collects the variants tried. Raises on failure (callers decide
+        isolation).
 
         Returns (played, clip): what the play hook returned ({"outcome", "dry",
         "gap_ms"}; None for a device without a speaker) and, when `keep`, the speech as
@@ -263,6 +275,7 @@ class SpeechMixin:
         """
         if not self.has_speaker:
             return None, None
+        text = _end_sentence(text)
         # Counted until it has played: a speech queued on the device behind an answer
         # keeps that answer from opening a follow-up window (the answer's own count is
         # released by the time it decides).
