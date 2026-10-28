@@ -133,7 +133,7 @@ async def test_station_session_through_the_bridge():
         station = FakeStation(ws)
         hello = await server.recv()
         assert hello["type"] == "hello" and hello["id"] == "YA-d3336afa"
-        assert hello["caps"] == {"speaker": True, "screen": False, "follow_up": False}
+        assert hello["caps"] == {"speaker": True, "screen": False, "follow_up": True}
         assert hello["mic"] == {"channels": 1} and hello["play"]["rate"] == 48000
         assert hello["volume"] == 50
 
@@ -254,3 +254,199 @@ async def test_station_session_through_the_bridge():
         await http.close()
         await bridge_runner.cleanup()
         await server_runner.cleanup()
+
+
+# ------------------------------------------------------------------ follow-up
+
+async def connect():
+    """A bridge against a fake server, with a station connected to it (its hello already read)."""
+    server = FakeServer()
+    server_runner, server_port = await serve("/device", server.handle)
+    bridge = Bridge(lambda: f"ws://127.0.0.1:{server_port}/device")
+    bridge_runner, bridge_port = await serve("/uni.ws", bridge.handle)
+    http = aiohttp.ClientSession()
+    ws = await http.ws_connect(f"ws://127.0.0.1:{bridge_port}/uni.ws",
+                               headers={"X-UPRX-DEVICE-ID": "LB0000000000000527720000d3336afa",
+                                        "X-UPRX-SSID": "ssid1"})
+    station = FakeStation(ws)
+    hello = await server.recv()
+    assert hello["type"] == "hello" and hello["caps"]["follow_up"] is True
+    return server, station, ws, http, bridge_runner, server_runner
+
+
+async def hang_up(http, bridge_runner, server_runner) -> None:
+    await http.close()
+    await bridge_runner.cleanup()
+    await server_runner.cleanup()
+
+
+def wakes(server) -> int:
+    return len([t for t in server.texts if '"type": "wake"' in t])
+
+
+async def wake_and_answer(server, station, ws, session: int, phrase: str, answer: str) -> int:
+    """One full wake cycle on `session` (its microphone stream is the `session`-th odd stream):
+    the wake word spotted, the phrase transcribed, the answer played out and reported. Returns
+    the stream id the answer played on."""
+    stream_id = session * 2 - 1
+    await station.event("Vins", "VoiceInput", {"header": {"request_id": f"r{session}"},
+                                               "enable_spotter_validation": True},
+                        streamId=stream_id)
+    await station.directive("InputStartAck")
+    assert await server.recv() == {"type": "wake", "session": session, "word": "Алиса"}
+    mic = OggOpusStreamEncoder()
+    await station.mic(stream_id, mic.add(tone(0.3, 16000), 16000))
+    before = len(server.mic)
+    await ws.send_str(json.dumps({"streamcontrol": {"action": 2, "reason": 0, "streamId": stream_id}}))
+    await grown(server.mic, before)  # the pre-roll goes out at the SpotterEnd
+    await server.send(type="state", session=session, value="listening")
+    await station.directive("Validation")
+    await server.send(type="state", session=session, value="transcribing")
+    await server.send(type="transcript", session=session, text=phrase)
+    await station.recv_with_partials()  # the empty partial holds the station while the answer is made
+    await ws.send_str(json.dumps({"streamcontrol": {"action": 0, "reason": 7, "streamId": stream_id}}))
+    await server.send(type="reply", session=session, text=answer)
+    await server.send(type="play_start", id=session, session=session)
+    await server.ws.send_bytes(bytes([PLAY]) + tone(0.2, 48000).tobytes())
+    await server.send(type="play_end", id=session, session=session)
+    final = await station.directive("Result")
+    assert final["payload"]["endOfUtt"] is True
+    assert final["payload"]["recognition"][0]["normalized"] == phrase
+    await station.recv()  # the microphone stream's close
+    vins = await station.directive("VinsResponse")
+    assert vins["payload"]["voice_response"]["output_speech"]["text"] == answer
+    speak = await station.directive("Speak")
+    sid = speak["header"]["streamId"]
+    await station.recv()  # the answer stream's close
+    assert await server.recv() == {"type": "played", "id": session, "dry": 0, "gap_ms": 0}
+    return sid
+
+
+async def followup_input(station, stream_id: int, request_id: str) -> None:
+    """The station's post-answer listening: a VoiceInput with no wake-word spot behind it."""
+    await station.event("Vins", "VoiceInput", {"header": {"request_id": request_id}},
+                        streamId=stream_id)
+    await station.directive("InputStartAck")
+
+
+async def answer(server, station, session: int, play_id: int, phrase: str, reply: str) -> tuple[int, dict]:
+    """The answer half of a cycle, for a phrase the server has already taken: the transcript, the
+    VinsResponse and the TTS stream at its play_start, `played` once its duration has passed.
+    Returns the stream id the answer played on and the VinsResponse's voice_response."""
+    await server.send(type="state", session=session, value="transcribing")
+    await server.send(type="transcript", session=session, text=phrase)
+    await station.recv_with_partials()  # the empty partial holds the station while the answer is made
+    await server.send(type="reply", session=session, text=reply)
+    await server.send(type="play_start", id=play_id, session=session)
+    await server.ws.send_bytes(bytes([PLAY]) + tone(0.2, 48000).tobytes())
+    await server.send(type="play_end", id=play_id, session=session)
+    final = await station.directive("Result")
+    assert final["payload"]["endOfUtt"] is True
+    assert final["payload"]["recognition"][0]["normalized"] == phrase
+    await station.recv()  # the cycle's microphone stream close
+    vins = await station.directive("VinsResponse")
+    assert vins["payload"]["voice_response"]["output_speech"]["text"] == reply
+    speak = await station.directive("Speak")
+    sid = speak["header"]["streamId"]
+    await station.recv()  # the answer stream's close
+    assert await server.recv() == {"type": "played", "id": play_id, "dry": 0, "gap_ms": 0}
+    return sid, vins["payload"]["voice_response"]
+
+
+async def test_the_followup_window_runs_in_the_answered_session():
+    server, station, ws, http, bridge_runner, server_runner = await connect()
+    try:
+        sid1 = await wake_and_answer(server, station, ws, 1, "алиса включи свет", "Свет включён")
+        assert wakes(server) == 1
+
+        # The server arms the follow-up window once the answer is reported, and the station
+        # opens its post-answer listening: a VoiceInput with no wake-word spot behind it.
+        await server.send(type="state", session=1, value="listening")
+        await followup_input(station, 3, "r-fup1")
+        assert wakes(server) == 1  # no second wake: the window attaches to session 1
+
+        # Its microphone audio goes into the same session, with no pre-roll and no SpotterEnd.
+        mic2 = OggOpusStreamEncoder()
+        before = len(server.mic)
+        await station.mic(3, mic2.add(tone(0.4, 16000), 16000))
+        await grown(server.mic, before)
+        sid2, vr = await answer(server, station, 1, 2, "а теперь выключи", "Свет выключён")
+        assert vr["should_listen"] is True and vr["output_speech"]["text"] == "Свет выключён"
+        assert sid2 != sid1  # the second answer plays on its own stream
+        assert OpusStreamDecoder().feed(bytes(station.audio[sid2])).size > 0
+
+        # The next window's VoiceInput may also come before the server's `listening`: its audio
+        # is held until the listening releases it.
+        mic3 = OggOpusStreamEncoder()
+        await followup_input(station, 5, "r-fup2")
+        assert wakes(server) == 1
+        before = len(server.mic)
+        await station.mic(5, mic3.add(tone(0.4, 16000), 16000))
+        await asyncio.sleep(0.3)
+        assert len(server.mic) == before  # held: the window's `listening` has not come yet
+        await server.send(type="state", session=1, value="listening")
+        await grown(server.mic, before)  # released by the listening
+    finally:
+        await hang_up(http, bridge_runner, server_runner)
+
+
+async def test_a_wake_word_in_the_followup_window_wakes_a_new_session():
+    server, station, ws, http, bridge_runner, server_runner = await connect()
+    try:
+        await wake_and_answer(server, station, ws, 1, "алиса включи свет", "Свет включён")
+        await server.send(type="state", session=1, value="listening")
+        await followup_input(station, 3, "r-fup")
+        assert wakes(server) == 1
+        # The wake word is spotted in the window: its SpotterEnd, then a VoiceInput that wakes.
+        await ws.send_str(json.dumps({"streamcontrol": {"action": 2, "reason": 0, "streamId": 3}}))
+        await station.event("Vins", "VoiceInput", {"header": {"request_id": "r2"}}, streamId=5)
+        await station.directive("InputStartAck")
+        assert await server.recv() == {"type": "wake", "session": 2, "word": "Алиса"}
+        # The follow-up cycle's stream ends with the wake.
+        sc = await station.recv()
+        assert sc["streamcontrol"]["streamId"] == 3 and sc["streamcontrol"]["action"] == 0
+    finally:
+        await hang_up(http, bridge_runner, server_runner)
+
+
+async def test_a_followup_window_without_the_servers_listening_closes(monkeypatch):
+    monkeypatch.setattr("src.uniproxy.uniproxy.FOLLOWUP_LISTEN_WAIT_S", 0.2)
+    server, station, ws, http, bridge_runner, server_runner = await connect()
+    try:
+        await wake_and_answer(server, station, ws, 1, "алиса включи свет", "Свет включён")
+        # The follow-up stage stays off: no `state listening` follows the played.
+        await followup_input(station, 3, "r-fup")
+        assert wakes(server) == 1
+        before = len(server.mic)
+        mic2 = OggOpusStreamEncoder()
+        await station.mic(3, mic2.add(tone(0.4, 16000), 16000))
+        await asyncio.sleep(0.1)
+        assert len(server.mic) == before  # held while the cycle waits for the listening
+        # The wait runs out: the cycle's stream closes and its held audio is dropped, with no
+        # answer — the station just stops listening.
+        sc = await station.recv()
+        assert sc["streamcontrol"]["streamId"] == 3 and sc["streamcontrol"]["action"] == 0
+        try:
+            await asyncio.wait_for(station.recv(), 0.5)
+            raise AssertionError("the cycle got a message after the wait ran out")
+        except asyncio.TimeoutError:
+            pass
+        assert len(server.mic) == before  # the held audio never went to the server
+    finally:
+        await hang_up(http, bridge_runner, server_runner)
+
+
+async def test_the_followup_window_ended_idle_closes_its_stream():
+    server, station, ws, http, bridge_runner, server_runner = await connect()
+    try:
+        await wake_and_answer(server, station, ws, 1, "алиса включи свет", "Свет включён")
+        await server.send(type="state", session=1, value="listening")
+        await followup_input(station, 3, "r-fup")
+        # No speech in the window: the server ends the session with idle.
+        await server.send(type="state", session=1, value="idle")
+        final = await station.directive("Result")
+        assert final["payload"]["endOfUtt"] is True  # the window's empty final result
+        sc = await station.recv()
+        assert sc["streamcontrol"]["streamId"] == 3 and sc["streamcontrol"]["action"] == 0
+    finally:
+        await hang_up(http, bridge_runner, server_runner)

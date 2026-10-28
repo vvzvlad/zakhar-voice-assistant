@@ -68,6 +68,9 @@ WAKE_WORD = "Алиса"
 MIC_FRAME = 512
 # The longest the microphone audio is held as the pre-roll when no SpotterEnd comes.
 PREROLL_WAIT_S = 2.0
+# The longest a follow-up cycle waits for the server's follow-up `listening` (the stage may be
+# off, or the answer was dropped): past it the cycle's stream closes and its audio is dropped.
+FOLLOWUP_LISTEN_WAIT_S = 4.0
 # How often an empty partial ASR.Result keeps the station listening (quasard's default).
 PARTIAL_INTERVAL_S = 0.3
 # The longest the server is fed silence after the station stops its microphone, so the server's
@@ -110,6 +113,7 @@ class VoiceRequest:
     responded: bool = False  # its VinsResponse went out
     directives: list[dict] = field(default_factory=list)  # for its VinsResponse
     partial_no: int = 0
+    followup: bool = False  # the post-answer listening window of an already answered session
 
     @property
     def duration_ms(self) -> int:
@@ -175,6 +179,9 @@ class Link:
         self.request: VoiceRequest | None = None  # the latest VoiceInput while its run lasts
         self._started = time.monotonic()  # the device's "boot", for the hello's uptime
         self._session = 0
+        # The session whose follow-up `listening` already came: a window the server armed before
+        # the station's VoiceInput for it arrived (the two travel different links and race).
+        self._window = 0
         self._out: asyncio.Queue | None = None  # what goes to the server, while connected
         self._plays: dict[int, Play] = {}  # not reported yet
         self._open: Play | None = None  # the one between its play_start and play_end
@@ -246,7 +253,7 @@ class Link:
         return {
             "type": "hello", "id": self.name, "fw": "quasar bridge",
             "uptime": int(time.monotonic() - self._started),
-            "caps": {"speaker": True, "screen": False, "follow_up": False},
+            "caps": {"speaker": True, "screen": False, "follow_up": True},
             "mic": {"channels": 1},
             "play": {"rate": PLAY_RATE, "buffer_ms": BUFFER_MS},
             "volume": VOLUME,
@@ -265,14 +272,60 @@ class Link:
     def wake(self, req: VoiceRequest) -> None:
         """A VoiceInput: `wake` proposing the next session. The request before it is left as the
         station left it: its microphone stops, nothing more of it goes to the station."""
-        if self.request is not None:
-            self.request.mic_open = False
+        prev = self.request
+        if prev is not None:
+            prev.mic_open = False
+            if prev.followup and not prev.responded:
+                # A wake word spotted during the follow-up window: the cycle's stream ends with
+                # it, the new VoiceInput wakes as any wake does. The session's armed follow-up
+                # window dies with the cycle.
+                self._window = 0
+                self._spawn_send(prev.station.send_json(P.stream_control(prev.stream_id)))
         self._session += 1
         req.session = self._session
         self.request = req
         self._send({"type": "wake", "session": req.session, "word": WAKE_WORD})
         asyncio.get_running_loop().call_later(PREROLL_WAIT_S, self.send_preroll, req)
         logger.info(f"station {self.name}: wake, session {req.session}")
+
+    def attach_followup(self, req: VoiceRequest) -> None:
+        """The station's post-answer listening window (the answer's shouldListen): a VoiceInput
+        while the session's answer is out. It attaches to the answered session as its follow-up
+        cycle: the same session goes on, no new wake and no pre-roll — the microphone audio is
+        held until the server's follow-up `listening` releases it."""
+        prev = self.request
+        if prev is None:
+            # The session ended while the VoiceInput was being acked: no open session, so the
+            # VoiceInput goes the way any VoiceInput without one does.
+            self.wake(req)
+            return
+        req.session = prev.session
+        req.followup = True
+        self.request = req
+        if self._window == req.session:
+            # The window's `listening` already came, before this VoiceInput: the session was
+            # taken and the held audio goes out at once.
+            req.taken = True
+            self._window = 0
+            self.send_preroll(req)
+        asyncio.get_running_loop().call_later(FOLLOWUP_LISTEN_WAIT_S, self._followup_timeout, req)
+        logger.info(f"station {self.name}: follow-up window, session {req.session}")
+
+    def _followup_timeout(self, req: VoiceRequest) -> None:
+        """The server's follow-up `listening` never came for the cycle: its stream closes and the
+        audio it held is dropped, with no answer — the station just stops listening."""
+        if req is not self.request or req.preroll_sent or req.responded or req.cancelled:
+            return
+        req.mic_open = False
+        req.pcm.clear()
+        if self._window == req.session:
+            self._window = 0  # the closed cycle was the window's last chance
+        self.request = None
+        self._spawn_send(req.station.send_json(P.stream_control(req.stream_id)))
+
+    def _spawn_send(self, coro) -> None:
+        t = asyncio.create_task(coro)
+        t.add_done_callback(_log_task_error)
 
     def mic(self, req: VoiceRequest, pcm: np.ndarray) -> None:
         """Decoded microphone audio of `req` (float32, 16 kHz): held until the pre-roll goes,
@@ -373,6 +426,12 @@ class Link:
                 req.taken = True
                 if req.spotter_validation:
                     await req.station.send_json(P.spotter_validation(req.ref, self.device_id, True))
+                if req.followup:
+                    self.send_preroll(req)  # the audio the follow-up cycle held goes out
+            elif req.responded:
+                # A `listening` of an already taken, answered session: its follow-up window is
+                # armed — possibly before the station's VoiceInput for it arrives.
+                self._window = req.session
         elif value in ("idle", "error"):
             await self._end(req)
         else:
@@ -556,8 +615,12 @@ class StationSession:
         return sid
 
     async def respond(self, req: VoiceRequest, text: str, directives: list[dict]) -> None:
+        # shouldListen keeps the station listening after the answer: the server's follow-up
+        # window (docs/device-protocol.md, "Follow-up") then runs in the same session. An empty
+        # answer (a refused wake, an idle/error end) leaves it off.
         await self.send_json(P.vins_response(req.ref, req.request_id, self.session_id, req.sequence_number,
-                                             text, speech=text, directives=directives))
+                                             text, speech=text, directives=directives,
+                                             should_listen=bool(text)))
 
     def _spawn(self, coro) -> asyncio.Task:
         t = asyncio.create_task(coro)
@@ -671,7 +734,15 @@ class StationSession:
             await self.respond(req, "", [])
             return
         await self.send_json(P.input_start_ack(req.ref))
-        self.link.wake(req)
+        prev = self.link.request
+        if prev is not None and prev.responded:
+            # The station's post-answer listening window (shouldListen of the answer): it
+            # attaches to the answered session as its follow-up cycle instead of waking a new
+            # one. A wake-word spot ends this stream and wakes through `Link.wake` instead —
+            # the spot's SpotterEnd cannot be waited for here, it comes after this VoiceInput.
+            self.link.attach_followup(req)
+        else:
+            self.link.wake(req)
         self._spawn(self._partials_loop(req))
 
     async def _partials_loop(self, req: VoiceRequest) -> None:
