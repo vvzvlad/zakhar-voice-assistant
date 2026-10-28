@@ -1862,6 +1862,48 @@ async def test_filler_dedup_at_most_once_per_run(tmp_path, monkeypatch):
     assert played_texts(pipeline).count(clean_llm_output("Щас погуглю…")) == 1
 
 
+async def test_stock_line_leaves_the_model_its_line(tmp_path, monkeypatch):
+    # The run-4799 shape: a silent long search gets the stock line, and the model's
+    # own line next to the playback call still plays.
+    patch_llm_with_fillers(monkeypatch, [("Щас поищу.", True), ("Нашёл, включаю.", False)])
+    store = FakeRunsStore()
+    pipeline, _ = make_pipeline(tmp_path, monkeypatch, stt_text="включи серию",
+                                runs_store=store, tts_backend=EchoTts())
+
+    await say(pipeline)
+    await _drain_filler_tasks(pipeline)
+
+    assert sorted(played_texts(pipeline)) == sorted(["Щас поищу.", "Нашёл, включаю.", "готово."])
+    assert store.records[0]["filler_text"] == "Щас поищу. Нашёл, включаю."
+
+
+async def test_no_stock_line_after_the_model_line(tmp_path, monkeypatch):
+    patch_llm_with_fillers(monkeypatch, [("Щас гляну…", False), ("Щас поищу.", True)])
+    pipeline, _ = make_pipeline(tmp_path, monkeypatch, stt_text="включи серию",
+                                tts_backend=EchoTts())
+
+    await say(pipeline)
+    await _drain_filler_tasks(pipeline)
+
+    assert sorted(played_texts(pipeline)) == sorted(["Щас гляну…", "готово."])
+
+
+def patch_llm_with_fillers(monkeypatch, lines):
+    """Stub the LLM stage with a fake that offers each (text, stock) line of `lines`
+    for a slow tool, in order, before returning "готово"."""
+
+    class FakeLlmStage:
+        def __init__(self, backend, hub, cfg):
+            pass
+
+        async def respond(self, req, *, on_filler=None, has_next=False):
+            for text, stock in lines:
+                await on_filler(text, ["search_events"], stock=stock)
+            return make_llm_result("готово")
+
+    monkeypatch.setattr("src.llm.LlmStage", FakeLlmStage)
+
+
 async def test_no_filler_without_speaker(tmp_path, monkeypatch):
     # A device without a speaker: the slow-tool filler is a no-op (nothing scheduled,
     # nothing recorded) and the reply is not synthesized either.
