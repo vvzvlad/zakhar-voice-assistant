@@ -57,6 +57,24 @@ class ReplyConfig(BaseModel):
         description="Spoken when the model returns no text after a tool ran.",
         json_schema_extra=FALLBACK_REPLY_EXTRA,
     )
+    # Offered to the early-filler path when the model calls a tool with no line of its
+    # own and the call outlasts the delay below; the pipeline's filler policy decides
+    # whether it plays: a slow tool, at most once per run, never after the model's own
+    # line, and without using up the model's line.
+    filler_default: str = Field(
+        "Щас поищу.",
+        title="Line during a long tool call",
+        description="Spoken when the model called a slow tool without a line of its own and "
+        "the call is still running after the wait below. Empty: silence.",
+        json_schema_extra=FALLBACK_REPLY_EXTRA,
+    )
+    filler_default_delay: float = Field(
+        2.0, ge=0,
+        title="Wait before that line",
+        description="How long a tool call runs before the line above is spoken; a quicker "
+        "call gets only the reply.",
+        json_schema_extra={**ADVANCED_FIELD_EXTRA, "group": "Fallback replies", "unit": "s"},
+    )
     reply_empty: str = Field(
         "Я тебя не расслышал, повтори.",
         title="Reply when empty",

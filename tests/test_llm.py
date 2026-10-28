@@ -1,3 +1,4 @@
+import asyncio
 import dataclasses
 import inspect
 
@@ -22,10 +23,12 @@ class StubHub:
     each call rode in with, so tests can assert the stage passes req.device through.
     """
 
-    def __init__(self, tools=None):
+    def __init__(self, tools=None, delay=0.0):
         self.tools = tools or []
         self.calls = []    # records (name, args)
         self.devices = []  # records the device= of each call
+        self.delay = delay  # seconds each call takes
+        self.cancelled = False
 
     async def ensure_tools(self):
         return None
@@ -33,6 +36,11 @@ class StubHub:
     async def call(self, name, arguments, *, device=None):
         self.calls.append((name, arguments))
         self.devices.append(device)
+        try:
+            await asyncio.sleep(self.delay)
+        except asyncio.CancelledError:
+            self.cancelled = True
+            raise
         return "ok"
 
 
@@ -142,13 +150,14 @@ def _http_status_error(status_code, json_body=None):
 
 
 async def _respond(backend, hub, text, *, history=None, max_tool_rounds=MAX_TOOL_ROUNDS,
-                   device=None, on_filler=None, has_next=False):
+                   device=None, on_filler=None, has_next=False, **cfg):
     """Drive an LlmStage with a ready-made request and return the LlmResult.
 
     The system prompt is passed directly (assembled by the orchestrator in
-    production), so no CoreConfig/prompt file is involved at this level.
+    production), so no CoreConfig/prompt file is involved at this level. `cfg`
+    overrides LlmConfig fields.
     """
-    stage = LlmStage(backend, hub, LlmConfig(max_tool_rounds=max_tool_rounds))
+    stage = LlmStage(backend, hub, LlmConfig(max_tool_rounds=max_tool_rounds, **cfg))
     return await stage.respond(
         LlmRequest(
             system_prompt=SYSTEM_PROMPT,
@@ -491,7 +500,8 @@ async def test_on_filler_not_called_without_tool_calls():
 
 
 async def test_on_filler_not_called_when_content_empty():
-    # A tool-call round with no spoken content (content=None) must NOT invoke on_filler.
+    # A tool-call round with no spoken content (content=None) whose call ends within
+    # the stock line's delay (a pause on the TV) must NOT invoke on_filler.
     hub = StubHub(tools=[SET_LIGHT_TOOL])
     backend = FakeLlmBackend([
         _tool_call("set_light", "{}"),
@@ -507,6 +517,91 @@ async def test_on_filler_not_called_when_content_empty():
 
     assert seen == []
     assert result.reply == clean_llm_output("Готово.")
+
+
+async def test_stock_line_offered_when_a_silent_call_runs_long():
+    # Run 4799: the model called the torrent search with no line of its own and the
+    # user sat a minute in silence. A call still running after the delay gets the
+    # stock line, with that call's tool name for the caller's slow-tool policy.
+    hub = StubHub(tools=[SET_LIGHT_TOOL], delay=0.2)
+    backend = FakeLlmBackend([_tool_call("set_light", "{}"), _final("Готово.")])
+
+    seen = []
+
+    async def recorder(content, tool_names, stock=False):
+        seen.append((content, tool_names, stock))
+
+    result = await _respond(backend, hub, "включи серию", on_filler=recorder,
+                            filler_default_delay=0.05)
+
+    assert seen == [("Щас поищу.", ["set_light"], True)]
+    assert result.reply == clean_llm_output("Готово.")
+
+
+async def test_model_line_takes_the_place_of_the_stock_line():
+    # The model said its own line next to a long call: only that line is offered.
+    hub = StubHub(tools=[SET_LIGHT_TOOL], delay=0.2)
+    backend = FakeLlmBackend([
+        _tool_call_with_content("set_light", "{}", "Щас гляну…"),
+        _final("Готово."),
+    ])
+
+    seen = []
+
+    async def recorder(content, tool_names, stock=False):
+        seen.append((content, tool_names, stock))
+
+    await _respond(backend, hub, "включи серию", on_filler=recorder,
+                   filler_default_delay=0.05)
+
+    assert seen == [("Щас гляну…", ["set_light"], False)]
+
+
+async def test_empty_stock_line_is_not_offered():
+    hub = StubHub(tools=[SET_LIGHT_TOOL], delay=0.2)
+    backend = FakeLlmBackend([_tool_call("set_light", "{}"), _final("Готово.")])
+
+    seen = []
+
+    async def recorder(content, tool_names, stock=False):
+        seen.append((content, tool_names))
+
+    await _respond(backend, hub, "включи серию", on_filler=recorder,
+                   filler_default="", filler_default_delay=0.05)
+
+    assert seen == []
+
+
+async def test_declined_stock_line_is_not_the_reply():
+    # The stock line belongs to the filler path only: declined, it never stands in
+    # for an empty final round.
+    hub = StubHub(tools=[SET_LIGHT_TOOL], delay=0.2)
+    backend = FakeLlmBackend([_tool_call("set_light", "{}"), _final("")])
+
+    async def declines(content, tool_names, stock=False):
+        return False
+
+    result = await _respond(backend, hub, "включи серию", on_filler=declines,
+                            filler_default_delay=0.05)
+
+    assert result.reply == LlmConfig().reply_empty_after_tools
+
+
+async def test_cancelled_run_cancels_the_call_waiting_for_the_stock_line():
+    hub = StubHub(tools=[SET_LIGHT_TOOL], delay=10)
+    backend = FakeLlmBackend([_tool_call("set_light", "{}"), _final("Готово.")])
+
+    async def recorder(content, tool_names, stock=False):
+        return True
+
+    task = asyncio.create_task(_respond(backend, hub, "включи серию", on_filler=recorder,
+                                        filler_default_delay=5))
+    await asyncio.sleep(0.05)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert hub.cancelled
 
 
 async def test_on_filler_failure_does_not_break_loop():

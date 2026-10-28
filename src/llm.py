@@ -8,6 +8,7 @@ and never builds HTTP requests itself. The backend returns the raw provider JSON
 raises httpx.HTTPStatusError on non-2xx.
 """
 
+import asyncio
 import json
 from dataclasses import dataclass
 
@@ -61,11 +62,14 @@ class LlmStage:
         (the hub owns the ambient-device ContextVar, not this stage).
 
         `on_filler`, when given, is an optional `async (content: str, tool_names:
-        list[str]) -> bool` callback invoked for each tool-requesting round that also
-        carries spoken content, so the caller can play an early "filler" line while
-        the (slow) tool + final round run; it returns True when it takes the line
-        for playback. Its failures are swallowed with a warning and count as not
-        spoken.
+        list[str], *, stock: bool = False) -> bool` callback, so the caller can play an
+        early "filler" line while the (slow) tool + final round run. It gets each
+        tool-requesting round's spoken content before the tools run; a round with none
+        instead offers `cfg.filler_default` with the one tool name and `stock=True`,
+        once a call of the round has run `cfg.filler_default_delay` seconds (an empty
+        default offers nothing). It returns True when it takes the line for playback.
+        Its failures are swallowed with a warning and count as not spoken. The stock
+        line is never a reply candidate.
 
         A tool round's content that was not spoken (no callback, or the callback
         declined) becomes the reply when the model's final round comes back empty —
@@ -203,21 +207,29 @@ class LlmStage:
             # A tool-requesting round may also carry a short spoken "filler" line in its
             # content (the persona's "I'll go check it" placeholder). Forward it to the
             # caller so an early reply can be spoken while the (slow) tool + final round
-            # run. Policy (speak-or-not, at-most-once) lives entirely in the callback; we
-            # stay policy-free and just forward content + the tool names. Isolated: a
-            # callback failure must never break the tool loop.
+            # run. The speak-or-not policy (slow tool, at most once) lives in the
+            # callback; the stage forwards content + the tool names and only decides
+            # WHEN to offer the stock line (below). Isolated: a callback failure must
+            # never break the tool loop.
+            async def _offer(text: str, tool_names: list[str], **kw) -> bool:
+                try:
+                    return bool(await on_filler(text, tool_names, **kw))
+                except Exception as e:  # noqa: BLE001 - filler is best-effort
+                    logger.warning(f"on_filler callback failed: {e}")
+                    return False
+
             filler_text = (message.get("content") or "").strip()
             spoken = False
             if filler_text and on_filler is not None:
-                tool_names = [tc["function"]["name"] for tc in tool_calls]
-                try:
-                    spoken = bool(await on_filler(filler_text, tool_names))
-                except Exception as e:  # noqa: BLE001 - filler is best-effort
-                    logger.warning(f"on_filler callback failed: {e}")
+                spoken = await _offer(filler_text, [tc["function"]["name"] for tc in tool_calls])
             # A tool round's content nobody spoke stays a reply candidate; a later
             # spoken round does not erase an earlier unspoken one.
             if filler_text and not spoken:
                 unspoken = clean_llm_output(filler_text)
+            # A round with no line of the model's own offers the configured stock line
+            # once a call has run past filler_default_delay: a quick call (a pause on
+            # the TV) is over before that, and its reply alone is enough.
+            stock = "" if filler_text or on_filler is None else cfg.filler_default.strip()
 
             # Execute each requested tool via the hub and feed results back. The
             # originating device rides along so the hub can publish it to in-process
@@ -230,7 +242,18 @@ class LlmStage:
                     args = json.loads(fn.get("arguments") or "{}")
                 except (ValueError, json.JSONDecodeError):
                     args = {}
-                out = await hub.call(name, args, device=req.device)
+                call = asyncio.ensure_future(hub.call(name, args, device=req.device))
+                try:
+                    if stock:
+                        done, _ = await asyncio.wait({call}, timeout=cfg.filler_default_delay)
+                        if not done:
+                            await _offer(stock, [name], stock=True)
+                            stock = ""
+                    out = await call
+                except asyncio.CancelledError:
+                    # asyncio.wait does not pass a cancelled run on to the call.
+                    call.cancel()
+                    raise
                 tool_executed = True
                 logger.info(f"tool {name}({args}) -> {out!r}")
                 round_calls.append({"name": name, "args": args, "result": out})

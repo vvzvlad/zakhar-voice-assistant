@@ -1022,12 +1022,18 @@ class Pipeline(SpeechMixin):
                     # and the LLM until TTS_START switches it to "replying" — this is the
                     # indicator shown to the user between their question and the answer.
                     self._emit(StageEvent.STT_VAD_END, {})
-                    filler_fired = False  # at most one early filler per run
+                    filler_fired = False  # at most one model-written early line per run
+                    stock_fired = False   # at most one stock line, only before that one
 
-                    async def _speak_filler(text: str, tool_names: list[str]) -> bool:
-                        # Policy lives here (llm.py is policy-free): speak at most once per
-                        # run, and only for a SLOW tool (so instant smart-home actions don't
-                        # double-talk). The slow KNOWLEDGE comes from the tool source via
+                    async def _speak_filler(text: str, tool_names: list[str],
+                                            stock: bool = False) -> bool:
+                        # Policy lives here: speak the model's line at most once per run,
+                        # and only for a SLOW tool (so instant smart-home actions don't
+                        # double-talk). The stock line (`stock`, offered by llm.py when a
+                        # silent call runs long) does not take the model's turn — "Щас
+                        # поищу" while the search runs, then "Нашёл, включаю" while the
+                        # playback starts — but never follows a line the model already
+                        # said. The slow KNOWLEDGE comes from the tool source via
                         # hub.is_slow (each source declares whether its tools are slow).
                         # Schedule synthesis+play as a fire-and-forget task
                         # so the slow tool is NOT delayed by filler TTS. Synchronous
@@ -1036,17 +1042,22 @@ class Pipeline(SpeechMixin):
                         # synthesis itself is fire-and-forget): an unclaimed one stays
                         # the LLM stage's reply if the model's final round comes back
                         # empty.
-                        nonlocal filler_fired
-                        if filler_fired or not self.has_speaker:
+                        nonlocal filler_fired, stock_fired
+                        if filler_fired or (stock and stock_fired) or not self.has_speaker:
                             return False
                         if not any(self.hub.is_slow(n) for n in tool_names):
                             return False  # fast action: the final reply alone is enough
                         spoken = clean_llm_output(text)  # tag cleanup only; engine post-processing happens inside the TTS backend
                         if not spoken:
                             return False
-                        filler_fired = True
-                        record["filler_text"] = spoken
-                        record["t_filler"] = int((time.perf_counter() - t0) * 1000)
+                        if stock:
+                            stock_fired = True
+                        else:
+                            filler_fired = True
+                        # Both lines of a run land in one field; t_filler is the first.
+                        record["filler_text"] = f"{record['filler_text']} {spoken}".strip()
+                        if record["t_filler"] is None:
+                            record["t_filler"] = int((time.perf_counter() - t0) * 1000)
                         self._schedule_filler(spoken)
                         return True
 
