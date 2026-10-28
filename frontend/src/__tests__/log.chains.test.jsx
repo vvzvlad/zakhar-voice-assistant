@@ -219,6 +219,20 @@ describe("Request log — chains", () => {
     expect(items[1].textContent).toContain("ну и погодка");
   });
 
+  it("shows an answer's tool calls in the context as the calls, not an empty assistant line", async () => {
+    getRun.mockResolvedValue({ ...ROW, request: { system_prompt: "p", user_text: "сколько времени", tools: [], context: [
+      { role: "user", content: "включи лампу" },
+      { role: "assistant", content: "", tool_calls: [{ id: "call_1", type: "function", function: { name: "set_light", arguments: '{"device_id": "table_light", "state": "on"}' } }] },
+      { role: "tool", tool_call_id: "call_1", content: "applied" },
+      { role: "assistant", content: "Готово." },
+    ] } });
+    render(<Log />);
+    fireEvent.click((await screen.findAllByText("Солнечно"))[0]);
+    const block = (await screen.findByText(/Context · 4 msg/)).closest(".z-tool");
+    expect([...block.querySelectorAll(".z-code.text")].map((d) => d.textContent)).toEqual([
+      "user: включи лампу", 'assistant: set_light({"device_id": "table_light", "state": "on"})', "tool: applied", "assistant: Готово."]);
+  });
+
   it("shows a dash, not (silence), as the request of an announcement", async () => {
     getRuns.mockResolvedValue({ runs: [
       { ...ROW, reason: "reminder", stt_text: null, llm_text: "молоко" },

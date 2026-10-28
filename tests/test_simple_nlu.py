@@ -283,6 +283,20 @@ async def test_round2_error():
     assert data["choices"][0]["message"]["content"] == SimpleNluConfig().reply_error
 
 
+async def test_history_tool_result_is_not_this_requests():
+    # A previous answer's call and result in the history leave the new request in
+    # round 1: it gets its own tool call, not the confirmation.
+    messages = [
+        {"role": "user", "content": "включи свет в зале"},
+        {"role": "assistant", "content": "", "tool_calls": [{"id": "call_0"}]},
+        {"role": "tool", "tool_call_id": "call_0", "content": "ok"},
+        {"role": "assistant", "content": "Готово."},
+        {"role": "user", "content": "выключи ночник"},
+    ]
+    data = await _backend().complete(messages, FAKE_TOOLS)
+    assert data["choices"][0]["message"]["tool_calls"][0]["function"]["name"] == "set_dimmer"
+
+
 # --- no-match --------------------------------------------------------------- #
 
 async def test_no_match():

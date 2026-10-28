@@ -336,7 +336,7 @@ function Drawer({ r, loading, error, onClose }) {
               <div className="z-tool">
                 <div className="tn"><s>context</s> Context · {(r.request.context || []).length} msg</div>
                 {(r.request.context && r.request.context.length)
-                  ? r.request.context.map((m, k) => <div className="z-code text" style={{ marginTop: 6 }} key={k}><span className="k">{m.role}: </span>{m.content}</div>)
+                  ? r.request.context.map((m, k) => <div className="z-code text" style={{ marginTop: 6 }} key={k}><span className="k">{m.role}: </span>{m.tool_calls ? m.tool_calls.map((c) => `${c.function.name}(${c.function.arguments})`).join("; ") : m.content}</div>)
                   : <div className="z-code" style={{ color: "var(--mut)" }}>— no prior context —</div>}
               </div>
               <div className="z-tool">

@@ -325,7 +325,14 @@ def last_user_text(messages: list) -> str:
 
 
 def has_tool_result(messages: list) -> bool:
-    return any(msg.get("role") == "tool" for msg in messages)
+    """A tool ran for the current request: a tool message after the last user
+    message. Earlier ones are the history's, from previous answers."""
+    for msg in reversed(messages):
+        if msg.get("role") == "user":
+            return False
+        if msg.get("role") == "tool":
+            return True
+    return False
 
 
 def round2_reply(messages: list, reply_done: str, reply_error: str) -> str:
