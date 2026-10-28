@@ -295,7 +295,7 @@ function Drawer({ r, loading, error, onClose }) {
               </div>
             )}
             <div className="z-f"><div className="z-fl"><b style={{ color: "var(--mut)", fontWeight: 600, fontSize: 11, textTransform: "uppercase", letterSpacing: ".04em" }}>Reply</b></div>
-              <div style={{ fontSize: 14, color: r.llm ? "var(--ink)" : "var(--mut2)", fontStyle: r.llm ? "normal" : "italic" }}>{r.llm || "— no response produced —"}</div></div>
+              <div style={{ fontSize: 14, color: r.llm ? "var(--ink)" : "var(--mut2)", fontStyle: r.llm ? "normal" : "italic" }}>{r.llm || (r.result === "running" ? "…" : "— no response produced —")}</div></div>
           </div></div>
 
           {r.attempts && r.attempts.length > 0 && <>
@@ -470,11 +470,28 @@ function Log() {
   useEffect(() => { pageRef.current = page; }, [page]);
   const pageSizeRef = useRef(pageSize);
   useEffect(() => { pageSizeRef.current = pageSize; }, [pageSize]);
+  // Mirror of the drawer's run id, so the live subscription refreshes an open run.
+  const openIdRef = useRef(openId);
+  useEffect(() => { openIdRef.current = openId; }, [openId]);
+  // Number of the latest drawer detail fetch: only its reply is applied, so an older
+  // reply that comes back late never overwrites a newer one.
+  const detailSeq = useRef(0);
 
   useEffect(() => {
     const stop = openRunsStream((row) => {
-      if (pageRef.current !== 1) return;             // only page 1 reflects live runs
       const mapped = mapRun(row);
+      // A frame of the run open in the drawer refetches its detail, whatever page or
+      // filter the list shows, without the loading spinner; a failure keeps the last
+      // detail.
+      if (mapped.id != null && mapped.id === openIdRef.current) {
+        const seq = ++detailSeq.current;
+        getRun(mapped.id)
+          .then((detailRow) => {
+            if (seq === detailSeq.current) { setDetail(mapRun(detailRow)); setDetailError(null); }
+          })
+          .catch(() => {});
+      }
+      if (pageRef.current !== 1) return;             // only page 1 reflects live runs
       const match = matchesFilters(row, filtersRef.current);
       // A brand-new finalized matching run grows the dataset -> bump total. Compute
       // newness from the runs ref BEFORE the state update (no side effects inside the
@@ -491,9 +508,10 @@ function Log() {
     setDetail(null);
     setDetailError(null);
     setDetailLoading(true);
+    const seq = ++detailSeq.current;
     getRun(id)
-      .then((row) => setDetail(mapRun(row)))
-      .catch((e) => setDetailError(e))
+      .then((row) => { if (seq === detailSeq.current) setDetail(mapRun(row)); })
+      .catch((e) => { if (seq === detailSeq.current) setDetailError(e); })
       .finally(() => setDetailLoading(false));
   }, []);
 
@@ -552,7 +570,7 @@ function Log() {
                         <td className="z-cmid" style={{ fontWeight: 600 }}>{deviceLabel(devices, r.device)}</td>
                         <td className="mono z-cwide" data-testid="run-chain" style={{ fontSize: 11.5, color: r.chain ? "var(--ink2)" : "var(--mut2)" }}>{r.chain || "—"}</td>
                         <td><div className={"z-tx" + (r.stt ? "" : " mut")}>{r.stt || (r.live ? "…" : isAnnouncement(r) ? "—" : emptyRequestText(r))}</div></td>
-                        <td><div className={"z-tx" + (r.llm ? "" : " mut")}>{r.llm || (r.live ? "…" : "—")}</div></td>
+                        <td><div className={"z-tx" + (r.llm ? "" : " mut")}>{r.llm || (r.live || r.result === "running" ? "…" : "—")}</div></td>
                         <td className="num z-cwide">{r.tokens || "—"}</td>
                         <td className="z-cwide"><Waterfall r={r} /></td>
                         <td className="num z-cmid" style={{ fontWeight: 600 }}>{fmtSec(totalMs(r))}</td>

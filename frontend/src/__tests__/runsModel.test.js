@@ -93,6 +93,10 @@ describe("statusMeta", () => {
   it("names a wake another device kept a 'Duplicate'", () => {
     expect(statusMeta({ result: "rejected", reason: "duplicate" })).toEqual({ label: "Duplicate", tone: "muted" });
   });
+
+  it("shows a run stored before its answer as Running", () => {
+    expect(statusMeta({ result: "running" })).toEqual({ label: "Running", tone: "muted" });
+  });
 });
 
 describe("isAnnouncement", () => {

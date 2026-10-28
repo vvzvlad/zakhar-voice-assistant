@@ -1,5 +1,6 @@
 import asyncio
 import io
+import sqlite3
 import time
 import wave
 
@@ -276,18 +277,21 @@ def make_llm_result(reply="ответ", **overrides):
     return LlmResult(**fields)
 
 
-def patch_llm(monkeypatch, reply="ответ", error=None, result=None):
+def patch_llm(monkeypatch, reply="ответ", error=None, result=None, on_respond=None):
     """Stub the whole LLM stage. STT is injected as a fake backend, not patched.
 
     Replaces llm.LlmStage with a fake whose respond() returns a canned LlmResult
     (built from `reply`, or `result` verbatim when given). When `error` is given
-    (a StageError), respond() raises it instead."""
+    (a StageError), respond() raises it instead. `on_respond()` is called as
+    respond() starts."""
 
     class FakeLlmStage:
         def __init__(self, backend, hub, cfg):
             pass
 
         async def respond(self, req, *, on_filler=None, has_next=False):
+            if on_respond is not None:
+                on_respond()
             if error is not None:
                 raise error
             return result if result is not None else make_llm_result(reply)
@@ -1088,10 +1092,10 @@ async def test_run_streams_live_stage_updates(tmp_path, monkeypatch):
 
     assert len(hub.broadcasts) >= 3
     # First broadcast: the live STT partial — recognized text present, no LLM yet,
-    # no DB id yet.
+    # and the id of the "running" row stored at the transcript.
     first = hub.broadcasts[0]
     assert first["run"]["live"]
-    assert first["run"]["id"] is None
+    assert first["run"]["id"] == 1
     assert first["run"]["stt_text"] == "включи свет"
     assert not first["run"].get("llm_text")
     # Some live partial before the final carries the LLM reply.
@@ -1151,6 +1155,43 @@ async def test_run_row_is_stored_before_the_answer_is_spoken(tmp_path, monkeypat
     assert [b["run"]["id"] for b in hub.broadcasts if not b["run"].get("live")] == [1]
 
 
+def rows_at(path):
+    """The (id, stt_text, result) of every run log row at `path`, read over a plain
+    connection of its own: opening a RunsStore would close a "running" row."""
+    conn = sqlite3.connect(path)
+    try:
+        return conn.execute("SELECT id, stt_text, result FROM runs").fetchall()
+    finally:
+        conn.close()
+
+
+async def test_a_voice_run_is_in_the_run_log_as_running_while_its_handler_works(tmp_path, monkeypatch):
+    # A panel reloaded during a slow handler lists the run: its row holds the transcript
+    # as "running" from the first transcript on, and the run's end rewrites that row.
+    path = str(tmp_path / "runs.db")
+    seen = []
+    patch_llm(monkeypatch, reply="готово", on_respond=lambda: seen.extend(rows_at(path)))
+    pipeline, _ = make_pipeline(tmp_path, monkeypatch, stt_text="включи сериал",
+                                runs_store=RunsStore(path))
+
+    await say(pipeline)
+
+    assert seen == [(1, "включи сериал", "running")]
+    assert rows_at(path) == [(1, "включи сериал", "ok")]
+
+
+async def test_a_text_request_is_in_the_run_log_as_running_while_its_handler_works(tmp_path, monkeypatch):
+    path = str(tmp_path / "runs.db")
+    seen = []
+    patch_llm(monkeypatch, reply="готово", on_respond=lambda: seen.extend(rows_at(path)))
+    pipeline, _ = make_pipeline(tmp_path, monkeypatch, runs_store=RunsStore(path))
+
+    await pipeline.run_text("включи сериал", speak=False)
+
+    assert seen == [(1, "включи сериал", "running")]
+    assert rows_at(path) == [(1, "включи сериал", "ok")]
+
+
 async def test_a_wake_cancelling_the_run_during_its_early_insert_leaves_one_row(tmp_path, monkeypatch):
     class SlowStore(FakeRunsStore):
         def insert(self, rec):
@@ -1160,13 +1201,15 @@ async def test_a_wake_cancelling_the_run_during_its_early_insert_leaves_one_row(
     store = SlowStore()
     pipeline, _ = make_pipeline(tmp_path, monkeypatch, runs_store=store)
     record = pipeline._new_record("text", stt_text="x")
-    task = asyncio.create_task(pipeline._store_answer(record))
+    task = asyncio.create_task(pipeline._store_record(record, result="running"))
     await asyncio.sleep(0.05)
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
     await pipeline._store_run(record, time.perf_counter())  # what _run's finally does next
     assert len(store.records) == 1 and record["id"] == 1
+    # "running" was the row's only: the cancelled run's row ends with its own result.
+    assert store.records[0]["result"] == "empty"
 
 
 async def test_no_live_partial_on_no_speech(tmp_path, monkeypatch):
@@ -2534,8 +2577,8 @@ async def test_llm_stage_error_without_partial_attribute(tmp_path, monkeypatch):
 
 async def test_run_text_happy_path(tmp_path, monkeypatch):
     # A text run does the full LLM turn, appends context, plays the reply on the
-    # device, records the run (reason="text", request in stt_text) and broadcasts
-    # the finalized summary — all WITHOUT any stage events.
+    # device, records the run (reason="text", request in stt_text), streams its live
+    # partials and broadcasts the finalized summary — all WITHOUT any stage events.
     from src import context
 
     patch_llm(monkeypatch, reply="готово")
@@ -2571,11 +2614,30 @@ async def test_run_text_happy_path(tmp_path, monkeypatch):
     assert pipeline.play.calls == [(b"MP3", "audio/mpeg")]
     # No stage events for a text run (no voice session).
     assert events == []
-    # Exactly one finalized broadcast, after the insert (id echoes the store).
-    assert len(hub.broadcasts) == 1
-    assert hub.broadcasts[0]["type"] == "run"
-    assert hub.broadcasts[0]["run"]["id"] == 1
-    assert hub.broadcasts[0]["run"]["result"] == "ok"
+    # Live partials of the stored row (the "running" one, then the reply's), then
+    # exactly one finalized broadcast, last (id echoes the store).
+    assert [(b["type"], b["run"].get("live"), b["run"]["id"]) for b in hub.broadcasts] == [
+        ("run", 1, 1), ("run", 1, 1), ("run", None, 1)]
+    assert hub.broadcasts[-1]["run"]["result"] == "ok"
+
+
+async def test_run_text_final_broadcast_waits_for_slow_live_partials(tmp_path, monkeypatch):
+    # A live partial sent after the final would turn the finished row back into
+    # "Running" in the panel: the final goes out only after the live partials are sent.
+    class SlowLiveRunEvents(FakeRunEvents):
+        async def broadcast(self, payload):
+            if payload["run"].get("live"):
+                await asyncio.sleep(0.05)
+            await super().broadcast(payload)
+
+    patch_llm(monkeypatch, reply="готово")
+    hub = SlowLiveRunEvents()
+    pipeline, _ = make_pipeline(tmp_path, monkeypatch, runs_store=FakeRunsStore(),
+                                run_events=hub)
+
+    await pipeline.run_text("включи свет", speak=False)
+
+    assert [b["run"].get("live") for b in hub.broadcasts] == [1, 1, None]
 
 
 # One answered run that called a tool: the history keeps the call and its result.
@@ -2702,7 +2764,7 @@ async def test_run_text_row_is_stored_before_the_reply_is_spoken(tmp_path, monke
     assert seen == [(1, "включи свет", "готово", None, None)]
     rows = pipeline.runs_store.list()
     assert [(r["id"], r["play_dry"], r["play_gap_ms"]) for r in rows] == [(1, 1, 30)]
-    assert [b["run"]["id"] for b in hub.broadcasts] == [1]
+    assert [b["run"]["id"] for b in hub.broadcasts if not b["run"].get("live")] == [1]
 
 
 async def test_run_text_without_store_or_hub(tmp_path, monkeypatch):

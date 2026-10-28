@@ -106,6 +106,22 @@ def test_update_rewrites_the_row_fields_and_json_columns(tmp_path):
     store.close()
 
 
+def test_opening_closes_a_running_row_left_by_a_dead_process(tmp_path):
+    # A run still "running" when the store opens was cut off by a server that died
+    # mid-run: it reads as a server error; a finished run keeps its result.
+    store = _store(tmp_path)
+    running = store.insert(_rec(result="running", t_total=None))
+    done = store.insert(_rec(result="ok"))
+    store.close()
+    store = _store(tmp_path)
+    got = store.get(running)
+    assert (got["result"], got["error_stage"], got["error_text"]) == (
+        "error", "server", "The server stopped before the run ended")
+    got = store.get(done)
+    assert (got["result"], got["error_stage"], got["error_text"]) == ("ok", None, None)
+    store.close()
+
+
 def test_get_request_is_none_when_absent(tmp_path):
     # A record WITHOUT a `request` key yields request=None (column defaults to NULL).
     store = _store(tmp_path)

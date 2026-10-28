@@ -116,7 +116,10 @@ async def test_declined_goes_to_next_chain_which_answers():
                  handlers={"nlu": nlu, "llm": llm})
     heard = []
 
-    run = await voice(rt, on_text=lambda text, _t: heard.append(text))
+    async def on_text(text, _t):
+        heard.append(text)
+
+    run = await voice(rt, on_text=on_text)
 
     assert outcomes(run) == [("nlu", "declined"), ("llm", "answered")]
     assert (run.chain, run.reply, run.text, run.answered) == (
@@ -185,7 +188,11 @@ async def test_nothing_heard_runs_no_handler():
     rt = runtime([chain("a"), chain("b")], stt={"a": Stt(""), "b": Stt(" ")},
                  handlers={"a": Handler("x"), "b": Handler("y")})
     heard = []
-    run = await voice(rt, on_text=lambda text, _t: heard.append(text))
+
+    async def on_text(text, _t):
+        heard.append(text)
+
+    run = await voice(rt, on_text=on_text)
     assert run.reply is None and heard == [] and run.text == ""
     assert outcomes(run) == [("a", "empty"), ("b", "empty")]
 
@@ -202,7 +209,10 @@ async def test_gate_is_asked_once_about_the_first_transcript_before_any_handler(
         asked.append((text, list(heard), list(first.calls)))
         return accept
 
-    run = await voice(rt, on_text=lambda text, _t: heard.append(text), gate=gate)
+    async def on_text(text, _t):
+        heard.append(text)
+
+    run = await voice(rt, on_text=on_text, gate=gate)
     assert asked == [("а в спальне", [], [])]
     if accept:
         assert heard == ["а в спальне"] and run.reply == "готово"

@@ -5,12 +5,13 @@
 // Also the device column, which shows a device's label and filters by it from a
 // dropdown, the Result dropdown, the request of an announcement, which is no request
 // rather than silence, the detail of a duplicate, which is no verifier reject, and the
-// detail's dated header, its copy button, its Metadata and what its Total spans.
+// detail's dated header, its copy button, its Metadata and what its Total spans, and the
+// open detail refetched on a streamed frame of its run.
 import React from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent, cleanup, waitFor, within } from "@testing-library/react";
+import { render, screen, fireEvent, cleanup, waitFor, within, act } from "@testing-library/react";
 import Log from "../pages/log.jsx";
-import { getRuns, getRun } from "../api.js";
+import { getRuns, getRun, openRunsStream } from "../api.js";
 import { fmtTime } from "../runsModel.js";
 
 vi.mock("../appData.jsx", () => ({
@@ -243,6 +244,43 @@ describe("Request log — chains", () => {
     const recognized = screen.getAllByRole("row").filter((tr) => tr.querySelector("td"))
       .map((tr) => tr.querySelectorAll("td")[3].textContent);
     expect(recognized).toEqual(["—", "(silence)"]);
+  });
+
+  it("refreshes the open run's detail when a frame of that run streams in", async () => {
+    let push;
+    openRunsStream.mockImplementationOnce((onRow) => { push = onRow; return () => {}; });
+    const running = { ...ROW, result: "running", llm_text: "" };
+    getRuns.mockResolvedValue({ runs: [running], total: 1 });
+    getRun.mockResolvedValue(running);
+    render(<Log />);
+    fireEvent.click(await screen.findByText("какая погода"));
+    const drawer = await screen.findByRole("dialog");
+    await within(drawer).findByText("…");
+    expect(within(drawer).getByText("Running")).toBeInTheDocument();
+    getRun.mockResolvedValue(ROW);
+    act(() => push({ ...ROW, live: 1 }));
+    expect(await within(drawer).findByText("Солнечно")).toBeInTheDocument();
+    expect(within(drawer).getByText("OK")).toBeInTheDocument();
+    expect(getRun).toHaveBeenLastCalledWith(7);
+  });
+
+  it("keeps the newer detail when the open's own fetch comes back after a frame's", async () => {
+    let push;
+    openRunsStream.mockImplementationOnce((onRow) => { push = onRow; return () => {}; });
+    const running = { ...ROW, result: "running", llm_text: "" };
+    getRuns.mockResolvedValue({ runs: [running], total: 1 });
+    let openReply, frameReply;
+    getRun.mockImplementationOnce(() => new Promise((r) => { openReply = r; }))
+      .mockImplementationOnce(() => new Promise((r) => { frameReply = r; }));
+    render(<Log />);
+    fireEvent.click(await screen.findByText("какая погода"));
+    const drawer = await screen.findByRole("dialog");
+    await waitFor(() => expect(getRun).toHaveBeenCalledTimes(1));
+    act(() => push({ ...ROW, live: 1 }));
+    await waitFor(() => expect(getRun).toHaveBeenCalledTimes(2));
+    await act(async () => { frameReply(ROW); });
+    await act(async () => { openReply(running); });
+    expect(await within(drawer).findByText("Солнечно")).toBeInTheDocument();
   });
 
   it("shows a duplicate as dropped, without the verifier card or a silence caption", async () => {

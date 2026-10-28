@@ -13,13 +13,15 @@ import { total } from "./components/primitives.jsx";
 // blocked it (reason wakeword_reject / wakeword_error), another device kept the same
 // phrase (reason duplicate), or the follow-up check dropped a follow-up phrase
 // (reason followup_*). It produced no answer on purpose, so it reads as muted (like
-// "empty"), not as a hard error.
+// "empty"), not as a hard error. "running" is a run still in progress, stored before
+// its answer.
 export const RESULT_META = {
   ok:       { label: "OK",        tone: "good" },
   tool:     { label: "OK · tool", tone: "good" },
   empty:    { label: "Empty",     tone: "muted" },
   rejected: { label: "Rejected",  tone: "muted" },
   error:    { label: "Error",     tone: "bad" },
+  running:  { label: "Running",   tone: "muted" },
 };
 
 // Per-stage accent colors for the waterfall / gantt segments.
@@ -65,7 +67,8 @@ export function fmtTime(ts, withDate = false) {
 export function mapRun(row) {
   if (!row) return row;
   // Live (in-progress) rows are upserted by device, so they are keyed
-  // "live:<device>" (a run's live row gets its DB id once its answer is stored).
+  // "live:<device>" (a run's live row gets its DB id once its row is stored, at its
+  // first transcript).
   // Finalized rows are keyed by their real id.
   const live = !!row.live;
   const key = live ? "live:" + (row.device ?? "") : row.id;
@@ -123,8 +126,8 @@ export function emptyRequestText(r) {
 // even when the finalized row itself is filtered out, so a live row is never
 // stranded; it is (re)inserted only when `match` is true. A live partial is
 // inserted only when `match` is true. A live partial of a run whose row the list
-// already holds (fetched once its answer was stored: the partial carries that row's
-// id) replaces that row in place, under the row's key. Newest first, capped at `cap`.
+// already holds (fetched once the row was stored: the partial carries that row's id)
+// replaces that row in place, under the row's key. Newest first, capped at `cap`.
 export function applyStreamedRun(prev, mapped, match, cap = 100) {
   if (mapped.live && match && mapped.id != null && prev.some((r) => r.key === mapped.id)) {
     return prev.map((r) => (r.key === mapped.id ? { ...mapped, key: mapped.id } : r));

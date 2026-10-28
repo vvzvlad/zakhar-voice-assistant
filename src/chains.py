@@ -150,7 +150,7 @@ async def run(rt, *, device: str, request, pcm: bytes = b"", text: str | None = 
     """Offer a request to the enabled chains in order until one answers.
 
     Voice (text is None): `pcm` is the utterance and `streams` the live sessions
-    opened at speech by open_stream(), keyed by chain name; `on_text(text, t_stt)`
+    opened at speech by open_stream(), keyed by chain name; `await on_text(text, t_stt)`
     fires once, with the first non-empty transcript and the ms spent on STT so far.
     `await gate(text)` is asked about that transcript before on_text and before any
     handler; False stops the run there (its attempt's outcome is "rejected").
@@ -209,7 +209,7 @@ async def run(rt, *, device: str, request, pcm: bytes = b"", text: str | None = 
                     attempt.update(text=utterance, outcome="rejected")
                     break
                 if not heard and on_text is not None:
-                    on_text(utterance, out.t_stt)
+                    await on_text(utterance, out.t_stt)
                 heard = True
             attempt["text"] = utterance
             out.text = utterance

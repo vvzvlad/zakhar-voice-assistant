@@ -805,8 +805,9 @@ class Pipeline(SpeechMixin):
         awaiting keeps a slow/stuck WS client from backpressuring the per-device
         `self._lock` that `_run` holds across the whole run — the same reason the
         finalized broadcast is deferred outside the lock. Chaining preserves per-stage
-        delivery order; `_run`'s outer `finally` drains the chain (outside the lock)
-        before the finalized broadcast so the final never overtakes a partial.
+        delivery order; the outer `finally` of `_run` and `run_text` drains the chain
+        (_drain_live, outside the lock) before the finalized broadcast so the final
+        never overtakes a partial.
         """
         if self.run_events is None:
             return
@@ -983,9 +984,10 @@ class Pipeline(SpeechMixin):
                 pcm, pcm2 = self._condition_audio(pcm, pcm2, trim=followup is None)
 
                 # Observability record for this run (_new_record). Accumulated across
-                # all terminal paths below: inserted once its answer exists
-                # (_store_answer), else in the finally, which completes the row; the
-                # rest of the timings fill in as stages complete.
+                # all terminal paths below: inserted at its first transcript and
+                # rewritten once its answer exists (_store_record), else inserted in the
+                # finally, which completes the row; the rest of the timings fill in as
+                # stages complete.
                 # The answer's stored speech (speak_reply), stored after the run is
                 # inserted, mirroring the utterance-audio store. Stays None unless the
                 # answer played, so a failed/empty TTS stores nothing.
@@ -1048,15 +1050,17 @@ class Pipeline(SpeechMixin):
                         self._schedule_filler(spoken)
                         return True
 
-                    def _on_text(text: str, t_stt: int) -> None:
+                    async def _on_text(text: str, t_stt: int) -> None:
                         # The first non-empty transcript of any chain: shown on the device
-                        # (STT_END) and in the panel (live STT partial), then the device
-                        # enters the intent phase. Fires at most once per run.
+                        # (STT_END), then the device enters the intent phase; the run's
+                        # row is stored as "running" and the panel gets the live STT
+                        # partial, which carries that row's id. Fires at most once per run.
                         record["stt_text"] = text
                         record["t_stt"] = t_stt
                         self._emit(StageEvent.STT_END, {"text": text})
-                        self._emit_live(record)
                         self._emit(StageEvent.INTENT_START, {})
+                        await self._store_record(record, result="running")
+                        self._emit_live(record)
 
                     # A phrase heard in a follow-up window: the follow-up check of its
                     # first transcript, asked before anything reaches the device, unless
@@ -1158,9 +1162,6 @@ class Pipeline(SpeechMixin):
                         self._emit(StageEvent.RUN_END, {})
                         return
                     reply = chain_run.reply
-                    # Live LLM partial: record now carries llm_text, model, tokens,
-                    # rounds, t_llm, the chain attempts and the updated result.
-                    self._emit_live(record)
 
                     # Only an answered turn is a conversation turn: don't pollute the
                     # context history with a spoken fallback or decline phrase.
@@ -1177,7 +1178,11 @@ class Pipeline(SpeechMixin):
                         except Exception as e:
                             # Context persistence failure must not break the run.
                             logger.error(f"{self.name}: context append failed: {e}")
-                    await self._store_answer(record)
+                    await self._store_record(record)
+                    # Live LLM partial, after the row it announces is committed: record
+                    # now carries llm_text, model, tokens, rounds, t_llm, the chain
+                    # attempts and the updated result.
+                    self._emit_live(record)
 
                     self._emit(StageEvent.INTENT_END, {"conversation_id": conversation_id})
 
@@ -1244,14 +1249,19 @@ class Pipeline(SpeechMixin):
             # that lands while it waits for the lock, before the inner try, closes them
             # here; aclose() is idempotent, so the inner close is harmless.
             await self._close_stt_streams(stt_streams)
-            tail = self._live_send_tail
-            self._live_send_tail = None
-            if tail is not None:
-                try:
-                    await tail
-                except Exception as e:  # noqa: BLE001 - draining must never break the run
-                    logger.debug(f"{self.name}: live run update drain failed: {e}")
+            await self._drain_live()
             await self._broadcast_run(pending_run)
+
+    async def _drain_live(self) -> None:
+        """Wait for the scheduled live run partials (_emit_live) to be sent, so the
+        finalized broadcast after it never overtakes one; a failure is logged."""
+        tail = self._live_send_tail
+        self._live_send_tail = None
+        if tail is not None:
+            try:
+                await tail
+            except Exception as e:  # noqa: BLE001 - draining must never break the run
+                logger.debug(f"{self.name}: live run update drain failed: {e}")
 
     def _condition_audio(self, pcm: bytes, pcm2: bytes, trim: bool) -> tuple[bytes, bytes]:
         """The captured sample as STT gets it and the run log stores it: the lead-in
@@ -1320,23 +1330,34 @@ class Pipeline(SpeechMixin):
             **fields,
         })
 
-    async def _store_answer(self, record: dict) -> None:
-        """Insert the run record as soon as its answer exists, before it is spoken, so
-        a process that dies during the speech leaves the request and the answer in the
-        run log. The row has no t_total until _store_run completes it (the panel then
-        sums the stages, the metrics skip it). The row's id goes to record["id"]: the
-        live partials after it carry it (live_row) and _store_run completes that row,
-        also when a new wake cancels the run while the insert runs (the row commits
-        anyway). A failure is logged and the run goes on; _store_run then inserts the
-        record."""
-        if self.runs_store is None:
+    async def _store_record(self, record: dict, result: str | None = None) -> None:
+        """Write the run record to the run log while the run goes on: at its first
+        transcript as a "running" row (`result` overrides the record's own in the row
+        only), so a panel reloaded during a slow handler lists the run and opens it, and
+        again at its answer, so a process that dies during the speech keeps the request
+        and the answer. The first call inserts and puts the row's id in record["id"]
+        (live partials after it carry it, live_row), also when a new wake cancels the
+        run during the write; later calls rewrite that row. No t_total until _store_run
+        completes it. A failure is logged and the run goes on; _store_run then inserts.
+        A "running" row left by a dead process is closed by RunsStore when it opens."""
+        store = self.runs_store
+        if store is None:
             return
-        insert = asyncio.ensure_future(asyncio.to_thread(self.runs_store.insert, record))
+        row = record if result is None else {**record, "result": result}
+        run_id = record.get("id")
+
+        def write() -> int:
+            if run_id is None:
+                return store.insert(row)
+            store.update(run_id, row)
+            return run_id
+
+        task = asyncio.ensure_future(asyncio.to_thread(write))
         try:
-            record["id"] = await asyncio.shield(insert)
+            record["id"] = await asyncio.shield(task)
         except asyncio.CancelledError:
             try:
-                record["id"] = await insert
+                record["id"] = await task
             except Exception as e:
                 logger.error(f"{self.name}: early run record failed: {e}")
             raise
@@ -1345,7 +1366,7 @@ class Pipeline(SpeechMixin):
 
     async def _store_run(self, record: dict, t0: float, pcm: bytes = b"", pcm2: bytes = b"",
                          tts_audio=None, tts_mime=None) -> dict | None:
-        """Insert the run record (update its row when _store_answer inserted it),
+        """Insert the run record (update its row when _store_record inserted it),
         publish it to the telemetry (whether or not the run log is on, with its run log
         id when it has one) and store its audio; returns the summary row to broadcast
         (_broadcast_run), or None. A recording failure must never break the run or
@@ -1437,6 +1458,8 @@ class Pipeline(SpeechMixin):
                 # values (t_vad/t_stt = 0, audio_* = None).
                 record = self._new_record(reason, stt_text=text)
                 try:
+                    await self._store_record(record, result="running")
+                    self._emit_live(record)
                     # The recognition chains, entered at the handler step (no STT): each
                     # enabled chain's handler in order until one answers. No on_filler:
                     # a text run has no listener waiting in silence, so no early filler
@@ -1462,7 +1485,8 @@ class Pipeline(SpeechMixin):
                         except Exception as e:
                             # Context persistence failure must not break the run.
                             logger.error(f"{self.name}: context append failed: {e}")
-                    await self._store_answer(record)
+                    await self._store_record(record)
+                    self._emit_live(record)
 
                     # Only the spoken text is accented: the value RETURNED to the caller
                     # stays the plain `reply`, which is also returned when its speech
@@ -1485,7 +1509,9 @@ class Pipeline(SpeechMixin):
                     pending_run = await self._store_run(record, t0)
         finally:
             # Outside the lock: best-effort push of the finalized run to live
-            # panel subscribers; only fires when the insert succeeded.
+            # panel subscribers, after the live partials (same as `_run`); only fires
+            # when the insert succeeded.
+            await self._drain_live()
             await self._broadcast_run(pending_run)
         return {
             "reply": reply,

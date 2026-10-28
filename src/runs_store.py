@@ -1,7 +1,9 @@
 """SQLite-backed log of pipeline runs (observability backend).
 
-Each run (STT -> LLM -> TTS) is one row, inserted when it ends; a run with an answer
-has it inserted as soon as the answer exists and rewritten (update) at its end. Rounds (the
+Each run (STT -> LLM -> TTS) is one row, inserted with result "running" at its first
+transcript (a text request: at its start), rewritten (update) when its answer exists and
+again at its end; a run that ends before its transcript is accepted (silence, a phrase
+the gate drops, a duplicate) is inserted at its end. Rounds (the
 agentic tool-calling steps) are stored as a JSON string column to avoid a join.
 
 All methods are synchronous; callers in async code offload them to a worker thread
@@ -105,6 +107,12 @@ class RunsStore:
         self._conn.execute(_CREATE_TTS_AUDIO_TABLE)
         self._conn.commit()
         self._migrate()
+        # A row still "running" at open was left by a process that died mid-run.
+        self._conn.execute(
+            "UPDATE runs SET result = 'error', error_stage = 'server', "
+            "error_text = 'The server stopped before the run ended' WHERE result = 'running'"
+        )
+        self._conn.commit()
 
     def _migrate(self) -> None:
         """Add columns introduced after the initial schema to a pre-existing DB.

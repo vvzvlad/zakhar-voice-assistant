@@ -175,7 +175,7 @@ async def prepare(srv, device_id: str, state: str, dev: FakeDevice, channels: in
         phrase = np.full(ms_bytes(STAND_IN_MS, channels) // 2, 1000, "<i2").tobytes()
         phrase += bytes(ms_bytes(300, channels))
         await stream(dev, phrase, channels, len(phrase), 1, asyncio.Event())
-        await until(lambda: srv.rt.runs_store.list(device=device_id))  # its answer
+        await until(lambda: srv.rt.runs_store.list(device=device_id))  # its row, from the transcript on
     if state in ("answering", "announcing"):
         await until(lambda: any(m["type"] == "play_start" for m in got))
     if state == "answering":
@@ -248,7 +248,10 @@ async def replay(srv, monkeypatch, case: dict, group: dict, scale: float = SCALE
         def shown(device_id):
             return [m["text"] for m in got[device_id] if m["type"] == "reply" and "session" not in m]
 
-        await until(lambda: all(rows(run["device"]) for run in runs.values()), timeout=5)
+        # A run's row is in the log from its first transcript on, as "running".
+        await until(lambda: all(rows(run["device"]) and all(
+            result != "running" for result, _ in rows(run["device"])) for run in runs.values()),
+            timeout=5)
         for run_id, run in runs.items():
             assert rows(run["device"]) == [tuple(run["expected"])], (run_id, run["device"])
             if run.get("answer_stopped"):
