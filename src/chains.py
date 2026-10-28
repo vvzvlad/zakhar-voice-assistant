@@ -56,8 +56,14 @@ def referenced_instances(chains) -> set[tuple[str, str]]:
     return refs
 
 
-def spoken_fallback(err: StageError, cfg) -> str:
-    """The handler's configured phrase spoken for its failure instead of the raw error."""
+def spoken_fallback(err: StageError, cfg, *, after_tools: bool = False) -> str:
+    """The handler's configured phrase spoken for its failure instead of the raw error.
+    An empty provider account is named even after a tool ran: nothing works until it
+    is topped up."""
+    if err.kind == "no_credits":
+        return cfg.reply_no_credits
+    if after_tools:
+        return cfg.reply_error_after_tools
     return cfg.reply_rate_limit if err.kind == "rate_limit" else cfg.reply_error
 
 
@@ -242,7 +248,8 @@ async def run(rt, *, device: str, request, pcm: bytes = b"", text: str | None = 
                 if partial.get("tool_used"):
                     # The action already happened: stop here rather than let a later
                     # chain repeat it.
-                    out.chain, out.reply = chain.name, cfg.reply_error_after_tools
+                    out.chain = chain.name
+                    out.reply = spoken_fallback(failure, cfg, after_tools=True)
                     break
                 out.reply = spoken_fallback(failure, cfg)
                 continue

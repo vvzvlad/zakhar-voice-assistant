@@ -51,6 +51,13 @@ class ReplyConfig(BaseModel):
         description="Spoken when the provider refuses the request over its rate limit (HTTP 429).",
         json_schema_extra=FALLBACK_REPLY_EXTRA,
     )
+    reply_no_credits: str = Field(
+        "Кончились деньги на счёте нейросети, пополни баланс.",
+        title="Reply when out of credits",
+        description="Spoken when the provider refuses the request because the account is "
+        "out of credits (HTTP 402), also after a tool already ran.",
+        json_schema_extra=FALLBACK_REPLY_EXTRA,
+    )
     reply_empty_after_tools: str = Field(
         "Готово.",
         title="Reply when empty after a tool",
@@ -81,9 +88,10 @@ class ReplyConfig(BaseModel):
         description="Spoken when the model returns no text.",
         json_schema_extra=FALLBACK_REPLY_EXTRA,
     )
-    # Spoken when the LLM stage fails for any reason other than a rate limit; the
-    # raw error text goes to the run log, never to the user. A command engine, which
-    # has no model to read a tool's error, also speaks it when its tool returned one.
+    # Spoken when the LLM stage fails for any reason other than a rate limit or an
+    # empty account; the raw error text goes to the run log, never to the user. A
+    # command engine, which has no model to read a tool's error, also speaks it when
+    # its tool returned one.
     reply_error: str = Field(
         "Что-то сломалось, попробуй ещё раз попозже.",
         title="Reply on error",
@@ -93,10 +101,12 @@ class ReplyConfig(BaseModel):
     )
     # Spoken when the LLM stage fails AFTER a tool already ran: the action happened,
     # so no later chain retries it and the user hears that only the answer is missing.
+    # An empty account speaks reply_no_credits instead.
     reply_error_after_tools: str = Field(
         "Сделал, но ответить не смог.",
         title="Reply on error after a tool",
-        description="Spoken when the handler fails after a tool already ran.",
+        description="Spoken when the handler fails after a tool already ran (an empty "
+        "account has its own reply).",
         json_schema_extra=FALLBACK_REPLY_EXTRA,
     )
 

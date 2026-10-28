@@ -101,10 +101,10 @@ def test_llm_temperature_and_tokens_ranges():
 
 
 def test_llm_panel_schema_groups_the_fallback_replies_and_names_units():
-    # The panel folds the five spoken fallbacks under Advanced in one group, in the
+    # The panel folds the six spoken fallbacks under Advanced in one group, in the
     # text font, each with a hint; temperature names its range, the token limit its unit.
     props = LlmConfig.model_json_schema()["properties"]
-    for name in ("reply_rate_limit", "reply_empty_after_tools", "reply_empty",
+    for name in ("reply_rate_limit", "reply_no_credits", "reply_empty_after_tools", "reply_empty",
                  "reply_error", "reply_error_after_tools"):
         assert props[name]["group"] == "Fallback replies", name
         assert props[name]["advanced"] and props[name]["phrase"] and props[name]["description"], name

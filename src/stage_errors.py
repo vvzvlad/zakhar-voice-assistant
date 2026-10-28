@@ -9,7 +9,7 @@ class StageError(Exception):
     def __init__(self, stage: str, message: str, *, kind: str = "error"):
         super().__init__(message)
         self.stage = stage          # "vad" | "stt" | "llm" | "tts"
-        self.kind = kind            # "error" | "rate_limit" | ...
+        self.kind = kind            # "error" | "rate_limit" | "no_credits" | ...
 
 
 class Declined(Exception):

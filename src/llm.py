@@ -82,7 +82,8 @@ class LlmStage:
         chain would take the utterance if this handler declines. A backend's
         stage_errors.Declined propagates unchanged.
 
-        On failure raises StageError("llm", ...) (kind="rate_limit" for HTTP 429);
+        On failure raises StageError("llm", ...) (kind="rate_limit" for HTTP 429,
+        kind="no_credits" for HTTP 402);
         the orchestrator maps it to a configured spoken phrase. The observability
         data accumulated before the failure (model/tokens/rounds/request, and
         tool_used — whether a tool already ran) is attached to the exception as
@@ -159,7 +160,9 @@ class LlmStage:
                     reason = e.response.json().get("error", {}).get("message")
                 except Exception:
                     reason = None
-                raise _error(str(reason or e)) from e
+                # 402 Payment Required: the provider account is out of credits.
+                kind = "no_credits" if e.response.status_code == 402 else "error"
+                raise _error(str(reason or e), kind=kind) from e
             except httpx.HTTPError as e:
                 logger.error(f"LLM request failed: {e}")
                 raise _error(str(e)) from e

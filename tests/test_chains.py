@@ -292,11 +292,25 @@ async def test_text_request_enters_at_the_handler():
 
 
 def test_spoken_fallback_maps_kind_to_configured_phrase():
-    # "rate_limit" gets its dedicated line; any other kind the generic error phrase.
+    # "rate_limit" and "no_credits" get their dedicated lines; any other kind the
+    # generic error phrase.
     cfg = LlmConfig()
     assert chains.spoken_fallback(StageError("llm", "x", kind="rate_limit"), cfg) \
         == cfg.reply_rate_limit
+    assert chains.spoken_fallback(StageError("llm", "x", kind="no_credits"), cfg) \
+        == cfg.reply_no_credits
     assert chains.spoken_fallback(StageError("llm", "x", kind="timeout"), cfg) == cfg.reply_error
+
+
+async def test_out_of_credits_after_tool_names_the_credits():
+    # The account ran dry on the round after a tool: the user hears that money ran
+    # out, not "done but could not answer".
+    err = StageError("llm", "add credits", kind="no_credits")
+    err.partial = {"tool_used": True}
+    rt = runtime([chain("a"), chain("b")], stt={"a": Stt("найди"), "b": Stt("найди")},
+                 handlers={"a": Handler(err), "b": Handler("не должен")})
+    run = await voice(rt)
+    assert (run.chain, run.reply) == ("a", LlmConfig().reply_no_credits)
 
 
 def test_referenced_instances_and_starts_at_speech_follow_enabled_chains():

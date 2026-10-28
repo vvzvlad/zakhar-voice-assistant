@@ -399,7 +399,7 @@ def test_chain_referenced_instance_config_is_validated(tmp_path):
 
 def test_catalog_flags_handler_limits_and_fallback_phrases_advanced(tmp_path):
     # The panel folds `advanced` fields under the form's "Advanced" section.
-    advanced = {"max_tokens", "max_tool_rounds", "timeout", "reply_rate_limit",
+    advanced = {"max_tokens", "max_tool_rounds", "timeout", "reply_rate_limit", "reply_no_credits",
                 "reply_empty_after_tools", "filler_default", "filler_default_delay",
                 "reply_empty", "reply_error", "reply_error_after_tools"}
     llm = next(c for c in _service(tmp_path).catalog()["categories"] if c["id"] == "llm")

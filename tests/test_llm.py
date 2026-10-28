@@ -269,6 +269,19 @@ async def test_rate_limit_raises_stage_error():
     assert partial["tool_used"] is False
 
 
+async def test_payment_required_raises_no_credits():
+    # HTTP 402 (OpenRouter: "...exceed your available credits... add credits") ->
+    # kind="no_credits", with the provider's message as the error text.
+    message = "This request would exceed your available credits. Add credits."
+    backend = FakeLlmBackend([_http_status_error(402, {"error": {"message": message, "code": 402}})])
+
+    with pytest.raises(StageError) as ei:
+        await _respond(backend, StubHub(tools=[]), "привет")
+
+    assert ei.value.kind == "no_credits"
+    assert str(ei.value) == message
+
+
 async def test_non_2xx_raises_stage_error_with_reason():
     hub = StubHub(tools=[])
     backend = FakeLlmBackend([_http_status_error(500, {"error": {"message": "boom"}})])
