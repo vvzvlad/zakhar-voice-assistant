@@ -32,8 +32,9 @@ class Run:
         # the backend that opened it, for the finalize log line.
         self.vad = vad
         self.vad_desc = vad_desc
-        # A wake over the device's own answer or open session, which the wake-word
-        # check is told (WakewordVerifier.verify).
+        # A wake over the device's own answer or open session held for the quick
+        # wake-word check, which it is told (WakewordVerifier.verify); False for one the
+        # check does not hear or with the check off, which its phrase decides (_run).
         self.over_answer = over_answer
         # A wake over the device's own music: held for the quick wake-word check, with
         # the plain grammar, which decides only whether the music ducks (Pipeline._check).

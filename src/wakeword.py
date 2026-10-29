@@ -29,6 +29,11 @@ class WakewordVerifier(ABC):
         """`over_answer`: the wake came while the device was answering, so its own
         voice may be in `pcm`; a verifier may judge such a wake stricter."""
 
+    def hears(self, word: str) -> bool:
+        """Whether verify() listens for the wake word `word` at all; the pipeline holds
+        no wake of a word it does not, which it could only reject."""
+        return True
+
 
 class PassthroughVerifier(WakewordVerifier):
     """No-op used when the stage is disabled: always accepts."""

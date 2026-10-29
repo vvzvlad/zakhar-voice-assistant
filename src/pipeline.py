@@ -235,21 +235,27 @@ class Pipeline(SpeechMixin):
         taken run is released (_release)
         once the arbitration lets it through; one that loses ends held. A released wake
         over the device's playing stream (`over_playback`), checked or not, only stops
-        it (_stop_answer). A newer wake replaces a proposal silently."""
+        it (_stop_answer). A wake of a word the check does not listen for (the Yandex
+        Station's «Алиса») is a wake like any other over an answer or music too: taken
+        at once and confirmed by its phrase. A newer wake replaces a proposal
+        silently."""
         if self._proposed is not None:
             self._drop(self._proposed)
+        if not (self.gates_wake(word) and self.rt.wakeword_backend.hears(word)):
+            over_answer = over_music = False
         run = self._proposed = self._new_run(
             cid, word or "", preroll_ms=PREROLL_MS if word else 0,
             no_speech_timeout_ms=self.core.vad.no_speech_timeout_ms, over_answer=over_answer,
             over_music=over_music, over_playback=over_playback)
-        if (over_answer or over_music) and self.gates_wake(word):
+        if over_answer or over_music:
             what = ("over the running answer waits for the wake-word check" if over_answer
                     else "over the music waits for the wake-word check, which decides only "
                          "whether the music ducks")
             logger.info(f"{self.name}: 🛡️ wake (cid={cid}) {what}")
         else:
             # Not checked here (not over an answer or music, check disabled/None/
-            # passthrough, no wake word): its verdict is in.
+            # passthrough, no wake word or one the check does not listen for): its
+            # verdict is in.
             run.verdict = True
         if word and self.arbiter is not None and not over_playback:
             self._arbitration_token += 1

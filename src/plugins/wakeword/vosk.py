@@ -152,6 +152,11 @@ class VoskWakewordVerifier(WakewordVerifier):
             score = 1.0 if accepted else 0.0
         return WakewordVerdict(accepted=accepted, score=score)
 
+    def hears(self, word: str) -> bool:
+        # The grammar holds only the keywords: a wake of another word (the Yandex Station's
+        # «Алиса», spotted by the station itself) decodes as [unk] whatever was said.
+        return not self._keywords or word.strip().lower() in self._keywords
+
     async def verify(self, pcm: bytes, over_answer: bool = False) -> WakewordVerdict:
         if not self._keywords:
             # No keywords configured: an unconfigured gate must not silently reject
@@ -193,7 +198,7 @@ class VoskWakewordConfig(BaseModel):
     keywords: list[str] = Field(
         default_factory=lambda: ["захар"],
         title="Keywords",
-        description="Wake words the offline check accepts (over a running answer, or over the music for ducking); empty accepts every such wake. Any other wake is checked for the device's wake word in its phrase, unless another device woke on it too while nothing plays.",
+        description="Wake words the offline check accepts (over a running answer, or over the music for ducking); empty accepts every such wake. Any other wake, and one of a word not in the list (the Yandex Station's «Алиса»), is checked for its wake word in its phrase, unless another device woke on it too while nothing plays.",
         json_schema_extra=PHRASE_FIELD_EXTRA,
     )
 

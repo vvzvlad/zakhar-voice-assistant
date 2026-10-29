@@ -114,6 +114,12 @@ async def test_verify_accepts_when_keyword_in_text_with_conf_score():
     assert verdict.score == pytest.approx(0.83)
 
 
+def test_hears_only_its_keywords():
+    # The device's «Захар» is in the grammar, the Yandex Station's «Алиса» is not.
+    v = _verifier({"text": ""}, keywords=["Захар"])
+    assert v.hears("Захар") and not v.hears("Алиса")
+
+
 async def test_verify_matches_case_insensitively():
     # The Russian Vosk model emits lowercase text. A capitalized operator-configured
     # keyword ("Захар") is normalized to lowercase so it still matches the lowercase

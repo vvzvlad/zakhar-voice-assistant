@@ -177,7 +177,8 @@ device                                   server
   held for the same check, without those words, which decides only whether the music ducks: the
   wake is confirmed whatever the check says (at once when the check is off), its `listening`
   carries `"duck": false` when the check did not hear the wake word, and its phrase is checked as
-  that of a wake taken at once (below). Any other `wake` is confirmed at once. A confirmed wake is
+  that of a wake taken at once (below). A `wake` whose `word` the check does not listen for (the
+  Yandex Station's «Алиса») is held for neither and, as any other `wake`, is confirmed at once. A confirmed wake is
   taken: the server cancels the older run and sends `play_stop`, which flushes the device's
   playback, a stream the server started before it saw the `wake` included, then `state listening`
   with the proposed `session`, which makes it the device's current session; the audio held

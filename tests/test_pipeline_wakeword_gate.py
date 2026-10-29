@@ -162,6 +162,33 @@ async def test_gate_accept_over_a_silent_session_runs_the_phrase(tmp_path, monke
     assert (rec["result"], rec["stt_text"], rec["llm_text"]) == ("ok", "включи свет", "готово")
 
 
+@pytest.mark.parametrize("text, outcome", [
+    ("алиса включи свет", ("ok", "готово")),
+    ("включи свет", ("rejected", "")),
+])
+async def test_a_wake_of_a_word_the_check_does_not_hear_is_decided_by_its_phrase(
+        tmp_path, monkeypatch, text, outcome):
+    # The Yandex Station spots «Алиса» itself and the check listens only for «захар», so it
+    # could only reject the wake. Over an answer the wake is taken at once without asking the
+    # verifier, and its phrase is checked for its word as that of any wake taken at once.
+    patch_llm(monkeypatch, reply="готово")
+    store = FakeRunsStore()
+    verifier = FakeWakewordVerifier(accepted=False, window_ms=VERIFY_WINDOW_MS)
+    verifier.hears = lambda word: word.lower() == "захар"
+    pipeline, events = _make_gated(tmp_path, monkeypatch, verifier=verifier,
+                                   stt_text=text, runs_store=store)
+    install_phrase_vad(pipeline)
+
+    pipeline.on_wake("cid", "Алиса", over_answer=True)
+    assert types_of(events) == [StageEvent.RUN_START, StageEvent.STT_START,
+                                StageEvent.STT_VAD_START]
+    await pipeline.on_audio(PHRASE)
+    await settle(pipeline)
+    assert verifier.calls == []
+    rec = store.records[-1]
+    assert (rec["result"], rec["llm_text"]) == outcome
+
+
 @pytest.mark.parametrize("accepted", [False, True])
 async def test_a_wake_over_the_music_is_decided_by_its_phrase(tmp_path, monkeypatch, accepted):
     # Over the device's music the check decides only whether the music ducks: the wake is
