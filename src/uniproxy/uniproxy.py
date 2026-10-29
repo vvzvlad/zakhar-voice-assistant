@@ -73,9 +73,6 @@ PREROLL_WAIT_S = 2.0
 FOLLOWUP_LISTEN_WAIT_S = 4.0
 # How often an empty partial ASR.Result keeps the station listening (quasard's default).
 PARTIAL_INTERVAL_S = 0.3
-# The longest the server is fed silence after the station stops its microphone, so the server's
-# VAD end-points a request the station abandoned instead of staying in `listening` forever.
-DRAIN_MAX_S = 3.0
 # The playback rate the server resamples to; TTS.Speak streams are 48 kHz Ogg/Opus.
 PLAY_RATE = 48000
 # The station queues a whole answer itself: with a buffer this large the server's pacing lets it
@@ -367,8 +364,12 @@ class Link:
         t.add_done_callback(_log_task_error)
 
     async def _drain_loop(self, req: VoiceRequest) -> None:
+        """Silence until the server stops listening to `req`: its VAD ends a phrase with no
+        speech only after the pre-roll and its no-speech wait, both its own settings, and at
+        the latest at its longest phrase. A shorter feed leaves the run listening until the
+        station's next wake replaces it."""
         silence = bytes([MIC]) + bytes(MIC_FRAME * 2)
-        for _ in range(int(DRAIN_MAX_S * ASR_RATE / MIC_FRAME)):
+        while True:
             if req is not self.request or not req.mic_open or not self.up:
                 return
             self._send(silence)

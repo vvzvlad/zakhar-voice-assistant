@@ -256,6 +256,28 @@ async def test_station_session_through_the_bridge():
         await server_runner.cleanup()
 
 
+async def test_silence_goes_on_until_the_server_ends_an_abandoned_request():
+    # The station closes its microphone with no speech heard (reason 8). The server ends such
+    # a phrase only after the pre-roll and its no-speech wait, longer than any fixed feed: the
+    # silence goes on until the server stops listening, then stops.
+    server, station, ws, http, bridge_runner, server_runner = await connect()
+    try:
+        await station.event("Vins", "VoiceInput", {"header": {"request_id": "r1"}}, streamId=1)
+        await station.directive("InputStartAck")
+        assert await server.recv() == {"type": "wake", "session": 1, "word": "Алиса"}
+        await server.send(type="state", session=1, value="listening")
+        await ws.send_str(json.dumps({"streamcontrol": {"action": 0, "reason": 8, "streamId": 1}}))
+        # Past 3.1 s of silence, and on until the server's state ends it.
+        await grown(server.mic, 2 * 16000 * 31 // 10)
+        await server.send(type="state", session=1, value="idle")
+        await asyncio.sleep(0.2)
+        fed = len(server.mic)
+        await asyncio.sleep(0.2)
+        assert len(server.mic) == fed
+    finally:
+        await hang_up(http, bridge_runner, server_runner)
+
+
 # ------------------------------------------------------------------ follow-up
 
 async def connect():
