@@ -23,12 +23,18 @@ connection of that id is open.
   VinsResponse, TTS.Speak, Ogg     ◄──  reply, then the answer's play_start / 0x02 / play_end
   empty VinsResponse               ◄──  state idle or error without an answer, a refused wake
 
+An AAPI station (firmware 3.x) times a request out 12 s after the phrase unless an AliceResponse
+comes, and the partials do not hold it. There the transcript gets at once an AliceResponse
+skeleton that opens a response stream; the answer completes it as a DeferredAliceResponse (an
+empty one on idle or error without an answer).
+
 The wake word stays quasar's own: the station spots «Алиса», and the server's wake-word models
 are refused (`model_loaded ok: false`). Every stream of a session (the end-of-phrase chime, a
 filler, the answer) goes out as a TTS.Speak of its request; the VinsResponse waits for the
-reply's text. A stream of no session (an announcement) goes as a TTS.Speak of no request. The
-station reports nothing of its playback, so `played` goes once a stream's duration has passed
-since its first audio came.
+reply's text. An AAPI station plays only the first TTS stream of a request, so there they all
+go into one TTS.Speak of it, closed after the answer. A stream of no session (an announcement)
+goes as a TTS.Speak of no request. The station reports nothing of its playback, so `played`
+goes once a stream's duration has passed since its first audio came.
 
 The server end-points a phrase from the microphone audio, so when the station stops its own stream
 first (a streamcontrol close or Vins.CancelRequest), the Link feeds the server silence until its VAD
@@ -53,7 +59,8 @@ from .audio import ASR_RATE, OggOpusStreamEncoder, OpusStreamDecoder, frame_stre
 
 # streamcontrol.action of the station's SpotterEnd (the firmware's Close is 0, LazyTTS 3).
 STREAM_SPOTTER_END = 2
-# The station closing its own microphone stream, and the reasons that mean "no answer".
+# The station closing its own microphone stream: a cancel (no answer goes back) and no speech
+# heard (an empty window unless the server heard a phrase, see Link._end).
 STREAM_CLOSE = 0
 REASON_CANCEL = 7
 REASON_NO_SPEECH = 8
@@ -75,6 +82,12 @@ FOLLOWUP_LISTEN_WAIT_S = 4.0
 PARTIAL_INTERVAL_S = 0.3
 # The playback rate the server resamples to; TTS.Speak streams are 48 kHz Ogg/Opus.
 PLAY_RATE = 48000
+# The silence step of a shared AAPI TTS stream between its plays (Link._keep_shared).
+KEEP_S = 0.2
+# AAPI: the directive that marks where in a response's chain the request's TTS plays
+# (protocol.vins_response puts the same one in front of a voiced answer).
+TTS_PLACEHOLDER = {"name": "tts_play_placeholder", "payload": {"channel": "Dialog"},
+                   "sub_name": "tts_play_placeholder", "type": "client_action", "is_led_silent": True}
 # The station queues a whole answer itself: with a buffer this large the server's pacing lets it
 # send the speech as fast as it is synthesized.
 BUFFER_MS = 60000
@@ -108,9 +121,13 @@ class VoiceRequest:
     transcript: str = ""  # its final text, the ASR.Result held until the answer (see _hold_asr)
     reply: str | None = None
     responded: bool = False  # its VinsResponse went out
+    stream_started: bool = False  # AAPI: its early stream-start AliceResponse skeleton went out
+    tts_sid: int = 0  # AAPI after the skeleton: the one TTS.Speak stream its plays share (0: none)
+    tts_encoder: OggOpusStreamEncoder | None = None
     directives: list[dict] = field(default_factory=list)  # for its VinsResponse
     partial_no: int = 0
     followup: bool = False  # the post-answer listening window of an already answered session
+    no_speech: bool = False  # the station closed its microphone hearing no speech (reason 8)
 
     @property
     def duration_ms(self) -> int:
@@ -128,6 +145,7 @@ class Play:
     samples: int = 0
     first_at: float | None = None  # loop time of its first audio
     timer: asyncio.TimerHandle | None = None
+    request: VoiceRequest | None = None  # AAPI: the request whose one TTS stream it goes into
 
 
 class Bridge:
@@ -185,7 +203,8 @@ class Link:
         self._model: dict | None = None  # the `model` whose bytes are coming
         self._model_left = 0
         self._drains: set[asyncio.Task] = set()  # silence feeds for abandoned requests
-        self._holds: set[asyncio.Task] = set()  # final-ASR holds of requests waiting for an answer
+        # final-ASR holds and shared-TTS-stream silence (_keep_shared) of requests waiting for an answer
+        self._holds: set[asyncio.Task] = set()
         self._task = asyncio.create_task(self._run())
         self._task.add_done_callback(_log_task_error)
 
@@ -278,6 +297,8 @@ class Link:
                 # window dies with the cycle.
                 self._window = 0
                 self._spawn_send(prev.station.send_json(P.stream_control(prev.stream_id)))
+            if prev.tts_sid:
+                self._spawn_send(self._close_shared(prev))  # its shared TTS stream goes with it
         self._session += 1
         req.session = self._session
         self.request = req
@@ -311,7 +332,8 @@ class Link:
     def _followup_timeout(self, req: VoiceRequest) -> None:
         """The server's follow-up `listening` never came for the cycle: the audio it held is
         dropped and it ends as an empty window does (_end) — a final empty ASR.Result, its
-        stream's close, no answer: the station just stops listening."""
+        stream's close, no answer (firmware 1.56; an AAPI station gets an empty answer instead,
+        _end_silently): the station just stops listening."""
         if req is not self.request or req.preroll_sent or req.responded or req.cancelled:
             return
         req.mic_open = False
@@ -320,7 +342,17 @@ class Link:
         if self._window == req.session:
             self._window = 0  # the closed cycle was the window's last chance
         self.request = None
+        if req.station.proto:
+            self._spawn_send(self._end_silently(req))  # see _end
+            return
         self._spawn_send(self._send_final(req, ""))
+
+    async def _end_silently(self, req: VoiceRequest) -> None:
+        """An AAPI listening with no phrase ends with an empty answer and its stream's close, and
+        no final ASR.Result, on which quasar would play its no-speech sound."""
+        req.responded = req.asr_sent = True
+        await req.station.respond(req, "", [])
+        await req.station.send_json(P.stream_control(req.stream_id))
 
     def _spawn_send(self, coro) -> None:
         t = asyncio.create_task(coro)
@@ -445,7 +477,8 @@ class Link:
         its spotter validation and the station's stream closes; a taken one waits for its
         transcript (_finish_asr): quasar takes an empty final ASR.Result for a phrase it did not
         hear and plays no answer after it. _close_mic never closes a follow-up cycle's stream: an
-        empty window ends with a final ASR.Result first (_end, _followup_timeout); a wake word
+        empty window ends with a final ASR.Result first (_end, _followup_timeout; an AAPI station
+        gets an empty answer instead, _end_silently); a wake word
         that supersedes the cycle closes it in Link.wake."""
         if not req.mic_open:
             return
@@ -478,6 +511,12 @@ class Link:
         if not req.taken or req.asr_sent or req.cancelled or req.responded:
             return
         req.transcript = text
+        if req.station.proto:
+            # AAPI firmware 3.x: an early stream-start AliceResponse quenches the station's
+            # waitForResult timer at once; the empty partials below hold only firmware 1.56.
+            await req.station.respond_stream_start(req)
+            req.stream_started = True
+            return
         t = asyncio.create_task(self._hold_loop(req))
         self._holds.add(t)
         t.add_done_callback(self._holds.discard)
@@ -495,13 +534,21 @@ class Link:
 
     async def _end(self, req: VoiceRequest) -> None:
         """The run of `req` is over: its microphone stops and, if no answer went, an empty
-        VinsResponse does; a follow-up window with no phrase gets only its final empty
-        ASR.Result and no answer."""
+        VinsResponse does; a follow-up window, or a taken wake the station heard no speech in,
+        with no phrase gets only its final empty ASR.Result and no answer (an AAPI station an empty
+        answer instead, _end_silently)."""
         await self._close_mic(req)
+        if (req.followup or (req.no_speech and req.taken)) and not req.transcript and not req.responded \
+                and req.station.proto:
+            # AAPI: quasar plays its no-speech sound on a final empty ASR.Result; an empty answer
+            # ends its listening without one, as the device protocol's silent window ends.
+            await self._end_silently(req)
         await self._finish_asr(req, req.transcript)
-        if req.followup and not req.transcript and not req.responded:
+        if (req.followup or (req.no_speech and req.taken)) and not req.transcript and not req.responded:
             # The window ended with no phrase (the station's own close of its stream, the
-            # server's idle, the link gone): it ends the way real Yandex ends an empty window —
+            # server's idle, the link gone), or a taken wake the station itself heard no speech in
+            # (a post-answer listening that came after the run ended wakes anew): on firmware
+            # 1.56 it ends the way real Yandex ends an empty window —
             # a final empty ASR.Result, then the stream's close, and no answer. On a bare close
             # quasar's post-answer state machine, still waiting for the final result, plays its
             # error sound.
@@ -511,13 +558,40 @@ class Link:
             self.request = None
         if not req.responded and not req.cancelled:
             req.responded = True
-            await req.station.respond(req, "", req.directives)
+            if req.station.proto and req.stream_started:
+                # AAPI: a request that got the early skeleton but no spoken answer (a silent
+                # command, an empty/error reply) must close that stream with a final
+                # DeferredAliceResponse, not a second full AliceResponse (mirrors _on_play_start).
+                await req.station.respond_deferred(req, "", req.directives)
+            else:
+                await req.station.respond(req, "", req.directives)
+        await self._close_shared(req)
+
+    async def _keep_shared(self, req: VoiceRequest, sid: int) -> None:
+        """Silence into the request's shared TTS stream, at its own pace, while no play goes into
+        it: the firmware's TTS player fails a stream that gets no audio for 10 s
+        (onTtsPlayerError), and a slow answer comes later than that after the chime."""
+        while req.tts_sid == sid:
+            if self._open is None or self._open.request is not req:
+                await req.station.send_audio(sid, req.tts_encoder.silence(KEEP_S))
+            await asyncio.sleep(KEEP_S)
+
+    async def _close_shared(self, req: VoiceRequest) -> None:
+        """The request's shared TTS stream (_on_play_start) ends here, unless a play still goes
+        into it: that play's play_end closes it then."""
+        if not req.tts_sid or (self._open is not None and self._open.request is req):
+            return
+        sid, encoder = req.tts_sid, req.tts_encoder
+        req.tts_sid, req.tts_encoder = 0, None  # before the awaits: _keep_shared stops
+        await req.station.send_audio(sid, encoder.close())
+        await req.station.send_json(P.stream_control(sid))
 
     async def _on_play_start(self, msg: dict) -> None:
         play = self._open = self._plays[msg["id"]] = Play(msg["id"])
         req = self._of(msg.get("session"))
         if req is not None and req.cancelled:
             return  # a cancelled request: reported played (station stays None), not sent out
+        shared = req is not None and req.station.proto and not req.responded
         if req is None or req.responded:
             station, ref = (req.station if req is not None else self.stations[-1]), ""
         elif req.reply is None:
@@ -528,7 +602,26 @@ class Link:
             station, ref = req.station, req.ref
             await self._finish_asr(req, req.transcript)
             req.responded = True
-            await station.respond(req, req.reply, req.directives)
+            if station.proto:
+                # AAPI firmware 3.x: the finished answer completes the stream-start skeleton as a
+                # DeferredAliceResponse, not a second AliceResponse.
+                await station.respond_deferred(req, req.reply, req.directives)
+            else:
+                await station.respond(req, req.reply, req.directives)
+        if shared:
+            # AAPI: the firmware plays a single TTS stream of a request, into the skeleton's
+            # tts_play_placeholder, and ignores later ones, as the cloud streams one answer. So the
+            # chime (which may come before the skeleton), a filler and the answer go into one
+            # TTS.Speak, closed after the answer.
+            if not req.tts_sid:
+                req.tts_sid, req.tts_encoder = station.next_stream_id(), OggOpusStreamEncoder()
+                await station.send_json(P.tts_speak(ref, req.tts_sid))
+                t = asyncio.create_task(self._keep_shared(req, req.tts_sid))
+                self._holds.add(t)
+                t.add_done_callback(self._holds.discard)
+                t.add_done_callback(_log_task_error)
+            play.station, play.sid, play.encoder, play.request = station, req.tts_sid, req.tts_encoder, req
+            return
         play.station, play.sid, play.encoder = station, station.next_stream_id(), OggOpusStreamEncoder()
         await station.send_json(P.tts_speak(ref, play.sid))
 
@@ -549,9 +642,15 @@ class Link:
             return
         if self._open is play:
             self._open = None
-        if play.station is not None:
+        req = play.request
+        if play.station is not None and (req is None or req.responded or req.cancelled
+                                         or req is not self.request):
+            if req is not None:
+                req.tts_sid, req.tts_encoder = 0, None  # before the awaits: _keep_shared stops
             await play.station.send_audio(play.sid, play.encoder.close())
             await play.station.send_json(P.stream_control(play.sid))
+        # A play of a live request's shared stream before its answer leaves the stream open: the
+        # silence of _keep_shared goes on in it and pushes out the page the Ogg muxer holds.
         loop = asyncio.get_running_loop()
         left = 0.0 if play.first_at is None else play.first_at + play.samples / PLAY_RATE - loop.time()
         play.timer = loop.call_later(max(left, 0.0), self._played, play)
@@ -565,6 +664,8 @@ class Link:
         their ids."""
         play, self._open = self._open, None
         if play is not None and play.station is not None:
+            if play.request is not None:
+                play.request.tts_sid, play.request.tts_encoder = 0, None  # _keep_shared stops
             play.encoder.close()
             await play.station.send_json(P.stream_control(play.sid))
         for p in self._plays.values():
@@ -577,8 +678,9 @@ class Link:
     async def _on_set_volume(self, value: int) -> None:
         action = P.client_action("sound_set_level", {"new_level": round(value / 10), "new_percent_level": value})
         req = self.request
-        if req is not None and not req.responded:
-            # With the request's VinsResponse, as Alice's own volume commands come.
+        if req is not None and not req.responded and not req.stream_started:
+            # With the request's VinsResponse, as Alice's own volume commands come. After an AAPI
+            # skeleton it goes as a Push: the firmware runs no directive of a DeferredAliceResponse.
             req.directives.append(action)
         else:
             await self.stations[-1].send_json(
@@ -597,6 +699,9 @@ class StationSession:
         self.session_id = headers.get("X-UPRX-SSID") or str(uuid.uuid4())
         self.proto = False  # the station sent an AAPI frame: answer in protobuf (firmware 3.x)
         self._send_lock = asyncio.Lock()
+        # One send_audio's pages go out together: the silence of a shared TTS stream
+        # (Link._keep_shared) and a play's audio come from two tasks into one Ogg stream.
+        self._audio_lock = asyncio.Lock()
         self._next_out_stream = 2  # server streams are even
         self._tasks: set[asyncio.Task] = set()
 
@@ -626,8 +731,9 @@ class StationSession:
             pass
 
     async def send_audio(self, sid: int, data: bytes) -> None:
-        for chunk in split_ogg_pages(data):
-            await self.send_bytes(frame_stream(sid, chunk))
+        async with self._audio_lock:
+            for chunk in split_ogg_pages(data):
+                await self.send_bytes(frame_stream(sid, chunk))
 
     def next_stream_id(self) -> int:
         sid = self._next_out_stream
@@ -641,6 +747,41 @@ class StationSession:
         await self.send_json(P.vins_response(req.ref, req.request_id, self.session_id, req.sequence_number,
                                              text, speech=text, directives=directives,
                                              should_listen=bool(text)))
+
+    async def respond_stream_start(self, req: VoiceRequest) -> None:
+        """AAPI firmware 3.x: an early AliceResponse carrying only the response-stream directives
+        and no answer, sent the moment the transcript comes. The firmware times a request out 12 s
+        from the end of the phrase waiting for an AliceResponse (its waitForResult); the empty
+        partial ASR.Results that hold firmware 1.56 never reach that timer. This matches the real
+        cloud's response_stream_start carcass; the finished answer follows as a
+        DeferredAliceResponse (respond_deferred)."""
+        directives = [
+            P.client_action("response_stream_start"),
+            dict(TTS_PLACEHOLDER),
+            P.client_action("response_stream_placeholder"),
+        ]
+        msg = P.vins_response(req.ref, req.request_id, self.session_id, req.sequence_number,
+                              "", speech="", directives=directives, should_listen=True)
+        payload = msg["directive"]["payload"]
+        # As the cloud's skeleton: a voice answer is announced though its text is not here yet.
+        # With has_voice_response off the firmware drops tts_play_placeholder from the chain,
+        # runs response_stream_placeholder at once and ends the turn before the answer comes.
+        payload["voice_response"]["has_voice_response"] = True
+        payload["response"]["is_streaming"] = True
+        await self.send_json(msg)
+
+    async def respond_deferred(self, req: VoiceRequest, text: str, directives: list[dict]) -> None:
+        """AAPI firmware 3.x: the finished answer as a single final DeferredAliceResponse chunk
+        (IsLast), completing the early stream-start skeleton; the TTS audio follows it as it does
+        for firmware 1.56. should_listen is carried in the base response, as respond() carries it
+        in the VinsResponse, so the follow-up window still arms."""
+        payload = {
+            "response_partial_num": 0,
+            "is_last": True,
+            "request_id": req.request_id,
+            "base_response": {"text": text, "should_listen": bool(text), "directives": list(directives or [])},
+        }
+        await self.send_json(P.directive("Vins", "DeferredAliceResponse", payload, ref=req.ref))
 
     def _spawn(self, coro) -> asyncio.Task:
         t = asyncio.create_task(coro)
@@ -783,7 +924,10 @@ class StationSession:
         elif sc.get("action") == STREAM_CLOSE and req.mic_open:
             # A close after the server stopped listening is no cancel: quasar closes its stream
             # itself once it gets the final ASR.Result, and waits for the answer.
-            self.link.station_stopped(req, sc.get("reason") in (REASON_CANCEL, REASON_NO_SPEECH))
+            # A no-speech close (the station's own 5 s of silence) is no cancel: quasar still
+            # waits 12 s for the request's end and plays its error sound without one.
+            req.no_speech = sc.get("reason") == REASON_NO_SPEECH
+            self.link.station_stopped(req, sc.get("reason") == REASON_CANCEL)
 
     async def _respond_empty(self, ref: str, payload: dict) -> None:
         hdr = payload.get("header") or {}

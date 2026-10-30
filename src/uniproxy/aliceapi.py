@@ -1,4 +1,4 @@
-# From https://github.com/amirilivice/quasard @ a142b19, alice_server/aliceapi.py, unchanged.
+# Adapted from https://github.com/amirilivice/quasard @ a142b19, alice_server/aliceapi.py.
 """Бинарный protobuf-протокол uniproxy («proto Alice API») — им говорят прошивки 3.x.
 
 Кадр: бинарный WS-фрейм "AAPI" + сериализованный NAlice.NAliceApi.TClientMessage / TServerMessage.
@@ -156,8 +156,18 @@ def server_to_proto(msg: dict) -> dict | None:
                        "SequenceNumber": ph.get("sequence_number") or 0, "ParentRequestId": ph.get("request_id") or ""},
             "Response": {"Cards": [{"Type": c.get("type", "simple_text"), "Text": c.get("text", ""),
                                     "CardId": c.get("card_id", "")} for c in r.get("cards", [])],
-                         "Directives": [_directive(x) for x in r.get("directives", [])]},
+                         "Directives": [_directive(x) for x in r.get("directives", [])],
+                         "IsStreaming": bool(r.get("is_streaming"))},
             "VoiceResponse": voice,
+        }}
+    elif name == "Vins.DeferredAliceResponse":
+        br = p.get("base_response", {})
+        body = {"DeferredAliceResponse": {
+            "ResponsePartialNum": p.get("response_partial_num", 0),
+            "IsLast": bool(p.get("is_last")),
+            "RequestId": p.get("request_id", ""),
+            "BaseResponse": {"Text": br.get("text", ""), "ShouldListen": bool(br.get("should_listen")),
+                             "Directives": [_directive(x) for x in br.get("directives", [])]},
         }}
     else:
         return None

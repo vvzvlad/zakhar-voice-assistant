@@ -55,7 +55,7 @@ configured under `core.mcp_servers` in `data/config.json`.
   tries a build on the board, `station-install HOST=…` makes it start at boot in place of quasar.
 - `src/uniproxy/` — the other way to run a Yandex Station: its stock quasar (wake word «Алиса»)
   talks to a uniproxy emulation built on quasard (github.com/amirilivice/quasard; `protocol.py`,
-  `aliceapi.py`, `audio.py` are its files unchanged), handing each request to the server as a device
+  `audio.py` are its files unchanged, `aliceapi.py` adapted), handing each request to the server as a device
   at `/uni.ws` on the device port (`make station-bridge` runs it standalone). The content of the
   station's messages is never logged or sent on — `SynchronizeState` carries its Yandex OAuth token.
 - `microWakeWord/` — wake-word model training research and the deployed models.

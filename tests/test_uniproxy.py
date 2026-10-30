@@ -11,7 +11,8 @@ import aiohttp
 import numpy as np
 from aiohttp import web
 
-from src.uniproxy.audio import OggOpusStreamEncoder, OpusStreamDecoder, split_ogg_pages
+from src.uniproxy import aliceapi
+from src.uniproxy.audio import OggOpusStreamEncoder, OpusStreamDecoder, parse_stream_frame, split_ogg_pages
 from src.uniproxy.uniproxy import MIC, PLAY, Bridge
 
 TOKEN = "station-oauth-token"
@@ -278,6 +279,24 @@ async def test_silence_goes_on_until_the_server_ends_an_abandoned_request():
         await hang_up(http, bridge_runner, server_runner)
 
 
+async def test_a_wake_the_station_heard_no_speech_in_ends_as_an_empty_window():
+    # The station closes its microphone with no speech heard (reason 8), as its post-answer
+    # listening that wakes anew after the run ended does. It still waits for the request's end
+    # and plays its error sound 12 s later without one: the request ends as an empty window.
+    server, station, ws, http, bridge_runner, server_runner = await connect()
+    try:
+        await station.event("Vins", "VoiceInput", {"header": {"request_id": "r1"}}, streamId=1)
+        await station.directive("InputStartAck")
+        assert await server.recv() == {"type": "wake", "session": 1, "word": "Алиса"}
+        await server.send(type="state", session=1, value="listening")
+        await ws.send_str(json.dumps({"streamcontrol": {"action": 0, "reason": 8, "streamId": 1}}))
+        await grown(server.mic, 2 * 16000 // 10)  # the close got through: the silence feed began
+        await server.send(type="state", session=1, value="idle")
+        await empty_window_end(station, 1)
+    finally:
+        await hang_up(http, bridge_runner, server_runner)
+
+
 # ------------------------------------------------------------------ follow-up
 
 async def connect():
@@ -503,5 +522,289 @@ async def test_the_followup_window_ended_before_its_listening_gets_no_bare_close
         await followup_input(station, 3, "r-fup")
         await server.send(type="state", session=1, value="idle")
         await empty_window_end(station, 3)
+    finally:
+        await hang_up(http, bridge_runner, server_runner)
+
+
+# ------------------------------------------------------------------ AAPI (firmware 3.x)
+
+
+async def wait_for_proto(ws, kind: str, deadline_s: float = 3.0) -> dict:
+    """The next server AAPI event of `kind` (e.g. "AliceResponse"), skipping other events, the
+    stream-control frames and the audio stream frames. Fails if none comes within the window."""
+    loop = asyncio.get_running_loop()
+    end = loop.time() + deadline_s
+    while True:
+        remaining = end - loop.time()
+        if remaining <= 0:
+            raise AssertionError(f"no server {kind} within {deadline_s}s")
+        try:
+            msg = await asyncio.wait_for(ws.receive(), remaining)
+        except asyncio.TimeoutError:
+            raise AssertionError(f"no server {kind} within {deadline_s}s")
+        if msg.type == aiohttp.WSMsgType.BINARY and msg.data.startswith(aliceapi.MAGIC):
+            event = aliceapi.decode_server(msg.data).get("Event")
+            if event and kind in event:
+                return event
+
+
+async def proto_frames(ws, seconds: float = 1.5) -> list[dict]:
+    """Every server AAPI message (events and stream controls) within `seconds`."""
+    out = []
+    loop = asyncio.get_running_loop()
+    end = loop.time() + seconds
+    while (remaining := end - loop.time()) > 0:
+        try:
+            msg = await asyncio.wait_for(ws.receive(), remaining)
+        except asyncio.TimeoutError:
+            break
+        if msg.type == aiohttp.WSMsgType.BINARY and msg.data.startswith(aliceapi.MAGIC):
+            out.append(aliceapi.decode_server(msg.data))
+    return out
+
+
+async def aapi_wake(server, ws, text: str) -> None:
+    """An AAPI VoiceInput the server takes and transcribes as `text`."""
+    await ws.send_bytes(aliceapi.encode_client({"Event": {
+        "Header": {"MessageId": "ref1", "StreamId": 1},
+        "VoiceInput": {"Header": {"RequestId": "r1", "SequenceNumber": 0},
+                       "EnableSpotterValidation": True,
+                       "Request": {"Event": {"Type": "voice_input"}}}}}))
+    assert await server.recv() == {"type": "wake", "session": 1, "word": "Алиса"}
+    await server.send(type="state", session=1, value="listening")
+    await server.send(type="transcript", session=1, text=text)
+
+
+async def play(server, play_id: int) -> None:
+    await server.send(type="play_start", id=play_id, session=1)
+    await server.ws.send_bytes(bytes([PLAY]) + tone(0.1, 48000).tobytes())
+    await server.send(type="play_end", id=play_id, session=1)
+
+
+async def test_an_aapi_station_gets_an_early_skeleton_response_before_the_reply():
+    """Firmware 3.x (AAPI): the station times its waitForResult out 12 s from the end of the
+    phrase, waiting for an AliceResponse; the empty partial ASR results do not reach that timer.
+    So on a slow answer the bridge sends an early stream-start AliceResponse the moment the
+    transcript comes, before the reply is ready, and delivers the finished answer as a
+    DeferredAliceResponse."""
+    server, _, ws, http, bridge_runner, server_runner = await connect()
+    try:
+        await aapi_wake(server, ws, "расскажи зачем керамику обжигают")
+
+        # Before any reply exists: the early stream-start AliceResponse, with the directives that
+        # quench waitForResult and no answer voice yet.
+        event = await wait_for_proto(ws, "AliceResponse")
+        names = [d["Name"] for d in event["AliceResponse"]["Response"]["Directives"]]
+        assert "response_stream_start" in names
+        assert "tts_play_placeholder" in names
+        assert "response_stream_placeholder" in names
+        # A voice answer is announced and the response marked streaming, as in the cloud's
+        # skeleton: otherwise the firmware drops tts_play_placeholder and ends the turn at once.
+        assert event["AliceResponse"]["VoiceResponse"]["HasVoiceResponse"] is True
+        assert event["AliceResponse"]["Response"]["IsStreaming"] is True
+
+        # Only now does the reply arrive and play: the finished answer is a DeferredAliceResponse,
+        # IsLast set, carrying the text; the TTS audio follows as for firmware 1.56.
+        await server.send(type="reply", session=1, text="Чтобы спечь черепок и закрепить форму.")
+        await play(server, 8)
+        deferred = (await wait_for_proto(ws, "DeferredAliceResponse"))["DeferredAliceResponse"]
+        assert deferred["IsLast"] is True
+        assert deferred["BaseResponse"]["Text"] == "Чтобы спечь черепок и закрепить форму."
+        assert deferred["BaseResponse"]["ShouldListen"] is True
+        await ws.close()
+    finally:
+        await hang_up(http, bridge_runner, server_runner)
+
+
+async def test_an_aapi_station_gets_the_filler_and_the_answer_in_one_tts_stream():
+    """Firmware 3.x (AAPI): the station plays only a request's first TTS stream, into the
+    skeleton's tts_play_placeholder, and drops the later ones. So a filler and the answer go into
+    one TTS.Speak, closed only after the answer."""
+    server, _, ws, http, bridge_runner, server_runner = await connect()
+    try:
+        await aapi_wake(server, ws, "какая погода на выходных")
+        await wait_for_proto(ws, "AliceResponse")
+        await play(server, 7)  # a filler while the answer is not ready
+        await server.send(type="reply", session=1, text="В субботу пасмурно.")
+        await play(server, 8)
+
+        frames = await proto_frames(ws)
+        speaks = [m["Event"]["Header"]["StreamId"] for m in frames if "TtsSpeak" in m.get("Event", {})]
+        closes = [m["StreamControl"]["StreamId"] for m in frames if "StreamControl" in m]
+        assert len(speaks) == 1
+        assert closes.count(speaks[0]) == 1
+        await ws.close()
+    finally:
+        await hang_up(http, bridge_runner, server_runner)
+
+
+async def test_an_aapi_tts_stream_gets_silence_while_the_answer_is_not_ready():
+    """Firmware 3.x (AAPI): the TTS player fails a stream that gets no audio for 10 s, and a slow
+    answer comes later than that after the chime. So between the plays the shared stream gets
+    silence at its own pace."""
+    server, _, ws, http, bridge_runner, server_runner = await connect()
+    try:
+        await aapi_wake(server, ws, "какая погода на выходных")
+        await wait_for_proto(ws, "AliceResponse")
+        await play(server, 7)  # the chime; the answer is not ready yet
+        sid, audio = None, 0
+        loop = asyncio.get_running_loop()
+        end = loop.time() + 1.5
+        while (remaining := end - loop.time()) > 0:
+            try:
+                msg = await asyncio.wait_for(ws.receive(), remaining)
+            except asyncio.TimeoutError:
+                break
+            if msg.type != aiohttp.WSMsgType.BINARY:
+                continue
+            if msg.data.startswith(aliceapi.MAGIC):
+                event = aliceapi.decode_server(msg.data).get("Event", {})
+                if "TtsSpeak" in event:
+                    sid = int(event["Header"]["StreamId"])  # a uint64: a string in the dict
+            elif sid is not None and parse_stream_frame(msg.data)[0] == sid:
+                audio += 1
+        # 0.1 s of chime is one Ogg page at most; the rest is the silence that keeps the stream.
+        assert audio >= 5
+        await ws.close()
+    finally:
+        await hang_up(http, bridge_runner, server_runner)
+
+
+async def test_an_aapi_listening_with_no_speech_ends_with_an_empty_answer_not_a_final_result():
+    """Firmware 3.x (AAPI): on a final empty ASR.Result quasar plays its no-speech sound, and a
+    listening with no phrase ends without a sound. So such a request (here the post-answer
+    listening that woke anew, which the station closes itself with no speech heard) ends with an
+    empty AliceResponse and no final empty ASR.Result."""
+    server, _, ws, http, bridge_runner, server_runner = await connect()
+    try:
+        await ws.send_bytes(aliceapi.encode_client({"Event": {
+            "Header": {"MessageId": "ref1", "StreamId": 1},
+            "VoiceInput": {"Header": {"RequestId": "r1", "SequenceNumber": 0},
+                           "Request": {"Event": {"Type": "voice_input"}}}}}))
+        assert await server.recv() == {"type": "wake", "session": 1, "word": "Алиса"}
+        await server.send(type="state", session=1, value="listening")
+        await ws.send_bytes(aliceapi.encode_client(
+            {"StreamControl": {"StreamId": 1, "Close": {"Reason": "NO_SPEECH"}}}))
+        await grown(server.mic, 2 * 16000 // 10)  # the close got through: the silence feed began
+        await server.send(type="state", session=1, value="idle")
+
+        frames = await proto_frames(ws)
+        finals = [m for m in frames if m.get("Event", {}).get("AsrResult", {}).get("EndOfUtt")]
+        answers = [m for m in frames if "AliceResponse" in m.get("Event", {})]
+        assert not finals
+        assert len(answers) == 1
+        assert not answers[0]["Event"]["AliceResponse"].get("VoiceResponse", {}).get("ShouldListen")
+        assert any(m.get("StreamControl", {}).get("StreamId") in (1, "1") for m in frames)
+        await ws.close()
+    finally:
+        await hang_up(http, bridge_runner, server_runner)
+
+
+async def aapi_answered(server, ws) -> None:
+    """An AAPI request answered and played; the server got its `played`."""
+    await aapi_wake(server, ws, "алиса включи свет")
+    await wait_for_proto(ws, "AliceResponse")
+    await server.send(type="reply", session=1, text="Свет включён.")
+    await play(server, 8)
+    await wait_for_proto(ws, "DeferredAliceResponse")
+    assert (await server.recv())["type"] == "played"
+
+
+async def aapi_followup_input(ws, stream_id: int = 3) -> None:
+    """The station's post-answer listening: an AAPI VoiceInput on its next stream."""
+    await ws.send_bytes(aliceapi.encode_client({"Event": {
+        "Header": {"MessageId": "ref-fup", "StreamId": stream_id},
+        "VoiceInput": {"Header": {"RequestId": "r-fup", "SequenceNumber": 1},
+                       "Request": {"Event": {"Type": "voice_input"}}}}}))
+
+
+def assert_silent_end(frames: list[dict], stream_id: int) -> None:
+    """An AAPI listening with no phrase ends with one empty answer and its stream's close, and
+    no final ASR.Result, on which quasar would play its no-speech sound."""
+    assert not [m for m in frames if m.get("Event", {}).get("AsrResult", {}).get("EndOfUtt")]
+    answers = [m["Event"]["AliceResponse"] for m in frames if "AliceResponse" in m.get("Event", {})]
+    assert len(answers) == 1
+    assert not answers[0].get("VoiceResponse", {}).get("ShouldListen")
+    assert [int(m["StreamControl"]["StreamId"]) for m in frames if "StreamControl" in m].count(stream_id) == 1
+
+
+async def test_an_aapi_followup_window_with_no_speech_ends_without_a_sound():
+    """Firmware 3.x (AAPI): the post-answer window the server opened ends on silence (its idle)
+    without a sound, as the device protocol has it."""
+    server, _, ws, http, bridge_runner, server_runner = await connect()
+    try:
+        await aapi_answered(server, ws)
+        await server.send(type="state", session=1, value="listening")
+        await aapi_followup_input(ws)
+        await asyncio.sleep(0.2)
+        await server.send(type="state", session=1, value="idle")
+        assert_silent_end(await proto_frames(ws), 3)
+        await ws.close()
+    finally:
+        await hang_up(http, bridge_runner, server_runner)
+
+
+async def test_an_aapi_followup_window_the_server_never_opens_ends_without_a_sound(monkeypatch):
+    """Firmware 3.x (AAPI): a post-answer window whose follow-up `listening` never comes (the
+    server's follow-up stage off) ends at the bridge's wait without a sound."""
+    monkeypatch.setattr("src.uniproxy.uniproxy.FOLLOWUP_LISTEN_WAIT_S", 0.2)
+    server, _, ws, http, bridge_runner, server_runner = await connect()
+    try:
+        await aapi_answered(server, ws)
+        await aapi_followup_input(ws)
+        assert_silent_end(await proto_frames(ws, 1.0), 3)
+        await ws.close()
+    finally:
+        await hang_up(http, bridge_runner, server_runner)
+
+
+async def test_a_wake_the_station_heard_no_speech_in_still_gets_the_answer_the_server_heard():
+    """The station closes its microphone hearing no speech (reason 8), but the server heard a
+    phrase: that close is no cancel, the phrase gets its answer."""
+    server, _, ws, http, bridge_runner, server_runner = await connect()
+    try:
+        await ws.send_bytes(aliceapi.encode_client({"Event": {
+            "Header": {"MessageId": "ref1", "StreamId": 1},
+            "VoiceInput": {"Header": {"RequestId": "r1", "SequenceNumber": 0},
+                           "Request": {"Event": {"Type": "voice_input"}}}}}))
+        assert await server.recv() == {"type": "wake", "session": 1, "word": "Алиса"}
+        await server.send(type="state", session=1, value="listening")
+        await ws.send_bytes(aliceapi.encode_client(
+            {"StreamControl": {"StreamId": 1, "Close": {"Reason": "NO_SPEECH"}}}))
+        await grown(server.mic, 2 * 16000 // 10)  # the close got through: the silence feed began
+        await server.send(type="state", session=1, value="transcribing")
+        await server.send(type="transcript", session=1, text="алиса привет")
+        await wait_for_proto(ws, "AliceResponse")
+        await server.send(type="reply", session=1, text="Привет.")
+        await play(server, 8)
+        deferred = (await wait_for_proto(ws, "DeferredAliceResponse"))["DeferredAliceResponse"]
+        assert deferred["BaseResponse"]["Text"] == "Привет."
+        await ws.close()
+    finally:
+        await hang_up(http, bridge_runner, server_runner)
+
+
+async def test_an_aapi_request_without_an_answer_closes_its_skeleton_and_tts_stream():
+    """Firmware 3.x (AAPI): a request whose run ends with no answer after its skeleton and chime
+    (a silent command, an error) gets a final empty DeferredAliceResponse, and its shared TTS
+    stream closes once."""
+    server, _, ws, http, bridge_runner, server_runner = await connect()
+    try:
+        await aapi_wake(server, ws, "выключи свет")
+        await wait_for_proto(ws, "AliceResponse")
+        await play(server, 7)  # the end-of-phrase chime
+        await server.send(type="state", session=1, value="idle")
+
+        frames = await proto_frames(ws)
+        deferred = [m["Event"]["DeferredAliceResponse"] for m in frames
+                    if "DeferredAliceResponse" in m.get("Event", {})]
+        assert len(deferred) == 1
+        assert deferred[0]["IsLast"] is True
+        assert not deferred[0]["BaseResponse"].get("Text")
+        speaks = [m["Event"]["Header"]["StreamId"] for m in frames if "TtsSpeak" in m.get("Event", {})]
+        closes = [m["StreamControl"]["StreamId"] for m in frames if "StreamControl" in m]
+        assert len(speaks) == 1
+        assert closes.count(speaks[0]) == 1
+        await ws.close()
     finally:
         await hang_up(http, bridge_runner, server_runner)
